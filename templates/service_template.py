@@ -8,7 +8,7 @@ running system.
 Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a service can declare. This file covers what is specific to services.
 
-  Where it goes:  DATA_DIR/sandbox_plugins/services/service_<name>.py
+  Where it goes:  DATA_DIR/workspace/services/service_<name>.py
   Filename:       must start with "service_"
   Entry points:   start(self, sdk) and stop(self, sdk), plus its exports
 

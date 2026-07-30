@@ -20,6 +20,7 @@ import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
 import llm
+from tests.support import retarget_trees
 from sandbox import Sandbox
 from sandbox.guest import requests as R
 from sandbox.policy import Chain, classify
@@ -70,10 +71,8 @@ class LeakyBackend(BaseLLMBackend):
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
     """A plugin tree holding streaming backends."""
-    helpers = tmp_path / "helpers"
-    helpers.mkdir()
-    monkeypatch.setattr("plugins.helpers.plugin_paths.helper_dirs",
-                        lambda: ((None, helpers),))
+    helpers = retarget_trees(monkeypatch, tmp_path)["workspace"] / "llm"
+    helpers.mkdir(parents=True)
     yield helpers
     llm.registry._BRAINS.clear()
     llm.registry._BACKENDS.clear()

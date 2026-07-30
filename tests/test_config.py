@@ -356,7 +356,7 @@ def _run(context, args, *, method="run", approve=None):
     sandbox = Sandbox(context=context, approve=approve)
     try:
         return sandbox.run(
-            "plugins/commands/command_config.py",
+            "bundled/commands/command_config.py",
             "ConfigCommand",
             kwargs={"args": args},
             method=method,

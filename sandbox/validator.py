@@ -937,8 +937,8 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
             walker.add(NOTE, node,
                        "declares 'isolation', which is ignored",
                        "the kernel decides this from the plugin's tree: "
-                       "sandbox_plugins is always subprocessed, plugins/ "
-                       "always in-process, installed_plugins by whether it "
+                       "workspace/ is always subprocessed, bundled/ "
+                       "always in-process, installed/ by whether it "
                        "imports a foreign library")
             break
     declared.pop("isolation", None)

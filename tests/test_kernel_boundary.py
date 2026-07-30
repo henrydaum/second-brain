@@ -26,22 +26,20 @@ ROOT = Path(__file__).resolve().parents[1]
 # Everything outside plugins/ that boots or runs the kernel.
 CORE_DIRS = ("agent", "attachments", "config", "events", "pipeline",
              "runtime", "state_machine")
-CORE_FILES = ("main.py", "main.pyw", "paths.py")
+CORE_FILES = ("main.py", "main.pyw", "paths.py", "trees.py", "migrations.py")
 
-# The plugin *substrate*: infrastructure the plugin system itself is made of.
-# Growing this set is sometimes right (a new base class, a new shared helper);
-# do it here, on purpose, not by accident.
-SUBSTRATE = frozenset({
-    "plugins.BaseCommand",
-    "plugins.BaseService",
-    "plugins.BaseTask",
-    "plugins.BaseTool",
-    "plugins.plugin_discovery",
-    "plugins.plugin_watcher",
-    "plugins.helpers.plugin_paths",
-    "plugins.helpers.memory_paths",
-    "plugins.frontends.helpers.command_registry",
-})
+# ``plugins/`` is now *exclusively* substrate — base classes, discovery, the
+# watcher, path metadata, the command registry. The app's own capabilities
+# moved to the ``bundled/`` tree, where discovery finds them like any other
+# tree's, so there is nothing left in ``plugins/`` for core to import wrongly
+# and this set does not need maintaining by hand.
+#
+# The rule this replaces was a nine-entry allowlist that had to be edited every
+# time a substrate file was added or renamed, and whose failure mode was a
+# green suite. What keeps it honest now is the *directory*: putting an
+# implementation back under ``plugins/`` is the thing to catch in review, and
+# ``test_the_plugins_package_holds_no_implementations`` below catches it here.
+SUBSTRATE_PACKAGE = "plugins"
 
 # Sanctioned plugin implementations, pinned to the exact core files allowed to
 # import them. Empty, and meant to stay that way: a core file that wants a
@@ -96,17 +94,62 @@ def _collect_edges():
 
 def test_core_imports_only_substrate():
     edges = _collect_edges()
-    allowed = SUBSTRATE | set(SANCTIONED)
     violations = {mod: sorted(files)
-                  for mod, files in edges.items() if mod not in allowed}
+                  for mod, files in edges.items() if mod in SANCTIONED}
     assert not violations, (
-        "Core code grew a hard import of a plugin module:\n"
+        "Core code grew a hard import of a plugin implementation:\n"
         + "\n".join(f"  {mod}  <-  {', '.join(files)}"
                     for mod, files in sorted(violations.items()))
         + "\nPlugin implementations must be reached via discovery (the"
-        " services dict / registries), never imported from core. If this is"
-        " genuinely new plugin *substrate*, add it to SUBSTRATE here and to"
-        " the kernel-boundary section of CLAUDE.md — deliberately."
+        " services dict / registries), never imported from core."
+    )
+
+
+def test_the_plugins_package_holds_no_implementations():
+    """``plugins/`` is substrate, so nothing in it may look like a plugin.
+
+    This is what makes ``test_core_imports_only_substrate`` able to say "any
+    ``plugins.*`` import is fine" without that being a loophole: the set of
+    things core may import is defined by what the package is allowed to
+    *contain*, which is checkable, rather than by a list someone remembers to
+    edit.
+
+    Two things would mean it had quietly become a fourth tree: a folder named
+    after a root (which is where discovery globs), or a class subclassing one
+    of the base classes (which is what discovery instantiates). The second is
+    the real definition of an implementation, and it is what a filename rule
+    would miss — ``plugins/command_registry.py`` carries a family prefix and is
+    substrate, while a ``plugins/repl.py`` subclassing ``BaseFrontend`` would
+    not carry one and would very much not be.
+    """
+    import trees
+
+    package = ROOT / SUBSTRATE_PACKAGE
+    root_names = {root.name for root in trees.ROOTS}
+    bases = {"BaseTool", "BaseTask", "BaseService", "BaseCommand", "BaseFrontend"}
+    offenders = []
+    for path in sorted(package.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        rel = path.relative_to(package)
+        if set(rel.parts[:-1]) & root_names:
+            offenders.append(f"{rel.as_posix()} (in a tree-root folder)")
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            named = {b.id for b in node.bases if isinstance(b, ast.Name)}
+            named |= {b.attr for b in node.bases if isinstance(b, ast.Attribute)}
+            if named & bases:
+                offenders.append(
+                    f"{rel.as_posix()}: class {node.name} subclasses "
+                    f"{sorted(named & bases)[0]}")
+    assert not offenders, (
+        "plugins/ is the plugin substrate and must hold no plugin "
+        "implementations:\n  " + "\n  ".join(offenders)
+        + "\nCapabilities that ship with the app belong in bundled/, where "
+        "discovery finds them like any other tree's."
     )
 
 

@@ -8,7 +8,7 @@ instructions (plugin guidance stays out of the kernel).
 
 import pytest
 
-import plugins.helpers.memory_paths as memory_paths
+import plugins.memory_paths as memory_paths
 from agent.system_prompt import _agent_memory
 from pipeline.database import DEFAULT_USER_ID
 

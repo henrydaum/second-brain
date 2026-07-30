@@ -200,7 +200,7 @@ def test_the_kernel_parser_reads_through_the_sdk(tmp_path):
     is a direct read; a box hands it the real SDK and the same line becomes a
     mediated Request. Nothing in the parser changes.
     """
-    from plugins.helpers.parse_text import parse_plaintext
+    from bundled.parsers.parse_text import parse_plaintext
 
     note = tmp_path / "note.md"
     note.write_text("hello   world\n\n\n\nagain\n", encoding="utf-8")
@@ -243,7 +243,7 @@ def test_the_kernel_stand_in_actually_reads(tmp_path):
 
 def test_a_parser_honours_the_char_limit(tmp_path):
     """max_chars comes from config, and truncation happens after the read."""
-    from plugins.helpers.parse_text import parse_plaintext
+    from bundled.parsers.parse_text import parse_plaintext
 
     class Sdk:
         """Minimal stand-in."""
@@ -277,7 +277,7 @@ def test_a_parser_loads_inside_a_subprocess_box(tmp_path):
     tree = tmp_path / "tree"
     (tree / "tools").mkdir(parents=True)
     (tree / "helpers").mkdir()
-    shutil.copy("plugins/helpers/parse_text.py", tree / "helpers" / "parse_text.py")
+    shutil.copy("bundled/parsers/parse_text.py", tree / "helpers" / "parse_text.py")
 
     note = tmp_path / "note.md"
     note.write_text("# Title\n\nSome   body   text.\n", encoding="utf-8")
@@ -329,7 +329,7 @@ def test_the_parser_contract_is_guest_code():
     """
     from sandbox.validator import validate_file
 
-    report = validate_file("plugins/helpers/parse_text.py")
+    report = validate_file("bundled/parsers/parse_text.py")
     assert report.ok, report.render()
     assert not report.disclaimed, report.render()
 

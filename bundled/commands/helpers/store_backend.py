@@ -84,7 +84,7 @@ class GitStoreBackend:
 
     def list_python_files(self) -> list[str]:
         """Return tree-store plugin/helper Python files."""
-        from plugins.commands.helpers import package_manager
+        from bundled.commands.helpers import package_manager
         return [path for path in self.list_tree_files() if path.endswith(".py") and package_manager._is_valid_tree_rel(path)]
 
     def get_tree_file_bytes(self, rel_path: str) -> bytes:

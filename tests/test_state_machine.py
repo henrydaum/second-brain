@@ -9,7 +9,7 @@ only kernel frontend, so frontend assertions here use it directly.
 from types import SimpleNamespace
 
 from plugins.BaseFrontend import BaseFrontend
-from plugins.frontends.helpers.formatters import render_plain
+from bundled.frontends.helpers.formatters import render_plain
 from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
 from state_machine.form_display import form_step_display
 from state_machine.forms import schema_to_form_steps

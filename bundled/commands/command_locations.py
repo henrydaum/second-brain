@@ -3,7 +3,9 @@
 from guest.bases import BaseCommand
 
 
-KINDS = ["root", "plugins", "sandbox", "installed"]
+#: The three trees, plus the two roots they hang off. Named for where the code
+#: came from, which is the only thing the tree name has ever carried.
+KINDS = ["root", "bundled", "installed", "workspace"]
 
 
 class LocationsCommand(BaseCommand):
@@ -26,24 +28,19 @@ class LocationsCommand(BaseCommand):
         """Execute `/locations` for the active session."""
         project = sdk.paths.get("project")
         data_dir = sdk.paths.get("data")
-        sandbox_plugins = sdk.paths.get("sandbox_plugins")
-        installed_plugins = sdk.paths.get("installed_plugins")
+        bundled = sdk.paths.get("bundled")
+        installed = sdk.paths.get("installed")
+        workspace = sdk.paths.get("workspace")
         locations = {
             "root": (project, data_dir),
-            "plugins": (_join(project, "plugins"), data_dir),
-            "sandbox": (sandbox_plugins, sandbox_plugins),
-            "installed": (installed_plugins, installed_plugins),
+            "bundled": (bundled, bundled),
+            "installed": (installed, installed),
+            "workspace": (workspace, workspace),
         }
         root, data = locations.get(
             args.get("kind") or "root", locations["root"])
         return _format_locations(
             root, _tree(sdk, root), data, _tree(sdk, data))
-
-
-def _join(root, name):
-    """Join an application root without consulting the guest environment."""
-    separator = "\\" if "\\" in root else "/"
-    return root.rstrip("/\\") + separator + name
 
 
 def _tree(sdk, path):

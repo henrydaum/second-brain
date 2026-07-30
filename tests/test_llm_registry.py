@@ -16,6 +16,7 @@ import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
 import llm
+from tests.support import retarget_trees
 from llm.registry import Brain, _pool_ceiling
 
 BACKEND = '''
@@ -71,15 +72,8 @@ def tree(tmp_path, monkeypatch):
     Discovery reads declarations off disk, so a test only has to write files —
     there is no registration call to fake.
     """
-    helpers = tmp_path / "helpers"
-    helpers.mkdir()
-
-    def helper_dirs():
-        """Stand in for the real tree scan."""
-        return ((None, helpers),)
-
-    monkeypatch.setattr("plugins.helpers.plugin_paths.helper_dirs",
-                        helper_dirs)
+    helpers = retarget_trees(monkeypatch, tmp_path)["workspace"] / "llm"
+    helpers.mkdir(parents=True)
     # Native backends are a separate world; keep them out unless a test asks.
     yield helpers
     llm.registry._BRAINS.clear()

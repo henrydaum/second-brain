@@ -13,19 +13,22 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from paths import INSTALLED_PLUGINS, ROOT_DIR
-from plugins.commands.helpers.store_backend import GitStoreBackend
-from plugins.helpers.plugin_paths import (HELPERS_FAMILY, PLUGIN_FAMILIES,
-                                          PLUGIN_ROOTS, SCRIPTS_FAMILY)
+import trees
+from paths import ROOT_DIR
+from bundled.commands.helpers.store_backend import GitStoreBackend
+from plugins.plugin_paths import PLUGIN_FAMILIES, PLUGIN_ROOTS
 
+INSTALLED_PLUGINS = trees.tree("installed").path
 
-# The family folders, plus the two roots that belong to no family because they
-# are not plugins at all. Parsers live in ``helpers/``: a package ships
-# ``helpers/parse_pdf.py`` and whatever needs it imports it. ``scripts/`` holds
-# SDK code that is run rather than registered, which the store can ship for the
-# same reason it ships a helper — the file is the whole package.
-TREE_ROOTS = ({family for family, _prefix in PLUGIN_FAMILIES.values()}
-              | {HELPERS_FAMILY, SCRIPTS_FAMILY})
+# Every root a tree may hold, read from the one table that declares them. A
+# package ships ``parsers/parse_pdf.py`` and whatever needs it imports it;
+# ``scripts/`` holds SDK code that is run rather than registered, which the
+# store can ship for the same reason — the file is the whole package.
+#
+# ``skills`` and ``bundles`` are deliberately absent: neither is a root the
+# kernel routes, so neither is in ``trees``, and both keep the bespoke handling
+# below.
+TREE_ROOTS = {root.name for root in trees.ROOTS}
 DEPENDENCY_FIELDS = ("dependencies_files", "dependencies_pip")
 _PACKAGE_LOCK = threading.RLock()
 Progress = Callable[[str], None]
@@ -635,7 +638,7 @@ def _validate_rel_path(path: str) -> str:
         raise PackageError(f"Invalid package file path: {path}")
     if p.parts[0] not in TREE_ROOTS:
         raise PackageError(f"Package file path must start with one of {sorted(TREE_ROOTS)}: {path}")
-    if len(p.parts) not in (2, 3) or (len(p.parts) == 3 and p.parts[1] != "helpers"):
+    if len(p.parts) not in (2, 3) or (len(p.parts) == 3 and p.parts[1] != trees.HELPERS_DIRNAME):
         raise PackageError(f"Package file path must be a plugin or helper file: {path}")
     if not _is_valid_tree_rel(p.as_posix()):
         raise PackageError(f"Invalid plugin/helper file path: {path}")
@@ -674,33 +677,33 @@ def _rel_id(rel: str) -> str:
 
 
 def _is_valid_tree_rel(rel: str) -> bool:
-    """Whether a store path is a plugin, a family helper, or shared code.
+    """Whether a store path names a file one of the trees can hold.
 
-    Four shapes are legal:
+    Three shapes are legal:
 
-        tools/tool_x.py            a plugin, prefixed by its family
+        tools/tool_x.py            a registered file, carrying its root's prefix
+        parsers/parse_pdf.py       likewise — the prefix is what a scanner globs
+        scripts/backfill.py        an unprefixed root: run, never registered
         tools/helpers/x.py         a helper belonging to one family
-        helpers/parse_pdf.py       shared code belonging to no family
-        scripts/backfill.py        SDK code that is run rather than registered
 
-    The last two have no prefix rule because neither is a plugin: nothing
-    discovers them, and a prefix would make the validator expect a plugin
-    class. Both are top level only — ``scripts/helpers/x.py`` falls through to
-    the three-part branch below, which admits family folders and nothing else,
-    and that matches ``isolation.is_script``, which is what decides whether an
-    installed script may run at all.
+    The prefix rule is read off the root rather than restated here: a root
+    declaring one is scanned and its files must carry it, and a root declaring
+    none is reached by being named, where a prefix would only make the
+    validator expect a plugin class. Unprefixed roots are top level only —
+    ``scripts/helpers/x.py`` falls through to the three-part branch, which
+    admits family folders and nothing else, matching ``isolation.is_script``,
+    which is what decides whether an installed script may run at all.
     """
     p = PurePosixPath(rel)
     if p.suffix != ".py":
         return False
+    root = trees.roots_by_name.get(p.parts[0])
+    if root is None:
+        return False
     if len(p.parts) == 2:
-        if p.parts[0] in (HELPERS_FAMILY, SCRIPTS_FAMILY):
-            return True
-        return any(p.parts[0] == family and p.name.startswith(prefix)
-                   for family, prefix in PLUGIN_FAMILIES.values())
-    return (len(p.parts) == 3 and p.parts[1] == "helpers"
-            and any(p.parts[0] == family
-                    for family, _prefix in PLUGIN_FAMILIES.values()))
+        return p.name.startswith(root.prefix)
+    return (len(p.parts) == 3 and p.parts[1] == trees.HELPERS_DIRNAME
+            and root.family is not None)
 
 
 def _target(rel_path: str) -> Path:
@@ -840,16 +843,17 @@ def _plugin_name(rel: str, plugin_type: str) -> str:
     return stem[len(prefix):] if stem.startswith(prefix) else stem
 
 
-def _is_rescannable_helper(rel: str) -> bool:
-    """Whether an installed file is a parser, i.e. ``helpers/parse_*.py``.
+#: Roots whose contents a kernel registry scans, so installing one means
+#: rescanning rather than loading. Both belong to no plugin family — a parser
+#: and a backend are routed to by extension and by profile, not registered as
+#: capabilities.
+RESCANNED_ROOTS = ("parsers", "llm")
 
-    Helpers live at a tree's root rather than under a family: a parser is not
-    a plugin and belongs to no family, it is a library whoever needs it
-    imports.
-    """
+
+def _is_rescannable_helper(rel: str) -> bool:
+    """Whether an installed file is a parser or an LLM backend."""
     p = PurePosixPath(rel)
-    return (len(p.parts) == 2 and p.parts[0] == "helpers"
-            and (p.name.startswith("parse_") or p.name.startswith("llm_")))
+    return len(p.parts) == 2 and p.parts[0] in RESCANNED_ROOTS
 
 
 def _rescan_helpers(context, lines: list[str]) -> None:

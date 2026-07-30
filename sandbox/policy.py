@@ -143,8 +143,8 @@ def _scratch_roots() -> list:
     Falls back to the system temp directory when the kernel is absent, which
     is the case in tests and in a bare container.
 
-    ``sandbox_plugins`` is here for a different reason than the rest, and it
-    is the point of the whole boundary — see :func:`_authoring_root`.
+    The ``workspace`` tree is here for a different reason than the rest, and
+    it is the point of the whole boundary — see :func:`_authoring_root`.
     """
     import tempfile
 
@@ -163,7 +163,7 @@ def _authoring_root():
     """The tree an agent may write code into freely, or None.
 
     This is what the process boundary is *for*. Every file under
-    ``sandbox_plugins`` runs in a subprocess — not because it asked to, but
+    ``workspace`` runs in a subprocess — not because it asked to, but
     because of where it is (``sandbox/isolation.py``) — so code the agent
     writes there is contained before it ever runs. Asking a human to approve
     each edit would buy nothing that containment has not already bought, and
@@ -178,8 +178,8 @@ def _authoring_root():
     been written without a dialog. Free authorship, unchanged authorization.
     """
     try:
-        from paths import SANDBOX_PLUGINS
-        return Path(SANDBOX_PLUGINS)
+        import trees
+        return Path(trees.tree("workspace").path)
     except Exception:
         return None
 
@@ -194,7 +194,7 @@ def _write_reason(path, verb: str = "write") -> str:
     """
     root = _authoring_root()
     if root is not None and _within(path, [root]):
-        return f"{verb} in the agent's own plugin tree"
+        return f"{verb} in the agent's own tree"
     return f"{verb} in scratch"
 
 

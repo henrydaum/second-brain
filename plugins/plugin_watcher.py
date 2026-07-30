@@ -9,7 +9,8 @@ from watchdog.observers import Observer
 
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
-from plugins.helpers.plugin_paths import helper_dirs, iter_plugin_dirs, plugin_info
+import trees
+from plugins.plugin_paths import plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
 
 logger = logging.getLogger("PluginWatcher")
@@ -63,12 +64,17 @@ class PluginWatcher:
         handler = _PluginEventHandler(self)
         self._handler = handler
         watched = 0
-        for _plugin_type, directory in iter_plugin_dirs():
-            directory.mkdir(parents=True, exist_ok=True)
-            self.observer.schedule(handler, str(directory), recursive=False)
-            watched += 1
-        for _root, directory in helper_dirs():
-            directory.mkdir(parents=True, exist_ok=True)
+        for tree, _root, directory in trees.iter_root_dirs(watched_only=True):
+            if tree.builtin:
+                # Never create a directory in the source tree. The app's own
+                # roots ship in the repo, so an absent one means the app ships
+                # nothing of that kind — materializing it puts empty folders in
+                # a checkout at every boot, and git does not track them, so the
+                # next person to delete them watches them come back.
+                if not directory.is_dir():
+                    continue
+            else:
+                directory.mkdir(parents=True, exist_ok=True)
             self.observer.schedule(handler, str(directory), recursive=False)
             watched += 1
         self._scan_existing()
@@ -93,20 +99,13 @@ class PluginWatcher:
         """Internal helper to handle scan existing."""
         with self._lock:
             self._known_mtimes.clear()
-            for _plugin_type, directory in iter_plugin_dirs():
+            # Every ``.py`` in every watched root, not just the ones matching a
+            # prefix. Seeding only the registrable files meant anything else had
+            # no baseline mtime, so its first save after startup looked like a
+            # brand-new file.
+            for _tree, _root, directory in trees.iter_root_dirs(watched_only=True):
                 if not directory.exists():
                     continue
-                for path in directory.glob("*.py"):
-                    try:
-                        self._known_mtimes[str(path.resolve())] = path.stat().st_mtime
-                    except OSError:
-                        pass
-            for _root, directory in helper_dirs():
-                if not directory.exists():
-                    continue
-                # Every helper, not just backends. Seeding only ``llm_*``
-                # meant a parser or library had no baseline mtime, so its
-                # first save after startup looked like a brand-new file.
                 for path in directory.glob("*.py"):
                     try:
                         self._known_mtimes[str(path.resolve())] = path.stat().st_mtime
@@ -146,8 +145,8 @@ class PluginWatcher:
             error = f"Plugin file does not exist: {path}"
             self._notify(f"✕ Plugin registration failed: {path.name}\n{error}")
             return {"ok": False, "error": error}
-        helper = self._helper_kind(path)
-        if helper == "llm":
+        root = self._root_of(path)
+        if root == "llm":
             self._refresh_llm_backends()
             self._notify(
                 f"✓ Registered LLM backend{' edit' if edited else ''}: "
@@ -157,24 +156,13 @@ class PluginWatcher:
                 "ok": True, "name": path.stem, "family": "llm_backend",
                 "path": str(path),
             }
-        if helper == "parser":
+        if root == "parsers":
             self._refresh_parsers()
             self._notify(
                 f"✓ Registered parser{' edit' if edited else ''}: {path.stem}"
             )
             return {
                 "ok": True, "name": path.stem, "family": "parser",
-                "path": str(path),
-            }
-        if helper == "library":
-            # Recognized and inert. A shared library under helpers/ is already
-            # imported by whatever uses it, so a restart is what applies the
-            # edit — that is not a failed plugin registration, and announcing
-            # it as one put a red ✕ in the user's chat for saving a file.
-            logger.info("Plugin watcher: helper library %s changed; a restart "
-                        "applies it", path.name)
-            return {
-                "ok": True, "name": path.stem, "family": "helper",
                 "path": str(path),
             }
         info, err = plugin_info(path)
@@ -219,33 +207,26 @@ class PluginWatcher:
     def unregister(self, raw_path) -> dict:
         """Unload everything registered from one recognized source file."""
         path = Path(raw_path).resolve()
-        helper = self._helper_kind(path)
-        if helper == "llm":
+        root = self._root_of(path)
+        if root == "llm":
             self._refresh_llm_backends()
             self._notify(f"Deregistered LLM backend: {path.stem}")
             return {
                 "ok": True, "names": [path.stem], "family": "llm_backend",
                 "path": str(path),
             }
-        if helper == "parser":
+        if root == "parsers":
             self._refresh_parsers()
             self._notify(f"Deregistered parser: {path.stem}")
             return {
                 "ok": True, "names": [path.stem], "family": "parser",
                 "path": str(path),
             }
-        if helper == "library":
-            logger.info("Plugin watcher: helper library %s removed; a restart "
-                        "applies it", path.name)
-            return {
-                "ok": True, "names": [], "family": "helper",
-                "path": str(path),
-            }
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher could not infer deleted plugin {path}: {err}")
             return {"ok": False, "error": err}
-        if info.plugin_type == "frontend" and info.built_in:
+        if info.plugin_type == "frontend" and info.builtin:
             # git pull (e.g. /update) replaces files as delete+create; tearing
             # down a kernel frontend mid-churn kills the surface the user is
             # typing into. Built-in frontends only change on restart anyway.
@@ -379,43 +360,36 @@ class PluginWatcher:
             logger.exception("parser rescan failed")
 
     @staticmethod
-    def _helper_kind(path: Path) -> str | None:
-        """Classify a changed file in a ``helpers/`` tree root.
+    def _root_of(path: Path) -> str | None:
+        """Which tree root a changed file sits directly in, or None.
 
-        ``helpers/`` is the fourth tree root beside the five families, and
-        nothing in it is a plugin — no base class, no entry point, nothing
-        discovery registers. ``plugin_info`` only knows the families, so every
-        helper that was not an LLM backend came back as "not in a known plugin
-        folder": a warning plus a red failure notice in chat, for saving an
-        ordinary library file.
+        The directory is the answer. This used to sniff the filename stem,
+        because everything that was not one of the five families lived in a
+        single ``helpers/`` folder and only the prefix could tell an LLM
+        backend from a parser from an ordinary library — so a plain library
+        file came back as "not in a known plugin folder", which put a red ✕ in
+        the user's chat for saving one.
 
-        Returns ``"llm"``, ``"parser"``, ``"library"``, or ``None`` when the
-        path is not a top-level helper at all. Top-level only, matching
-        ``package_manager._is_rescannable_helper`` — a family-local
-        ``tools/helpers/x.py`` belongs to its plugin, not to this root.
+        Top level only: a family-local ``tools/helpers/x.py`` belongs to its
+        plugin, not to a root, and is not watched at all.
         """
         if path.suffix != ".py":
             return None
-        try:
-            in_root = any(
-                path.parent.resolve() == directory.resolve()
-                for _root, directory in helper_dirs()
-            )
-        except OSError:
+        found = trees.locate(path)
+        if found is None or found.root is None or len(found.rel.parts) != 1:
             return None
-        if not in_root:
-            return None
-        if path.stem.startswith("llm_"):
-            return "llm"
-        if path.stem.startswith("parse_"):
-            return "parser"
-        return "library"
+        return found.root.name
 
 
 # Load priority: services must register before the tasks that require them, so
 # a batch install (many files landing at once) doesn't leave tasks warning about
 # missing services. Lower number = loaded first. Unknown types load last.
 _LOAD_PRIORITY = {"service": 0, "task": 1, "tool": 2, "command": 3, "frontend": 4}
+
+#: Roots a kernel registry scans rather than discovery, which is why a file in
+#: one is hoisted to the front of a batch: it belongs to no family, so
+#: ``plugin_info`` cannot rank it at all.
+_RESCANNED_ROOTS = ("parsers", "llm")
 
 
 class _PluginEventHandler(FileSystemEventHandler):
@@ -462,9 +436,9 @@ class _PluginEventHandler(FileSystemEventHandler):
 
         def _priority(raw_path: str) -> int:
             path = Path(raw_path)
-            # Helpers load first: a parser or backend is what a plugin
-            # arriving in the same batch may be about to look for.
-            if self.watcher._helper_kind(path):
+            # Parsers and backends load first: either is what a plugin arriving
+            # in the same batch may be about to look for.
+            if self.watcher._root_of(path) in _RESCANNED_ROOTS:
                 return _LOAD_PRIORITY["service"]
             info, err = plugin_info(path)
             return _LOAD_PRIORITY.get(info.plugin_type, len(_LOAD_PRIORITY)) if info and not err else len(_LOAD_PRIORITY)

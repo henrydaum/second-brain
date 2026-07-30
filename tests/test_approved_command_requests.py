@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.command_registry import CommandRegistry
+from plugins.command_registry import CommandRegistry
 from sandbox.approval import describe_grant, phrase_for
 from sandbox.bridge import adapt
 from sandbox.guest.requests import (ALL_TYPES, FS_WRITE, NET_HTTP, PATH_GET,
@@ -186,7 +186,7 @@ def test_the_prompt_is_rendered_from_the_same_declaration_as_the_grant():
     something to the sandbox, not to the kernel — so the declaration is read
     back from the validator, which is where the bridge got it too.
     """
-    path = Path("plugins/commands/command_update.py")
+    path = Path("bundled/commands/command_update.py")
     declared = validate_file(path).declarations["requests"]
     module = adapt(path)
     command = next(
@@ -203,7 +203,7 @@ def test_update_declares_exactly_what_its_approval_grants():
     live example of the grant. If it drifts, a user approving the command is
     consenting to something other than what runs.
     """
-    report = validate_file(Path("plugins/commands/command_update.py"))
+    report = validate_file(Path("bundled/commands/command_update.py"))
     assert report.ok, report.render()
     assert set(report.declarations["requests"]) == {PATH_GET, PROC_RUN}
 

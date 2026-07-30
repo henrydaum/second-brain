@@ -33,7 +33,7 @@ def main(sdk, path):
 
 That is a complete, runnable sandbox program.
 
-**Put it in `scripts/`** — `<DATA_DIR>/sandbox_plugins/scripts/<name>.py`,
+**Put it in `scripts/`** — `<DATA_DIR>/workspace/scripts/<name>.py`,
 which `sdk.paths.get("scripts")` will tell you. The directory is the whole
 declaration, the way `helpers/` is: there is no prefix, no base class and no
 keyword that could say what this file is, so where it sits has to.
@@ -321,7 +321,8 @@ sdk.conv.delete(conversation_id)
 sdk.config.read(key)           # omit key for everything
 sdk.config.read(details=True)  # visible, redacted setting descriptors
 sdk.config.write(key, value)
-sdk.paths.get(name)            # project, data, installed_plugins, sandbox_plugins
+sdk.paths.get(name)            # project, data, bundled, installed, workspace,
+                               # scripts, python, platform
 sdk.users.read(user_id=None)   # defaults to the current user
 sdk.users.list()
 sdk.users.write(user_id=None, **fields)

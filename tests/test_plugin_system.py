@@ -49,8 +49,8 @@ def _watched_dir(tmp_path, monkeypatch, plugin_type="tool"):
 
 def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
     """Internal helper to handle patch plugin dir."""
-    import plugins.helpers.plugin_paths as paths
-    import plugins.plugin_watcher as watcher_mod
+    import trees
+    import plugins.plugin_paths as paths
 
     config = dict(paths.PLUGIN_CONFIG)
     directory = Path(directory).resolve()
@@ -59,14 +59,20 @@ def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
     prefix = paths.PLUGIN_FAMILIES[plugin_type][1]
     config[plugin_type] = (paths.PluginDir(root, plugin_type, family, prefix),)
     monkeypatch.setattr(paths, "PLUGIN_CONFIG", config)
-    monkeypatch.setattr(watcher_mod, "iter_plugin_dirs", lambda: [(plugin_type, Path(directory).resolve())])
+    # The watcher walks the layout rather than a family list, so narrowing it
+    # to one directory is done at the table.
+    tree_root = trees.roots_by_name[paths.PLUGIN_FAMILIES[plugin_type][0]]
+    monkeypatch.setattr(
+        trees, "iter_root_dirs",
+        lambda watched_only=False: [(root, tree_root, directory)])
 
 
 def _patch_tool_discovery(monkeypatch, roots):
     """Patch tool discovery to use test roots."""
-    import plugins.helpers.plugin_paths as paths
+    import plugins.plugin_paths as paths
 
-    plugin_roots = tuple(paths.PluginRoot(name, Path(root), module, built_in) for name, root, module, built_in in roots)
+    plugin_roots = tuple(paths.PluginRoot(name, Path(root), module, builtin=built_in)
+                         for name, root, module, built_in in roots)
     config = dict(paths.PLUGIN_CONFIG)
     config["tool"] = tuple(paths.PluginDir(root, "tool", "tools", "tool_") for root in plugin_roots)
     monkeypatch.setattr(paths, "PLUGIN_ROOTS", plugin_roots)
@@ -255,17 +261,13 @@ def test_plugin_watcher_refreshes_sandboxed_llm_backends(
     tmp_path,
     monkeypatch,
 ):
-    """LLM helper changes rescan the kernel registry."""
-    import plugins.plugin_watcher as watcher_mod
+    """A change under llm/ rescans the kernel registry."""
 
-    directory = tmp_path / "helpers"
-    directory.mkdir()
-    root = object()
-    monkeypatch.setattr(
-        watcher_mod,
-        "helper_dirs",
-        lambda: ((root, directory),),
-    )
+    import trees
+    from tests.support import retarget_trees
+
+    directory = retarget_trees(monkeypatch, tmp_path)["workspace"] / "llm"
+    directory.mkdir(parents=True)
     path = directory / "llm_fake.py"
     path.write_text("display_name = 'Fake'\n", encoding="utf-8")
     calls = []
@@ -288,6 +290,47 @@ def test_plugin_watcher_refreshes_sandboxed_llm_backends(
         "discover",
         ("refresh", service.config, {"force": True}),
     ]
+
+
+def test_a_batch_loads_parsers_and_backends_before_plugins(tmp_path, monkeypatch):
+    """Ordering, and the fact that ranking a rootless file does not raise.
+
+    ``_priority`` has to rank files ``plugin_info`` knows nothing about — a
+    parser and an LLM backend belong to no family — so it asks the layout
+    first. That branch is reached on *every* debounced batch, and it went
+    unexercised long enough for a refactor to leave it calling a method that no
+    longer existed: an ``AttributeError`` on any group of saves, with a green
+    suite. This pins both halves.
+    """
+    from plugins.plugin_watcher import _PluginEventHandler
+    from tests.support import retarget_trees
+
+    workspace = retarget_trees(monkeypatch, tmp_path)["workspace"]
+    written = []
+    for rel in ("tools/tool_late.py", "parsers/parse_early.py",
+                "llm/llm_early.py", "commands/command_mid.py"):
+        path = workspace / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n", encoding="utf-8")
+        written.append(str(path))
+
+    watcher = PluginWatcher({})
+    handler = _PluginEventHandler(watcher)
+    handler.pending = set(written)
+    loaded = []
+    monkeypatch.setattr(watcher, "handle_create_or_modify", loaded.append)
+    handler._fire_batch()
+
+    kinds = [Path(p).parent.name for p in loaded]
+    assert len(loaded) == len(written), "every queued file must be loaded"
+    assert set(kinds[:2]) == {"parsers", "llm"}, (
+        f"parsers and backends must load before plugins, got {kinds}")
+    # Deliberately not asserting the order of the remaining two. Ranking a
+    # family goes through ``plugin_info``, which resolves against the *real*
+    # PLUGIN_CONFIG and cannot place a file in a retargeted tree — so they tie
+    # and fall back to set iteration order, which pytest-randomly reseeds. The
+    # family ordering is ``_LOAD_PRIORITY``'s to keep; this test is about the
+    # rootless branch ahead of it.
 
 
 def test_plugin_watcher_refreshes_runtime_commands_on_command_load(tmp_path, monkeypatch):
@@ -474,7 +517,7 @@ def test_orchestrator_stop_unsubscribes_service_loaded_handler():
 # ────────────────────────────────────────────────────────────────────
 
 from plugins.BaseService import EXTENSION, BaseService, is_user_managed_service, should_autoload_service
-from plugins.frontends.helpers.formatters import format_services
+from bundled.frontends.helpers.formatters import format_services
 
 
 class ManagedService(BaseService):

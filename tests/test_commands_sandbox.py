@@ -16,13 +16,13 @@ worth a test belongs with the *mechanism* it exercises (approval gating in
 
 import pytest
 
-from plugins.helpers.plugin_paths import iter_plugin_dirs
+from plugins.plugin_paths import iter_plugin_dirs
 from sandbox import bridge
 from sandbox.guest.requests import ALL_TYPES
 from sandbox.validator import validate_file
 
 _ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
-_KERNEL_COMMANDS = sorted((_ROOT / "plugins" / "commands").glob("command_*.py"))
+_KERNEL_COMMANDS = sorted((_ROOT / "bundled" / "commands").glob("command_*.py"))
 
 
 def _ids(paths):

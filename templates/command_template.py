@@ -7,7 +7,7 @@ imported by the running system.
 Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a command can declare. This file covers what is specific to commands.
 
-  Where it goes:  DATA_DIR/sandbox_plugins/commands/command_<name>.py
+  Where it goes:  DATA_DIR/workspace/commands/command_<name>.py
   Filename:       must start with "command_"
   Entry points:   run(self, sdk, args) and optionally form(self, sdk, args)
 

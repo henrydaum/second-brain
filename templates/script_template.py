@@ -12,7 +12,7 @@ code by name, it does not need a plugin class.
 Read docs/SDK.md for the Request surface. This file covers what is specific to
 scripts and helper files.
 
-  Where it goes:  <DATA_DIR>/sandbox_plugins/scripts/, and nowhere else.
+  Where it goes:  <DATA_DIR>/workspace/scripts/, and nowhere else.
                   `sdk.paths.get("scripts")` will tell you the absolute path.
                   The directory is the entire declaration — a script has no
                   prefix, no base class and no keyword that could say what it

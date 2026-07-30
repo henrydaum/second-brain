@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from paths import INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
+import trees
+from tests.support import retarget_trees
 from sandbox.guest.box import IN_PROCESS, SUBPROCESS
 from sandbox.isolation import (INSTALLED, KERNEL, SANDBOX, UNKNOWN,
                                required_isolation, tree_of)
@@ -41,8 +42,8 @@ def _write(path: Path, extra: str = "") -> Path:
 # ── the tree decides ──────────────────────────────────────────────────
 
 @pytest.mark.parametrize("root, tree, expected", [
-    (SANDBOX_PLUGINS / "tools", SANDBOX, SUBPROCESS),
-    (ROOT_DIR / "plugins" / "tools", KERNEL, IN_PROCESS),
+    (trees.tree("workspace").path / "tools", SANDBOX, SUBPROCESS),
+    (trees.tree("bundled").path / "tools", KERNEL, IN_PROCESS),
 ])
 def test_the_tree_decides_isolation(root, tree, expected):
     """Agent-authored code is contained; the kernel's own is not.
@@ -67,8 +68,7 @@ def test_a_file_cannot_declare_its_way_out_of_a_subprocess(tmp_path,
     An agent authoring a plugin could previously author its own escape from
     the process boundary by leaving a line out — or putting one in.
     """
-    tree = tmp_path / "sandbox_plugins"
-    monkeypatch.setattr("paths.SANDBOX_PLUGINS", tree)
+    tree = retarget_trees(monkeypatch, tmp_path)["workspace"]
 
     source = _write(tree / "tools" / "tool_sample.py",
                     'isolation = "in_process"')
@@ -82,8 +82,7 @@ def test_isolation_is_not_a_declaration_any_more(tmp_path, monkeypatch):
     collector takes every literal class attribute, so "not in the allowlist"
     was never what kept ``isolation`` out — dropping it explicitly is.
     """
-    tree = tmp_path / "sandbox_plugins"
-    monkeypatch.setattr("paths.SANDBOX_PLUGINS", tree)
+    tree = retarget_trees(monkeypatch, tmp_path)["workspace"]
     source = _write(tree / "tools" / "tool_sample.py",
                     'isolation = "in_process"')
     report = validate_file(source)
@@ -92,14 +91,14 @@ def test_isolation_is_not_a_declaration_any_more(tmp_path, monkeypatch):
     # And the author is told once, at the line, rather than left to wonder.
     assert any("isolation" in f.message for f in report.findings)
     assert "isolation" not in validate_file(
-        Path("plugins/commands/command_update.py")).declarations
+        Path("bundled/commands/command_update.py")).declarations
 
 
 # ── installed packages are judged on what they import ─────────────────
 
 def _installed(tmp_path, monkeypatch, extra):
-    monkeypatch.setattr("paths.INSTALLED_PLUGINS", tmp_path / "installed")
-    source = _write(tmp_path / "installed" / "tools" / "tool_sample.py", extra)
+    installed = retarget_trees(monkeypatch, tmp_path)["installed"]
+    source = _write(installed / "tools" / "tool_sample.py", extra)
     return source, validate_file(source)
 
 
@@ -136,8 +135,8 @@ def test_the_foreign_check_is_computed_not_declared(tmp_path, monkeypatch):
 
 def test_an_unreadable_report_isolates(tmp_path, monkeypatch):
     """No verdict about the contents is not the same as a clean verdict."""
-    monkeypatch.setattr("paths.INSTALLED_PLUGINS", tmp_path / "installed")
-    source = tmp_path / "installed" / "tools" / "tool_x.py"
+    installed = retarget_trees(monkeypatch, tmp_path)["installed"]
+    source = installed / "tools" / "tool_x.py"
     assert required_isolation(source, None) == SUBPROCESS
 
 
@@ -148,10 +147,10 @@ def _chain():
 
 
 @pytest.mark.parametrize("kind, args", [
-    (FS_WRITE, {"path": str(SANDBOX_PLUGINS / "tools" / "tool_new.py")}),
-    (FS_DELETE, {"path": str(SANDBOX_PLUGINS / "tools" / "tool_old.py")}),
-    (FS_MOVE, {"src": str(SANDBOX_PLUGINS / "tools" / "a.py"),
-               "dst": str(SANDBOX_PLUGINS / "tools" / "b.py")}),
+    (FS_WRITE, {"path": str(trees.tree("workspace").path / "tools" / "tool_new.py")}),
+    (FS_DELETE, {"path": str(trees.tree("workspace").path / "tools" / "tool_old.py")}),
+    (FS_MOVE, {"src": str(trees.tree("workspace").path / "tools" / "a.py"),
+               "dst": str(trees.tree("workspace").path / "tools" / "b.py")}),
 ])
 def test_the_agent_writes_its_own_plugins_without_asking(kind, args):
     """This is what the subprocess buys.
@@ -165,7 +164,7 @@ def test_the_agent_writes_its_own_plugins_without_asking(kind, args):
 
 def test_the_grant_is_that_tree_and_no_other():
     """Free authorship is scoped to where containment applies."""
-    outside = str(ROOT_DIR / "plugins" / "tools" / "tool_kernel.py")
+    outside = str(trees.tree("bundled").path / "tools" / "tool_kernel.py")
     assert classify(Request(FS_WRITE, {"path": outside}),
                     _chain()).level == UNSAFE
 
@@ -189,6 +188,6 @@ def test_writing_code_freely_does_not_widen_what_it_may_do():
 def test_the_ledger_can_tell_authoring_from_scratch():
     """Two grants share a branch; reading back what happened should not guess."""
     reason = classify(Request(FS_WRITE, {
-        "path": str(SANDBOX_PLUGINS / "tools" / "tool_new.py")}),
+        "path": str(trees.tree("workspace").path / "tools" / "tool_new.py")}),
         _chain()).reason
-    assert "plugin tree" in reason
+    assert "agent's own tree" in reason

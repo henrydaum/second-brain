@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from plugins.helpers.plugin_paths import PLUGIN_ROOTS, plugin_dirs, plugin_info
+from plugins.plugin_paths import PLUGIN_ROOTS, plugin_dirs, plugin_info
 
 logger = logging.getLogger("Discovery")
 
@@ -178,7 +178,7 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseCommand, module_name):
@@ -218,7 +218,7 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
             if module is None:
                 continue
             for cls in _find_subclasses(module, BaseFrontend, module_name):
@@ -253,7 +253,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseTool, module_name):
@@ -285,7 +285,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseTask, module_name):
@@ -317,7 +317,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
             if py_file.stem.startswith("_"):
                 continue
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload=False)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload=False)
             if module is None:
                 continue
             built = _call_build_services(module, module_name, config)
@@ -450,7 +450,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
         return None, err
     module_name = info.module_name
 
-    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -487,7 +487,7 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
     if frontend_manager is None:
         return None, "No frontend manager available"
 
-    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -515,7 +515,7 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
     if command_registry is None:
         return None, "No command registry available"
 
-    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -538,7 +538,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
         return None, err
     module_name = info.module_name
 
-    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -579,7 +579,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
     }
     _unload_services_by_source(services, _source_path(file_path))
 
-    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -688,13 +688,17 @@ def _load_external(module_name: str, file_path: Path, reload: bool):
 
 
 def _purge_external_helper_modules(module_name: str):
-    """Drop helper modules that may be reused by a reloaded plugin."""
+    """Drop helper modules that may be reused by a reloaded plugin.
+
+    Family-local only (``<tree>.<family>.helpers``). There is no tree-level
+    ``helpers/`` any more — a helper belongs to the family it helps.
+    """
     parts = module_name.split(".")
     if len(parts) < 3:
         return
-    prefixes = (f"{parts[0]}.{parts[1]}.helpers", f"{parts[0]}.helpers")
+    prefix = f"{parts[0]}.{parts[1]}.helpers"
     for name in list(sys.modules):
-        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes):
+        if name == prefix or name.startswith(prefix + "."):
             sys.modules.pop(name, None)
 
 
@@ -702,7 +706,7 @@ def _ensure_external_namespaces(module_name: str):
     """Create namespace packages for DATA_DIR plugin roots."""
     import types
 
-    root_paths = {root.module: root.path for root in PLUGIN_ROOTS if not root.built_in}
+    root_paths = {root.module: root.path for root in PLUGIN_ROOTS if not root.builtin}
     parts = module_name.split(".")
     root_path = root_paths.get(parts[0])
     if root_path is None:

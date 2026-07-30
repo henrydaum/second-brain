@@ -56,7 +56,7 @@ def timekeeper(monkeypatch):
         )
         sandbox = Sandbox(context=context)
         configure(sandbox)
-        module = adapt("plugins/services/service_timekeeper.py")
+        module = adapt("bundled/services/service_timekeeper.py")
         service = module.build_services(config)["timekeeper"]
         context.services["timekeeper"] = service
         sandboxes.append((sandbox, service))

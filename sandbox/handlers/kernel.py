@@ -963,19 +963,20 @@ def _path_get(ctx, args: dict) -> Result:
     """
     import sys
 
-    from paths import (DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS,
-                       SANDBOX_SCRIPTS)
+    import trees
+    from paths import DATA_DIR, ROOT_DIR
 
     locations = {
         "project": getattr(ctx, "root_dir", None) or ROOT_DIR,
         "data": DATA_DIR,
-        "installed_plugins": INSTALLED_PLUGINS,
-        "sandbox_plugins": SANDBOX_PLUGINS,
-        # Named rather than left to be built out of ``sandbox_plugins``: where
-        # a script goes is what decides whether it can be run without a dialog,
+        "bundled": trees.tree("bundled").path,
+        "installed": trees.tree("installed").path,
+        "workspace": trees.tree("workspace").path,
+        # Named rather than left to be built out of ``workspace``: where a
+        # script goes is what decides whether it can be run without a dialog,
         # so it is a fact the kernel states rather than a path convention a
         # plugin is expected to remember.
-        "scripts": SANDBOX_SCRIPTS,
+        "scripts": trees.tree("workspace").path / "scripts",
         "python": sys.executable,
         "platform": sys.platform,
     }
@@ -1033,7 +1034,7 @@ def _plugin_list(ctx, args: dict) -> Result:
     if source != "registered":
         try:
             from paths import ROOT_DIR
-            from plugins.commands.helpers import package_manager
+            from bundled.commands.helpers import package_manager
 
             root = getattr(ctx, "root_dir", None) or ROOT_DIR
             if source == "available":
@@ -1158,7 +1159,7 @@ def _plugin_install(ctx, args: dict) -> Result:
     """Install one store package through the kernel package manager."""
     try:
         from paths import ROOT_DIR
-        from plugins.commands.helpers import package_manager
+        from bundled.commands.helpers import package_manager
 
         root = getattr(ctx, "root_dir", None) or ROOT_DIR
         outcome = package_manager.install_package(
@@ -1174,7 +1175,7 @@ def _plugin_uninstall(ctx, args: dict) -> Result:
     """Uninstall one package through the kernel package manager."""
     try:
         from paths import ROOT_DIR
-        from plugins.commands.helpers import package_manager
+        from bundled.commands.helpers import package_manager
 
         root = getattr(ctx, "root_dir", None) or ROOT_DIR
         outcome = package_manager.uninstall_package(
@@ -1190,7 +1191,7 @@ def _plugin_update(ctx, args: dict) -> Result:
     """Update all installed packages through the kernel package manager."""
     try:
         from paths import ROOT_DIR
-        from plugins.commands.helpers import package_manager
+        from bundled.commands.helpers import package_manager
 
         root = getattr(ctx, "root_dir", None) or ROOT_DIR
         outcome = package_manager.update_packages(
@@ -1245,7 +1246,7 @@ def _plugin_validate(ctx, args: dict) -> Result:
     between "your plugin did not load" and a line number with a fix on it.
     Nothing is imported or executed: this is a pure AST walk.
     """
-    from plugins.helpers.plugin_paths import resolve_plugin_path
+    from plugins.plugin_paths import resolve_plugin_path
 
     from ..validator import validate_file
 
@@ -1306,7 +1307,7 @@ def _plugin_target(ctx, args: dict):
         return None, Result.failure("the plugin watcher is not available")
     raw_path = args.get("path") or ""
     if raw_path:
-        from plugins.helpers.plugin_paths import plugin_info, resolve_plugin_path
+        from plugins.plugin_paths import plugin_info, resolve_plugin_path
 
         path, error = resolve_plugin_path(raw_path)
         if error:
@@ -1588,7 +1589,7 @@ def _command_list(ctx, args: dict) -> Result:
 
     predicate = None
     if args.get("visible"):
-        from plugins.frontends.helpers.command_registry import (
+        from plugins.command_registry import (
             frontend_command_filter,
         )
 
@@ -2653,7 +2654,7 @@ def _script_run(ctx, args: dict) -> Result:
     resolving a path, descending the chain, and — the part that is not
     obvious — noticing if the caller goes away.
     """
-    from plugins.helpers.plugin_paths import resolve_plugin_path
+    from plugins.plugin_paths import resolve_plugin_path
 
     from .. import provenance
     from ..bridge import get_sandbox
@@ -2679,11 +2680,11 @@ def _script_run(ctx, args: dict) -> Result:
         # Naming the real directory rather than ``<tree>/scripts/``: this
         # message is what the agent has to learn from when it guessed, and an
         # abstraction is not somewhere a file can be put.
-        from paths import SANDBOX_SCRIPTS
+        import trees
         return Result.failure(
             f"{path.name} is not in a scripts/ directory; put it in "
-            f"{SANDBOX_SCRIPTS} and run it from there, so that it is "
-            f"contained before it runs")
+            f"{trees.tree("workspace").path / 'scripts'} and run it from there, so "
+            f"that it is contained before it runs")
 
     caller = provenance.current()
     chain = caller.chain if caller is not None else None

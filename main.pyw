@@ -6,6 +6,7 @@ import threading
 import time
 from pathlib import Path
 
+import migrations
 from paths import DATA_DIR
 
 # Silence noisy libraries
@@ -27,10 +28,14 @@ for _handler in logging.getLogger().handlers:
 		_handler.setLevel(logging.WARNING)
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-(DATA_DIR / "memory.md").touch(exist_ok=True)
 LOG_FILE = DATA_DIR / "app.log"
 
 logger = logging.getLogger("Main")
+
+# Before anything reads the trees. Idempotent and near-free once done, so it
+# runs every boot rather than behind a marker file that could itself go stale.
+for _line in migrations.migrate():
+	logger.info("DATA_DIR migration: %s", _line)
 
 
 # ── Crash-restart launcher ───────────────────────────────────────────
@@ -210,10 +215,13 @@ def main():
 		logger.error("No sync_directories set in config.json. Add at least one folder path.")
 		sys.exit(1)
 
-	# --- 1b. Ensure mutable plugin directories exist ---
-	from plugins.helpers.plugin_paths import iter_plugin_dirs
-	for _plugin_type, d in iter_plugin_dirs():
-		if d.is_relative_to(_ROOT / "plugins"):
+	# --- 1b. Ensure the mutable trees exist ---
+	# Every root, not just the five families: a workspace missing scripts/ or
+	# parsers/ makes the agent's first write to one fail on a directory it was
+	# told to use. The bundled tree ships in the repo and is skipped.
+	import trees as _trees
+	for _tree, _root, d in _trees.iter_root_dirs():
+		if _tree.builtin:
 			continue
 		d.mkdir(parents=True, exist_ok=True)
 

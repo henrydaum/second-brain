@@ -47,7 +47,7 @@ def test_repl_subprocess_drives_a_live_command(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(CONSOLE, "claim", claim)
-    module = adapt(Path("plugins/frontends/frontend_repl.py").resolve())
+    module = adapt(Path("bundled/frontends/frontend_repl.py").resolve())
     frontend_cls = next(
         value for value in vars(module).values()
         if isinstance(value, type) and getattr(value, "_sandboxed", False)
@@ -82,7 +82,7 @@ from sandbox.bridge import adapt
 
 
 def _frontend(app_shutdown):
-    module = adapt(Path("plugins/frontends/frontend_repl.py"))
+    module = adapt(Path("bundled/frontends/frontend_repl.py"))
     cls = next(
         value for value in vars(module).values()
         if isinstance(value, type) and getattr(value, "_sandboxed", False)

@@ -85,7 +85,7 @@ Browse and manage packages anytime:
 
 Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. You don't need to worry about managing helper files or Python packages (with one rare exception — OCR — which requires a manual pip install since it's platform/OS dependent).
 
-The /packages command automatically maintains a clean separation between the kernel and plugins. All installed plugins and helpers will be within the installed_plugins folder of the DATA_DIR (data directory, see below). You don't have to use the /packages command to install or remove plugins. You can also simply drag and drop plugins and their helpers into this folder. It'll be automatically picked up by the Plugin Watcher service. However, if you do it this way you will have to pip install their Python dependencies as well, if you haven't got them already.
+The /packages command automatically maintains a clean separation between the kernel and plugins. All installed plugins and helpers will be within the `installed` folder of the DATA_DIR (data directory, see below). You don't have to use the /packages command to install or remove plugins. You can also simply drag and drop plugins and their helpers into this folder. It'll be automatically picked up by the Plugin Watcher service. However, if you do it this way you will have to pip install their Python dependencies as well, if you haven't got them already.
 
 ### Contributing to the store
 
@@ -128,15 +128,28 @@ Frontends do not own that flow. `BaseFrontend` turns transport input into runtim
 
 Everything user-extensible has its own plugin family:
 
-| Family | Built-in path | Sandbox path | Contract |
+| Family | Folder | Prefix | Contract |
 |---|---|---|---|
-| Tools | `plugins/tools/` | `sandbox_plugins/tools/` | LLM-callable actions via `BaseTool` |
-| Tasks | `plugins/tasks/` | `sandbox_plugins/tasks/` | Pipeline and event work via `BaseTask` |
-| Services | `plugins/services/` | `sandbox_plugins/services/` | Shared backends via `BaseService` |
-| Commands | `plugins/commands/` | `sandbox_plugins/commands/` | User slash commands via `BaseCommand` |
-| Frontends | `plugins/frontends/` | `sandbox_plugins/frontends/` | User transports via `BaseFrontend` |
+| Tools | `tools/` | `tool_` | LLM-callable actions via `BaseTool` |
+| Tasks | `tasks/` | `task_` | Pipeline and event work via `BaseTask` |
+| Services | `services/` | `service_` | Shared backends via `BaseService` |
+| Commands | `commands/` | `command_` | User slash commands via `BaseCommand` |
+| Frontends | `frontends/` | `frontend_` | User transports via `BaseFrontend` |
 
-Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; the kernel plugin watcher then syncs adds, edits, and deletes live.
+Three more folders sit beside them, holding code the kernel routes to without a
+base class: `parsers/` (`parse_*.py`, reached by file extension), `llm/`
+(`llm_*.py`, reached by model profile), and `scripts/` (any name — SDK code the
+agent runs rather than registers, where the directory is the whole declaration).
+The prefix is the rule: a folder whose files carry one is *scanned*, a folder
+without one is reached by something naming the file. Code belonging to a single
+plugin goes in that family's own `helpers/` subfolder.
+
+That same set of folders appears in three **trees**, named for where the code
+came from: `bundled/` in the project root ships with the app, `DATA_DIR/installed`
+is delivered by the package store, and `DATA_DIR/workspace` is the agent's own —
+the one place it may write without asking, because everything under it runs in a
+subprocess. Bundled plugins are source-controlled; the other two live in the
+Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; the kernel plugin watcher then syncs adds, edits, and deletes live.
 
 The agent can create new plugins on-the-fly. When you ask Second Brain to make a new plugin (and test_plugin is installed), it'll follow these instructions:
 
@@ -153,7 +166,7 @@ In other words, the system prompt has been fully engineered.
 
 ## Security
 
-Rogue plugins are the primary security issue for Second Brain. If a plugin gets an infection, it's important to prevent it from taking down the whole system. Plugins written against the sandbox SDK cannot act on the outside world at all — every effect is a typed Request the kernel classifies and executes on their behalf — and agent-authored ones run in a subprocess with bounded CPU and memory, so a runaway is killed rather than tolerated. Service loads are given a timeout; if they can't get the job done within that timeframe, it gets cancelled. This fixes freezes. There's also a system fallback for crashes. If Second Brain crashes, then it will restart itself automatically. When this happens, all your conversations will be reloaded exactly where they were, even if you were in the middle of a command. Second Brain has a literal heartbeat which monitors for system-wide freezes. If there's no heartbeat for a long time, the system initiates a restart, like just discussed.
+Rogue plugins are the primary security issue for Second Brain. If a plugin gets an infection, it's important to prevent it from taking down the whole system. Plugins written against the sandbox SDK cannot act on the outside world at all — every effect is a typed Request the kernel classifies and executes on their behalf — and agent-authored ones run in a subprocess with bounded CPU and memory, so a runaway is killed rather than tolerated. Service loads are given a timeout; if they can't get the job done within that timeframe, it gets cancelled. This fixes freezes. There's also a system fallback for crashes. If Second Brain crashes, then it will restart itself automatically. When this happens, all your conversations will be reloaded exactly where they were, even if you were in the middle of a command.
 
 The bad news: rogue plugins can still kill Second Brain. All plugins run in-process, which means that there are no subprocesses. If a plugin calls `os._exit()`, then it will take down the whole process. Like malware, a plugin can theoretically prompt the agent to mine for private information and share it. Although no plugins like this exist in the store (they have been vetted by me personally), you should make sure you trust plugins before adding them to your runtime. And when writing new plugins for Second Brain, you should use an intelligent model that won't mess things up. Consider using Codex or Claude Code for in-depth coding exercises.
 
@@ -436,15 +449,18 @@ Second Brain/
     ├── config.json
     ├── plugin_config.json
     ├── database.db
-    ├── memory.md
     ├── attachment_cache/
-    ├── sandbox_plugins/
+    ├── memory/
+    ├── workspace/          # the agent's tree — the only writable one
     │   ├── tools/
     │   ├── tasks/
     │   ├── services/
     │   ├── commands/
-    │   └── frontends/
-    └── installed_plugins/
+    │   ├── frontends/
+    │   ├── parsers/
+    │   ├── llm/
+    │   └── scripts/
+    └── installed/          # the package store's tree, same shape
 ```
 
 ## Extension Authoring Guide

@@ -7,7 +7,7 @@ surfaces render the markdown natively.
 
 import re
 
-from plugins.frontends.helpers.formatters import align_md_tables, detail_card, format_tasks, md_table, render_plain
+from bundled.frontends.helpers.formatters import align_md_tables, detail_card, format_tasks, md_table, render_plain
 
 
 def _tables_start_their_own_block(text: str) -> bool:

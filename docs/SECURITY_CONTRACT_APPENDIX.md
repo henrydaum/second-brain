@@ -60,14 +60,14 @@ agent authoring a plugin could author its own escape from the process boundary
 by leaving a line out. Code does not get a vote on how contained it is.
 
 The replacement is provenance, which a file cannot assert about itself: writing
-into `sandbox_plugins/` is what *makes* something an agent-authored plugin.
+into `workspace/` is what *makes* something an agent-authored plugin.
 Three trees, three answers (`sandbox/isolation.py`):
 
 | Tree | Isolation | Why |
 |---|---|---|
-| `sandbox_plugins/` | always subprocess | agent-authored; this is what the boundary is for, and it is what buys free authorship above |
+| `workspace/` | always subprocess | agent-authored; this is what the boundary is for, and it is what buys free authorship above |
 | `plugins/` | always in-process | first-party kernel code, trusted by definition; a pipe would buy nothing and cost every call |
-| `installed_plugins/` | subprocess **iff** it imports something unmediated | a store package that is pure computation over the SDK is as inspectable as kernel code |
+| `installed/` | subprocess **iff** it imports something unmediated | a store package that is pure computation over the SDK is as inspectable as kernel code |
 | anything else | subprocess | unknown provenance fails closed |
 
 "Unmediated" is **computed, not declared** — for exactly the same reason the
@@ -84,7 +84,7 @@ place.
 
 **Boxes cannot be used to escape this.** Files group into a shared box by
 declaring `box = "name"`, and a box takes the tightest isolation any member
-asked for. The worry is a `sandbox_plugins` file naming the kernel's box to
+asked for. The worry is a `workspace` file naming the bundled tree's box to
 ride in-process beside it; it cannot, because isolation is computed per file
 from that file's own path *before* any grouping, and tightest-wins can only
 ever tighten from there. The worst a mislabelled file achieves is dragging its
@@ -114,7 +114,7 @@ thing and stays a different thing: a person may decide what the code may not.
 decision. Scratch space is granted, not requested by path.
 
 **The agent writes its own plugins freely.** Every path under
-`sandbox_plugins/` is writable, deletable and movable without a dialog, and
+`workspace/` is writable, deletable and movable without a dialog, and
 that grant is the return on the whole boundary. Code in that tree runs in a
 subprocess — not because it asked, but because of where it is (see
 *Isolation*) — so it is contained before it ever runs. Approving each edit
@@ -376,7 +376,7 @@ walk that never imports or executes the file it reads, so a `validate` that
 returns "will not load" has left the system exactly as it found it. It is what
 an agent authoring a plugin uses to check its own work after every edit, and a
 dialog in that loop would only teach the agent to stop checking. Writing the
-file was already free inside `sandbox_plugins/`; *loading* it is the step that
+file was already free inside `workspace/`; *loading* it is the step that
 asks.
 
 ## 9. Services

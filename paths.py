@@ -22,17 +22,11 @@ elif _system == "Darwin":
 else:
     DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "Second Brain"
 
-# Mirrored plugin trees. ``plugins/`` in the repo is the kernel/bundled tree;
-# these DATA_DIR trees hold agent drafts and installed optional plugins.
-SANDBOX_PLUGINS = DATA_DIR / "sandbox_plugins"
-INSTALLED_PLUGINS = DATA_DIR / "installed_plugins"
-PACKAGES_DIR = DATA_DIR / "packages"
-
-# The agent's own scratchpad: SDK code that is not a plugin. Named here because
-# three separate places need to agree on it — the policy function, the
-# isolation rule, and ``paths.get`` — and a string spelled three times is a
-# string that eventually gets spelled two ways.
-SANDBOX_SCRIPTS = SANDBOX_PLUGINS / "scripts"
+# The mirrored code trees are declared in ``trees.py``, which imports this
+# module. Anything wanting a tree path (``trees.WORKSPACE``, ``trees.INSTALLED``)
+# or a root inside one (``trees.dirs_for("scripts")``) asks there — the layout
+# is one table, and a path spelled in two files eventually gets spelled two
+# ways.
 
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.

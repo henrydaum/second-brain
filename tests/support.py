@@ -191,6 +191,35 @@ def store_source(relative: str):
     return None
 
 
+# ── Pointing the layout somewhere disposable ──────────────────────────
+
+def retarget_trees(monkeypatch, tmp_path, **overrides):
+    """Point the tree layout at ``tmp_path`` for the duration of one test.
+
+    Replaces ``trees.TREES`` wholesale rather than patching a path constant,
+    because the tuple is what every lookup walks — ``locate``, ``dirs_for``,
+    ``tree`` and therefore ``isolation``, ``policy`` and discovery all read it
+    at call time, so one swap moves the whole layout consistently.
+
+    Returns ``{name: path}`` for the trees it built. Pass an override to place
+    one somewhere specific::
+
+        roots = retarget_trees(monkeypatch, tmp_path, bundled=repo / "bundled")
+    """
+    import trees
+
+    built = {}
+    replacements = []
+    for original in trees.TREES:
+        path = Path(overrides.get(original.name, tmp_path / original.name))
+        built[original.name] = path
+        replacements.append(
+            trees.Tree(original.name, path, original.module,
+                       builtin=original.builtin))
+    monkeypatch.setattr(trees, "TREES", tuple(replacements))
+    return built
+
+
 # ── Calling a handler the way production does ─────────────────────────
 
 def call_handler(request_type: str, ctx, args: dict):

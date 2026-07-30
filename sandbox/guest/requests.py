@@ -191,7 +191,7 @@ PROC_LIST = "proc.list"
 # process (``proc.run`` starts an OS process outside the boundary entirely).
 #
 # It is the counterpart to free authorship. The agent may already write
-# anything it likes under ``sandbox_plugins`` because everything there is
+# anything it likes under ``workspace`` because everything there is
 # contained before it runs; this is how it *runs* one without the file having
 # to become a registered capability first. Every effect the script performs is
 # an ordinary Request classified with the caller still in the chain, so routing

@@ -196,31 +196,31 @@ def parse(path: str, modality: str = None, config: dict = None,
 def discover() -> int:
     """Rebuild the registry by importing every installed parser helper.
 
-    Scans ``helpers/parse_*.py`` at each plugin tree's root in precedence
-    order (built-in first, so the kernel's text parser always wins) and
-    imports each, firing its module-level ``register(...)`` calls. Heavy
-    parsers guard their own imports, so a missing optional dependency leaves
-    those extensions unregistered rather than failing the scan.
+    Scans ``parsers/parse_*.py`` at each tree's root in precedence order
+    (bundled first, so the kernel's text parser always wins) and imports each,
+    firing its module-level ``register(...)`` calls. Heavy parsers guard their
+    own imports, so a missing optional dependency leaves those extensions
+    unregistered rather than failing the scan.
 
     Installing a parser package and calling this makes it live; uninstalling
     and calling this drops it. That is the whole lifecycle, and it is a
     function rather than a service because nothing about it needs to persist.
     """
-    from plugins.helpers.plugin_paths import helper_dirs
+    import trees
     from plugins.plugin_discovery import _load_plugin_module
 
     clear()
     seen: set[str] = set()
     count = 0
-    for root, helpers in helper_dirs():
-        if not helpers.exists():
+    for root, parsers in trees.dirs_for("parsers"):
+        if not parsers.exists():
             continue
-        for py_file in sorted(helpers.glob("parse_*.py")):
+        for py_file in sorted(parsers.glob("parse_*.py")):
             if py_file.stem in seen:
                 continue          # an earlier, higher-precedence root won
-            module_name = f"{root.module}.helpers.{py_file.stem}"
+            module_name = f"{root.module}.parsers.{py_file.stem}"
             drain_registrations()          # discard anything left by a failure
-            module = _load_plugin_module(module_name, py_file, root.built_in,
+            module = _load_plugin_module(module_name, py_file, root.builtin,
                                          reload=True)
             if module is None:
                 continue

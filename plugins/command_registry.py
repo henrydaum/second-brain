@@ -9,7 +9,7 @@ import uuid
 from typing import Callable
 
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import md_table
+from bundled.frontends.helpers.formatters import md_table
 from state_machine.conversation import CallableSpec, FormStep
 
 logger = logging.getLogger("Commands")

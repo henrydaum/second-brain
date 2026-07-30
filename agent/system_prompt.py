@@ -316,12 +316,12 @@ def _agent_memory() -> str:
     """Memory section: the MEMORY.md index inlined, topics listed by name.
 
     Memory is a folder of per-topic markdown files plus an index
-    (see ``plugins/helpers/memory_paths.py``). Only the index is inlined so
+    (see ``plugins/memory_paths.py``). Only the index is inlined so
     prompt cost stays flat. How to read/write topics is the installed memory
     tool's business — its ``agent_prompt`` carries those instructions, keeping
     plugin guidance out of the kernel.
     """
-    from plugins.helpers.memory_paths import INDEX_FILENAME, list_topics, memory_root
+    from plugins.memory_paths import INDEX_FILENAME, list_topics, memory_root
 
     root = memory_root()
     index_path = root / INDEX_FILENAME

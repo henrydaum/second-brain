@@ -15,7 +15,7 @@ from agent.system_prompt import build_prompt_sections
 from config import config_manager
 from events.event_bus import bus
 from events.event_channels import CONFIG_CHANGED
-from plugins.frontends.helpers.command_registry import CommandRegistry
+from plugins.command_registry import CommandRegistry
 from plugins.plugin_discovery import discover_commands, discover_frontends, get_plugin_settings
 from runtime.context import build_context, set_kernel_parts
 from runtime.agent_scope import load_scope, scoped_registry

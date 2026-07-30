@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from plugins.commands.helpers import package_manager
-from plugins.helpers import plugin_paths
+from bundled.commands.helpers import package_manager
+from plugins import plugin_paths
 
 
 class _Backend:
@@ -334,7 +334,7 @@ def test_parser_helper_install_and_uninstall_rescan_parsers(tmp_path, monkeypatc
     monkeypatch.setattr(parsing, "discover", lambda: scans.append(1) or len(scans))
 
     context = _Context(tmp_path)
-    files = {"helpers/parse_pdf.py": _helper()}
+    files = {"parsers/parse_pdf.py": _helper()}
     monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
     monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
 

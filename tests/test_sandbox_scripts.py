@@ -17,6 +17,7 @@ from sandbox import Chain, Sandbox
 from sandbox.guest.box import SUBPROCESS
 from sandbox.guest.requests import SCRIPT_RUN, Request
 from sandbox.isolation import is_script, required_isolation
+from tests.support import retarget_trees
 from sandbox.policy import SAFE, UNSAFE, classify
 
 SCRIPT = '''\
@@ -31,11 +32,9 @@ def main(sdk, values=()):
 
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
-    """A sandbox_plugins tree with a scripts/ directory in it."""
-    root = tmp_path / "sandbox_plugins"
+    """A workspace tree with a scripts/ directory in it."""
+    root = retarget_trees(monkeypatch, tmp_path)["workspace"]
     (root / "scripts").mkdir(parents=True)
-    monkeypatch.setattr("paths.SANDBOX_PLUGINS", root)
-    monkeypatch.setattr("paths.INSTALLED_PLUGINS", tmp_path / "installed")
     return root
 
 
@@ -252,7 +251,7 @@ def test_cancelling_the_caller_tears_down_the_script(sb, tree, monkeypatch):
 
     spinner = tree / "scripts" / "tally.py"
     spinner.write_text(SPINNER, encoding="utf-8")
-    monkeypatch.setattr("plugins.helpers.plugin_paths.ALLOWED_ROOTS",
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
     bridge.configure(sb)
 
@@ -298,7 +297,7 @@ def test_a_tool_runs_a_script_through_the_sdk(sb, tree, monkeypatch):
     tool = tree / "tools" / "tool_caller.py"
     tool.parent.mkdir(parents=True, exist_ok=True)
     tool.write_text(CALLER, encoding="utf-8")
-    monkeypatch.setattr("plugins.helpers.plugin_paths.ALLOWED_ROOTS",
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
     bridge.configure(sb)
 
@@ -323,7 +322,7 @@ def test_a_handler_with_no_provenance_still_runs(sb, tree, monkeypatch):
     from sandbox import bridge, provenance
     from sandbox.handlers.kernel import _script_run
 
-    monkeypatch.setattr("plugins.helpers.plugin_paths.ALLOWED_ROOTS",
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
     bridge.configure(sb)
 
@@ -340,7 +339,7 @@ def test_a_bare_name_runs(sb, tree, monkeypatch):
     from sandbox.handlers.kernel import _script_run
 
     write(tree)
-    monkeypatch.setattr("plugins.helpers.plugin_paths.ALLOWED_ROOTS",
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
     bridge.configure(sb)
 

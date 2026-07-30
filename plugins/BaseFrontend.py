@@ -491,7 +491,7 @@ class BaseFrontend:
 
     def command_allowed(self, name: str) -> bool:
         """Whether ``name`` may run on this frontend under its profile."""
-        from plugins.frontends.helpers.command_registry import command_allowed
+        from plugins.command_registry import command_allowed
         return command_allowed(self.config, self.name, name)
 
     def _tag_session(self, session_key: str) -> None:

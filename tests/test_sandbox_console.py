@@ -329,7 +329,7 @@ def test_the_guest_renderer_matches_the_kernels(text):
     it moved into a box.
     """
     from guest.sdk import SDK
-    from plugins.frontends.helpers.formatters import render_plain
+    from bundled.frontends.helpers.formatters import render_plain
 
     assert SDK(None).md.plain(text) == render_plain(text)
 

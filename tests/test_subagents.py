@@ -928,7 +928,7 @@ def test_the_schedule_command_names_the_kernels_spawn_channel():
     from events.event_channels import SUBAGENT_SPAWN
     from sandbox.validator import validate_file
 
-    source = validate_file("plugins/commands/command_schedule.py").source
+    source = validate_file("bundled/commands/command_schedule.py").source
     assert f'SUBAGENT_CHANNEL = "{SUBAGENT_SPAWN}"' in source
 
 

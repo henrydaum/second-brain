@@ -58,7 +58,7 @@ def test_nothing_in_the_catalogue_is_unwired():
 
 def test_plugin_lifecycle_handlers_share_the_kernel_watcher():
     """SDK mutations enter the same coordinator as filesystem events."""
-    source = Path("plugins/commands/command_clear.py").resolve()
+    source = Path("bundled/commands/command_clear.py").resolve()
 
     class Watcher:
         def __init__(self):

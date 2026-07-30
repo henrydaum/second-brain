@@ -18,7 +18,56 @@ Do not bake heavy features into the kernel; they belong in packages.
 > (2) build install/uninstall against a cloud store, then (3) versioning and
 > possibly containerization. We are at the end of step (1).
 
-## What ships in the kernel (`plugins/`)
+## The layout (`trees.py`)
+
+Two facts decide where any piece of extension code lives, and both are declared
+in **one table** at the repo root, beside `paths.py`.
+
+**Who finds it.** A root whose files carry a *prefix* is scanned — something
+globs `f"{prefix}*.py"` and indexes what it finds. A root with no prefix is only
+ever reached by something naming the file. Eight roots:
+
+| Root | Prefix | Found by |
+|---|---|---|
+| `tools/` `tasks/` `services/` `commands/` `frontends/` | `tool_` … | `plugin_discovery` |
+| `parsers/` | `parse_` | `parsing.discover()` |
+| `llm/` | `llm_` | `llm.discover()` |
+| `scripts/` | — | `script.run` / `isolation.is_script` |
+
+**Who put it here.** Four trees holding the same eight roots: `bundled/` (ships
+with the app), `DATA_DIR/installed` (the store's), `DATA_DIR/workspace` (the
+agent's), and `origin/store` itself, which is the same shape reached over git.
+Discovery precedence is bundled → installed → workspace and **first match
+wins**; resolution *by filename* (`isolation.resolve_script`) deliberately runs
+the other way, because there the agent means the file it wrote.
+
+**A root is declared only when the kernel itself routes it.** That is the test
+to apply before adding a ninth: it is a claim that core code needs standing
+knowledge of the folder, the same question the kernel boundary asks. `skills/`,
+`memory/` and `bundles/` fail it — all three exist because of store packages,
+the kernel names none of them, and `package_manager` keeps handling them on its
+own.
+
+**There is no top-level `helpers/`.** A helper exists to help a plugin, so it
+lives inside the family it helps (`<tree>/tools/helpers/x.py`) — the one nested
+folder the layout allows. The root existed because parsers and backends had
+nowhere else to go, which made "not a plugin" the definition of a folder two
+kernel registries were scanning. A helper shared by *two* families now has no
+home: promote it to a service, or let the owning family hold it. Do not
+resurrect the root.
+
+`plugins/` is **exclusively substrate** — base classes, discovery, the watcher,
+`plugin_paths`, `memory_paths`, `command_registry`. It is not a tree. That is
+what lets `tests/test_kernel_boundary.py` treat any `plugins.*` import as
+allowed instead of maintaining a nine-entry allowlist by hand; what keeps it
+honest is `test_the_plugins_package_holds_no_implementations`, which fails on a
+tree-root-named folder or a class subclassing one of the five bases.
+
+`migrations.py` moves an older DATA_DIR to this layout at boot — idempotent,
+stdlib-only, and it refuses to guess: anything in an old `helpers/` that is not
+a parser or a backend is left in place and logged.
+
+## What ships in the app's tree (`bundled/`)
 
 Plugins are discovered purely by file presence (`plugins/plugin_discovery.py`).
 The kernel was produced by **moving** non-essential plugins into `store/` (a
@@ -102,7 +151,7 @@ makes the same file importable into a box without a second contract. It also
 retired the `services` dict that used to be threaded through every call:
 delegating parsers now use `sdk.services.call("google_drive", ...)`, and
 `parsing.bind_services()` just points the stand-in at the live registry.
-`plugins/helpers/parse_text.py` is the migrated reference — it validates
+`bundled/parsers/parse_text.py` is the migrated reference — it validates
 clean and loads in a subprocess box, both pinned by tests.
 
 **The contract lives in the guest** (`sandbox/guest/parsing.py`): `ParseResult`,
@@ -119,29 +168,24 @@ nothing — which is what keeps one file loadable in both worlds. Parsers must
 also avoid `pathlib` (the validator refuses it); match suffixes with
 `str.endswith`.
 
-**Parsers live in `helpers/` at a plugin tree's root**, not under a family —
-`plugins/helpers/parse_text.py`, `DATA_DIR/installed_plugins/helpers/
-parse_pdf.py`. A parser belongs to no family because it is not a plugin: no
-base class, no entry point, nothing discovery registers. `helpers/` is a
-fourth tree root beside the five families (`plugin_paths.helper_dirs()`,
-`package_manager.TREE_ROOTS`), and files there carry no name prefix.
+**Parsers live in `parsers/`, a tree root of their own** — `bundled/parsers/
+parse_text.py`, `DATA_DIR/installed/parsers/parse_pdf.py`. A parser belongs to
+no plugin *family* (no base class, no entry point, nothing `plugin_discovery`
+registers) but it is very much registered: `parsing.discover()` globs
+`parse_*.py` and routes to it by extension and modality. See **The layout**
+below for why that makes it a root and where the prefix rule comes from.
 
-`scripts/` is the fifth, and the trees are therefore **code trees rather than
-plugin trees** — a distinction the folder names (`plugins/`,
-`installed_plugins/`, `sandbox_plugins/`) predate and are not worth renaming
-for. A helper exists to be imported; a script exists to be *run*. See
-**Scripts** under the sandbox section.
-
-The **watcher** classifies a changed helper by stem rather than asking
-`plugin_info`, which only knows the five families and answered "not in a known
-plugin folder" for everything under `helpers/` that was not an `llm_*` backend
-— a warning plus a red failure notice in chat for saving an ordinary library
-file, and no parser rescan at all. `PluginWatcher._helper_kind` returns
-`llm` (rescan backends), `parser` (rescan `parsing.discover()`), `library`
-(recognized and inert — a restart applies it), or `None`. Top-level only,
-matching `package_manager._is_rescannable_helper`. Family-local helpers
-(`plugins/frontends/helpers/…`) are still not watched at all: observers are
-scheduled non-recursively, so editing one silently requires a restart.
+The **watcher** classifies a changed file by the root it sits in
+(`PluginWatcher._root_of` → `trees.locate`): `parsers` rescans
+`parsing.discover()`, `llm` rescans the backends, anything else falls through
+to `plugin_info`. It used to sniff the *filename stem*, because everything that
+was not one of the five families lived in a single `helpers/` folder and only
+the prefix could tell a backend from a parser from an ordinary library — so a
+plain library file came back as "not in a known plugin folder", which put a red
+✕ in the user's chat for saving one. That whole classifier is gone; the
+directory is the answer. Family-local helpers (`bundled/frontends/helpers/…`)
+are still not watched at all: observers are scheduled non-recursively, so
+editing one silently requires a restart.
 
 The kernel keeps only the dependency-light `parse_text` parser (UTF-8 / code /
 CSV / TSV, stdlib); shared text helpers are `parsing/utils.py`, re-exported
@@ -151,7 +195,7 @@ map so `get_modality` resolves image/audio/video with **no parser installed**
 (attachment routing relies on this). Every heavier parser is an installable
 store package (`parser-pdf`, `parser-office`, `parser-tabular`,
 `parser-image`, `parser-audio`, `parser-video`, `parser-gdoc`,
-`parser-container`) shipping a `helpers/parse_*.py` file. `parsing.discover()`
+`parser-container`) shipping a `parsers/parse_*.py` file. `parsing.discover()`
 rebuilds the registry by scanning those across the built-in, sandbox, and
 installed roots; `package_manager` rescans on install/uninstall so it takes
 effect live. `parsing.bind_services()` supplies peers for delegating parsers
@@ -189,7 +233,7 @@ two must be the *same* setting rather than two that happen to agree — a
 fan-out wider than the pool serializes its calls behind one box lock and
 presents as merely slow.
 
-**A backend is `helpers/llm_*.py`, and belongs to no family** — same as a
+**A backend is `llm/llm_*.py`, and belongs to no family** — same as a
 parser: no base class the kernel registers, no entry point, nothing discovery
 finds. `supports_streaming`, `supports_tool_choice`, `native_modalities` and
 `display_name` are **module-level declarations read by AST**, so asking what a
@@ -222,8 +266,8 @@ backend's `native_modalities`, appends the text fallback itself, and the box
 receives plain dicts whose bytes the backend reads with `sdk.fs.read_bytes`.
 
 **Backend discovery is sandbox-only.** Every installed provider is a
-`helpers/llm_*.py` backend and runs through a `Brain` pool. The deprecated
-`plugins/services/service_llm.py` compatibility shim is gone.
+`llm/llm_*.py` backend and runs through a `Brain` pool. The deprecated
+`service_llm.py` compatibility shim is gone.
 `llm.registry.as_brain` still adapts directly injected objects exposing
 `chat_with_tools` — test doubles use that seam — but
 plugin discovery never imports a native provider into the kernel.
@@ -235,7 +279,7 @@ is something the user asks for. Only the default profile loads at boot.
 **The store branch needs the matching migration**, five mechanical changes per
 parser:
 
-1. `services/helpers/parse_*.py` → `helpers/parse_*.py`
+1. `services/helpers/parse_*.py` → `parsers/parse_*.py`
 2. imports from `plugins.services.helpers.{ParseResult,parser_registry,
    parsing_utils}` → `from guest.parsing import ParseResult, clean_text,
    max_chars, register` (the **guest**, not `parsing` — a kernel import breaks
@@ -305,7 +349,7 @@ that fallback when the last store plugin is renamed, not before.
 
 These edits exist so the kernel degrades cleanly when a stdlib plugin is absent —
 the difference between a microkernel and a pile of assumptions:
-- **`plugins/services/service_compactor.py`** — context compaction is a
+- **`bundled/services/service_compactor.py`** — context compaction is a
   synchronous service call from the conversation loop, so the kernel does not
   route a blocking request through the event task queue. Its trigger lives in
   the loop's own **compaction layer** (`_compaction_layer`), a kernel escort
@@ -392,7 +436,7 @@ future store package, not kernel.
 ## Package store V1
 
 - **Tree mirror, not package archives.** The `origin/store` branch mirrors what
-  `DATA_DIR/installed_plugins` would look like if every optional plugin/helper
+  `DATA_DIR/installed` would look like if every optional plugin/helper
   were installed: `tools/tool_*.py`, `services/service_*.py`,
   `frontends/frontend_*.py`, `commands/command_*.py`, `tasks/task_*.py`, plus
   family-local `helpers/` files. `/packages install <stem>` and
@@ -405,7 +449,7 @@ future store package, not kernel.
 - **Install is a tree copy.** `/packages` reads the target file from
   `origin/store`, recursively follows `dependencies_files`, runs `pip install`
   for collected `dependencies_pip`, and copies the same relative paths into
-  `DATA_DIR/installed_plugins`. The store copy always wins: a differing
+  `DATA_DIR/installed`. The store copy always wins: a differing
   existing file is overwritten in place (no versioning yet — the store branch
   is assumed to hold the newest version); byte-identical files are skipped.
 - **Uninstall scans live trees.** Uninstall follows the installed target's
@@ -441,10 +485,12 @@ confirm a REPL round-trip + clean compaction on a long conversation.
 
 # 🧪 THE SANDBOX (`sandbox/`)
 
-**Naming warning, read this first.** Two unrelated things are called "sandbox"
-here. `DATA_DIR/sandbox_plugins/` is the *agent-authored plugin tree* (see
-"Sandbox plugin system" below). `sandbox/` is the **security boundary** — the
-subject of this section. They have nothing to do with each other.
+**A naming warning that no longer applies, kept because the fix is the point.**
+Two unrelated things used to be called "sandbox": `DATA_DIR/sandbox_plugins/`,
+the agent-authored code tree, and `sandbox/`, the security boundary — this
+section. The tree is `DATA_DIR/workspace/` now, so `sandbox/` means exactly one
+thing. If a variable, docstring or store plugin still says "sandbox" about a
+*tree*, it is stale.
 
 Plugins are arbitrary code on the other side of a boundary. The sandbox
 mediates it: sandboxed code **cannot act, it can only ask**. Anything touching
@@ -482,8 +528,8 @@ by refusing to finish — that is a hang, and it times out.
 `isolation = "subprocess"`, an AST-read declaration — which made the code being
 contained the authority on its own containment, so an agent authoring a plugin
 could author its own escape by leaving a line out. The tree decides instead,
-because a file cannot assert which tree it is in: `sandbox_plugins/` is always
-subprocessed, `plugins/` is always in-process, and `installed_plugins/` is
+because a file cannot assert which tree it is in: `workspace/` is always
+subprocessed, `bundled/` is always in-process, and `installed/` is
 subprocessed exactly when the validator sees an import it cannot mediate —
 computed from the AST (`report.unmediated`), never from `dependencies_pip`,
 which would be the same bug one level down. Unknown paths fail closed. A file
@@ -494,7 +540,7 @@ grouping, and tightest-wins only ever tightens. A user-facing override
 what the code may not.
 
 **That boundary is what buys free authorship.** The agent reads, writes, edits
-and deletes anywhere under `sandbox_plugins/` with no approval, because
+and deletes anywhere under `workspace/` with no approval, because
 everything there is contained before it runs. This is the LibOS invariant
 rather than an exception to it: writing a file changes what the system can
 *ask*, not what it may *affect* — the new plugin's Requests are classified like
@@ -1161,7 +1207,7 @@ message in place; the REPL prints the same shapes to stdout.
 
 Command/tool output is a **string of GitHub-flavored markdown**, built with
 the primitives in
-[plugins/frontends/helpers/formatters.py](plugins/frontends/helpers/formatters.py):
+[bundled/frontends/helpers/formatters.py](bundled/frontends/helpers/formatters.py):
 `md_table` for data tables, `detail_card(title, pairs)` for describe-style
 key/value cards, `quote_block` for prose under a card (descriptions,
 previews, payloads), and fenced code blocks for multi-line technical dumps
@@ -1184,7 +1230,7 @@ conversation title on a persistent surface; fed by the
 ## Where to plug in
 
 - **Add a slash command**: write a `BaseCommand` subclass as `command_*.py` in
-  the sandbox, installed package tree, or deliberately in [plugins/commands/](plugins/commands/)
+  the workspace, installed package tree, or deliberately in [bundled/commands/](bundled/commands/)
   when it is true kernel behavior. Commands receive `SecondBrainContext` in both
   `form(args, context)` and `run(args, context)`.
 - **Add a *sandboxed* tool** (the direction of travel): write a `BaseTool`
@@ -1250,9 +1296,9 @@ conversation title on a persistent surface; fed by the
 
 Slash commands now mirror the rest of the plugin system. The repo starts with a
 clean command slate: add built-ins as `command_*.py` files under
-[plugins/commands/](plugins/commands/), or create sandbox commands under
-`DATA_DIR/sandbox_plugins/commands`. The registry in
-[plugins/frontends/helpers/command_registry.py](plugins/frontends/helpers/command_registry.py)
+[bundled/commands/](bundled/commands/), or create workspace commands under
+`DATA_DIR/workspace/commands`. The registry in
+[plugins/command_registry.py](plugins/command_registry.py)
 is only the adapter: it builds context-aware forms, parses one-shot `/cmd ...`
 input mechanically, and dispatches structured dict args.
 
@@ -1262,7 +1308,7 @@ Unrelated to the security sandbox above — this is where agent-authored plugins
 live on disk.
 
 The agent can author tools/tasks/services/commands/frontends into
-`DATA_DIR/sandbox_plugins/<family>/` when an editing/package-authoring tool is
+`DATA_DIR/workspace/<family>/` when an editing/package-authoring tool is
 installed and in scope. Shell and file-editing tools are not kernel guarantees.
 Sandbox and installed plugins are auto-discovered alongside first-party ones in
 [plugins/](plugins/). Plugin helpers should use relative imports so files can
@@ -1270,6 +1316,10 @@ move between built-in, sandbox, and installed trees.
 
 ## Files that matter most
 
+- [trees.py](trees.py) — the layout authority: which trees exist, which roots
+  each holds, and the prefix rule. Everything that walks the layout —
+  discovery, the watcher, parsing, llm, isolation, policy, the package
+  manager — reads this one table.
 - [runtime/context.py](runtime/context.py) — `SecondBrainContext`, the
   shared bag tools/tasks receive.
 - [runtime/conversation_runtime.py](runtime/conversation_runtime.py) —

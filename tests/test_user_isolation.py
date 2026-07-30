@@ -268,7 +268,7 @@ def test_agent_switch_persists_active_profile_per_user(tmp_path):
     sandbox = Sandbox(context=context, approve=lambda *_: True)
     try:
         result = sandbox.run(
-            "plugins/commands/command_agent.py",
+            "bundled/commands/command_agent.py",
             "AgentCommand",
             kwargs={
                 "args": {

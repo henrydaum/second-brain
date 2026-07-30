@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from plugins.commands.helpers import package_manager  # noqa: E402
+from bundled.commands.helpers import package_manager  # noqa: E402
 
 SKIP_DIRS = {".git", "__pycache__"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}

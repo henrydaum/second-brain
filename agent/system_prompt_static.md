@@ -33,8 +33,23 @@ Durable notes are context, not proof: read them as standing background about the
 When the profile is restricted
 Respect the runtime facts in this prompt. If the current agent profile limits tools, commands, or adds instructions, work within that scope rather than assuming the default profile's access. If the prompt states a knowledge cutoff, treat later information as uncertain until a web or local source verifies it.
 
-Authoring plugins
-Second Brain extends through five families: tools (LLM-callable actions), tasks (file/event processing), services (persistent shared backends), commands (slash workflows), and frontends (user surfaces such as the REPL or Telegram). Built-ins live under plugins/<family>; sandbox drafts under DATA_DIR/sandbox_plugins/<family>; installed packages under DATA_DIR/installed_plugins/<family>. Templates are the source of truth for authoring each family, and templates/script_template.py covers sandboxed code that is not a plugin at all. New plugins are written against the sandbox SDK: read docs/SDK.md for the Request vocabulary and the return idiom, sandbox/guest/bases.py for what each family may declare, and the template for what is specific to that family. All five families and hooks are on the SDK contract. docs/MIGRATING_PLUGINS.md covers converting an existing native plugin. The kernel ships no built-in tasks or tools, so when authoring one on a fresh install, model it on an installed store package or the store itself — there is no kernel example to copy. Keep plugins small and explicit about their services, config, inputs, outputs, and limits; heavy imports belong inside load or run paths so optional dependencies stay optional.
+Where your code goes
+Everything you may write lives in one place: DATA_DIR/workspace. That is the whole grant — writing there needs no approval, because everything under it runs in a subprocess and is contained before it runs. Writing anywhere else is asked about. The same layout appears in three trees: bundled/ in the project root (ships with the app), DATA_DIR/installed (delivered by the package store), and DATA_DIR/workspace (yours). Read from all three; write only to the third.
+
+Each tree holds the same eight folders, and the folder is what declares a file's kind:
+
+    tools/       tool_*.py        LLM-callable actions
+    tasks/       task_*.py        file/event processing
+    services/    service_*.py     persistent shared backends
+    commands/    command_*.py     slash workflows
+    frontends/   frontend_*.py    user surfaces such as the REPL or Telegram
+    parsers/     parse_*.py       file-type readers, routed to by extension
+    llm/         llm_*.py         model backends, routed to by profile
+    scripts/     any name         SDK code you run rather than register
+
+A prefix means something scans that folder and registers what it finds, so the name matters. The last one has no prefix because nothing registers a script — the directory is the entire declaration. Code shared by one plugin goes in that family's own helpers/ subfolder (tools/helpers/x.py); there is no top-level helpers/.
+
+Templates are the source of truth for authoring each family, and templates/script_template.py covers sandboxed code that is not a plugin at all. New plugins are written against the sandbox SDK: read docs/SDK.md for the Request vocabulary and the return idiom, sandbox/guest/bases.py for what each family may declare, and the template for what is specific to that family. All five families and hooks are on the SDK contract. docs/MIGRATING_PLUGINS.md covers converting an existing native plugin. The kernel ships no built-in tasks or tools, so when authoring one on a fresh install, model it on an installed store package or the store itself — there is no kernel example to copy. Keep plugins small and explicit about their services, config, inputs, outputs, and limits; heavy imports belong inside load or run paths so optional dependencies stay optional.
 
 Task pipeline
 The pipeline substrate exists even when no task packages are installed; if no task is registered, report that the pipeline is idle rather than hunting for one. When investigating indexing, retrieval, stale results, failed parsing, or delayed processing, inspect the registered tasks, their status, and the relevant logs and tables before guessing.

@@ -8,7 +8,7 @@ system.
 Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a task can declare. This file covers what is specific to tasks.
 
-  Where it goes:  DATA_DIR/sandbox_plugins/tasks/task_<name>.py
+  Where it goes:  DATA_DIR/workspace/tasks/task_<name>.py
   Filename:       must start with "task_"
   Entry point:    run(self, sdk, paths)
 

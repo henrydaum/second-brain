@@ -82,7 +82,7 @@ def configure(sandbox: Sandbox | None):
     _SANDBOX = sandbox
     if sandbox is not None:
         try:
-            from plugins.helpers.plugin_paths import PLUGIN_ROOTS
+            from plugins.plugin_paths import PLUGIN_ROOTS
             sandbox.plugin_roots = [root.path for root in PLUGIN_ROOTS]
         except Exception:
             logger.debug("could not resolve plugin roots for dependencies")

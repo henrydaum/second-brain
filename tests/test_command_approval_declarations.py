@@ -18,7 +18,7 @@ from the policy rather than restated, so a Request added to ``ALWAYS_UNSAFE``
 tomorrow is covered here without anyone remembering to come back.
 """
 
-from plugins.helpers.plugin_paths import iter_plugin_dirs
+from plugins.plugin_paths import iter_plugin_dirs
 from sandbox.guest.requests import NET_HTTP, PROC_RUN, SECRET_REVEAL
 from sandbox.policy import ALWAYS_UNSAFE
 from sandbox.validator import validate_file

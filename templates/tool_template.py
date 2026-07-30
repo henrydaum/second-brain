@@ -9,7 +9,7 @@ the validator rejects. Read sandbox/guest/bases.py for every attribute a tool
 can declare. This file covers only what is specific to tools and cannot be
 guessed from either.
 
-  Where it goes:  DATA_DIR/sandbox_plugins/tools/tool_<name>.py
+  Where it goes:  DATA_DIR/workspace/tools/tool_<name>.py
                   (or plugins/tools/ only when it is true kernel behavior)
   Filename:       must start with "tool_" — discovery is by filename
   Entry point:    run(self, sdk, **kwargs)

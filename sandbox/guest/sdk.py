@@ -460,7 +460,8 @@ class _Config(_Namespace):
 class _Paths(_Namespace):
     """Kernel-owned application locations, and two facts about the host.
 
-    ``project``, ``data``, ``installed_plugins``, ``sandbox_plugins`` —
+    ``project``, ``data``, ``bundled``, ``installed``, ``workspace``,
+    ``scripts``, ``python``, ``platform`` —
     directories. ``python`` is the interpreter running the app, which is what
     ``pip`` should be invoked through so it installs into *this* environment;
     ``platform`` is ``sys.platform``. Both are here because the validator

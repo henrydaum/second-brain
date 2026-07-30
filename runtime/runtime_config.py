@@ -333,7 +333,7 @@ def _session_frontend_filter(runtime, session):
     name = getattr(session, "frontend_name", None)
     manager = getattr(runtime, "frontend_manager", None)
     frontend = (getattr(manager, "adapters", {}) or {}).get(name) if (name and manager is not None) else None
-    from plugins.frontends.helpers.command_registry import frontend_command_filter
+    from plugins.command_registry import frontend_command_filter
     return frontend, frontend_command_filter(runtime.config, name)
 
 

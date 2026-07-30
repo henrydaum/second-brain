@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from config import config_manager
 from pipeline.database import DEFAULT_USER_ID, Database
-from plugins.commands.helpers import package_manager
+from bundled.commands.helpers import package_manager
 
 # Import the state_machine package before runtime.conversation_loop to settle
 # the package-init circular import (state_machine/__init__ pulls in the loop).

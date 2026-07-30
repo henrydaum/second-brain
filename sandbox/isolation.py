@@ -8,14 +8,14 @@ file cannot assert which tree it is in.
 
 Three trees, three answers:
 
-- **``sandbox_plugins/``** — agent-authored, always a subprocess. This is the
+- **``workspace/``** — agent-authored, always a subprocess. This is the
   tree the security boundary exists for, and it is what buys the agent free
   rein inside it (see ``policy.py``): code it writes is contained before it
   runs, so writing it needs no dialog.
-- **``plugins/``** — the kernel's own tree, always in-process. First-party
+- **``bundled/``** — the app's own tree, always in-process. First-party
   code that ships with the system, on the trusted side by definition; putting
   it behind a pipe would buy nothing and cost every call.
-- **``installed_plugins/``** — store packages, subprocess *if* they reach for
+- **``installed/``** — store packages, subprocess *if* they reach for
   something that cannot be mediated. A package that is pure computation over
   the SDK is as inspectable as kernel code; one that imports a foreign library
   has a component the validator cannot see inside, which is exactly the case
@@ -33,45 +33,33 @@ from pathlib import Path
 from .guest.box import IN_PROCESS, SUBPROCESS
 
 # Tree names. Also the box namespace (see ``box_namespace``), so two files in
-# different trees can never resolve into the same box.
-KERNEL = "built_in"
-SANDBOX = "sandbox"
+# different trees can never resolve into the same box. Taken from ``trees``
+# rather than restated: these strings are compared against ``tree_of`` results
+# all over the sandbox, and a fourth spelling of "which tree" is exactly what
+# this module used to be.
+KERNEL = "bundled"
+SANDBOX = "workspace"
 INSTALLED = "installed"
 UNKNOWN = "unknown"
 
-# The fourth tree root, beside the five plugin families and ``helpers/``. A
-# script is SDK code that nothing registers: no base class, no entry point, no
-# discovery. See :func:`is_script`.
+#: The root a script lives in. One name, read from the table.
 SCRIPTS_DIRNAME = "scripts"
 
 
-def _roots() -> tuple:
-    """(tree, root) pairs, most specific first.
+def _locate(source):
+    """``trees.locate``, tolerant of a kernel that is not importable.
 
-    Read from ``paths`` rather than the plugin tree metadata: this is kernel
-    path knowledge, and reaching into ``plugins.*`` from here would widen what
-    the sandbox depends on for no gain. Order matters — the data trees live
-    under DATA_DIR and the kernel tree under ROOT_DIR, but a checkout with
-    DATA_DIR inside it must still resolve the more specific root first.
+    Read from ``trees`` rather than the plugin substrate: this is kernel path
+    knowledge, and reaching into ``plugins.*`` from here would widen what the
+    sandbox depends on to answer a question about containment. An absent
+    kernel (tests, a bare container) yields None, which every caller below
+    treats as unknown provenance and therefore as a subprocess.
     """
     try:
-        from paths import INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
+        import trees
     except Exception:
-        return ()
-    return (
-        (SANDBOX, Path(SANDBOX_PLUGINS)),
-        (INSTALLED, Path(INSTALLED_PLUGINS)),
-        (KERNEL, Path(ROOT_DIR) / "plugins"),
-    )
-
-
-def _within(path: Path, root: Path) -> bool:
-    """Whether ``path`` resolves inside ``root``."""
-    try:
-        Path(path).resolve().relative_to(Path(root).resolve())
-        return True
-    except (ValueError, OSError):
-        return False
+        return None
+    return trees.locate(source)
 
 
 def tree_of(source) -> str:
@@ -80,37 +68,25 @@ def tree_of(source) -> str:
     The whole of what the kernel trusts about a file, and the only input to
     :func:`required_isolation` that the file cannot influence.
     """
-    if not source:
-        return UNKNOWN
-    path = Path(source)
-    for tree, root in _roots():
-        if _within(path, root):
-            return tree
-    return UNKNOWN
+    found = _locate(source)
+    return found.tree.name if found is not None else UNKNOWN
 
 
 def is_script(source) -> bool:
     """Whether a file is a *script* — SDK code nothing registers.
 
-    True for ``<tree>/scripts/<name>.py`` at any of the three tree roots. The
-    directory is the whole declaration, exactly as ``helpers/`` is: a script
-    has no base class, no entry point and no family prefix, so there is nothing
-    else about the file that could say what it is.
+    True for ``<tree>/scripts/<name>.py`` in any tree. The directory is the
+    whole declaration: a script has no base class, no entry point and no
+    family prefix, so there is nothing else about the file that could say what
+    it is.
 
-    Top level only, matching ``helpers/``. A ``scripts/`` folder nested inside
-    a family is not a tree root and is not treated as one.
+    Top level only. A ``scripts/`` folder nested inside a family is not a tree
+    root and is not treated as one.
     """
-    if not source:
+    found = _locate(source)
+    if found is None or found.root is None:
         return False
-    path = Path(source)
-    for _tree, root in _roots():
-        try:
-            relative = path.resolve().relative_to(Path(root).resolve())
-        except (ValueError, OSError):
-            continue
-        return relative.parts[:1] == (SCRIPTS_DIRNAME,) and len(
-            relative.parts) == 2
-    return False
+    return found.root.name == SCRIPTS_DIRNAME and len(found.rel.parts) == 1
 
 
 def resolve_script(raw) -> Path | None:
@@ -140,13 +116,23 @@ def resolve_script(raw) -> Path | None:
         return None
     parts = path.parts
     if len(parts) == 1:
-        relative = Path(SCRIPTS_DIRNAME) / parts[0]
+        name = parts[0]
     elif len(parts) == 2 and parts[0] == SCRIPTS_DIRNAME:
-        relative = path
+        name = parts[1]
     else:
         return None
-    for _tree, root in _roots():
-        candidate = root / relative
+    try:
+        import trees
+        # Reversed against discovery order on purpose. Discovery resolves a
+        # *capability name* and lets the bundled tree win, so the app's own
+        # tool is not shadowed by a draft. This resolves a *filename* an agent
+        # typed, and the agent means the one it wrote — so the workspace is
+        # searched first and the bundled tree last.
+        script_dirs = tuple(reversed(trees.dirs_for(SCRIPTS_DIRNAME)))
+    except Exception:
+        return None
+    for _tree, directory in script_dirs:
+        candidate = directory / name
         try:
             if candidate.is_file():
                 return candidate.resolve()
@@ -191,7 +177,7 @@ def required_isolation(source, report=None) -> str:
 #
 # Files group into a shared box by declaring ``box = "name"``, and a box takes
 # the *tightest* isolation any member asked for. The obvious worry is a file in
-# ``sandbox_plugins`` naming the kernel's box to be loaded in-process beside
+# a ``workspace`` file naming the bundled tree's box to be loaded in-process beside
 # it — the exact escape the tree rule exists to prevent.
 #
 # It cannot happen, and the reason is worth writing down rather than

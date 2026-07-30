@@ -74,7 +74,7 @@ def _run(context, args, *, method="run", approve=None):
     sandbox = Sandbox(context=context, approve=approve)
     try:
         return sandbox.run(
-            "plugins/commands/command_agent.py",
+            "bundled/commands/command_agent.py",
             "AgentCommand",
             kwargs={"args": args},
             method=method,

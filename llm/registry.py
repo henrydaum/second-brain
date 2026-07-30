@@ -91,26 +91,26 @@ def _entry_from(source: str) -> str:
 def discover() -> int:
     """Rebuild the backend catalogue by scanning every plugin tree.
 
-    Scans ``helpers/llm_*.py`` at each tree's root in precedence order
-    (built-in first). A file that will not validate is skipped with a logged
-    reason rather than failing the scan — one broken backend must not take the
-    others with it, because one of the others may be the only way to reach a
-    model at all.
+    Scans ``llm/llm_*.py`` at each tree's root in precedence order (bundled
+    first). A file that will not validate is skipped with a logged reason
+    rather than failing the scan — one broken backend must not take the others
+    with it, because one of the others may be the only way to reach a model at
+    all.
 
     Installing a backend package and calling this makes it selectable;
     uninstalling and calling this drops it.
     """
+    import trees
     from sandbox.validator import validate_file
-    from plugins.helpers.plugin_paths import helper_dirs
 
     with _LOCK:
         _BACKENDS.clear()
         _ALIASES.clear()
         seen: set[str] = set()
-        for _root, helpers in helper_dirs():
-            if not helpers.exists():
+        for _root, backends in trees.dirs_for("llm"):
+            if not backends.exists():
                 continue
-            for py_file in sorted(helpers.glob(f"{BACKEND_PREFIX}*.py")):
+            for py_file in sorted(backends.glob(f"{BACKEND_PREFIX}*.py")):
                 if py_file.stem in seen:
                     continue          # a higher-precedence tree won
                 seen.add(py_file.stem)

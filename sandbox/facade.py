@@ -266,11 +266,11 @@ class Sandbox:
     def dependency_roots(self, source, declared) -> list:
         """Where a plugin's declared ``dependencies_files`` actually live.
 
-        The declaration is tree-relative (``helpers/parse_image.py``) because
+        The declaration is tree-relative (``parsers/parse_image.py``) because
         that is how the store ships it, but at runtime the file sits in
         whichever tree it was installed into. Resolution walks the plugin's
         own tree first and then the others, so an installed tool can declare
-        a parser that only ships with the kernel.
+        a parser that only ships with the app.
 
         Returns directories rather than files: they join the box's import
         path, which is what turns a declaration into an importable name.
@@ -279,14 +279,12 @@ class Sandbox:
             return []
 
         source = Path(source)
-        # <tree>/<family>/plugin.py, or <tree>/helpers/helper.py — either way
-        # the tree is two levels up.
-        own_tree = source.parent.parent
-        trees = [own_tree, *(t for t in self.plugin_roots if t != own_tree)]
+        own_tree = self._tree_of(source)
+        search = [own_tree, *(t for t in self.plugin_roots if t != own_tree)]
 
         found, missing = [], []
         for relative in declared:
-            for tree in trees:
+            for tree in search:
                 candidate = tree / relative
                 if candidate.is_file():
                     if candidate.parent not in found:
@@ -301,6 +299,26 @@ class Sandbox:
             logger.debug("%s declares unresolved dependencies: %s",
                          source.name, missing)
         return found
+
+    @staticmethod
+    def _tree_of(source: Path) -> Path:
+        """The tree a plugin source sits in.
+
+        Asked of the layout rather than counted in path segments. Two levels up
+        is right for ``<tree>/<family>/plugin.py`` and wrong for a family-local
+        ``<tree>/<family>/helpers/x.py``, where it yields the family directory —
+        so a helper declaring a dependency searched its own folder's parent
+        instead of its tree, and resolved a sibling only by luck.
+
+        Falls back to the old guess for a path in no known tree (a temp file, a
+        test fixture), which is the only case that answer was ever right for.
+        """
+        try:
+            import trees
+            found = trees.locate(source)
+        except Exception:
+            found = None
+        return found.tree.path if found is not None else source.parent.parent
 
     # ──────────────────────────────────────────────────────────────
     # Ephemeral.

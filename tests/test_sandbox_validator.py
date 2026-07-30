@@ -409,7 +409,7 @@ def test_a_correct_request_declaration_passes():
 
 def test_kernel_modules_are_not_called_foreign_libraries():
     """They are the boundary, not an unvalidatable dependency."""
-    for module in ("paths", "runtime.context", "plugins.helpers.plugin_paths"):
+    for module in ("paths", "runtime.context", "plugins.plugin_paths"):
         report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
         assert not report.ok, module
         assert "kernel side" in _messages(report), module

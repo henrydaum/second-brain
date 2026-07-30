@@ -907,7 +907,7 @@ def test_compactor_runs_through_the_sandbox(monkeypatch):
     """The real service exports one serializable compaction call."""
     sandbox = Sandbox()
     configure(sandbox)
-    module = adapt("plugins/services/service_compactor.py")
+    module = adapt("bundled/services/service_compactor.py")
     service = module.build_services({})["compactor"]
     seen = []
 
