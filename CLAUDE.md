@@ -725,8 +725,23 @@ Exclusive by declaration: `uses_console = True`, first claimant wins, second is
 refused — two readers would split a person's keystrokes non-deterministically,
 presenting as dropped characters. Release names the token so a frontend that
 already lost the claim cannot revoke its successor's. `sdk.md.plain()` is the
-guest's copy of the kernel's `render_plain` (pure; byte-identical, pinned by a
-test) for monospace rendering.
+guest's counterpart to the kernel's `render_plain` for monospace rendering —
+same *output*, pinned by a test, but not the same code, and the difference
+matters if anyone goes looking for duplication to delete. Nothing in
+`sdk._Markdown` is a copy of `formatters.py`: measured line-for-line, the six
+name-alike pairs (`table`/`md_table`, `card`/`detail_card`, `quote`/
+`quote_block`, `plain`/`render_plain`, `truncate`/`truncate_cell`) share **0%**
+of their bodies, and `align_tables`/`align_md_tables` shares 43%. The host side
+delegates and the guest side is stdlib-only; they agree on results because a
+test says so, which is the right coupling. Same finding holds for the hook
+types — `runtime/hooks.py` and `guest/hooks.py` look duplicated by name, but
+`HookContext` and `ModelRequest` differ in their *fields* (live `session`/
+`runtime`/`attachments` against `session_key`/`user_id`/`conversation_id`).
+They are projections, which is exactly why `sandbox/hooks.py` exists to
+translate. Only the four `end_turn` verdicts are genuinely identical, and
+`rebuild` — which coerces a wire dict defensively — survives sharing them, so
+folding the two modules together would save about thirty lines and cost a
+kernel-boundary widening. Not worth it.
 
 **Hooks are declared, not registered.** A service names doorways in
 `hooks = {moment: method}`, read by AST like `exports`. The bridge stands a
