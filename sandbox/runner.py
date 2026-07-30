@@ -25,6 +25,8 @@ import threading
 import time
 
 from .guest.channel import Terminated
+from .guest.codes import ERROR_GUEST_FAULT
+from .guest.faults import guest_traceback
 from .guest.requests import RequestFailed, Result
 from .guest.sdk import SDK
 from .interpreter import Execution, Interpreter, clamp_timeout
@@ -65,8 +67,15 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
             # refusal the plugin chose not to handle still reads as a refusal.
             box["result"] = failed.result
         except Exception as exc:
-            logger.exception("sandboxed code raised: %s", name)
-            box["result"] = Result.failure(f"unhandled error: {exc}")
+            # Debug, not exception: the stack rides the Result to the caller
+            # and the model now, and StreamHandlers sit at WARNING — so
+            # logging it at ERROR would dump every plugin bug on the user's
+            # terminal, and only for the in-process runner, which is exactly
+            # the asymmetry this reporting exists to remove.
+            logger.debug("sandboxed code raised: %s", name, exc_info=True)
+            box["result"] = Result.failure(
+                f"{type(exc).__name__}: {exc}", code=ERROR_GUEST_FAULT,
+                traceback=guest_traceback(exc, drop=(__file__,)))
         finally:
             execution.finished.set()
 

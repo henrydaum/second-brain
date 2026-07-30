@@ -31,6 +31,11 @@ ALLOWED_ABSOLUTE = {
     # The loader re-hashes a file before executing it, so the bytes that ran
     # are the bytes the validator passed. Pure computation over a string.
     "hashlib",
+    # ``get_close_matches`` for the SDK's "did you mean" — the same function
+    # the validator already uses to suggest Request types, on the other side
+    # of the boundary. Pure string arithmetic: no cwd, no files, no
+    # environment.
+    "difflib",
     # Pure path *arithmetic* for sdk.path — string manipulation with no cwd,
     # no stat, no environment. Named directly rather than reached through
     # ``os.path``, which is one of these two under an alias that also imports

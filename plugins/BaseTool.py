@@ -44,12 +44,17 @@ class ToolResult:
     attachment_paths:
         Local file paths for frontend rendering. These are not sent directly to
         the LLM, although image paths may later be passed back on a model call.
+    traceback:
+        Where a sandboxed tool broke, in its own frames. Set only when the code
+        raised; empty for a tool that reported an ordinary failure. Reaches the
+        model beside ``error``, so it can fix the line it actually wrote.
     """
     success: bool = True
     error: str = ""
     data: Any = None
     llm_summary: str = ""
     attachment_paths: list[str] = field(default_factory=list)
+    traceback: str = ""
 
     def __init__(
         self,
@@ -58,6 +63,7 @@ class ToolResult:
         data: Any = None,
         llm_summary: str = "",
         attachment_paths: list[str] | None = None,
+        traceback: str = "",
     ):
         """Initialize the tool result."""
         self.success = success
@@ -65,6 +71,7 @@ class ToolResult:
         self.data = data
         self.llm_summary = llm_summary
         self.attachment_paths = self._normalize_attachment_paths(attachment_paths)
+        self.traceback = traceback
 
     @staticmethod
     def _normalize_attachment_paths(*path_lists) -> list[str]:
@@ -83,6 +90,9 @@ class ToolResult:
 
     def to_dict(self, base_url: str = "") -> dict:
         """Serialize for HTTP API responses.
+
+        ``traceback`` is deliberately absent: this is the public HTTP/MCP shape,
+        and a stack trace is an internal diagnostic rather than part of it.
 
         Args:
             base_url: If provided, each attachment gets a fetchable ``url``

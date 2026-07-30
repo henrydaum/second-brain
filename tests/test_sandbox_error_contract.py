@@ -111,7 +111,8 @@ def _populated_result() -> Result:
               "retryable": True, "code": "a_code",
               "llm_summary": "a summary",
               "attachment_paths": ["/tmp/a.png"], "also_contains": ["x"],
-              "discovered_paths": ["/tmp/b"]}
+              "discovered_paths": ["/tmp/b"],
+              "traceback": 'File "p.py", line 1, in run\n'}
     missing = {f.name for f in dataclasses.fields(Result)} - set(values)
     assert not missing, (
         f"add {sorted(missing)} to this fixture — a new Result field is only "

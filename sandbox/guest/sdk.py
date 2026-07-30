@@ -48,6 +48,7 @@ for ``sdk.ok(...)`` only to attach ``llm_summary`` or attachments, and
 from __future__ import annotations
 
 import base64
+import difflib
 # ``ntpath``/``posixpath`` rather than ``os.path``, which is one of these two
 # under a name that also drags in ``os``. The guest ships stdlib-only and
 # environment-free (pinned by tests/test_sandbox_guest_boundary.py), and these
@@ -102,6 +103,26 @@ class _Namespace:
 
     def __init__(self, sdk: "SDK"):
         self._sdk = sdk
+
+    def __getattr__(self, name: str):
+        """Name the closest method rather than failing blank.
+
+        A miss here is almost always a guess at a surface the author has not
+        read — ``sdk.fs.readfile`` for ``sdk.fs.read``. The validator already
+        treats a near-miss as a teaching opportunity, suggesting Request types
+        the same way; this is that idea applied to the SDK itself, and it is
+        worth more here because it fires at the moment of the mistake.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)     # dunder probing, not a typo
+        # Every namespace class is its attribute name with an underscore and
+        # some capitals: _FS -> fs, _Conv -> conv, _LLM -> llm.
+        space = type(self).__name__.lstrip("_").lower()
+        methods = sorted(m for m in dir(type(self)) if not m.startswith("_"))
+        close = difflib.get_close_matches(name, methods, 1, 0.6)
+        hint = f" Did you mean sdk.{space}.{close[0]}?" if close else ""
+        raise AttributeError(f"sdk.{space} has no {name!r}.{hint} "
+                             f"{space} has: {', '.join(methods)}")
 
     def _ask(self, kind: str, **args):
         """Build a Request, send it, and return what it produced.
@@ -1607,6 +1628,16 @@ class SDK:
     Denied = Denied
     #: Raised when a Request breaks. ``Denied`` is a subclass of it.
     Failed = RequestFailed
+
+    def __getattr__(self, name: str):
+        """Name the closest namespace. See :meth:`_Namespace.__getattr__`."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        spaces = sorted(k for k in vars(self) if not k.startswith("_"))
+        close = difflib.get_close_matches(name, spaces, 1, 0.6)
+        hint = f" Did you mean sdk.{close[0]}?" if close else ""
+        raise AttributeError(f"sdk has no {name!r}.{hint} "
+                             f"The namespaces are: {', '.join(spaces)}")
 
     def __init__(self, channel):
         self._channel = channel

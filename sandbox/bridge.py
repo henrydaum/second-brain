@@ -143,15 +143,25 @@ def _native_base(family: str):
 
 def _result_to_native(family: str, result, native_module):
     """Translate a sandbox Result back into what the kernel expects."""
+    # Where a raise happened, if one did. Each family carries it differently:
+    # a tool has a field for it, a command returns markdown, and TaskResult
+    # feeds the ingestion pipeline and is not worth growing for this.
+    trace = result.traceback
+
     if family == "command":
         # Commands return markdown, or None.
-        return result.data if result.ok else f"Error: {result.error}"
+        if result.ok:
+            return result.data
+        return (f"Error: {result.error}\n\n```\n{trace}```" if trace
+                else f"Error: {result.error}")
 
     if family == "task":
         task_result = getattr(native_module, "TaskResult", None)
         if task_result is None:
             return result
-        return task_result(success=result.ok, error=result.error,
+        return task_result(success=result.ok,
+                           error=f"{result.error}\n{trace}" if trace
+                                 else result.error,
                            data=result.data or [],
                            also_contains=list(result.also_contains),
                            discovered_paths=list(result.discovered_paths))
@@ -161,7 +171,8 @@ def _result_to_native(family: str, result, native_module):
         return result
     return tool_result(success=result.ok, error=result.error,
                        data=result.data, llm_summary=result.llm_summary,
-                       attachment_paths=list(result.attachment_paths))
+                       attachment_paths=list(result.attachment_paths),
+                       traceback=trace)
 
 
 def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:

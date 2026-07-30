@@ -38,6 +38,8 @@ import threading
 import time
 
 from .guest import protocol
+from .guest.codes import ERROR_GUEST_FAULT
+from .guest.faults import guest_traceback
 from .guest.loader import load_entry, unload_box
 from .guest.requests import Result
 from .guest.sdk import SDK
@@ -192,7 +194,9 @@ class InProcessBox(PersistentBox):
             except RequestFailed as failed:
                 box["result"] = failed.result
             except Exception as exc:
-                box["result"] = Result.failure(f"{type(exc).__name__}: {exc}")
+                box["result"] = Result.failure(
+                    f"{type(exc).__name__}: {exc}", code=ERROR_GUEST_FAULT,
+                    traceback=guest_traceback(exc, drop=(__file__,)))
             finally:
                 done.set()
 
@@ -443,5 +447,9 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
 
     outcome = box.start(interpreter, timeout=start_timeout)
     if not outcome.ok:
-        raise BoxError(f"{name}: {outcome.error}")
+        # Carry the stack: this is the case it is worth the most in. "The box
+        # did not start" and "line 41 of your service, KeyError" are the same
+        # event, and only one of them can be acted on.
+        raise BoxError(f"{name}: {outcome.error}"
+                       + (f"\n{outcome.traceback}" if outcome.traceback else ""))
     return box

@@ -114,6 +114,11 @@ class ConversationLoop:
     OVER_BUDGET_MESSAGE = "I've made too many tool calls. Could you try a more specific question?"
     OVER_BUDGET_NUDGE = "You've hit the tool-call limit. Summarize what you have and stop calling tools."
     MAX_TOOL_RESULT_CHARS = 12000
+    # An error has its own, smaller budget. It was never truncated at all,
+    # which was fine while an error was a sentence and stopped being fine the
+    # moment it could carry a stack — or an exception whose str() is a
+    # parser's entire input document.
+    MAX_TOOL_ERROR_CHARS = 4000
     # How many times the doormen at the end_turn doorway may send the agent
     # back inside per drive. A stubborn doorman can never trap the agent
     # (the Claude Code stop_hook_active lesson): past this, the turn ends.
@@ -554,11 +559,24 @@ class ConversationLoop:
         # Action-level failure (legality, exec error) → tool error message.
         if not getattr(result, "ok", True):
             err = getattr(result, "error", None)
-            return json.dumps({"error": err.message if err else "Tool failed."}), []
+            return json.dumps({"error": _truncate_middle(
+                err.message if err else "Tool failed.",
+                self.MAX_TOOL_ERROR_CHARS)}), []
 
         # ToolResult-level failure.
         if tool_result is not None and not getattr(tool_result, "success", True):
-            return json.dumps({"error": getattr(tool_result, "error", "Tool failed.")}), []
+            failed = {"error": _truncate_middle(
+                str(getattr(tool_result, "error", "") or "Tool failed."),
+                self.MAX_TOOL_ERROR_CHARS)}
+            # A named key rather than multiprocessing's triple-quote fence:
+            # that fence exists because its channel is a bare string, and this
+            # one is JSON, where the key says what the blob is with no
+            # convention to learn. Absent on native tools, which have no field.
+            trace = str(getattr(tool_result, "traceback", "") or "")
+            if trace:
+                failed["traceback"] = _truncate_middle(
+                    trace, self.MAX_TOOL_ERROR_CHARS)
+            return json.dumps(failed), []
 
         # Ok action with no underlying ToolResult (e.g. an approval was
         # requested): surface the action's own message, never a bare "null"

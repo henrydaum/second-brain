@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from .guest import protocol
+from .guest.faults import clamp
 from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
 from .guest.codes import (ERROR_GUEST_EXITED, ERROR_GUEST_FAULT,
@@ -199,12 +200,19 @@ def service_until(interpreter: Interpreter, execution: Execution, proc,
 
 
 def fault_result(message: dict, name: str) -> Result:
-    """Turn a fault message into a failure Result."""
-    detail = message.get("traceback") or ""
-    if detail:
-        logger.debug("sandboxed fault in %s:\n%s", name, detail)
+    """Turn a fault message into a failure Result.
+
+    The child's stack used to go to ``logger.debug``, which is below the level
+    the app configures — so the one site that captured a real traceback was the
+    one site that threw it away. It rides on the Result now, which is the only
+    channel reaching the caller, the frontend and the model.
+
+    Re-clamped on receipt: the child is the far side of a trust boundary, and a
+    cap it applies to itself is not a cap.
+    """
     return Result.failure(message.get("error", "sandboxed code faulted"),
-                          code=ERROR_GUEST_FAULT)
+                          code=ERROR_GUEST_FAULT,
+                          traceback=clamp(str(message.get("traceback") or "")))
 
 
 def _pump(interpreter: Interpreter, execution: Execution, proc,

@@ -19,10 +19,11 @@ from __future__ import annotations
 import logging
 import sys
 import time
-import traceback
 
 from . import protocol
 from .channel import PipeChannel, Terminated
+from .codes import ERROR_GUEST_FAULT
+from .faults import guest_traceback
 from .loader import load_entry
 from .requests import RequestFailed, Result
 from .sdk import SDK
@@ -172,15 +173,30 @@ def _apply_limits(memory_mb: int | None, cpu_seconds: int | None):
 
 
 def _fault(wire_out, exc) -> int:
-    """Report a failure the code could not express as a Result."""
-    try:
-        protocol.write_message(wire_out, {
-            "kind": protocol.FAULT,
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc(),
-        })
-    except protocol.StreamClosed:
-        return 0    # nobody is listening; the parent already went away
+    """Report a failure the code could not express as a Result.
+
+    Guarded like ``_send_result``, and for the same reason one step further
+    along: an oversized message raises ``ProtocolError`` from ``encode`` before
+    the stream is touched, and letting that escape killed the child — so the
+    kernel reported "child exited without a result" and the fault explaining it
+    went with the process. The stack is what can be big, so the first retry
+    drops it; the second drops the sentence too, because an exception whose
+    ``str()`` is a megabyte is a thing that exists.
+    """
+    detail = {"kind": protocol.FAULT,
+              "error": f"{type(exc).__name__}: {exc}",
+              "traceback": guest_traceback(exc)}
+    for attempt in (detail,
+                    {**detail, "traceback": ""},
+                    {"kind": protocol.FAULT,
+                     "error": f"{type(exc).__name__}: (unsendable detail)"}):
+        try:
+            protocol.write_message(wire_out, attempt)
+            return 1
+        except protocol.StreamClosed:
+            return 0    # nobody is listening; the parent already went away
+        except protocol.ProtocolError:
+            continue
     return 1
 
 
@@ -285,7 +301,9 @@ def _serve_persistent(wire_in, wire_out, sdk, instance,
             result = failed.result
         except Exception as exc:
             # One bad call must not take the service down with it.
-            result = Result.failure(f"{type(exc).__name__}: {exc}")
+            result = Result.failure(f"{type(exc).__name__}: {exc}",
+                                    code=ERROR_GUEST_FAULT,
+                                    traceback=guest_traceback(exc))
 
         if not _send_result(wire_out, protocol.RETURN, result):
             return 1

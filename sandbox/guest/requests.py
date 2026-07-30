@@ -362,12 +362,10 @@ class Result:
     kill — because code that treats denial as fatal is the most likely thing a
     careless author writes.
 
-    Truthy on success, so the common check reads naturally::
-
-        r = sdk.fs.read(path)
-        if not r:
-            return sdk.fail(r.error)
-        text = r.data
+    Plugin authors rarely hold one. The SDK unwraps every Request, so
+    ``sdk.fs.read(path)`` is the text and a failure is an exception — see
+    :class:`RequestFailed`. This is what a *handler* returns and what crosses
+    the wire; reach for it directly only to attach the extras below.
     """
     ok: bool = True
     data: Any = None
@@ -377,6 +375,11 @@ class Result:
     #: ``ERROR_*`` names in :mod:`guest.codes`, or empty. Empty is the norm and
     #: is not a bug: most failures are only ever read. See that module.
     code: str = ""
+    #: The guest's own stack, formatted by :func:`guest.faults.guest_traceback`
+    #: — its frames, not the runner's. Empty on success and on any failure
+    #: nothing raised for; a denial has no stack. Only the four capture sites
+    #: mint one, which is why neither ``sdk.ok`` nor ``sdk.fail`` takes it.
+    traceback: str = ""
 
     # ── how a result reaches the agent and the frontend ────────────
     # ``data`` is for the caller; these carry the rest of what a plugin
@@ -397,6 +400,13 @@ class Result:
     def __bool__(self) -> bool:
         return self.ok
 
+    def __repr__(self) -> str:
+        """The outcome, not every field — this is read while debugging."""
+        if self.ok:
+            return f"Result(ok=True, data={self.data!r})"
+        code = f", code={self.code!r}" if self.code else ""
+        return f"Result(ok=False, error={self.error!r}{code})"
+
     @property
     def denied(self) -> bool:
         """Whether this failure was a refusal rather than a breakage.
@@ -415,13 +425,15 @@ class Result:
 
     @staticmethod
     def failure(error: str, retryable: bool = False,
-                code: str = "") -> "Result":
+                code: str = "", traceback: str = "") -> "Result":
         """Build a failure report.
 
         ``code`` is optional and usually stays empty — see ``guest/codes.py``
-        for when one is worth adding.
+        for when one is worth adding. ``traceback`` is for the four sites that
+        catch a raise; everything else leaves it empty.
         """
-        return Result(ok=False, error=error, retryable=retryable, code=code)
+        return Result(ok=False, error=error, retryable=retryable, code=code,
+                      traceback=traceback)
 
     @staticmethod
     def refusal(reason: str = "", code: str = ERROR_DENIED) -> "Result":
@@ -438,7 +450,7 @@ class Result:
         """Serialize for the subprocess runner."""
         return {"ok": self.ok, "data": self.data,
                 "error": self.error, "retryable": self.retryable,
-                "code": self.code,
+                "code": self.code, "traceback": self.traceback,
                 "llm_summary": self.llm_summary,
                 "attachment_paths": list(self.attachment_paths),
                 "also_contains": list(self.also_contains),
@@ -451,6 +463,7 @@ class Result:
                       error=raw.get("error", ""),
                       retryable=raw.get("retryable", False),
                       code=raw.get("code", ""),
+                      traceback=raw.get("traceback", ""),
                       llm_summary=raw.get("llm_summary", ""),
                       attachment_paths=list(raw.get("attachment_paths") or []),
                       also_contains=list(raw.get("also_contains") or []),

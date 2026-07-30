@@ -12,24 +12,34 @@ code by name, it does not need a plugin class.
 Read docs/SDK.md for the Request surface. This file covers what is specific to
 scripts and helper files.
 
-  Where it goes:  anywhere the caller can point at
+  Where it goes:  <DATA_DIR>/sandbox_plugins/scripts/, and nowhere else.
+                  `sdk.paths.get("scripts")` will tell you the absolute path.
+                  The directory is the entire declaration — a script has no
+                  prefix, no base class and no keyword that could say what it
+                  is — so a file anywhere else is REFUSED rather than asked
+                  about, and you have left a stray file behind. Spell the whole
+                  path out when you write it and again when you run it.
   Filename:       anything EXCEPT a family prefix. A file named tool_*.py,
                   task_*.py, service_*.py, command_*.py or frontend_*.py must
                   contain a matching plugin class — the validator will reject
                   it otherwise. Name scripts anything else.
-  Entry point:    any function you name when running it
+  Entry point:    any function you name when running it; `main` by default
 
 How it gets run:
 
-    from sandbox.facade import Sandbox
+    sdk.scripts.run(path)                       # calls main(sdk)
+    sdk.scripts.run(path, "summarize", path="notes.md")
 
-    sandbox = Sandbox(context=ctx, runtime=runtime)
-    result = sandbox.run("scratch/summarize.py", "summarize",
-                         kwargs={"path": "notes.md"})
+Whatever the function returns comes back. Pass `wait=False` for work that
+should not hold up a turn. From outside the sandbox it is the `run_script`
+tool, which takes the same absolute path.
 
-`run()` blocks and returns a Result. `start()` returns immediately with a Run
-you can wait on or cancel — the wait=False shape, for work that should not
-hold up a turn.
+Reach for a script instead of a shell command. Both do work on this machine,
+but a shell command is a process the kernel cannot see into, so it asks the
+user every single time; a script is contained — every effect inside it arrives
+at the gate on its own — so it asks nothing at all. The one exception is a
+script importing a library outside the standard library: that is asked about
+once per run, and the library is named.
 
 
 THE SAME RULES APPLY
@@ -111,6 +121,10 @@ def audit(sdk, root="."):
 
     Shows the failure idiom: catch only what you can act on. A file that
     cannot be read is worth skipping; a denied listing is worth reporting.
+
+    Watch the ordering. `Denied` is a subclass of `Failed`, so `except
+    sdk.Failed` catches refusals too — put `except sdk.Denied` first whenever
+    "the user said no" deserves different handling from "the disk is full".
     """
     try:
         paths = sdk.fs.list(root, pattern="*.md")
