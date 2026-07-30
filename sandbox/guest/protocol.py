@@ -19,6 +19,13 @@ Message kinds, parent to child:
 - ``call``    — persistent only: run this method and answer with ``return``
 - ``stop``    — persistent only: shut down gracefully
 
+Two optional fields carry the multi-occupant case, and both are absent for
+every box that has one occupant — which is nearly all of them. ``start`` may
+name ``entries``, several plugin classes to instantiate from one module
+import; ``call`` may then name a ``target`` saying which of them the call is
+for. A ``call`` with no ``target`` resolves to the sole occupant, so the wire
+a single-service box speaks is byte-identical to what it always was.
+
 Child to parent:
 
 - ``request`` — I want an effect; classify it
@@ -49,6 +56,7 @@ purpose".) Because nothing is awaited, a notice never appears in the
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -149,11 +157,17 @@ def read_message(stream) -> dict | None:
 def is_simple(value: Any) -> bool:
     """Whether a value may cross the boundary.
 
-    Only JSON-native data. A dataclass is converted to a dictionary by its
-    sender and rebuilt by the SDK on the far side, so no live object — and
-    therefore no route back into the kernel's module graph — ever crosses.
+    Only JSON-native data, plus ``bytes`` — which are not JSON-native but are
+    packed into it by :func:`pack` on the way out and restored on the way in,
+    so from a caller's point of view they cross like anything else.
+
+    A dataclass is converted to a dictionary by its sender and rebuilt by the
+    SDK on the far side, so no live object — and therefore no route back into
+    the kernel's module graph — ever crosses.
     """
     if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, (bytes, bytearray, memoryview)):
         return True
     if isinstance(value, (list, tuple)):
         return all(is_simple(v) for v in value)
@@ -161,3 +175,67 @@ def is_simple(value: Any) -> bool:
         return all(isinstance(k, str) and is_simple(v)
                    for k, v in value.items())
     return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Bytes over a JSON wire.
+# ──────────────────────────────────────────────────────────────────────
+#
+# JSON has no bytes type, so a value that is merely *numeric* — an embedding
+# vector, a thumbnail, a BLOB column — could not cross. It failed in the worst
+# possible direction: in-process there is no serialization at all, so a plugin
+# writing a BLOB worked on a thread and raised ``TypeError`` deep inside
+# ``json.dumps`` only once it ran in a subprocess. Identical code, two
+# behaviours, and the pipe is where the failure shows up.
+#
+# The codec lives here rather than in the database handler because there is
+# nothing database-shaped about it. Every payload that crosses funnels through
+# ``Request.args`` and ``Result.data``, so packing at those two points covers
+# db params, db rows, ``service.call`` arguments and ``service.call`` return
+# values in one place — and leaves every handler written as if bytes were
+# ordinary, which is the point.
+#
+# ``fs.read_bytes`` predates this and base64s by hand at the SDK level. It is
+# left alone: its encoding is part of that Request's documented answer, and
+# rewriting it would change a wire format for no behavioural gain.
+
+#: The single key marking a packed bytes value. A dict is only ever decoded
+#: when it has this key *and nothing else*, so plugin data that happens to
+#: contain the string is not mistaken for an encoding.
+BYTES_TAG = "__bytes__"
+
+
+def pack(value: Any) -> Any:
+    """Encode any ``bytes`` inside a payload for the JSON wire.
+
+    Recurses through lists and dicts, since the interesting cases are both
+    nested: a list of embedding vectors, a row dict with one BLOB column.
+    Everything else is returned unchanged, so packing a payload with no bytes
+    in it costs a walk and produces an equal value.
+    """
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {BYTES_TAG: base64.b64encode(bytes(value)).decode("ascii")}
+    if isinstance(value, (list, tuple)):
+        return [pack(item) for item in value]
+    if isinstance(value, dict):
+        return {key: pack(item) for key, item in value.items()}
+    return value
+
+
+def unpack(value: Any) -> Any:
+    """Restore what :func:`pack` encoded.
+
+    Undecodable content is passed through rather than raised on: a malformed
+    tag is data somebody sent, not a protocol violation, and the honest answer
+    is to hand back the dict as it arrived.
+    """
+    if isinstance(value, dict):
+        if len(value) == 1 and isinstance(value.get(BYTES_TAG), str):
+            try:
+                return base64.b64decode(value[BYTES_TAG], validate=True)
+            except (ValueError, TypeError):
+                return value
+        return {key: unpack(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [unpack(item) for item in value]
+    return value

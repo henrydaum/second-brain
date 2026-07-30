@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import protocol
+
 # ── filesystem ────────────────────────────────────────────────────────
 FS_READ = "fs.read"
 FS_WRITE = "fs.write"
@@ -290,13 +292,21 @@ class Request:
         return self.type in READ_ONLY
 
     def to_dict(self) -> dict:
-        """Serialize for the subprocess runner."""
-        return {"type": self.type, "args": dict(self.args)}
+        """Serialize for the subprocess runner.
+
+        ``args`` is packed so a Request may carry bytes — a BLOB bound as a
+        ``db.write`` parameter, most often. In-process the Request is handed
+        over as the object it already is and no packing happens at all, which
+        is what makes the two paths agree: a handler receives real ``bytes``
+        either way and never learns which side of a pipe it is on.
+        """
+        return {"type": self.type, "args": protocol.pack(dict(self.args))}
 
     @staticmethod
     def from_dict(raw: dict) -> "Request":
         """Rebuild from the wire."""
-        return Request(type=raw["type"], args=dict(raw.get("args") or {}))
+        return Request(type=raw["type"],
+                       args=protocol.unpack(dict(raw.get("args") or {})))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -447,8 +457,13 @@ class Result:
         return Result(ok=False, error=detail, retryable=False, code=code)
 
     def to_dict(self) -> dict:
-        """Serialize for the subprocess runner."""
-        return {"ok": self.ok, "data": self.data,
+        """Serialize for the subprocess runner.
+
+        ``data`` is packed for the same reason ``Request.args`` is, in the
+        other direction: a ``db.query`` answering with a BLOB column, or a
+        service export returning an embedding vector.
+        """
+        return {"ok": self.ok, "data": protocol.pack(self.data),
                 "error": self.error, "retryable": self.retryable,
                 "code": self.code, "traceback": self.traceback,
                 "llm_summary": self.llm_summary,
@@ -459,7 +474,7 @@ class Result:
     @staticmethod
     def from_dict(raw: dict) -> "Result":
         """Rebuild from the wire."""
-        return Result(ok=raw["ok"], data=raw.get("data"),
+        return Result(ok=raw["ok"], data=protocol.unpack(raw.get("data")),
                       error=raw.get("error", ""),
                       retryable=raw.get("retryable", False),
                       code=raw.get("code", ""),

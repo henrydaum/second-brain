@@ -62,7 +62,12 @@ NATIVE_BASES = {
 # an allowlist because the base classes will grow, and an allowlist that
 # drifts silently drops a plugin's schema.
 NOT_CARRIED = {"family", "box", "isolation", "lifetime", "timeout",
-               "memory_mb", "requests", "exports", "hooks"}
+               "memory_mb", "requests", "exports", "hooks",
+               # The per-class breakdown the bridge itself reads to decide how
+               # many adapters to build. Copying it onto an adapter would put
+               # a second, staler copy of every declaration on the object that
+               # already carries them flattened.
+               "classes", "entry"}
 
 _SANDBOX: Sandbox | None = None
 
@@ -394,7 +399,8 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     return module
 
 
-def _build(entry: str, base, attributes: dict, path, source_path: str):
+def _build(entry: str, base, attributes: dict, path, source_path: str,
+           module=None):
     """Make the adapter class and the synthetic module that carries it.
 
     One place because of ``__module__``. Discovery only accepts classes that
@@ -403,13 +409,18 @@ def _build(entry: str, base, attributes: dict, path, source_path: str):
     adapter therefore looked foreign to discovery and no migrated plugin could
     be found at all. Setting it here, once, is what makes a bridged plugin
     discoverable like any other.
+
+    Pass ``module`` to add another adapter to a module already built — how a
+    file declaring several services ends up as one module holding all of them,
+    which is what discovery expects to find.
     """
     module_name = f"sandboxed_{Path(path).stem}"
     adapter = type(f"Sandboxed{entry}", (base,),
                    {**attributes, "__module__": module_name})
 
-    module = types.ModuleType(module_name)
-    module.__file__ = source_path
+    if module is None:
+        module = types.ModuleType(module_name)
+        module.__file__ = source_path
     setattr(module, adapter.__name__, adapter)
     return adapter, module
 
@@ -595,6 +606,88 @@ def _drive_polls(
     return True
 
 
+class _Occupant:
+    """One service's view of a box it may be sharing.
+
+    Everything that calls into a resident service — the export forwarders, the
+    poll loop, the bus deliverer, the hook shims, the prompt collector —
+    reaches ``service._sandbox_box`` and calls ``.call(method, ...)``. Handing
+    each adapter a handle that already knows its own target keeps every one of
+    those sites written exactly as it was, instead of threading a ``target``
+    argument through five call paths that have no other reason to know a box
+    can hold more than one thing.
+    """
+
+    def __init__(self, box, target: str):
+        self._box = box
+        self._target = target
+
+    @property
+    def alive(self) -> bool:
+        """Whether the underlying box can still take calls."""
+        return self._box is not None and self._box.alive
+
+    @property
+    def execution(self):
+        """The box's execution, for callers that adjust its context."""
+        return self._box.execution
+
+    def call(self, method: str, *args, **kwargs):
+        """Invoke a method on *this* occupant."""
+        return self._box.call(method, *args, target=self._target, **kwargs)
+
+
+class _Residency:
+    """The one box a file's services share, and who is still using it.
+
+    A file holding two services registers as two services: the kernel loads
+    and unloads each by name, with no idea they are neighbours. But there is
+    one process behind them, and it exists precisely *because* they share
+    something expensive — so the naive mapping, where each adapter's
+    ``unload`` closes the box, means unloading the text embedder kills the
+    image embedder's model too, with no symptom beyond calls suddenly failing.
+
+    Hence a refcount. The first adapter to load opens the box; the last to
+    unload closes it. Everything in between joins what is already there.
+    """
+
+    def __init__(self, source_path: str, box_name: str, entries: list):
+        self.source_path = source_path
+        self.box_name = box_name
+        self.entries = list(entries)
+        self.box = None
+        self._users: set = set()
+        self._lock = threading.Lock()
+
+    def join(self, name: str, chain):
+        """Open the box if nobody has yet, and record this user."""
+        with self._lock:
+            if self.box is None or not self.box.alive:
+                self.box = get_sandbox().open(
+                    self.source_path,
+                    self.entries[0] if self.entries else "",
+                    name=self.box_name,
+                    chain=chain,
+                    # Empty for a lone occupant, so a one-service file opens
+                    # exactly the box it always did.
+                    entries=self.entries if len(self.entries) > 1 else (),
+                )
+            self._users.add(name)
+            return self.box
+
+    def leave(self, name: str):
+        """Drop this user, and close the box once the last one has gone."""
+        with self._lock:
+            self._users.discard(name)
+            if self._users or self.box is None:
+                return
+            self.box = None
+        try:
+            get_sandbox().close(self.box_name)
+        except Exception:
+            logger.exception("failed to close box %s", self.box_name)
+
+
 def _adapt_service(
     path,
     entry: str,
@@ -603,7 +696,7 @@ def _adapt_service(
     box_name: str,
     source: str,
 ):
-    """Build a native-looking service backed by a resident box.
+    """Build native-looking services backed by one resident box.
 
     The other families are *calls*: run once, translate the answer, tear down.
     A service is a *residency*, so the adapter maps the native lifecycle onto
@@ -615,8 +708,52 @@ def _adapt_service(
     and every method the plugin lists in ``exports`` becomes a real method on
     the adapter, because native callers reach services by attribute access
     rather than through ``service.call``.
+
+    A file may declare several service classes — the shape ``build_services``
+    has always supported, and the reason it returns a dict. They share one box
+    and are told apart by the call's ``target``, so a heavy library is
+    imported once and an accelerator context is created once. Everything below
+    is built per class; only :class:`_Residency` is shared.
     """
     source_path = str(path.resolve())
+    classes = list(declarations.get("classes") or [])
+    if not classes:
+        # A file the validator did not describe per class — a hand-built
+        # declarations dict in a test, most likely. Treat it as the one class
+        # it names, which is what this function always assumed.
+        classes = [{"entry": entry, **declarations}]
+
+    residency = _Residency(source_path, box_name,
+                           [c.get("entry") or entry for c in classes])
+
+    adapters = {}
+    module = None
+    for spec in classes:
+        adapter, module = _service_adapter(
+            path, spec.get("entry") or entry, base, spec, residency, source,
+            module)
+        adapters[adapter.name] = adapter
+
+    def build_services(config: dict) -> dict:
+        """Services are discovered by calling this, not by scanning classes."""
+        return {name: adapter() for name, adapter in adapters.items()}
+
+    module.build_services = build_services
+    return module
+
+
+def _service_adapter(
+    path,
+    entry: str,
+    base,
+    declarations: dict,
+    residency: "_Residency",
+    source: str,
+    module=None,
+):
+    """One service class's adapter. See :func:`_adapt_service`."""
+    source_path = residency.source_path
+    box_name = residency.box_name
     name = declarations.get("name") or path.stem.split("_", 1)[-1]
     exports = list(declarations.get("exports") or [])
     interval, max_failures = _poll_settings(declarations, 0.0)
@@ -644,15 +781,15 @@ def _adapt_service(
         # forever after.
         self._prompt_text = None
         try:
-            self._sandbox_box = get_sandbox().open(
-                source_path,
-                entry,
-                name=box_name,
-                chain=Chain(root=f"service:{name}"),
-            )
+            box = residency.join(name, Chain(root=f"service:{name}"))
         except Exception as exc:
             logger.error("service %s did not start: %s", name, exc)
             return False
+        # ``target`` is this service's own name, and empty when it is the box's
+        # only occupant — which is what keeps a one-service file's wire
+        # identical to what it always sent.
+        self._sandbox_box = _Occupant(
+            box, name if len(residency.entries) > 1 else "")
         self.loaded = True
         # Binding and loading happen in either order depending on whether this
         # is boot or a live reload, so both ends call the same idempotent sync.
@@ -690,10 +827,10 @@ def _adapt_service(
         _unhook(self)
         _deafen(self)
         self._sandbox_box = None
-        try:
-            get_sandbox().close(box_name)
-        except Exception:
-            logger.exception("failed to close box %s", box_name)
+        # The box closes when the *last* service in this file unloads. See
+        # ``_Residency``: unloading one of a pair must not take the other's
+        # loaded model down with it.
+        residency.leave(name)
 
     def bind_runtime(self, *, runtime=None, **_):
         """Receive the runtime. Idempotent, and may arrive before or after load."""
@@ -765,14 +902,7 @@ def _adapt_service(
     for method in exports:
         attributes[method] = _export(method)
 
-    adapter, module = _build(entry, base, attributes, path, source_path)
-
-    def build_services(config: dict) -> dict:
-        """Services are discovered by calling this, not by scanning classes."""
-        return {name: adapter()}
-
-    module.build_services = build_services
-    return module
+    return _build(entry, base, attributes, path, source_path, module)
 
 
 def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,

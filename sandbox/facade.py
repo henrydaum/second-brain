@@ -225,6 +225,14 @@ class Sandbox:
         """
         report = validate_file(source)
         declared = report.declarations
+        # A file may hold several services, and they share one box — so the
+        # box's ceilings have to fit its *slowest and largest* occupant, not
+        # whichever class happened to be written first. Taking the maximum is
+        # the only reading that cannot silently starve a sibling; the kernel
+        # still clamps whatever comes out.
+        occupants = list(declared.get("classes") or []) or [declared]
+        timeout = max(float(spec.get("timeout") or 0) for spec in occupants)
+        memory_mb = max(int(spec.get("memory_mb") or 0) for spec in occupants)
         # Isolation is the one field the file does not get a vote on: it comes
         # from which tree the file lives in, which is not something the file
         # can assert. Everything else here is still declared intent, resolved
@@ -234,8 +242,8 @@ class Sandbox:
             box=str(declared.get("box") or ""),
             isolation=required_isolation(source, report),
             lifetime=str(declared.get("lifetime") or ""),
-            timeout=float(declared.get("timeout") or 0),
-            memory_mb=int(declared.get("memory_mb") or 0),
+            timeout=timeout,
+            memory_mb=memory_mb,
         )
         spec = resolve([membership])[membership.box_name]
         return report, spec
@@ -407,8 +415,14 @@ class Sandbox:
              chain: Chain | None = None, isolated: bool | None = None,
              call_timeout: float | None = None,
              start_timeout: float = DEFAULT_START_TIMEOUT,
-             manage_lifecycle: bool = True) -> PersistentBox:
-        """Load a resident box and keep a handle on it."""
+             manage_lifecycle: bool = True, entries=()) -> PersistentBox:
+        """Load a resident box and keep a handle on it.
+
+        ``entries`` opens the box with several plugin classes in it, addressed
+        by ``box.call(..., target=name)``. The box is still one box under one
+        name, which is what makes a second opener find it rather than spawn a
+        rival — see the reuse check below.
+        """
         report, spec, opts = self._prepare(source, isolated=isolated,
                                            timeout=call_timeout, name=name)
         box_name = opts["name"]
@@ -437,10 +451,12 @@ class Sandbox:
                             f"declare box = \"...\" on it")
                     return existing
             return self._open_locked(source, entry, box_name, opts, chain,
-                                     start_timeout, manage_lifecycle)
+                                     start_timeout, manage_lifecycle,
+                                     entries)
 
     def _open_locked(self, source, entry, box_name, opts, chain,
-                     start_timeout, manage_lifecycle) -> PersistentBox:
+                     start_timeout, manage_lifecycle,
+                     entries=()) -> PersistentBox:
         """Open one box, with this name's opener lock already held."""
         box = open_box(self.interpreter, source, entry, name=box_name,
                        isolated=opts["isolated"], chain=chain,
@@ -450,7 +466,7 @@ class Sandbox:
                        extra_roots=[str(p) for p in opts["extra_roots"]],
                        memory_mb=opts["memory_mb"],
                        manage_lifecycle=manage_lifecycle,
-                       digest=opts["digest"])
+                       digest=opts["digest"], entries=entries)
         with self._lock:
             stale = self._boxes.get(box_name)
             self._boxes[box_name] = box

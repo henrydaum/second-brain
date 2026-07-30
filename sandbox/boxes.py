@@ -40,7 +40,7 @@ import time
 from .guest import protocol
 from .guest.codes import ERROR_GUEST_FAULT
 from .guest.faults import guest_traceback
-from .guest.loader import load_entry, unload_box
+from .guest.loader import load_entries, load_entry, unload_box
 from .guest.requests import Result
 from .guest.sdk import SDK
 from .interpreter import Execution, Interpreter, clamp_timeout
@@ -80,7 +80,7 @@ class PersistentBox:
         """Whether this box can still take calls."""
         return self._alive
 
-    def call(self, method: str, *args, **kwargs) -> Result:
+    def call(self, method: str, *args, target: str = "", **kwargs) -> Result:
         """Invoke a method and wait for its answer. Serialized per box.
 
         If a caller is on this thread — a sandboxed tool that reached us
@@ -94,9 +94,12 @@ class PersistentBox:
         the box's own chain and context, which is right: a service acting on
         its own initiative is not acting for anybody.
 
-        Deliberately not a ``chain=`` parameter. This method's first parameter
-        is already ``method``, and ``sandbox/hooks.py`` documents having been
-        bitten by that collision once.
+        ``target`` names which occupant, for a box holding several services;
+        empty means the only one. It is keyword-only, and that is not a style
+        choice: the first positional here is already ``method``, and
+        ``sandbox/hooks.py`` documents being bitten once by exactly that
+        collision — a ``chain=`` parameter that a caller passed positionally
+        and silently invoked as a method name.
         """
         if not self._alive:
             return Result.failure(f"box {self.name!r} is not running")
@@ -107,14 +110,14 @@ class PersistentBox:
                 return Result.failure(f"box {self.name!r} is not running")
             caller = provenance.current()
             if caller is None:
-                return self._call(method, args, kwargs)
+                return self._call(method, args, kwargs, target)
             base_chain = self.execution.chain
             base_context = self.execution.context
             self.execution.chain = caller.chain.push(self.name)
             if caller.context is not None:
                 self.execution.context = caller.context
             try:
-                return self._call(method, args, kwargs)
+                return self._call(method, args, kwargs, target)
             finally:
                 self.execution.chain = base_chain
                 self.execution.context = base_context
@@ -123,9 +126,21 @@ class PersistentBox:
         """Shut down: ask, then starve, then kill."""
         raise NotImplementedError
 
-    def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
+    def _call(self, method: str, args: tuple, kwargs: dict,
+              target: str = "") -> Result:
         """Runner-specific call."""
         raise NotImplementedError
+
+    def _receiver(self, targets: dict, target: str):
+        """Resolve which occupant a call is for, or None.
+
+        Shared by both runners because both hold the same question: a box with
+        one occupant serves it whatever the call said, and a box with several
+        serves only a name it recognises.
+        """
+        if target:
+            return targets.get(target)
+        return next(iter(targets.values())) if len(targets) == 1 else None
 
 
 class InProcessBox(PersistentBox):
@@ -140,20 +155,27 @@ class InProcessBox(PersistentBox):
     def __init__(self, target, name: str, chain=None, call_timeout=None,
                  manage_lifecycle: bool = True):
         super().__init__(name, chain, call_timeout)
-        self.target = target
+        # One occupant, or a ``{name: object}`` mapping when several services
+        # share this box. ``target`` stays the single case so nothing that
+        # reaches for it has to learn about the other.
+        self.targets = target if isinstance(target, dict) else {"": target}
+        self.target = next(iter(self.targets.values()))
         self.manage_lifecycle = manage_lifecycle
         self.sdk = SDK(None)   # channel attached at start()
 
     def start(self, interpreter: Interpreter,
               timeout: float = DEFAULT_START_TIMEOUT) -> Result:
-        """Run the target's ``start`` if it has one, then stand by."""
+        """Run each occupant's ``start`` if it has one, then stand by."""
         self.sdk = SDK(interpreter.channel(self.execution))
         self._interpreter = interpreter
-        start_fn = getattr(self.target, "start", None)
-        if self.manage_lifecycle and callable(start_fn):
-            outcome = self._invoke(start_fn, (), {}, clamp_timeout(timeout))
-            if not outcome.ok:
-                return outcome
+        if self.manage_lifecycle:
+            for occupant in self.targets.values():
+                start_fn = getattr(occupant, "start", None)
+                if callable(start_fn):
+                    outcome = self._invoke(start_fn, (), {},
+                                           clamp_timeout(timeout))
+                    if not outcome.ok:
+                        return outcome
         self._alive = True
         return Result(data=True)
 
@@ -233,21 +255,29 @@ class InProcessBox(PersistentBox):
                 f"timed out after {deadline:.1f}s of running")
         return box.get("result", Result(data=None))
 
-    def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
-        """Invoke a method on the resident instance."""
-        fn = getattr(self.target, method, None)
+    def _call(self, method: str, args: tuple, kwargs: dict,
+              target: str = "") -> Result:
+        """Invoke a method on the addressed resident instance."""
+        receiver = self._receiver(self.targets, target)
+        if receiver is None:
+            return Result.failure(
+                f"no such target: {target!r}; this box holds "
+                f"{sorted(self.targets)}")
+        fn = getattr(receiver, method, None)
         if not callable(fn):
             return Result.failure(f"no such method: {method!r}")
         return self._invoke(fn, args, kwargs, self.call_timeout)
 
     def stop(self, timeout: float = 10.0) -> Result:
-        """Ask it to stop, then starve it. There is no kill for a thread."""
+        """Ask each occupant to stop, then starve. No kill for a thread."""
         if not self._alive:
             return Result(data=False)
         self._alive = False
-        stop_fn = getattr(self.target, "stop", None)
-        if self.manage_lifecycle and callable(stop_fn):
-            self._invoke(stop_fn, (), {}, clamp_timeout(timeout))
+        if self.manage_lifecycle:
+            for occupant in self.targets.values():
+                stop_fn = getattr(occupant, "stop", None)
+                if callable(stop_fn):
+                    self._invoke(stop_fn, (), {}, clamp_timeout(timeout))
         self._interpreter.cancel(self.execution)
         unload_box(self.name)
         return Result(data=True)
@@ -259,10 +289,15 @@ class SubprocessBox(PersistentBox):
     def __init__(self, module_path: str, entry: str, name: str,
                  chain=None, call_timeout=None, box_root=None,
                  memory_mb: int | None = None, extra_roots=(),
-                 manage_lifecycle: bool = True, digest: str = ""):
+                 manage_lifecycle: bool = True, digest: str = "",
+                 entries=()):
         super().__init__(name, chain, call_timeout)
         self.module_path = str(module_path)
         self.entry = entry
+        # Several plugin classes to instantiate from one module import. Empty
+        # for the ordinary single-occupant box, in which case ``entry`` alone
+        # names what to load.
+        self.entries = list(entries or [])
         self.box_root = box_root
         self.extra_roots = list(extra_roots or [])
         self.memory_mb = memory_mb
@@ -287,6 +322,7 @@ class SubprocessBox(PersistentBox):
                 "kind": protocol.START,
                 "module": self.module_path,
                 "func": self.entry,
+                "entries": self.entries,
                 "persistent": True,
                 "box": self.name,
                 "root": self.box_root,
@@ -313,7 +349,8 @@ class SubprocessBox(PersistentBox):
         self._alive = True
         return Result(data=True)
 
-    def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
+    def _call(self, method: str, args: tuple, kwargs: dict,
+              target: str = "") -> Result:
         """Send a call and service Requests until the answer comes back.
 
         The deadline escalates rather than merely starving. Refusing a
@@ -334,11 +371,17 @@ class SubprocessBox(PersistentBox):
         # second for the life of the process.
         ticket = WATCHDOG.watch(self.execution, self.call_timeout, self._kill)
         try:
+            # Packed for the same reason ``Request.args`` is: a caller handing
+            # a service raw bytes — an image to OCR, a vector to store — must
+            # not depend on which side of a pipe the service happens to be on.
+            # The answer needs nothing here; it travels as a Result, which
+            # packs itself.
             if not send(self.proc, {
                 "kind": protocol.CALL,
                 "method": method,
-                "args": list(args),
-                "kwargs": kwargs,
+                "target": target,
+                "args": protocol.pack(list(args)),
+                "kwargs": protocol.pack(kwargs),
             }):
                 self._alive = False
                 return Result.failure("box channel closed")
@@ -421,13 +464,17 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
              start_timeout: float = DEFAULT_START_TIMEOUT,
              box_root=None, memory_mb: int | None = None,
              extra_roots=(), manage_lifecycle: bool = True,
-             digest: str = "") -> PersistentBox:
+             digest: str = "", entries=()) -> PersistentBox:
     """Load a resident box and return a handle to call into.
 
     ``entry`` names a plugin class, or is empty for a bare script — in which
     case the module itself is the object, its functions are the methods, and
     its globals are the state that persists. That is the whole of a scratchpad
     server.
+
+    ``entries`` names several plugin classes instead, all instantiated from
+    one module import and addressed by ``call(..., target=name)``. Only
+    services use it, and only because they share something expensive.
 
     Raises :class:`BoxError` if it will not start, since a handle to a box
     that never loaded is not a useful thing to hand back.
@@ -436,11 +483,17 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
         box = SubprocessBox(module_path, entry, name, chain=chain,
                             call_timeout=call_timeout, box_root=box_root,
                             memory_mb=memory_mb, extra_roots=extra_roots,
-                            manage_lifecycle=manage_lifecycle, digest=digest)
+                            manage_lifecycle=manage_lifecycle, digest=digest,
+                            entries=entries)
     else:
-        target = load_entry(module_path, entry, box_name=name, root=box_root,
-                            bound=False, extra_roots=extra_roots,
-                            digest=digest)
+        if entries:
+            target = load_entries(module_path, entries, box_name=name,
+                                  root=box_root, extra_roots=extra_roots,
+                                  digest=digest)
+        else:
+            target = load_entry(module_path, entry, box_name=name,
+                                root=box_root, bound=False,
+                                extra_roots=extra_roots, digest=digest)
         box = InProcessBox(target, name, chain=chain,
                            call_timeout=call_timeout,
                            manage_lifecycle=manage_lifecycle)

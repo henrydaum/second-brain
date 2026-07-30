@@ -24,7 +24,7 @@ from . import protocol
 from .channel import PipeChannel, Terminated
 from .codes import ERROR_GUEST_FAULT
 from .faults import guest_traceback
-from .loader import load_entry
+from .loader import load_entries, load_entry
 from .requests import RequestFailed, Result
 from .sdk import SDK
 
@@ -244,15 +244,23 @@ def _serve_persistent(wire_in, wire_out, sdk, instance,
     costs a process and its memory, not CPU. It never decides to exit — the
     kernel owns the box, and the only ways out are a ``stop``, a channel that
     closes, or being killed.
+
+    ``instance`` is one object, or a ``{target: object}`` mapping when several
+    services share this box. Both are served by the same loop because they
+    differ only in how a call resolves its receiver: a box with one occupant
+    ignores ``target`` entirely, so nothing about the single case changed.
     """
-    start_fn = getattr(instance, "start", None)
-    if manage_lifecycle and callable(start_fn):
-        try:
-            start_fn(sdk)
-        except Terminated:
-            return 0
-        except Exception as exc:
-            return _fault(wire_out, exc)
+    residents = instance if isinstance(instance, dict) else {"": instance}
+
+    for occupant in residents.values():
+        start_fn = getattr(occupant, "start", None)
+        if manage_lifecycle and callable(start_fn):
+            try:
+                start_fn(sdk)
+            except Terminated:
+                return 0
+            except Exception as exc:
+                return _fault(wire_out, exc)
 
     protocol.write_message(wire_out, {"kind": protocol.READY})
 
@@ -269,18 +277,33 @@ def _serve_persistent(wire_in, wire_out, sdk, instance,
         kind = message.get("kind")
 
         if kind == protocol.STOP:
-            stop_fn = getattr(instance, "stop", None)
-            if manage_lifecycle and callable(stop_fn):
-                try:
-                    stop_fn(sdk)
-                except Exception:
-                    pass    # a failed teardown must not block the shutdown
+            # Every occupant is torn down, and one that raises does not stop
+            # the others being asked: a box holding two services must not
+            # leak the second one's connection because the first threw.
+            for occupant in residents.values():
+                stop_fn = getattr(occupant, "stop", None)
+                if manage_lifecycle and callable(stop_fn):
+                    try:
+                        stop_fn(sdk)
+                    except Exception:
+                        pass  # a failed teardown must not block the shutdown
             break
 
         if kind != protocol.CALL:
             return _fault(wire_out, ValueError(f"unexpected message: {kind}"))
 
-        method = getattr(instance, message.get("method", ""), None)
+        target = message.get("target") or ""
+        if target and target in residents:
+            receiver = residents[target]
+        elif not target and len(residents) == 1:
+            receiver = next(iter(residents.values()))
+        else:
+            _send_result(wire_out, protocol.RETURN, Result.failure(
+                f"no such target: {target!r}; this box holds "
+                f"{sorted(residents)}"))
+            continue
+
+        method = getattr(receiver, message.get("method", ""), None)
         if not callable(method):
             _send_result(wire_out, protocol.RETURN, Result.failure(
                 f"no such method: {message.get('method')!r}"))
@@ -289,8 +312,8 @@ def _serve_persistent(wire_in, wire_out, sdk, instance,
         try:
             raw = method(
                 sdk,
-                *(message.get("args") or []),
-                **(message.get("kwargs") or {}),
+                *protocol.unpack(message.get("args") or []),
+                **protocol.unpack(message.get("kwargs") or {}),
             )
             result = raw if isinstance(raw, Result) else Result(data=raw)
         except Terminated:
@@ -332,13 +355,24 @@ def main() -> int:
     sdk = SDK(PipeChannel(wire_in, wire_out))
 
     try:
-        target = load_entry(start["module"], start["func"],
-                            box_name=start.get("box") or "",
-                            root=start.get("root") or None,
-                            extra_roots=start.get("extra_roots") or (),
-                            bound=not start.get("persistent"),
-                            method=start.get("method") or "run",
-                            digest=start.get("digest") or "")
+        # ``entries`` names several plugin classes sharing this box — the
+        # multi-service case. One module import serves all of them, which is
+        # the whole reason they were put in one file.
+        entries = start.get("entries") or ()
+        if entries:
+            target = load_entries(start["module"], entries,
+                                  box_name=start.get("box") or "",
+                                  root=start.get("root") or None,
+                                  extra_roots=start.get("extra_roots") or (),
+                                  digest=start.get("digest") or "")
+        else:
+            target = load_entry(start["module"], start["func"],
+                                box_name=start.get("box") or "",
+                                root=start.get("root") or None,
+                                extra_roots=start.get("extra_roots") or (),
+                                bound=not start.get("persistent"),
+                                method=start.get("method") or "run",
+                                digest=start.get("digest") or "")
     except Exception as exc:
         return _fault(wire_out, exc)
 
@@ -348,7 +382,8 @@ def main() -> int:
                 wire_in, wire_out, sdk, target,
                 manage_lifecycle=bool(start.get("manage_lifecycle", True)),
             )
-        return _run_ephemeral(wire_out, sdk, target, start.get("kwargs") or {})
+        return _run_ephemeral(wire_out, sdk, target,
+                              protocol.unpack(start.get("kwargs") or {}))
     except protocol.StreamClosed:
         # The kernel closed the pipes — during shutdown, or after killing this
         # box. There is no one left to tell, and a traceback on the user's

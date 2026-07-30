@@ -164,6 +164,34 @@ def load_entry(module_path, func_name: str = "", box_name: str = "",
     return fn
 
 
+def load_entries(module_path, names, box_name: str = "", root=None,
+                 extra_roots=(), digest: str = "") -> dict:
+    """Instantiate several plugin classes out of **one** module import.
+
+    The point is the single import. Two services in a file share it because
+    they share something expensive — a machine-learning library, an
+    accelerator context, a connection pool — and loading the module twice
+    would pay for it twice and leave the two halves unable to see each other's
+    state. ``load_member`` caches by qualified name, so this is one execution
+    of the file no matter how many classes come out of it.
+
+    Keyed by each class's declared ``name`` rather than by its class name,
+    because that is the handle every caller already has: the service name is
+    what ``build_services`` registers, what a chain link is written with, and
+    what arrives on the wire as a call's target.
+    """
+    module = load_member(module_path, box_name=box_name, root=root,
+                         extra_roots=extra_roots, digest=digest)
+    instances = {}
+    for entry in names:
+        target = getattr(module, entry, None)
+        if target is None:
+            raise AttributeError(f"{module_path} has no {entry!r}")
+        instance = target() if isinstance(target, type) else target
+        instances[getattr(instance, "name", "") or entry] = instance
+    return instances
+
+
 def unload_box(box_name: str):
     """Forget a box and every member loaded into it.
 

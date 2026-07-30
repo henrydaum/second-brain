@@ -680,6 +680,26 @@ not through `service.call`. The synthetic module supplies `build_services`,
 since that is how discovery finds services. The box owns the start deadline,
 so the adapter sets `load_timeout = 0` rather than race two timers.
 
+**Services are also the one family that may share a file, and they share a
+box when they do.** Every other family is registered *as* its file — discovery
+finds `tool_x.py` and expects the tool it is named after — so the validator's
+one-class rule stands for four of the five. Services are reached through
+`build_services`, which has always returned a *dict*, and the reason to put
+two in one file is that they share something expensive: `service_embed.py`
+holds a text and an image embedder, and two files would mean two torch
+imports and two CUDA contexts for models that a serialized box could never
+run simultaneously anyway. So `validator` collects `declarations["classes"]`,
+one entry per class; `bridge._adapt_service` builds an adapter each over a
+single `_Residency`; `open` carries `entries` and `call` carries a `target`.
+Two details are load-bearing. The box closes on a **refcount**, not on the
+first `unload` — the kernel loads and unloads each service by name with no
+idea they are neighbours, and the naive mapping kills a live model with no
+symptom beyond the survivor's calls failing. And the box takes the **maximum**
+declared `timeout`/`memory_mb` across its occupants (`facade.inspect`), since
+one shared ceiling has to fit the slowest one. A lone occupant sends no
+`entries` and no `target`, so a one-service file's wire is byte-identical to
+what it always was.
+
 **Resident polling is shared infrastructure.** Services and frontends may
 define `poll(self, sdk)` and a positive `poll_interval`; the kernel owns the
 thread and drives the serialized box call. Truthy drains immediately, falsy
@@ -1006,6 +1026,26 @@ enumerate fields by hand — forget the first and the field is lost only on the
 subprocess hop, silent in-process. `tests/test_sandbox_error_contract.py`
 derives its expectation from `dataclasses.fields`, so it fails the moment a
 field is added without a value.
+
+**Bytes cross, and the codec is not the database's.** JSON has no bytes type,
+so a value that is merely *numeric* — an embedding vector, a thumbnail, a BLOB
+column — had no way over the wire, and it failed in the worst available
+direction: in-process there is no serialization at all, so a plugin writing a
+BLOB worked on a thread and raised `TypeError` from inside `json.dumps` only
+once the same file ran in a subprocess. `protocol.pack`/`unpack` encode bytes
+as `{"__bytes__": "<b64>"}`, applied at the *four serialization boundaries* —
+`Request.to_dict`/`from_dict`, `Result.to_dict`/`from_dict`, and the resident
+box's `CALL` message either side. That covers `db.write` params, `db.query`
+rows, `service.call` arguments and its return values in one place, and every
+handler stays written as if bytes were ordinary, because from a handler's
+side they are. Nothing about a schema changed: `embedding` is still a real
+BLOB. Only a *lone* tag key is decoded, so plugin data containing the string
+is not mistaken for an encoding. `fs.read_bytes` predates this and base64s by
+hand at the SDK level; it is left alone, since its encoding is part of that
+Request's documented answer. What this does **not** fix is volume —
+`db.query` caps at 500 rows and a message at 16 MB, so a scan over every
+vector in an index is still a bandwidth problem and still has to happen where
+the vectors are.
 
 **Secrets.** A config setting holding a credential is *named* `secret_*` —
 that prefix is the declaration, matching how the rest of the system declares

@@ -179,7 +179,95 @@ def test_two_plugin_classes_in_one_file_is_an_error():
     report = _validate(GOOD_TOOL + "\n\nclass Other(BaseTool):\n"
                                    '    """Second."""\n    name = "other"\n')
     assert not report.ok
-    assert "exactly one" in _messages(report)
+    assert "only services may share a file" in _messages(report)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The one exception: services share a file, because build_services has
+# always answered with a dict.
+# ──────────────────────────────────────────────────────────────────────
+
+TWO_SERVICES = '''
+"""Two embedders that share a heavy library."""
+
+from guest.bases import BaseService
+
+
+class TextEmbedder(BaseService):
+    """Text."""
+    name = "text_embedder"
+    exports = ["encode"]
+
+    def start(self, sdk):
+        """Open."""
+        return True
+
+    def encode(self, sdk, inputs):
+        """Encode."""
+        return []
+
+
+class ImageEmbedder(BaseService):
+    """Images."""
+    name = "image_embedder"
+    exports = ["encode"]
+
+    def start(self, sdk):
+        """Open."""
+        return True
+
+    def encode(self, sdk, inputs):
+        """Encode."""
+        return []
+'''
+
+
+def test_two_services_may_share_one_file():
+    """The shape ``build_services`` has always supported."""
+    report = _validate(TWO_SERVICES, filename="service_embed.py")
+    assert report.ok, report.render()
+
+
+def test_each_service_class_is_declared_separately():
+    """One entry per class, so the bridge can build an adapter per class."""
+    report = _validate(TWO_SERVICES, filename="service_embed.py")
+    classes = report.declarations["classes"]
+    assert [c["entry"] for c in classes] == ["TextEmbedder", "ImageEmbedder"]
+    assert [c["name"] for c in classes] == ["text_embedder", "image_embedder"]
+    # Family defaults reach every class, not just the first.
+    assert all(c["lifetime"] == "persistent" for c in classes)
+
+
+def test_a_second_service_class_is_checked_too():
+    """Skipping the rest would let a sibling declare a bad Request and load."""
+    report = _validate(
+        TWO_SERVICES.replace('    name = "image_embedder"',
+                             '    name = "image_embedder"\n'
+                             '    requests = ["fs.raed"]'),
+        filename="service_embed.py")
+    assert not report.ok
+    assert "'fs.raed' is not a Request type" in _messages(report)
+
+
+def test_two_services_cannot_claim_the_same_name():
+    """A sibling collision is as silent as a registry one, and as fatal."""
+    report = _validate(
+        TWO_SERVICES.replace('name = "image_embedder"',
+                             'name = "text_embedder"'),
+        filename="service_embed.py")
+    assert not report.ok
+    assert "already registered" in _messages(report)
+
+
+def test_a_service_and_a_tool_cannot_share_a_file():
+    """Discovery has no coherent answer for what to register it as."""
+    report = _validate(
+        TWO_SERVICES + "\n\nfrom plugins.BaseTool import BaseTool\n\n"
+        "class Odd(BaseTool):\n"
+        '    """Odd."""\n    name = "odd"\n',
+        filename="service_embed.py")
+    assert not report.ok
+    assert "only services may share a file" in _messages(report)
 
 
 def test_a_missing_name_is_an_error():

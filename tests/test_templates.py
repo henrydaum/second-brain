@@ -42,7 +42,7 @@ NATIVE = {}
 # hook_template.py has to hold services because that is where hooks live.
 # Every other finding is a real failure.
 DISCOVERY_ONLY = (
-    "plugin classes; a plugin file must declare exactly one",
+    "only services may share a file",
     "discovery finds plugins by filename",
 )
 

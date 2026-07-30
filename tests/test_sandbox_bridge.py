@@ -451,6 +451,188 @@ def test_only_exported_methods_exist(tmp_path, box):
     assert service.exports == ["bump", "total"]
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Several services in one file, sharing one box.
+#
+# The shape ``build_services`` has always supported, and it exists for a
+# reason worth testing rather than merely allowing: two services put in one
+# file share something expensive, so they must share the *process* too, and
+# unloading one must not take the other's state down with it.
+# ──────────────────────────────────────────────────────────────────────
+
+TWO_SERVICES = '''
+"""Two services that share a module-level resource."""
+
+from guest.bases import BaseService
+
+LOADS = []
+
+
+class Alpha(BaseService):
+    """First."""
+
+    name = "alpha"
+    exports = ["bump", "total", "loads"]
+
+    def start(self, sdk):
+        """Begin."""
+        LOADS.append("alpha")
+        self._n = 0
+        return True
+
+    def bump(self, sdk, by=1):
+        """Add."""
+        self._n += by
+        return self._n
+
+    def total(self, sdk):
+        """Read."""
+        return self._n
+
+    def loads(self, sdk):
+        """Who has started in this process."""
+        return list(LOADS)
+
+
+class Beta(BaseService):
+    """Second."""
+
+    name = "beta"
+    exports = ["bump", "total", "loads"]
+
+    def start(self, sdk):
+        """Begin."""
+        LOADS.append("beta")
+        self._n = 100
+        return True
+
+    def bump(self, sdk, by=1):
+        """Add."""
+        self._n += by
+        return self._n
+
+    def total(self, sdk):
+        """Read."""
+        return self._n
+
+    def loads(self, sdk):
+        """Who has started in this process."""
+        return list(LOADS)
+'''
+
+
+def _two_services(tmp_path, monkeypatch, isolated):
+    """Build both adapters the way discovery would, in a chosen tree.
+
+    Isolation is provenance, so the *tree* is how a test picks a runner —
+    ``bundled`` is always in-process and ``workspace`` always a subprocess.
+    A declaration would be ignored, which is the point of ``isolation.py``.
+    """
+    from tests.support import retarget_trees
+
+    roots = retarget_trees(monkeypatch, tmp_path)
+    tree = roots["workspace" if isolated else "bundled"]
+    services = tree / "services"
+    services.mkdir(parents=True, exist_ok=True)
+    path = services / "service_pair.py"
+    path.write_text(TWO_SERVICES, encoding="utf-8")
+
+    module = adapt(path)
+    built = module.build_services({})
+    return built["alpha"], built["beta"]
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_two_services_in_one_file_both_register(tmp_path, box, isolated,
+                                                monkeypatch):
+    """``build_services`` answers with both, as the native version always did."""
+    alpha, beta = _two_services(tmp_path, monkeypatch, isolated)
+    assert alpha.name == "alpha" and beta.name == "beta"
+    assert alpha.load() is True and beta.load() is True
+    assert alpha.total() == 0
+    assert beta.total() == 100
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_calls_route_to_the_right_occupant(tmp_path, box, isolated,
+                                           monkeypatch):
+    """Two occupants, one box: a call must not reach the neighbour.
+
+    Both hold a method of the same name over different state, which is the
+    case a target-less dispatch gets silently wrong.
+    """
+    alpha, beta = _two_services(tmp_path, monkeypatch, isolated)
+    alpha.load()
+    beta.load()
+
+    assert alpha.bump(by=5) == 5
+    assert beta.bump(by=5) == 105
+    assert alpha.total() == 5          # untouched by beta's bump
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_the_file_is_imported_once_for_both(tmp_path, box, isolated,
+                                            monkeypatch):
+    """One module import, which is the whole reason to share a file.
+
+    A module-level list both classes append to is the cheapest observable
+    proof: two imports would give each occupant its own ``LOADS``.
+    """
+    alpha, beta = _two_services(tmp_path, monkeypatch, isolated)
+    alpha.load()
+    beta.load()
+    assert alpha.loads() == ["alpha", "beta"] == beta.loads()
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_unloading_one_service_leaves_its_neighbour_running(
+        tmp_path, box, isolated, monkeypatch):
+    """The refcount. Naively, one ``unload`` closes the shared box.
+
+    That failure has no symptom beyond the survivor's calls suddenly failing,
+    and nothing about the survivor changed — which makes it exactly the kind
+    of thing to pin.
+    """
+    alpha, beta = _two_services(tmp_path, monkeypatch, isolated)
+    alpha.load()
+    beta.load()
+    beta.bump(by=7)
+
+    alpha.unload()
+    assert alpha.loaded is False
+    assert beta.loaded is True
+    assert beta.total() == 107          # its box, and its state, survived
+
+
+def test_the_shared_box_takes_its_slowest_occupants_ceiling(tmp_path, box):
+    """One box, one deadline — so it has to fit whoever needs longest.
+
+    Reading the first class's ``timeout`` would silently starve a sibling
+    that declared more, and the symptom would be a call that dies at a
+    deadline the plugin never asked for.
+    """
+    source = TWO_SERVICES.replace('    name = "alpha"',
+                                  '    name = "alpha"\n    timeout = 30')
+    source = source.replace('    name = "beta"',
+                            '    name = "beta"\n    timeout = 300')
+    path = tmp_path / "service_pair.py"
+    path.write_text(source, encoding="utf-8")
+    _report, spec = box.inspect(path)
+    assert spec.timeout == 300
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_the_box_closes_once_the_last_service_unloads(
+        tmp_path, box, isolated, monkeypatch):
+    """The other half of the refcount: nothing is left running."""
+    alpha, beta = _two_services(tmp_path, monkeypatch, isolated)
+    alpha.load()
+    beta.load()
+    alpha.unload()
+    beta.unload()
+    assert box.box("service_pair") is None
+
+
 def test_calling_an_unloaded_service_fails_clearly(tmp_path, box):
     """The failure names the service, rather than surfacing a None box."""
     from sandbox.bridge import ServiceCallFailed

@@ -740,10 +740,27 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                 f"FormStep is command-only; a {family} cannot present a "
                 "multi-step command form",
             )
+
+    # One class per file, with one exception: services.
+    #
+    # Every other family is registered *as* the file — discovery finds
+    # ``tool_x.py`` and expects the tool it is named after. Services are the
+    # one family reached through a module-level factory, ``build_services``,
+    # which has always returned a dict and so has always been able to answer
+    # with more than one. A single embedding file offering a text embedder and
+    # an image embedder is the shape that produced this, and the two want to
+    # share a process: one import of a heavy library, one accelerator context.
+    #
+    # They must all be services, not merely more than one class: a file that
+    # is half tool and half service has no coherent answer to what discovery
+    # should register it as.
     if len(declared) > 1:
-        walker.add(ERROR, declared[1][2],
-                   f"declares {len(declared)} plugin classes; a plugin file "
-                   f"must declare exactly one")
+        families = {found[0] for found in declared}
+        if families != {"service"}:
+            walker.add(ERROR, declared[1][2],
+                       f"declares {len(declared)} plugin classes of "
+                       f"{sorted(families)}; only services may share a file",
+                       "one class per file, or make them all services")
 
     # Discovery is by file presence, so the filename *is* the declaration of
     # what family a file belongs to. A mismatch means the plugin silently
@@ -754,6 +771,18 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                    f"{stem}.py subclasses {base}, so it must be named "
                    f"{family}_<name>.py — discovery finds plugins by filename",
                    f"a {wanted}* filename")
+
+    # Every class gets the full check, not just the first. Skipping the rest
+    # would let a second service declare a bad ``requests`` entry or collide
+    # with its sibling's name and load anyway.
+    taken = list(known_names)
+    for found_family, found_base, found_cls in declared:
+        taken.append(
+            _check_class(walker, found_family, found_base, found_cls, taken))
+
+
+def _check_class(walker: _Walker, family: str, base: str, cls, known_names):
+    """Check one plugin class's declarations. Returns the name it claimed."""
     assigned = {}
     for item in cls.body:
         if isinstance(item, ast.Assign):
@@ -763,6 +792,7 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
         elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             assigned[item.target.id] = item
 
+    claimed = ""
     if "poll_interval" in assigned:
         node = assigned["poll_interval"]
         interval = _literal(node.value)
@@ -805,6 +835,8 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
         elif value in set(known_names):
             walker.add(ERROR, node, f"name {value!r} is already registered",
                        "a different name")
+        else:
+            claimed = value
 
     # Declarations are read by AST, so they have to be literals.
     for key in LITERAL_LISTS:
@@ -861,6 +893,8 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                            f"{key}={value:g} exceeds the kernel ceiling of "
                            f"{ceiling:g} and will be clamped")
 
+    return claimed
+
 
 # ``isolation`` is deliberately never collected. It was, and it made the code
 # being contained the authority on its own containment — see
@@ -904,27 +938,45 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
     Module level first, then the plugin class on top — so a helper can declare
     ``box`` at module scope and a plugin can declare everything on its class.
     """
-    declared = {}
-    scopes = [_assignments(tree.body)]
+    module_scope = _assignments(tree.body)
     classes = _plugin_classes(walker)
-    if classes:
-        family = classes[0][0]
-        declared["family"] = family
-        # Family defaults first, so anything written in the file wins.
-        declared.update(FAMILY_DEFAULTS.get(family, {}))
-        scopes.append(_assignments(classes[0][2].body))
 
-    # Every literal class attribute, not just the documented ones: the
-    # dual-mode loader has to copy ``parameters``, ``description`` and the
-    # rest onto its adapter, or the registry advertises a plugin with no
-    # schema.
-    for scope in scopes:
-        for key, node in scope.items():
-            if key.startswith("_"):
-                continue
-            value = _literal(node.value)
-            if value is not None:
-                declared[key] = value
+    def _for(class_node, family: str) -> dict:
+        """Module-level declarations, with one class's own on top."""
+        found = {}
+        if family:
+            found["family"] = family
+            # Family defaults first, so anything written in the file wins.
+            found.update(FAMILY_DEFAULTS.get(family, {}))
+        scopes = [module_scope]
+        if class_node is not None:
+            scopes.append(_assignments(class_node.body))
+        # Every literal class attribute, not just the documented ones: the
+        # dual-mode loader has to copy ``parameters``, ``description`` and the
+        # rest onto its adapter, or the registry advertises a plugin with no
+        # schema.
+        for scope in scopes:
+            for key, node in scope.items():
+                if key.startswith("_"):
+                    continue
+                value = _literal(node.value)
+                if value is not None:
+                    found[key] = value
+        return found
+
+    if classes:
+        declared = _for(classes[0][2], classes[0][0])
+    else:
+        declared = _for(None, "")
+
+    # One entry per plugin class, each carrying the class's own name so the
+    # bridge can build an adapter per class without re-parsing. Only services
+    # are ever allowed more than one (see ``_check_contract``), but the list is
+    # unconditional so a caller never has to branch on how many there are.
+    declared["classes"] = [
+        {"entry": node.name, **_for(node, found_family)}
+        for found_family, _base, node in classes
+    ]
 
     # ``isolation`` is dropped rather than merely unused. Everything literal
     # gets collected here, not just the documented keys, so leaving it in
@@ -932,7 +984,9 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
     # goes looking — and a stale declaration that reads as authoritative is
     # how this became a vulnerability in the first place. The author is told
     # once, at the line, rather than left to wonder why it does nothing.
-    for scope in scopes:
+    isolation_scopes = [module_scope,
+                        *(_assignments(node.body) for _f, _b, node in classes)]
+    for scope in isolation_scopes:
         if (node := scope.get("isolation")) is not None:
             walker.add(NOTE, node,
                        "declares 'isolation', which is ignored",
@@ -942,6 +996,8 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
                        "imports a foreign library")
             break
     declared.pop("isolation", None)
+    for entry in declared["classes"]:
+        entry.pop("isolation", None)
 
     declared.setdefault("name", Path(filename).stem)
     return declared
