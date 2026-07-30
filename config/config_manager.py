@@ -166,7 +166,7 @@ def save(config: dict, path: str = None):
     # it", which is not ownership at all — it made a setting's home an accident
     # of history, and left a key that had been re-homed into SETTINGS_DATA
     # permanently unable to reach the file that now owns it.
-    plugin_keys = ((_get_plugin_keys() | set(load_plugin_config().keys()))
+    plugin_keys = ((plugin_setting_keys() | set(load_plugin_config().keys()))
                    - set(DEFAULTS))
     existing = {}
     p = Path(path)
@@ -189,13 +189,69 @@ def save(config: dict, path: str = None):
 
 # ── Plugin config ───────────────────────────────────────────────────
 
-def _get_plugin_keys() -> set:
+def plugin_setting_keys() -> set:
     """Return the set of variable_names owned by plugin config."""
     try:
         from plugins.plugin_discovery import get_plugin_settings
         return {entry[1] for entry in get_plugin_settings()}
     except ImportError:
         return set()
+
+
+def migrate_secret_keys(key: str, value):
+    """Rename credential fields to the ``secret_`` prefix that declares them.
+
+    ``llm_profiles`` predates the naming rule (CLAUDE.md, "Secrets"), so a
+    profile arriving with a bare ``llm_api_key`` would be stored as an ordinary
+    setting and read back in plaintext. Renaming on the way in is what puts it
+    behind a ``<secret:...>`` handle. Mutates and returns ``value``.
+    """
+    if key != "llm_profiles" or not isinstance(value, dict):
+        return value
+    for profile in value.values():
+        if (isinstance(profile, dict) and "llm_api_key" in profile
+                and "secret_llm_api_key" not in profile):
+            profile["secret_llm_api_key"] = profile.pop("llm_api_key")
+    return value
+
+
+def is_user_scoped(key: str) -> bool:
+    """Whether a setting belongs to the current user rather than the machine.
+
+    Declared either by ``{"scope": "user"}`` in a setting's ``type_info`` or,
+    for a plugin's own setting, by what discovery reports for it.
+    """
+    try:
+        from plugins.plugin_discovery import (get_plugin_setting_scope,
+                                              get_plugin_settings)
+        plugin_settings = get_plugin_settings()
+    except ImportError:
+        plugin_settings, get_plugin_setting_scope = [], None
+
+    entry = next((item for item in (*SETTINGS_DATA, *plugin_settings)
+                  if item[1] == key), None)
+    info = entry[4] if entry and isinstance(entry[4], dict) else {}
+    if info.get("scope") == "user":
+        return True
+    if get_plugin_setting_scope is None:
+        return False
+    return (key in {item[1] for item in plugin_settings}
+            and get_plugin_setting_scope(key) == "user")
+
+
+def detect_profile_renames(old, new) -> dict:
+    """Map ``{old_name: new_name}`` for profiles that were only renamed.
+
+    A rename reads as one removal plus one addition, and is told apart from a
+    genuine delete-and-create by the definition being unchanged. Sessions
+    pointing at the old name have to follow it, or editing a profile's name
+    silently detaches everyone using it.
+    """
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return {}
+    removed, added = set(old) - set(new), set(new) - set(old)
+    return {source: target for source in removed for target in added
+            if old[source] == new[target]}
 
 
 def load_plugin_config(path: str = None) -> dict:

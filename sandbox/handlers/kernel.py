@@ -876,22 +876,9 @@ def _config_write(ctx, args: dict) -> Result:
         return bad
     try:
         from config import config_manager
-        from config.config_data import SETTINGS_DATA
-        from plugins.plugin_discovery import (
-            get_plugin_setting_scope,
-            get_plugin_settings,
-        )
 
-        value = resolve(args.get("value"), lookup_from(ctx))
-        if key == "llm_profiles" and isinstance(value, dict):
-            for profile in value.values():
-                if (
-                    isinstance(profile, dict)
-                    and "llm_api_key" in profile
-                    and "secret_llm_api_key" not in profile
-                ):
-                    profile["secret_llm_api_key"] = profile.pop(
-                        "llm_api_key")
+        value = config_manager.migrate_secret_keys(
+            key, resolve(args.get("value"), lookup_from(ctx)))
         if args.get("merge"):
             current = config.get(key)
             if current is not None and not isinstance(current, dict):
@@ -901,20 +888,8 @@ def _config_write(ctx, args: dict) -> Result:
                 return Result.failure(
                     "config.write merge requires a mapping value")
             value = {**(current or {}), **value}
-        entries = [*SETTINGS_DATA, *get_plugin_settings()]
-        entry = next((item for item in entries if item[1] == key), None)
-        info = (
-            entry[4]
-            if entry and isinstance(entry[4], dict)
-            else {}
-        )
-        plugin_keys = {item[1] for item in get_plugin_settings()}
-        user_scoped = (
-            info.get("scope") == "user"
-            or (key in plugin_keys and get_plugin_setting_scope(key) == "user")
-        )
         old = config.get(key)
-        if user_scoped:
+        if config_manager.is_user_scoped(key):
             db = _db(ctx)
             getter = getattr(db, "get_user_config", None)
             setter = getattr(db, "set_user_config", None)
@@ -942,19 +917,9 @@ def _config_write(ctx, args: dict) -> Result:
                 runtime.refresh_session_specs()
             return Result(data=True)
         config[key] = value
-        if (
-            key == "agent_profiles"
-            and isinstance(old, dict)
-            and isinstance(value, dict)
-        ):
-            removed = set(old) - set(value)
-            added = set(value) - set(old)
-            renames = {
-                source: target
-                for source in removed
-                for target in added
-                if old[source] == value[target]
-            }
+        renames = config_manager.detect_profile_renames(old, value) \
+            if key == "agent_profiles" else {}
+        if renames:
             runtime = _runtime(ctx)
             for session in (
                 getattr(runtime, "sessions", {}) or {}
@@ -967,7 +932,8 @@ def _config_write(ctx, args: dict) -> Result:
                 if override in renames:
                     session.profile_override = renames[override]
         config_manager.save(config)
-        if key in plugin_keys or args.get("scope") == "plugin":
+        if key in config_manager.plugin_setting_keys() \
+                or args.get("scope") == "plugin":
             plugin_config = config_manager.load_plugin_config()
             plugin_config[key] = value
             config_manager.save_plugin_config(plugin_config)
