@@ -101,6 +101,23 @@ def settle(registry, handle, timeout=5.0):
     return registry.get(handle.id)
 
 
+def eventually(predicate, timeout=5.0):
+    """Wait for something that happens just after a handle settles.
+
+    ``_done`` is set *before* the notice for an uncollectable failure goes
+    out, so a waiter is released while that push is still in flight on the
+    worker thread. Asserting straight after ``settle`` therefore passes when
+    the suite is idle and loses the race under load — which is what made this
+    look like an order-dependent test rather than a racing one.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The guards. Each one is a way a spawn can go badly wrong quietly.
 # ──────────────────────────────────────────────────────────────────────
@@ -311,7 +328,8 @@ def test_a_scheduled_failure_is_pushed_because_nobody_will_collect_it():
 
     registry, runtime = registry_for(turn=turn)
     settle(registry, registry.spawn("go", title="Nightly"))  # no owner
-    assert any("Nightly" in message for message in runtime.pushed)
+    assert eventually(
+        lambda: any("Nightly" in message for message in runtime.pushed))
 
 
 # ──────────────────────────────────────────────────────────────────────
