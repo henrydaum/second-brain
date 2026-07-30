@@ -227,52 +227,49 @@ def _conv_create(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        title = args.get("title") or "New conversation"
-        category = args.get("category")
-        uid = getattr(ctx, "user_id", None)
-        runtime = _runtime(ctx)
-        creator = getattr(runtime, "create_conversation", None)
-        if creator is not None:
-            cid = creator(
+    title = args.get("title") or "New conversation"
+    category = args.get("category")
+    uid = getattr(ctx, "user_id", None)
+    runtime = _runtime(ctx)
+    creator = getattr(runtime, "create_conversation", None)
+    if creator is not None:
+        cid = creator(
+            title, kind="user", category=category, user_id=uid)
+    else:
+        try:
+            cid = db.create_conversation(
                 title, kind="user", category=category, user_id=uid)
-        else:
-            try:
-                cid = db.create_conversation(
-                    title, kind="user", category=category, user_id=uid)
-            except TypeError:
-                # Compatibility with small database doubles predating
-                # ownership. Activation still requires the real runtime.
-                if args.get("activate"):
-                    return Result.failure(
-                        "conversation activation is not available "
-                        "in this context")
-                cid = db.create_conversation(title)
-        if cid is None:
-            return Result.failure("failed to create conversation")
-        if not args.get("activate"):
-            return Result(data=cid)
+        except TypeError:
+            # Compatibility with small database doubles predating
+            # ownership. Activation still requires the real runtime.
+            if args.get("activate"):
+                return Result.failure(
+                    "conversation activation is not available "
+                    "in this context")
+            cid = db.create_conversation(title)
+    if cid is None:
+        return Result.failure("failed to create conversation")
+    if not args.get("activate"):
+        return Result(data=cid)
 
-        key = getattr(ctx, "session_key", None)
-        loader = getattr(runtime, "load_conversation", None)
-        if (bad := _need(loader, "conversation loading")) is not None:
-            return bad
-        existing = (getattr(runtime, "sessions", None) or {}).get(key)
-        if (
-            existing is not None
-            and getattr(existing, "conversation_id", None) not in (None, cid)
-        ):
-            runtime.close_session(key)
-            runtime.set_session_user(key, uid)
-        session = loader(key, cid)
-        profile = (
-            getattr(session, "profile_override", None)
-            or getattr(session, "active_agent_profile", None)
-            or "default"
-        )
-        return Result(data={"id": cid, "profile": profile})
-    except Exception as exc:
-        return Result.failure(f"create failed: {exc}")
+    key = getattr(ctx, "session_key", None)
+    loader = getattr(runtime, "load_conversation", None)
+    if (bad := _need(loader, "conversation loading")) is not None:
+        return bad
+    existing = (getattr(runtime, "sessions", None) or {}).get(key)
+    if (
+        existing is not None
+        and getattr(existing, "conversation_id", None) not in (None, cid)
+    ):
+        runtime.close_session(key)
+        runtime.set_session_user(key, uid)
+    session = loader(key, cid)
+    profile = (
+        getattr(session, "profile_override", None)
+        or getattr(session, "active_agent_profile", None)
+        or "default"
+    )
+    return Result(data={"id": cid, "profile": profile})
 
 
 def _conv_read(ctx, args: dict) -> Result:
@@ -315,33 +312,30 @@ def _conv_list(ctx, args: dict) -> Result:
     limit, bad = int_arg(args, "limit", 50, lo=1, hi=200)
     if bad is not None:
         return bad
-    try:
-        user_id = getattr(ctx, "user_id", None)
-        if args.get("details"):
-            import time
+    user_id = getattr(ctx, "user_id", None)
+    if args.get("details"):
+        import time
 
-            category = args.get("category")
-            rows, has_more = db.list_conversations_page(
-                offset=0,
-                limit=limit,
-                category=category,
-                user_id=user_id,
-            )
-            items = _rows(rows)
-            for row in items:
-                row["updated_ago"] = _relative_time(
-                    row.get("updated_at"), time.time())
-            return Result(data={
-                "items": items,
-                "has_more": bool(has_more),
-                "categories": list(
-                    db.list_conversation_categories(user_id=user_id)),
-            })
-        if user_id is not None and hasattr(db, "list_user_conversations"):
-            return Result(data=_rows(db.list_user_conversations(user_id)))
-        return Result(data=_rows(db.list_conversations()))
-    except Exception as exc:
-        return Result.failure(f"list failed: {exc}")
+        category = args.get("category")
+        rows, has_more = db.list_conversations_page(
+            offset=0,
+            limit=limit,
+            category=category,
+            user_id=user_id,
+        )
+        items = _rows(rows)
+        for row in items:
+            row["updated_ago"] = _relative_time(
+                row.get("updated_at"), time.time())
+        return Result(data={
+            "items": items,
+            "has_more": bool(has_more),
+            "categories": list(
+                db.list_conversation_categories(user_id=user_id)),
+        })
+    if user_id is not None and hasattr(db, "list_user_conversations"):
+        return Result(data=_rows(db.list_user_conversations(user_id)))
+    return Result(data=_rows(db.list_conversations()))
 
 
 def _relative_time(timestamp, now) -> str:
@@ -790,69 +784,66 @@ def _config_read(ctx, args: dict) -> Result:
     config = getattr(ctx, "config", None) or {}
     key = args.get("key")
     if args.get("details"):
-        try:
-            from config.config_data import SETTINGS_DATA
-            from plugins.plugin_discovery import (
-                get_plugin_setting_scope,
-                get_plugin_settings,
-                get_setting_plugin_names,
-            )
+        from config.config_data import SETTINGS_DATA
+        from plugins.plugin_discovery import (
+            get_plugin_setting_scope,
+            get_plugin_settings,
+            get_setting_plugin_names,
+        )
 
-            plugin_entries = list(get_plugin_settings())
-            plugin_keys = {entry[1] for entry in plugin_entries}
-            items = []
-            for entry in [*SETTINGS_DATA, *plugin_entries]:
-                if (
-                    not isinstance(entry, (list, tuple))
-                    or len(entry) != 5
-                ):
-                    continue
-                title, name, description, default, raw_info = entry
-                info = raw_info if isinstance(raw_info, dict) else {}
-                if info.get("hidden") is True or (key and name != key):
-                    continue
-                scope = (
-                    "user"
-                    if info.get("scope") == "user"
-                    or (
-                        name in plugin_keys
-                        and get_plugin_setting_scope(name) == "user"
-                    )
-                    else "global"
+        plugin_entries = list(get_plugin_settings())
+        plugin_keys = {entry[1] for entry in plugin_entries}
+        items = []
+        for entry in [*SETTINGS_DATA, *plugin_entries]:
+            if (
+                not isinstance(entry, (list, tuple))
+                or len(entry) != 5
+            ):
+                continue
+            title, name, description, default, raw_info = entry
+            info = raw_info if isinstance(raw_info, dict) else {}
+            if info.get("hidden") is True or (key and name != key):
+                continue
+            scope = (
+                "user"
+                if info.get("scope") == "user"
+                or (
+                    name in plugin_keys
+                    and get_plugin_setting_scope(name) == "user"
                 )
-                owners = list(get_setting_plugin_names(name) or [])
-                category = (
-                    "user" if scope == "user"
-                    else "plugin" if name in plugin_keys
-                    else "kernel"
-                )
-                items.append({
-                    "title": title,
-                    "key": name,
-                    "description": description,
-                    "default": default,
-                    "info": info,
-                    "scope": scope,
-                    "category": category,
-                    "storage": {
-                        "kernel": "config.json",
-                        "plugin": "plugin_config.json",
-                        "user": "per-user",
-                    }[category],
-                    "owners": owners,
-                    "current": redact(
-                        name, _config_value(ctx, name, entry), guess=True),
-                    "restart_required": False,
-                })
-            # Plugin discovery already tracks the declaring family. Use its
-            # public query rather than exposing plugin objects to the guest.
-            from plugins.plugin_discovery import get_plugin_setting_type
-            for item in items:
-                item["restart_required"] = (
-                    get_plugin_setting_type(item["key"]) == "frontend")
-            return Result(data=sorted(items, key=lambda item: item["key"]))
-        except Exception as exc:
-            return Result.failure(f"config details failed: {exc}")
+                else "global"
+            )
+            owners = list(get_setting_plugin_names(name) or [])
+            category = (
+                "user" if scope == "user"
+                else "plugin" if name in plugin_keys
+                else "kernel"
+            )
+            items.append({
+                "title": title,
+                "key": name,
+                "description": description,
+                "default": default,
+                "info": info,
+                "scope": scope,
+                "category": category,
+                "storage": {
+                    "kernel": "config.json",
+                    "plugin": "plugin_config.json",
+                    "user": "per-user",
+                }[category],
+                "owners": owners,
+                "current": redact(
+                    name, _config_value(ctx, name, entry), guess=True),
+                "restart_required": False,
+            })
+        # Plugin discovery already tracks the declaring family. Use its
+        # public query rather than exposing plugin objects to the guest.
+        from plugins.plugin_discovery import get_plugin_setting_type
+        for item in items:
+            item["restart_required"] = (
+                get_plugin_setting_type(item["key"]) == "frontend")
+        return Result(data=sorted(items, key=lambda item: item["key"]))
     if args.get("present"):
         return Result(data=bool(config.get(key))) if key else Result(
             data=bool(config))
@@ -880,21 +871,23 @@ def _config_write(ctx, args: dict) -> Result:
     config = getattr(ctx, "config", None)
     if (bad := _need(config, "config")) is not None:
         return bad
-    try:
-        from config import config_manager
+    from config import config_manager
 
-        value = config_manager.migrate_secret_keys(
-            key, resolve(args.get("value"), lookup_from(ctx)))
-        if args.get("merge"):
-            current = config.get(key)
-            if current is not None and not isinstance(current, dict):
-                return Result.failure(
-                    f"config setting {key!r} is not a mapping")
-            if not isinstance(value, dict):
-                return Result.failure(
-                    "config.write merge requires a mapping value")
-            value = {**(current or {}), **value}
-        old = config.get(key)
+    value = config_manager.migrate_secret_keys(
+        key, resolve(args.get("value"), lookup_from(ctx)))
+    if args.get("merge"):
+        current = config.get(key)
+        if current is not None and not isinstance(current, dict):
+            return Result.failure(
+                f"config setting {key!r} is not a mapping")
+        if not isinstance(value, dict):
+            return Result.failure(
+                "config.write merge requires a mapping value")
+        value = {**(current or {}), **value}
+    old = config.get(key)
+    # Only what can actually fail stays guarded: the settings
+    # catalogue, the database, the config file, and the watcher.
+    try:
         if config_manager.is_user_scoped(key):
             db = _db(ctx)
             getter = getattr(db, "get_user_config", None)
