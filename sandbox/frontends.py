@@ -22,10 +22,9 @@ anything — it is resident, and its authority is its identity rather than a
 moment.
 
 **Rendering is a projection.** ``BaseFrontend`` hands its subclasses live
-kernel objects; a box can only be handed data. The nine ``render_*`` methods
-collapse to one ``render(kind, payload)`` call here, because nine wire methods
-for one concept is surface with no payoff — and a guest that only understands
-``messages`` is still a working frontend.
+kernel objects; a box can only be handed data, so the nine ``render_*`` methods
+collapse to one ``render(kind, payload)`` call here — and a guest that only
+understands ``messages`` is still a working frontend.
 """
 
 from __future__ import annotations

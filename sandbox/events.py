@@ -1,16 +1,11 @@
 """The bus, inbound — the only place that knows both sides of a delivery.
 
-``sdk.events.emit`` has always worked: sandboxed code can shout onto the bus,
-because publishing is a Request like any other. Hearing back is the direction
-that needed building, and it needed building differently — an event arrives
-*at* a plugin rather than being asked for, so there is no Request to classify
-and no return value to translate. What there is instead is a subscription, and
-a subscription is a thing that can leak.
-
-So it is **declared, not registered**, exactly as ``hooks`` are: a plugin lists
-``subscribed_channels``, the bridge stands a listener at each one and removes
-them at unload. The plugin never holds a subscription, so it cannot forget to
-drop one, and uninstalling the file takes the declaration with it.
+Emitting was always a Request; *hearing* needed building differently, because
+an event arrives at a plugin rather than being asked for — there is no Request
+to classify and no return value to translate. What there is instead is a
+subscription, and a subscription can leak. So it is **declared, not
+registered**, exactly as ``hooks`` are: the plugin never holds one, so it
+cannot forget to drop one.
 
 Two things this module owes the rest of the system:
 

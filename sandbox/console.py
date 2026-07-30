@@ -1,25 +1,16 @@
 """The machine's console, owned by the kernel and lent to one frontend.
 
-Sandboxed code cannot read a terminal, and the reasons compound. ``input()``
-blocks, and a box takes one call at a time — so a frontend blocked on input
-holds its own box and cannot render, which means agent output would only appear
-*after* the next thing you typed. Worse, a subprocess box's stdin **is** the
-wire protocol: reading it would eat the frames the box is talking over. A rule
-that worked in-process and corrupted the protocol under isolation is the worst
-kind, because nothing fails until someone sets ``isolation``.
+``input()`` is refused, and the three compounding reasons are in CLAUDE.md
+under "The console is the kernel's, lent to one frontend". The mechanism:
+**the host reads, the guest drains.** One thread here pulls lines off stdin
+into a bounded buffer; ``console.read_line`` takes what has arrived and returns
+immediately, so a frontend never blocks and renders keep landing between polls.
+The child process never opens stdin at all, which is what lets a sandboxed REPL
+run *more* isolated than the native one rather than less.
 
-So the console inverts exactly like the poll loop did: **the host reads, the
-guest drains.** One thread here pulls lines off stdin into a buffer;
-``console.read_line`` takes what has arrived and returns immediately, so a
-frontend never blocks and renders keep landing between polls. The child process
-never opens stdin at all, which means a sandboxed REPL can run *more* isolated
-than the native one rather than less.
-
-**One claimant.** Two frontends reading one stdin would split a person's
-keystrokes between them non-deterministically — a bug that reads as the machine
-dropping characters. A frontend declares ``uses_console = True`` and the kernel
-refuses a second claim, the same way an operating system does not hand the same
-tty to two foreground processes.
+**One claimant**, declared by ``uses_console = True``; a second is refused,
+because two readers would split a person's keystrokes non-deterministically
+and present as dropped characters.
 
 **Releasing does not stop the reader**, and that is the fix for the way the
 above used to fail in practice. Releasing *did* stop it, which meant clearing

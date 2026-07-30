@@ -31,10 +31,10 @@ same key in the sandbox's registry of open boxes. The host refuses that
 collision when it sees it rather than silently serving one file's box to the
 other's caller.
 
-**Isolation is not declared.** How isolated a box runs is decided by the host
-from where its files live, and arrives here already resolved; a file saying
-``isolation = "subprocess"`` is ignored. The grouping rule below still applies
-to it, because a box with a subprocess member is a subprocess box.
+**Isolation is not declared.** It arrives here already resolved by the host
+from where the files live (``sandbox/isolation.py``); a file saying
+``isolation = "subprocess"`` is ignored. The grouping rule below still applies,
+because a box with a subprocess member is a subprocess box.
 
 **Lifetime.** An ephemeral box is torn down when its work finishes; a
 persistent one stays open and keeps its state, which is what a loaded service

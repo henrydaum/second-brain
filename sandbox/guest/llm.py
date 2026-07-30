@@ -1,12 +1,9 @@
 """The LLM backend contract — what a ``llm_*.py`` helper is handed and returns.
 
 This lives in the guest for the same reason :mod:`guest.parsing` does: a
-backend is *guest code*. It runs inside a box with a foreign SDK and a network
-connection, which is precisely the code least worth trusting in-process, and
-the child runs with ``sandbox/`` as its working directory and cannot see the
-kernel at all. A backend importing a kernel module would load in-process and
-die in a subprocess — the failure that only shows up once isolation is
-actually switched on.
+backend is *guest code*, running with a foreign SDK and a network connection,
+which is precisely what is least worth trusting in-process. A backend
+importing a kernel module would load in-process and die in a subprocess.
 
 A backend is a class::
 
@@ -26,10 +23,9 @@ Three things cross, and all three are plain data:
 - :class:`LLMResponse` out,
 - text deltas, pushed one at a time through ``sdk.llm.delta``.
 
-Nothing else. In particular there is no ``on_delta`` callback: a live callable
-cannot cross a pipe, and the boolean it used to return — "stop consuming" —
-is not the backend's decision to make. Stopping is cancellation, which the
-kernel already owns; a cancelled backend's next Request raises ``Terminated``.
+Nothing else. In particular there is no ``on_delta`` callback, and the abort
+boolean it used to return is gone rather than ported — see CLAUDE.md,
+"Streaming inverted, and lost a feature on purpose".
 
 Stdlib only, like everything else in here.
 """

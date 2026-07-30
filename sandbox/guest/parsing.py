@@ -5,12 +5,10 @@ box, alongside whatever consumes its output, and the shape it hands back is
 part of what a plugin author writes against — the same reason
 :mod:`guest.bases` and :mod:`guest.hooks` are here rather than in the kernel.
 
-The practical consequence is the whole reason it moved: the child process runs
-with ``sandbox/`` as its working directory and cannot see the kernel at all.
-A parser importing a kernel module loads in-process, fails in a subprocess,
-and the difference only shows up for the heavy parsers that most need the
-process boundary. Importing the contract from the guest resolves identically
-in both.
+The practical consequence is the whole reason it moved: a parser importing a
+kernel module loads in-process and fails in a subprocess, which is the case
+the heavy parsers most need. Importing the contract from the guest resolves
+identically in both. (CLAUDE.md, "The contract lives in the guest".)
 
 A parser is::
 
