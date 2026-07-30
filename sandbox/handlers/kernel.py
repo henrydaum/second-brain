@@ -18,6 +18,7 @@ Two conventions run through the file:
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 
 from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
@@ -148,8 +149,12 @@ def _db_query(ctx, args: dict) -> Result:
         return Result(data=_rows(db.query_rows(scoped, params, max_rows=limit)))
     except ValueError as exc:
         return Result.refusal(str(exc))
-    except Exception as exc:
-        return Result.failure(f"query failed: {exc}")
+    except sqlite3.Error as exc:
+        # The guest wrote this SQL, so a malformed statement is its mistake
+        # rather than the kernel's. Anything else reaches the interpreter's
+        # net, where it belongs -- with a traceback.
+        return Result.failure(f"query failed: {exc}",
+                              code=ERROR_INVALID_ARGUMENT)
 
 
 def _db_write(ctx, args: dict) -> Result:
@@ -177,8 +182,9 @@ def _db_write(ctx, args: dict) -> Result:
     try:
         db.execute_write(sql, tuple(args.get("params") or ()))
         return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"write failed: {exc}")
+    except sqlite3.Error as exc:
+        return Result.failure(f"write failed: {exc}",
+                              code=ERROR_INVALID_ARGUMENT)
 
 
 def _db_define(ctx, args: dict) -> Result:
@@ -201,8 +207,9 @@ def _db_define(ctx, args: dict) -> Result:
     try:
         db.execute_write(ddl)
         return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"define failed: {exc}")
+    except sqlite3.Error as exc:
+        return Result.failure(f"define failed: {exc}",
+                              code=ERROR_INVALID_ARGUMENT)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -283,28 +290,25 @@ def _conv_read(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        messages = _rows(db.get_conversation_messages(cid))
-        data = {
-            "conversation": dict(db.get_conversation(cid) or {}),
-            "messages": messages,
-        }
-        if args.get("details"):
-            from runtime.notifications import notification_mode
-            from state_machine.serialization import latest_state
+    messages = _rows(db.get_conversation_messages(cid))
+    data = {
+        "conversation": dict(db.get_conversation(cid) or {}),
+        "messages": messages,
+    }
+    if args.get("details"):
+        from runtime.notifications import notification_mode
+        from state_machine.serialization import latest_state
 
-            state = latest_state(messages) or {}
-            data["state"] = state
-            data["agent_profile"] = (
-                state.get("profile_override")
-                or state.get("active_agent_profile")
-                or ""
-            ).strip()
-            data["notification_mode"] = notification_mode(
-                state.get("notification_mode"))
-        return Result(data=data)
-    except Exception as exc:
-        return Result.failure(f"read failed: {exc}")
+        state = latest_state(messages) or {}
+        data["state"] = state
+        data["agent_profile"] = (
+            state.get("profile_override")
+            or state.get("active_agent_profile")
+            or ""
+        ).strip()
+        data["notification_mode"] = notification_mode(
+            state.get("notification_mode"))
+    return Result(data=data)
 
 
 def _conv_list(ctx, args: dict) -> Result:
@@ -377,11 +381,8 @@ def _conv_append(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        db.save_message(cid, args.get("role") or "user", args.get("content") or "")
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"append failed: {exc}")
+    db.save_message(cid, args.get("role") or "user", args.get("content") or "")
+    return Result(data=True)
 
 
 def _conv_set_title(ctx, args: dict) -> Result:
@@ -392,11 +393,8 @@ def _conv_set_title(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        db.update_conversation_title(cid, args.get("title") or "")
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"retitle failed: {exc}")
+    db.update_conversation_title(cid, args.get("title") or "")
+    return Result(data=True)
 
 
 def _conv_set_category(ctx, args: dict) -> Result:
@@ -408,15 +406,12 @@ def _conv_set_category(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        changed = setter(
-            getattr(ctx, "session_key", None),
-            cid,
-            args.get("category") or None,
-        )
-        return Result(data=bool(changed))
-    except Exception as exc:
-        return Result.failure(f"categorize failed: {exc}")
+    changed = setter(
+        getattr(ctx, "session_key", None),
+        cid,
+        args.get("category") or None,
+    )
+    return Result(data=bool(changed))
 
 
 def _conv_set_notification_mode(ctx, args: dict) -> Result:
@@ -428,14 +423,11 @@ def _conv_set_notification_mode(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        mode = setter(
-            getattr(ctx, "session_key", None), cid, args.get("mode"))
-        if mode is None:
-            return Result.failure("no such conversation", code=ERROR_NOT_FOUND)
-        return Result(data=mode)
-    except Exception as exc:
-        return Result.failure(f"notification change failed: {exc}")
+    mode = setter(
+        getattr(ctx, "session_key", None), cid, args.get("mode"))
+    if mode is None:
+        return Result.failure("no such conversation", code=ERROR_NOT_FOUND)
+    return Result(data=mode)
 
 
 def _conv_load(ctx, args: dict) -> Result:
@@ -447,16 +439,13 @@ def _conv_load(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        outcome = loader(getattr(ctx, "session_key", None), cid)
-        return Result(data={
-            "ok": bool(getattr(outcome, "ok", True)),
-            "messages": list(getattr(outcome, "messages", None) or []),
-            "error": getattr(outcome, "error", None),
-            "data": dict(getattr(outcome, "data", None) or {}),
-        })
-    except Exception as exc:
-        return Result.failure(f"load failed: {exc}")
+    outcome = loader(getattr(ctx, "session_key", None), cid)
+    return Result(data={
+        "ok": bool(getattr(outcome, "ok", True)),
+        "messages": list(getattr(outcome, "messages", None) or []),
+        "error": getattr(outcome, "error", None),
+        "data": dict(getattr(outcome, "data", None) or {}),
+    })
 
 
 def _conv_clear(ctx, args: dict) -> Result:
@@ -478,21 +467,18 @@ def _conv_clear(ctx, args: dict) -> Result:
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
 
-    try:
-        db.clear_conversation_messages(cid)
-        conversation = db.get_conversation(cid) or {}
-        title = (conversation.get("title") or "").strip()
-        if title and not title.endswith(" (cleared)"):
-            db.update_conversation_title(cid, f"{title} (cleared)")
+    db.clear_conversation_messages(cid)
+    conversation = db.get_conversation(cid) or {}
+    title = (conversation.get("title") or "").strip()
+    if title and not title.endswith(" (cleared)"):
+        db.update_conversation_title(cid, f"{title} (cleared)")
 
-        if session is not None and getattr(session, "conversation_id", None) == cid:
-            uid = runtime.session_user_id(key)
-            runtime.close_session(key)
-            runtime.set_session_user(key, uid)
-            runtime.load_conversation(key, cid)
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"clear failed: {exc}")
+    if session is not None and getattr(session, "conversation_id", None) == cid:
+        uid = runtime.session_user_id(key)
+        runtime.close_session(key)
+        runtime.set_session_user(key, uid)
+        runtime.load_conversation(key, cid)
+    return Result(data=True)
 
 
 def _conv_delete(ctx, args: dict) -> Result:
@@ -505,14 +491,11 @@ def _conv_delete(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    try:
-        if runtime is not None and hasattr(runtime, "delete_conversation"):
-            deleted = deleter(getattr(ctx, "session_key", None), cid)
-        else:
-            deleted = deleter(cid)
-        return Result(data=bool(deleted))
-    except Exception as exc:
-        return Result.failure(f"delete failed: {exc}")
+    if runtime is not None and hasattr(runtime, "delete_conversation"):
+        deleted = deleter(getattr(ctx, "session_key", None), cid)
+    else:
+        deleted = deleter(cid)
+    return Result(data=bool(deleted))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -581,11 +564,8 @@ def _session_push(ctx, args: dict) -> Result:
     if (bad := _need(push, "proactive messages")) is not None:
         return bad
     key = args.get("key") or getattr(ctx, "session_key", None)
-    try:
-        push(key, args.get("message") or "")
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"push failed: {exc}")
+    push(key, args.get("message") or "")
+    return Result(data=True)
 
 
 def _session_state_get(ctx, args: dict) -> Result:
@@ -595,10 +575,7 @@ def _session_state_get(ctx, args: dict) -> Result:
     if (bad := _need(getter, "session state")) is not None:
         return bad
     key = args.get("key") or getattr(ctx, "session_key", None)
-    try:
-        return Result(data=getter(key, args.get("namespace") or "sandbox"))
-    except Exception as exc:
-        return Result.failure(f"state read failed: {exc}")
+    return Result(data=getter(key, args.get("namespace") or "sandbox"))
 
 
 def _session_state_set(ctx, args: dict) -> Result:
@@ -608,11 +585,8 @@ def _session_state_set(ctx, args: dict) -> Result:
     if (bad := _need(setter, "session state")) is not None:
         return bad
     key = args.get("key") or getattr(ctx, "session_key", None)
-    try:
-        setter(key, args.get("namespace") or "sandbox", args.get("value"))
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"state write failed: {exc}")
+    setter(key, args.get("namespace") or "sandbox", args.get("value"))
+    return Result(data=True)
 
 
 def _session_cancel(ctx, args: dict) -> Result:
@@ -1021,10 +995,7 @@ def _user_read(ctx, args: dict) -> Result:
     if (bad := _need(db, "the database")) is not None:
         return bad
     uid = args.get("id", getattr(ctx, "user_id", None))
-    try:
-        return Result(data=_visible_user(db.get_user(uid)))
-    except Exception as exc:
-        return Result.failure(f"user read failed: {exc}")
+    return Result(data=_visible_user(db.get_user(uid)))
 
 
 def _user_list(ctx, args: dict) -> Result:
@@ -1032,10 +1003,7 @@ def _user_list(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        return Result(data=[_visible_user(r) for r in db.list_users() or []])
-    except Exception as exc:
-        return Result.failure(f"user list failed: {exc}")
+    return Result(data=[_visible_user(r) for r in db.list_users() or []])
 
 
 def _user_write(ctx, args: dict) -> Result:
@@ -1044,14 +1012,11 @@ def _user_write(ctx, args: dict) -> Result:
     if (bad := _need(db, "the database")) is not None:
         return bad
     uid = args.get("id", getattr(ctx, "user_id", None))
-    try:
-        if "config" in args:
-            db.set_user_config(uid, args["config"])
-        if "user_type" in args:
-            db.set_user_type(uid, args["user_type"])
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"user write failed: {exc}")
+    if "config" in args:
+        db.set_user_config(uid, args["config"])
+    if "user_type" in args:
+        db.set_user_type(uid, args["user_type"])
+    return Result(data=True)
 
 
 # ──────────────────────────────────────────────────────────────────────
