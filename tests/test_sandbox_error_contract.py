@@ -345,3 +345,30 @@ def test_an_absent_kernel_capability_is_unavailable_not_missing():
     assert not result.ok
     assert result.code == ERROR_UNAVAILABLE
     assert result.denied is False
+
+
+def test_a_crashing_tool_is_attributed_and_still_leaves_a_traceback(caplog):
+    """Foreign code keeps its guard, but no longer keeps the stack to itself.
+
+    A guard around a tool, service or parser is worth keeping -- "tool 'x'
+    failed" says more than "handler error" about *whose* bug it is. What it
+    should not do is discard the traceback, which is the only thing that says
+    *where*.
+    """
+    from types import SimpleNamespace
+
+    from sandbox.guest.requests import TOOL_CALL
+    from tests.support import call_handler
+
+    def call_tool(name, **kwargs):
+        raise KeyError("inner detail")
+
+    ctx = SimpleNamespace(call_tool=call_tool, session_key="s",
+                          services={}, config={})
+    with caplog.at_level(logging.ERROR, logger="Sandbox"):
+        result = call_handler(TOOL_CALL, ctx, {"name": "boom", "kwargs": {}})
+
+    assert not result.ok
+    assert "boom" in result.error                  # attribution survives
+    traced = [r for r in caplog.records if r.exc_info is not None]
+    assert traced, "the tool's traceback was swallowed"

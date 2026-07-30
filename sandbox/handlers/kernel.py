@@ -704,6 +704,7 @@ def _ui_ask(ctx, args: dict) -> Result:
         return Result(data=getattr(request, "value", None)
                       if hasattr(request, "value") else request.approved)
     except Exception as exc:
+        logger.exception("ui_ask failed")
         return Result.failure(f"could not ask: {exc}")
 
 
@@ -733,6 +734,7 @@ def _ui_approve(ctx, args: dict) -> Result:
                           args.get("justification") or "")
         return Result(data=bool(allowed))
     except Exception as exc:
+        logger.exception("ui_approve failed")
         return Result.failure(f"could not ask: {exc}")
 
 
@@ -749,6 +751,7 @@ def _ui_render(ctx, args: dict) -> Result:
              caption or f"{len(paths)} file(s)")
         return Result(data={"rendered": len(paths)})
     except Exception as exc:
+        logger.exception("ui_render failed")
         return Result.failure(f"render failed: {exc}")
 
 
@@ -941,6 +944,7 @@ def _config_write(ctx, args: dict) -> Result:
                 rescan()
         return Result(data=True)
     except Exception as exc:
+        logger.exception("config_write failed")
         return Result.failure(f"config write failed: {exc}")
 
 
@@ -1059,6 +1063,7 @@ def _plugin_list(ctx, args: dict) -> Result:
                 ]
             return Result(data=items)
         except Exception as exc:
+            logger.exception("plugin_list failed")
             return Result.failure(str(exc))
 
     category = args.get("category")
@@ -1125,6 +1130,7 @@ def _plugin_list(ctx, args: dict) -> Result:
 
             return Result(data=llm.backend_names())
         except Exception as exc:
+            logger.exception("plugin_list failed")
             return Result.failure(str(exc))
 
     registry = getattr(ctx, "tool_registry", None)
@@ -1160,6 +1166,7 @@ def _plugin_install(ctx, args: dict) -> Result:
             progress=_package_progress(ctx))
         return Result(data=outcome.text())
     except Exception as exc:
+        logger.exception("plugin_install failed")
         return Result.failure(str(exc))
 
 
@@ -1175,6 +1182,7 @@ def _plugin_uninstall(ctx, args: dict) -> Result:
             progress=_package_progress(ctx), root_dir=root)
         return Result(data=outcome.text())
     except Exception as exc:
+        logger.exception("plugin_uninstall failed")
         return Result.failure(str(exc))
 
 
@@ -1189,6 +1197,7 @@ def _plugin_update(ctx, args: dict) -> Result:
             root, ctx, progress=_package_progress(ctx))
         return Result(data=outcome.text())
     except Exception as exc:
+        logger.exception("plugin_update failed")
         return Result.failure(str(exc))
 
 
@@ -1432,6 +1441,7 @@ def _service_load(ctx, args: dict) -> Result:
             _clear_task_skip_cache(ctx)
         return Result(data=loaded is not False)
     except Exception as exc:
+        logger.exception("service_load failed")
         return Result.failure(f"service load failed: {exc}")
 
 
@@ -1452,6 +1462,7 @@ def _service_unload(ctx, args: dict) -> Result:
         _clear_task_skip_cache(ctx)
         return Result(data=True)
     except Exception as exc:
+        logger.exception("service_unload failed")
         return Result.failure(f"service unload failed: {exc}")
 
 
@@ -1480,6 +1491,7 @@ def _service_call(ctx, args: dict) -> Result:
     try:
         return Result(data=fn(**(args.get("kwargs") or {})))
     except Exception as exc:
+        logger.exception("service_call failed")
         return Result.failure(f"{name}.{method} failed: {exc}")
 
 
@@ -1557,6 +1569,7 @@ def _tool_call(ctx, args: dict) -> Result:
                       data=getattr(outcome, "data", outcome),
                       error=str(getattr(outcome, "error", "")))
     except Exception as exc:
+        logger.exception("tool_call failed")
         return Result.failure(f"tool {name!r} failed: {exc}")
 
 
@@ -1638,6 +1651,7 @@ def _command_call(ctx, args: dict) -> Result:
             session_key=getattr(ctx, "session_key", None),
         ))
     except Exception as exc:
+        logger.exception("command_call failed")
         return Result.failure(f"command failed: {exc}")
 
 
@@ -1663,6 +1677,7 @@ def _model_proceed(ctx, args: dict) -> Result:
     try:
         return Result(data=dial(args.get("request")))
     except Exception as exc:
+        logger.exception("model_proceed failed")
         return Result.failure(f"model call failed: {exc}")
 
 
@@ -1743,6 +1758,7 @@ def _agent_complete(ctx, args: dict) -> Result:
                             "llm": getattr(brain, "name", "") or ""},
                       error=str(response.error or ""))
     except Exception as exc:
+        logger.exception("agent_complete failed")
         return Result.failure(f"model call failed: {exc}")
 
 
@@ -1792,6 +1808,7 @@ def _agent_spawn(ctx, args: dict) -> Result:
     except (PermissionError, ValueError, FileNotFoundError) as exc:
         return Result.failure(str(exc))
     except Exception as exc:
+        logger.exception("agent_spawn failed")
         return Result.failure(f"could not start the subagent: {exc}")
 
     if not args.get("wait", True):
@@ -1827,6 +1844,7 @@ def _agent_collect(ctx, args: dict) -> Result:
             args.get("ids"), owner=owner,
             timeout=None if timeout is None else float(timeout)))
     except Exception as exc:
+        logger.exception("agent_collect failed")
         return Result.failure(f"could not collect subagents: {exc}")
 
 
@@ -1856,20 +1874,24 @@ def _agent_schedule(ctx, args: dict) -> Result:
         return Result.failure("a scheduled subagent needs a prompt")
     cron = (args.get("cron") or "").strip()
     if not cron:
-        return Result.failure("a scheduled subagent needs a cron expression")
+        return Result.failure("a scheduled subagent needs a cron expression",
+                              code=ERROR_INVALID_ARGUMENT)
     title = (args.get("title") or "Scheduled subagent").strip()
     name = (args.get("name") or "").strip() or _job_name(title)
 
     try:
         schedule = _schedule_def(cron, bool(args.get("one_time")))
     except Exception as exc:
-        return Result.failure(f"bad cron expression: {exc}")
+        logger.exception("agent_schedule failed")
+        return Result.failure(f"bad cron expression: {exc}",
+                              code=ERROR_INVALID_ARGUMENT)
     job = {**schedule, "channel": SUBAGENT_SPAWN, "enabled": True,
            "payload": {"title": title, "prompt": prompt,
                        "attachments": list(args.get("attachments") or [])}}
     try:
         keeper.create_job(name, job)
     except Exception as exc:
+        logger.exception("agent_schedule failed")
         return Result.failure(f"could not schedule the subagent: {exc}")
     return Result(data={"name": name, "title": title, **schedule})
 
@@ -1929,6 +1951,7 @@ def _cron_create(ctx, args: dict) -> Result:
         return Result(data=keeper.create_job(args.get("name"),
                                              args.get("job") or {}))
     except Exception as exc:
+        logger.exception("cron_create failed")
         return Result.failure(f"could not create job: {exc}")
 
 
@@ -1941,6 +1964,7 @@ def _cron_update(ctx, args: dict) -> Result:
         return Result(data=keeper.update_job(args.get("name"),
                                              args.get("patch") or {}))
     except Exception as exc:
+        logger.exception("cron_update failed")
         return Result.failure(f"could not update job: {exc}")
 
 
@@ -1968,6 +1992,7 @@ def _event_emit(ctx, args: dict) -> Result:
         bus.emit(args.get("channel"), args.get("payload"))
         return Result(data=True)
     except Exception as exc:
+        logger.exception("event_emit failed")
         return Result.failure(f"emit failed: {exc}")
 
 
@@ -1982,6 +2007,7 @@ def _event_request(ctx, args: dict) -> Result:
                                        args.get("payload") or {},
                                        timeout=timeout))
     except Exception as exc:
+        logger.exception("event_request failed")
         return Result.failure(f"request failed: {exc}", retryable=True)
 
 
@@ -2162,6 +2188,7 @@ def _frontend_submit(ctx, args: dict) -> Result:
     try:
         result = submit()
     except Exception as exc:
+        logger.exception("frontend_submit failed")
         return Result.failure(f"submit failed: {exc}")
 
     # A RuntimeResult is a live object. What a frontend needs back is whether
@@ -2190,6 +2217,7 @@ def _frontend_cancel(ctx, args: dict) -> Result:
         cancel()
         return Result(data=True)
     except Exception as exc:
+        logger.exception("frontend_cancel failed")
         return Result.failure(f"cancel failed: {exc}")
 
 
@@ -2266,6 +2294,7 @@ def _frontend_resolve(ctx, args: dict) -> Result:
     try:
         return Result(data=bool(resolve()))
     except Exception as exc:
+        logger.exception("frontend_resolve failed")
         return Result.failure(f"resolve failed: {exc}")
 
 
@@ -2556,6 +2585,7 @@ def _parse_file(ctx, args: dict) -> Result:
     try:
         parsed = parsing.parse(args.get("path"), modality)
     except Exception as exc:
+        logger.exception("parse_file failed")
         return Result.failure(f"parse failed: {exc}")
 
     if not getattr(parsed, "success", True):
@@ -2663,6 +2693,7 @@ def _script_run(ctx, args: dict) -> Result:
     try:
         sandbox = get_sandbox()
     except Exception as exc:
+        logger.exception("script_run failed")
         return Result.failure(f"the sandbox is not available: {exc}")
 
     try:
@@ -2672,6 +2703,7 @@ def _script_run(ctx, args: dict) -> Result:
         # A BoxError here is the useful case: a script declaring a persistent
         # lifetime is told to be opened rather than run, which is a real
         # message and not a crash.
+        logger.exception("script_run failed")
         return Result.failure(f"{path.name} could not start: {exc}")
 
     if not args.get("wait", True):

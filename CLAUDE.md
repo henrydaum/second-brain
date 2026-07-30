@@ -910,6 +910,28 @@ def run(self, sdk, path):
 `sdk.Denied` (refused) subclasses `sdk.Failed` (anything). `sdk.ok(x,
 llm_summary=...)` only when attaching extras. `sdk.log(...)`, never `logging`.
 
+**A handler is an adapter, and does not catch for itself.**
+`Interpreter._execute` already wraps every handler call: it logs
+`logger.exception` and returns `Result.failure(f"handler error: {exc}")`. So a
+per-handler `except Exception` around kernel code adds nothing and *costs the
+traceback* — which is how a `NameError` in `_config_write` once presented as an
+ordinary failed config write with the whole suite green.
+
+The rule, in order: **guard foreign code** (a tool, service, command, parser,
+model, `pip`, a subprocess, a frontend callback run inline) because "tool 'x'
+failed" says something the net cannot; **guard multi-step I/O** where a partial
+write needs naming; **otherwise let it raise**. Where the guest supplied the
+input — SQL it wrote, a payload it built, a number it passed — catch the
+*specific* exception and report `ERROR_INVALID_ARGUMENT`, because that is the
+guest's mistake rather than a kernel bug. `fs_net.py` was always the house
+style (one broad except in 41KB, otherwise `OSError`,
+`subprocess.TimeoutExpired`, `urllib.error.*`); `kernel.py` has been brought to
+it, 71 → 36.
+
+Every kept guard also logs `logger.exception`. Attribution and a stack trace
+are not alternatives — the message says *whose* bug it is, the traceback says
+*where*, and 34 of the 36 used to keep only the first.
+
 **Error codes** (`sandbox/guest/codes.py`). `Result.error` is a sentence, and a
 sentence is for a person; `Result.code` is the `ERROR_*` token code branches on.
 Which of the two `sdk` exceptions gets raised is `code in DENIAL_CODES` — it
