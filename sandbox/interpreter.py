@@ -34,6 +34,9 @@ from . import provenance
 from .handlers import HANDLERS
 from .policy import Chain, Decision, classify
 from .guest.channel import Terminated
+from .guest.codes import (ERROR_APPROVAL_DECLINED, ERROR_CANCELLED,
+                         ERROR_HANDLER_ERROR, ERROR_NO_HANDLER,
+                         ERROR_SHUTTING_DOWN)
 from .guest.requests import SELF_RESPOND, Request, Result
 
 logger = logging.getLogger("Sandbox")
@@ -60,6 +63,17 @@ DEFAULT_MAX_WORKERS = 16
 # Asking is slower still and must never queue behind execution, so its pool is
 # sized for concurrent dialogs rather than concurrent work.
 DEFAULT_MAX_APPROVALS = 8
+
+
+def _shutting_down() -> Result:
+    """The answer to anything that arrives while the sandbox is closing."""
+    return Result.refusal("sandbox is shutting down",
+                          code=ERROR_SHUTTING_DOWN)
+
+
+def _cancelled() -> Result:
+    """The answer to a cancelled execution — answered, never serviced."""
+    return Result.refusal("execution cancelled", code=ERROR_CANCELLED)
 
 
 def clamp_timeout(declared: float | None) -> float:
@@ -222,13 +236,13 @@ class Interpreter:
             if item is None:
                 continue
             execution, _ = item
-            execution.inbox.put(Result.refusal("sandbox is shutting down"))
+            execution.inbox.put(_shutting_down())
 
     def _gate_one(self, execution: Execution, request: Request):
         """Classify a single Request and route it."""
         # Starvation: a cancelled execution is answered, never serviced.
         if execution.cancelled:
-            execution.inbox.put(Result.refusal("execution cancelled"))
+            execution.inbox.put(_cancelled())
             return
 
         decision = classify(request, execution.chain)
@@ -236,7 +250,8 @@ class Interpreter:
         if not decision.safe:
             if self._approve is None:
                 self._settle(execution, request, decision,
-                             Result.refusal(decision.reason))
+                             Result.refusal(decision.reason,
+                                        code=ERROR_APPROVAL_DECLINED))
                 return
             # Asking leaves the gate too, and for a sharper reason than slow
             # work does. The approver renders a dialog through a frontend, and
@@ -266,7 +281,7 @@ class Interpreter:
             self._pool.submit(self._execute, execution, request, decision)
         except RuntimeError:
             self._settle(execution, request, decision,
-                         Result.refusal("sandbox is shutting down"))
+                         _shutting_down())
 
     def _ask_then_execute(self, execution: Execution, request: Request,
                           decision: Decision):
@@ -275,9 +290,8 @@ class Interpreter:
         # have been cancelled in, and a cancelled execution is answered rather
         # than serviced — the same rule the gate applies on the way in.
         if execution.cancelled or not self._running:
-            execution.inbox.put(Result.refusal(
-                "execution cancelled" if execution.cancelled
-                else "sandbox is shutting down"))
+            execution.inbox.put(
+                _cancelled() if execution.cancelled else _shutting_down())
             return
         try:
             allowed = self._approve(execution.chain, request, decision)
@@ -286,7 +300,8 @@ class Interpreter:
             allowed = False
         if not allowed:
             self._settle(execution, request, decision,
-                         Result.refusal(decision.reason))
+                         Result.refusal(decision.reason,
+                                        code=ERROR_APPROVAL_DECLINED))
             return
         # Shutdown may have begun while the dialog was up. The execution still
         # has to be answered — an unanswered Request is a thread blocked for
@@ -294,7 +309,7 @@ class Interpreter:
         # to a sandbox that is already going away.
         if not self._running:
             self._settle(execution, request, decision,
-                         Result.refusal("sandbox is shutting down"))
+                         _shutting_down())
             return
         self._hand_to_pool(execution, request, decision)
 
@@ -311,7 +326,9 @@ class Interpreter:
         try:
             handler = HANDLERS.get(request.type)
             if handler is None:
-                result = Result.failure(f"no handler for {request.type}")
+                result = Result.failure(
+                    f"no handler for {request.type}",
+                    code=ERROR_NO_HANDLER)
             else:
                 context = self._context_for(execution)
                 try:
@@ -320,7 +337,8 @@ class Interpreter:
                         result = handler(context, request.args)
                 except Exception as exc:
                     logger.exception("handler failed: %s", request.type)
-                    result = Result.failure(f"handler error: {exc}")
+                    result = Result.failure(f"handler error: {exc}",
+                                            code=ERROR_HANDLER_ERROR)
         finally:
             execution.left()
         self._settle(execution, request, decision, result)
@@ -384,7 +402,7 @@ class Interpreter:
         # caller would wait on ``inbox.get()`` for as long as the process
         # lives.
         if not self._running:
-            return Result.refusal("sandbox is shutting down")
+            return _shutting_down()
         self._gate_queue.put((execution, request))
         return execution.inbox.get()
 

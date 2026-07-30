@@ -26,6 +26,8 @@ from pathlib import Path
 from .guest import protocol
 from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
+from .guest.codes import (ERROR_GUEST_EXITED, ERROR_GUEST_FAULT,
+                         ERROR_INVALID_ARGUMENT, ERROR_TIMEOUT)
 from .guest.requests import Request, Result
 
 logger = logging.getLogger("Sandbox")
@@ -162,7 +164,8 @@ def service_until(interpreter: Interpreter, execution: Execution, proc,
             except (KeyError, TypeError, ValueError) as exc:
                 if not send(proc, {"kind": protocol.RESULT,
                                    "result": Result.failure(
-                                       f"unusable request: {exc}").to_dict()}):
+                                       f"unusable request: {exc}",
+                                       code=ERROR_INVALID_ARGUMENT).to_dict()}):
                     return None
                 continue
             # The same gate the in-process runner uses: one classification
@@ -200,14 +203,16 @@ def fault_result(message: dict, name: str) -> Result:
     detail = message.get("traceback") or ""
     if detail:
         logger.debug("sandboxed fault in %s:\n%s", name, detail)
-    return Result.failure(message.get("error", "sandboxed code faulted"))
+    return Result.failure(message.get("error", "sandboxed code faulted"),
+                          code=ERROR_GUEST_FAULT)
 
 
 def _pump(interpreter: Interpreter, execution: Execution, proc,
           killed: threading.Event, deadline: float, start: dict) -> Result:
     """Drive an ephemeral child until it finishes, faults, or is killed."""
     if not send(proc, start):
-        return Result.failure("child exited before it could be started")
+        return Result.failure("child exited before it could be started",
+                              code=ERROR_GUEST_EXITED)
 
     message = service_until(interpreter, execution, proc,
                             {protocol.DONE, protocol.FAULT})
@@ -218,10 +223,11 @@ def _pump(interpreter: Interpreter, execution: Execution, proc,
     # lands — and reporting that would hide the fact that it ran too long.
     if killed.is_set():
         return Result.failure(f"timed out after {deadline:.1f}s",
-                              retryable=True)
+                              retryable=True, code=ERROR_TIMEOUT)
     if message is None:
         return Result.failure(
-            f"child exited without a result (code {proc.poll()})")
+            f"child exited without a result (code {proc.poll()})",
+            code=ERROR_GUEST_EXITED)
     if message["kind"] == protocol.FAULT:
         return fault_result(message, execution.name)
     return Result.from_dict(message["result"])

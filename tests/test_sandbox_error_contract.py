@@ -184,3 +184,72 @@ def test_an_ordinary_failure_carries_no_code_by_default():
     """The 166 existing `failure` sites are unchanged."""
     assert Result.failure("went wrong").code == ""
     assert Result.failure("went wrong", retryable=True).retryable is True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The codes the kernel mints for itself.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_handler_that_raises_is_coded_as_breakage(interp, monkeypatch):
+    """Not a refusal — a plugin must not catch this as sdk.Denied."""
+    from sandbox.guest.codes import ERROR_HANDLER_ERROR
+
+    def boom(_ctx, _args):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setitem(HANDLERS, CONFIG_READ, boom)
+
+    def plugin(sdk):
+        answer = sdk._send(_read_request())
+        return sdk.ok({"code": answer.code, "denied": answer.denied})
+
+    out = run_in_process(interp, plugin, name="raiser").data
+    assert out["code"] == ERROR_HANDLER_ERROR
+    assert out["denied"] is False
+
+
+def test_an_unapproved_request_is_coded_as_a_declined_approval(interp):
+    """No approver is wired, so anything unsafe is refused at the gate."""
+    from sandbox.guest.codes import ERROR_APPROVAL_DECLINED
+
+    def plugin(sdk):
+        try:
+            sdk.net.http("https://example.invalid/")
+        except sdk.Denied as exc:
+            return sdk.ok(exc.result.code)
+        return sdk.ok("not denied")
+
+    assert run_in_process(interp, plugin, name="egress").data == \
+        ERROR_APPROVAL_DECLINED
+
+
+def test_reading_a_protected_file_is_coded_not_permitted(interp):
+    """The credential store, which is the one thing reads are narrow about.
+
+    Reads are otherwise deliberately broad — egress is the control — so a
+    protected path is where ``fs.read`` actually refuses rather than merely
+    failing to find something.
+    """
+    from sandbox.guest.codes import ERROR_NOT_PERMITTED
+    from sandbox.protected import protected_paths
+
+    guarded = sorted(protected_paths())
+    if not guarded:
+        pytest.skip("no protected paths configured in this environment")
+
+    def plugin(sdk, path):
+        try:
+            sdk.fs.read(path)
+        except sdk.Denied as exc:
+            return sdk.ok(exc.result.code)
+        return sdk.ok("not denied")
+
+    out = run_in_process(interp, plugin, name="peeker",
+                         kwargs={"path": str(guarded[0])})
+    assert out.data == ERROR_NOT_PERMITTED
+
+
+def _read_request():
+    """A CONFIG_READ Request, built where the import is cheap."""
+    from sandbox.guest.requests import Request
+    return Request(CONFIG_READ, {"key": "anything"})

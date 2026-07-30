@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .. import walk
 from ..guest import protocol
+from ..guest.codes import ERROR_NOT_PERMITTED
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
                               FS_WRITE_BYTES, NET_HTTP, PROC_LIST, PROC_RUN,
@@ -78,7 +79,8 @@ def _fs_read(ctx, args: dict) -> Result:
         return Result.failure("fs.read requires a path")
     path = Path(raw)
     if (why := reason_for(path)):
-        return Result.refusal(f"{raw} is not readable: {why}")
+        return Result.refusal(f"{raw} is not readable: {why}",
+                              code=ERROR_NOT_PERMITTED)
     try:
         if not path.is_file():
             return Result.failure(f"not a file: {raw}")
@@ -110,7 +112,8 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
     # Same answer as fs.read: the encoding a caller asks for cannot be a way
     # around which bytes may leave.
     if (why := reason_for(path)):
-        return Result.refusal(f"{raw} is not readable: {why}")
+        return Result.refusal(f"{raw} is not readable: {why}",
+                              code=ERROR_NOT_PERMITTED)
     try:
         offset = max(0, int(args.get("offset") or 0))
         length = max(0, int(args.get("length") or 0))
@@ -159,7 +162,8 @@ def _guard_write(*paths) -> Result | None:
         if not raw:
             continue
         if (why := reason_for(raw)):
-            return Result.refusal(f"{raw} is not writable: {why}")
+            return Result.refusal(f"{raw} is not writable: {why}",
+                                  code=ERROR_NOT_PERMITTED)
     return None
 
 
@@ -611,7 +615,7 @@ def _net_http(ctx, args: dict) -> Result:
         named = scheme or "no scheme"
         return Result.refusal(
             f"net.http speaks http and https, not {named}; "
-            f"read files with sdk.fs.read")
+            f"read files with sdk.fs.read", code=ERROR_NOT_PERMITTED)
     headers = resolve(dict(args.get("headers") or {}), lookup)
     body = resolve(args.get("body"), lookup)
     method = (args.get("method") or "GET").upper()
