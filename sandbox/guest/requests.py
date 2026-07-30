@@ -399,7 +399,15 @@ class Result:
 
     @property
     def denied(self) -> bool:
-        """Whether this failure was a refusal rather than a breakage."""
+        """Whether this failure was a refusal rather than a breakage.
+
+        Reads :attr:`code`, with the old message-prefix check kept as a
+        fallback for a Result built by a peer that predates the field — a
+        subprocess runner from an older build, or one rebuilt from a stored
+        payload. A coded Result never consults the prefix.
+        """
+        if not self.ok and self.code:
+            return self.code in DENIAL_CODES
         return not self.ok and self.error.startswith(DENIED)
 
     @staticmethod
