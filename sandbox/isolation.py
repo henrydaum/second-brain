@@ -1,15 +1,10 @@
 """How isolated a file runs — decided by where it lives, never by what it says.
 
-``isolation = "subprocess"`` used to be a module-level declaration, read off
-the file by AST alongside ``exports`` and ``requests``. That put the choice of
-containment in the hands of the code being contained, which is the one thing a
-sandbox may never delegate: an agent authoring a plugin could author its own
-escape from the process boundary by leaving a line out.
-
-So isolation joins provenance rather than declaration. A file's tree is not
-something it can assert — writing into ``sandbox_plugins/`` is what *makes*
-something an agent-authored plugin — so the kernel reads the answer off the
-path and the file gets no vote.
+Why the tree decides and not the file — and why foreign-library detection is
+computed from the AST rather than read off ``dependencies_pip`` — is argued in
+CLAUDE.md under "Isolation is provenance, not declaration". The short form:
+code being contained may never be the authority on its own containment, and a
+file cannot assert which tree it is in.
 
 Three trees, three answers:
 
@@ -29,11 +24,6 @@ Three trees, three answers:
 Anything else — a temporary file, a template, a path outside every tree — is
 of unknown provenance and gets the subprocess. Failing closed is the only
 defensible default for "I do not know what this is".
-
-**Foreign-library detection is computed, not declared**, for the same reason
-the tree is. ``dependencies_pip`` is a declaration and would reintroduce the
-bug one level down; the validator's import walk already answers the question
-from the AST, and ``report.unmediated`` is that answer.
 """
 
 from __future__ import annotations
