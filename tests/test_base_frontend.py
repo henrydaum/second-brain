@@ -200,3 +200,94 @@ def test_render_typing_exception_is_swallowed():
 
     f.render_typing = _boom
     f.on_bus_session_turn_changed(_changed("mine", "agent"))  # must not raise
+
+
+# ── Untargeted broadcasts land on one surface once ────────────────────
+#
+# With two frontends running, a system announcement (a plugin registration,
+# say) carries no session_key. It used to fan out across every session the
+# frontend considered live — which includes sessions no frontend has claimed
+# yet — so the REPL printed "Registered plugin: x" once for its own session
+# and again for Telegram's untagged one. Two lines, one transport, one event.
+
+class _BroadcastFrontend(BaseFrontend):
+    name = "repl"
+    capabilities = FrontendCapabilities()
+
+    def __init__(self, runtime):
+        super().__init__()
+        self.runtime = runtime
+        self.rendered: list[str] = []
+
+    def render_messages(self, _key, messages):
+        self.rendered.extend(messages)
+
+    def _live_session_keys(self):
+        # What the sandboxed adapter answers: own sessions plus unclaimed ones.
+        return [key for key, session in self.runtime.sessions.items()
+                if session.frontend_name in (None, self.name)]
+
+    def _current_approval_request(self, _key):
+        return None
+
+
+class _Session:
+    def __init__(self, frontend_name):
+        self.frontend_name = frontend_name
+
+
+class _Runtime:
+    def __init__(self, sessions):
+        self.sessions = sessions
+
+
+def _push(frontend, message="Registered plugin: memory"):
+    frontend.on_bus_message_pushed({"message": message, "kind": "plugin"})
+
+
+def test_a_broadcast_renders_once_when_another_frontend_is_untagged():
+    """The reported bug: repl + telegram running, one notice printed twice."""
+    runtime = _Runtime({"repl:1": _Session("repl"), "tg:2": _Session(None)})
+    frontend = _BroadcastFrontend(runtime)
+
+    _push(frontend)
+
+    assert frontend.rendered == ["Registered plugin: memory"]
+
+
+def test_a_broadcast_still_reaches_every_session_this_frontend_owns():
+    """Narrowing to owned sessions must not narrow to *one* of them."""
+    runtime = _Runtime({"a": _Session("repl"), "b": _Session("repl")})
+    frontend = _BroadcastFrontend(runtime)
+
+    _push(frontend)
+
+    assert frontend.rendered == ["Registered plugin: memory"] * 2
+
+
+def test_a_broadcast_is_not_swallowed_before_any_session_is_tagged():
+    """A fresh install has submitted nothing, so nothing carries an owner yet.
+
+    Falling back to the live set keeps announcements visible; the alternative
+    is a first-run where every registration notice silently goes nowhere.
+    """
+    runtime = _Runtime({"only": _Session(None)})
+    frontend = _BroadcastFrontend(runtime)
+
+    _push(frontend)
+
+    assert frontend.rendered == ["Registered plugin: memory"]
+
+
+def test_a_targeted_message_still_reaches_an_unclaimed_session():
+    """Ownership scoping applies to broadcasts only.
+
+    A targeted render names its session, and the first message of a
+    conversation arrives before anything has tagged it.
+    """
+    runtime = _Runtime({"repl:1": _Session("repl"), "new": _Session(None)})
+    frontend = _BroadcastFrontend(runtime)
+
+    frontend.on_bus_message_pushed({"message": "hello", "session_key": "new"})
+
+    assert frontend.rendered == ["hello"]

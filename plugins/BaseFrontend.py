@@ -579,7 +579,7 @@ class BaseFrontend:
         """Handle on bus approval requested."""
         target = ((getattr(req, "metadata", None) or {}).get("session_key"))
         live = self._live_session_keys()
-        keys = [target] if target in live else live
+        keys = [target] if target in live else self._broadcast_session_keys()
         for key in keys:
             try:
                 with self._approval_lock:
@@ -601,7 +601,7 @@ class BaseFrontend:
             return
         target = payload.get("session_key")
         live = self._live_session_keys()
-        keys = [target] if target in live else live
+        keys = [target] if target in live else self._broadcast_session_keys()
         for key in keys:
             try:
                 self.render_form_field(key, dict(form))
@@ -669,9 +669,10 @@ class BaseFrontend:
         title = (payload or {}).get("title")
         body = f"{title}\n\n{message}" if title else message
         target = (payload or {}).get("session_key")
-        keys = [target] if target else self._live_session_keys()
+        keys = [target] if target else self._broadcast_session_keys()
+        live = self._live_session_keys()
         for key in keys:
-            if key not in self._live_session_keys():
+            if key not in live:
                 continue
             if self._consume_streamed(key, body):
                 continue  # already rendered incrementally as a stream
@@ -889,6 +890,34 @@ class BaseFrontend:
             return []
         return [key for key, session in list(self.runtime.sessions.items())
                 if not self._is_background_session(key, session)]
+
+    def _broadcast_session_keys(self) -> list[str]:
+        """Where an *untargeted* announcement goes — this frontend's own sessions.
+
+        Distinct from :meth:`_live_session_keys`, and the distinction is the
+        whole point. A *targeted* render names a session, and the live set is
+        deliberately generous about untagged ones: a session nobody has claimed
+        may be one this frontend is about to receive, and dropping it would lose
+        the first message of a conversation.
+
+        A broadcast has no session to name. Fanning it across the live set
+        therefore renders it once *per session*, and an untagged session is in
+        every frontend's live set — so with the REPL and Telegram both running,
+        one "Registered plugin: x" printed twice in the terminal: once for the
+        REPL's own session, once for Telegram's not-yet-tagged one. The
+        transport is one surface; the announcement belongs on it once.
+
+        Falling back to the live set when this frontend owns nothing keeps a
+        fresh install (no session has submitted yet, so nothing is tagged) from
+        silently swallowing every announcement.
+        """
+        live = self._live_session_keys()
+        if self.runtime is None or not live:
+            return live
+        sessions = getattr(self.runtime, "sessions", None) or {}
+        owned = [key for key in live
+                 if getattr(sessions.get(key), "frontend_name", None) == self.name]
+        return owned or live
 
     @staticmethod
     def _is_background_session(key: str, session) -> bool:
