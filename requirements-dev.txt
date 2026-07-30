@@ -1,3 +1,0 @@
-# Dev / QA dependencies — NOT required to run the kernel.
-# The kernel's runtime deps live in requirements.txt (kept minimal on purpose).
-pytest
