@@ -559,3 +559,18 @@ def test_append_mode_adds_rather_than_replaces(tmp_path):
                                "mode": "append"})
 
     assert target.read_bytes() == b"\x00\x01\x02\x03"
+
+
+def test_every_result_extra_survives_the_child(both):
+    """A field forgotten in ``to_dict`` is lost here and nowhere else.
+
+    The in-process runner hands the Result back by reference, so it cannot
+    notice a serialization gap. This is the only runner that can.
+    """
+    in_proc, sub = both("returns_every_extra")
+    assert in_proc.ok and sub.ok
+    assert sub.data == {"n": 1}
+    assert sub.llm_summary == in_proc.llm_summary == "a summary"
+    assert sub.attachment_paths == in_proc.attachment_paths == ["/tmp/a.png"]
+    assert sub.also_contains == in_proc.also_contains == ["nested"]
+    assert sub.discovered_paths == in_proc.discovered_paths == ["/tmp/found"]

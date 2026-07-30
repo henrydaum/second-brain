@@ -66,3 +66,19 @@ def prints_to_stdout(sdk):
     """Print, which must not corrupt the protocol stream."""
     print("this must not reach the wire")
     return "survived"
+
+
+def returns_every_extra(sdk):
+    """Fill every optional field on Result, so the wire format is exercised.
+
+    ``to_dict``/``from_dict`` enumerate fields by hand, and the in-process
+    runner never serializes — so only a subprocess run can catch a field that
+    was added to the dataclass and forgotten on the wire.
+    """
+    return sdk.ok(
+        {"n": 1},
+        llm_summary="a summary",
+        attachments=["/tmp/a.png"],
+        also_contains=["nested"],
+        discovered_paths=["/tmp/found"],
+    )
