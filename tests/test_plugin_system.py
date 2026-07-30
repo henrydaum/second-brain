@@ -450,3 +450,71 @@ class _FakeHandler:
     def cancel_pending(self):
         """Cancel pending."""
         self.cancelled = True
+
+
+# ────────────────────────────────────────────────────────────────────
+# Pipeline wiring (was test_pipeline.py)
+# ────────────────────────────────────────────────────────────────────
+
+from events.event_channels import SERVICE_LOADED
+from pipeline.orchestrator import Orchestrator
+
+
+def test_orchestrator_stop_unsubscribes_service_loaded_handler():
+    """Verify orchestrator stop unsubscribes service loaded handler."""
+    before = len(bus._subs.get(SERVICE_LOADED, []))
+    orch = Orchestrator(None, {})
+    assert len(bus._subs.get(SERVICE_LOADED, [])) == before + 1
+    orch.stop()
+    assert len(bus._subs.get(SERVICE_LOADED, [])) == before
+
+
+# ────────────────────────────────────────────────────────────────────
+# Service lifecycle (was test_service_lifecycle.py)
+# ────────────────────────────────────────────────────────────────────
+
+from plugins.BaseService import EXTENSION, BaseService, is_user_managed_service, should_autoload_service
+from plugins.frontends.helpers.formatters import format_services
+
+
+class ManagedService(BaseService):
+    """Managed service."""
+    model_name = "Managed"
+
+
+class ExtensionService(BaseService):
+    """Extension service."""
+    model_name = "Extension"
+    lifecycle = EXTENSION
+
+
+def test_base_service_has_default_noop_lifecycle():
+    service = BaseService()
+
+    assert service.load() is True
+    assert service.loaded is True
+    service.unload()
+    assert service.loaded is False
+
+
+def test_extension_services_autoload_without_config_entry():
+    managed = ManagedService()
+    extension = ExtensionService()
+
+    assert not should_autoload_service("managed", managed, {"autoload_services": []})
+    assert should_autoload_service("managed", managed, {"autoload_services": ["managed"]})
+    assert should_autoload_service("extension", extension, {"autoload_services": []})
+    assert is_user_managed_service(managed)
+    assert not is_user_managed_service(extension)
+
+
+def test_format_services_labels_lifecycles():
+    text = format_services([
+        {"name": "extension", "loaded": True, "model_name": "Extension", "lifecycle": "extension"},
+        {"name": "managed", "loaded": True, "model_name": "Managed", "lifecycle": "managed"},
+        {"name": "cold", "loaded": False, "model_name": "Cold", "lifecycle": "managed"},
+    ])
+
+    assert "| extension | Extension |" in text
+    assert "| managed | Loaded |" in text
+    assert "| cold | Unloaded |" in text

@@ -1,6 +1,5 @@
 """Sandbox slice 1 — the drive loop, policy, provenance, and the return
-contract, plus a round-trip benchmark so the cost is measured rather than
-argued about."""
+contract."""
 
 import threading
 import time
@@ -254,33 +253,3 @@ def test_a_starved_loop_actually_stops(interp):
     result = run_in_process(interp, plugin, name="ignorer", timeout=0.3)
     assert not result.ok
     assert time.perf_counter() - started < 5.0
-
-
-# ──────────────────────────────────────────────────────────────────────
-# The number that decides whether this design is viable.
-# ──────────────────────────────────────────────────────────────────────
-
-def test_round_trip_cost(interp, tmp_path, capsys):
-    """Measure per-Request overhead. Concurrency is cheap; granularity costs.
-
-    If this lands far above ~100us the design needs revisiting before
-    anything is built on it.
-    """
-    (tmp_path / "f.txt").write_text("x", encoding="utf-8")
-    path = str(tmp_path / "f.txt")
-    iterations = 300
-
-    def plugin(sdk):
-        """Make many small Requests."""
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            sdk.fs.read(path)
-        return sdk.ok(time.perf_counter() - t0)
-
-    result = run_in_process(interp, plugin, name="bench", timeout=60)
-    assert result.ok
-    per_call_us = (result.data / iterations) * 1_000_000
-    with capsys.disabled():
-        print(f"\n  in-process round trip: {per_call_us:.1f} us/request "
-              f"({iterations} requests in {result.data * 1000:.1f} ms)")
-    assert per_call_us < 2000

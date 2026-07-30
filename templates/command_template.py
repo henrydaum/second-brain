@@ -79,6 +79,10 @@ class Note(BaseCommand):
 
     name = "note"
     description = "Append a short note to the current conversation."
+    # Guidance added to the agent's system prompt while this command is in
+    # scope. A method (``def agent_prompt(self, sdk)``) works too when the
+    # text depends on live state.
+    agent_prompt = "## Notes\nUse /note for a one-liner worth keeping."
     category = "Conversation"
 
     def form(self, sdk, args):

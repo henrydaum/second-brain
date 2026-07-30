@@ -78,16 +78,6 @@ SETTINGS_DATA = [
      1.0,
      {"type": "slider", "range": (0.1, 10.0, 99), "is_float": True}),
 
-    ("Task Timeout", "task_timeout",
-     "Seconds before a task is considered timed out.",
-     300,
-     {"type": "slider", "range": (30, 600, 57), "is_float": False}),
-
-    ("Tool Timeout", "tool_timeout",
-     "Seconds before an agent tool call is forcibly abandoned and reported to the LLM as a timeout error.",
-     600,
-     {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
-
     # --- Subagents ---
     # Kernel settings because spawning is kernel routing. They were declared by
     # the store's spawn tool, which is exactly the ownership accident
@@ -155,19 +145,6 @@ SETTINGS_DATA = [
      "launch, so enabling it takes effect on the next start.",
      True,
      {"type": "bool"}),
-
-    ("Stall Timeout", "stall_timeout",
-     "Stall watchdog: while healthy, the app touches a heartbeat file every few "
-     "seconds; if Restart On Crash is supervising and sees no heartbeat for this "
-     "many seconds, it kills and relaunches the app. 0 disables stall detection. "
-     "Checked at launch.",
-     120,
-     {"type": "slider", "range": (0, 600, 20), "is_float": False}),
-
-    ("Reprocess Interval", "reprocess_interval",
-     "Seconds between re-checking files for changes.",
-     300,
-     {"type": "slider", "range": (30, 3600, 119), "is_float": False}),
 
     ("Scheduled Jobs", "scheduled_jobs",
      "JSON object keyed by job name describing scheduled event emissions.",

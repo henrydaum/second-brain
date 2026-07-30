@@ -172,16 +172,11 @@ class BaseTool:
                 setattr(cls, attr, value.copy())
 
     # --- Agent system-prompt contribution ---
-    # Static guidance injected into the agent's system prompt when this tool is
-    # in scope. Override agent_prompt_for() instead for dynamic text.
+    # Guidance injected into the agent's system prompt when this tool is in scope.
+    # Declare a plain string, or override with ``def agent_prompt(self, ctx)``
+    # when the text depends on the session (``ctx`` is a PromptContext:
+    # db/services/orchestrator/config/scope/...). The collector accepts either.
     agent_prompt: str = ""
-
-    def agent_prompt_for(self, ctx) -> str:
-        """Guidance for the agent system prompt, or '' to contribute nothing.
-
-        ``ctx`` is a PromptContext (db/services/orchestrator/config/scope/...).
-        Default returns the static ``agent_prompt``; override for dynamic text."""
-        return self.agent_prompt
 
     def run(self, context, **kwargs) -> ToolResult:
         """Execute the base tool tool."""

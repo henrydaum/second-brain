@@ -267,9 +267,31 @@ sanctioned-implementation list is empty. Widening the boundary fails the suite
 until the test's allowlist — and this section — are updated deliberately.
 
 Everything else is discovery-based. The agent system prompt collects optional
-guidance from each in-scope plugin's `agent_prompt_for(ctx)` (see `_collect` in
+guidance from each in-scope plugin's **`agent_prompt`** (see `_collect` in
 `agent/system_prompt.py`), so missing plugins degrade silently and correctly —
 uninstalling a package removes its prompt text with it.
+
+**`agent_prompt` is one name with two shapes.** A plugin with nothing
+conditional to say declares a plain string; one whose text depends on live
+state defines `def agent_prompt(self, ctx)` (`sdk` in the guest). It was two
+names — a static `agent_prompt` attribute plus an `agent_prompt_for(ctx)`
+method whose base implementation returned it — duplicated byte-identically
+across all five native base classes and the guest base, while the store grew
+three spellings for one contract because neither name appeared in any template
+or in `docs/SDK.md`.
+
+The two cannot simply become a method, because the string form is not a
+convenience: it is *read by AST at load* and copied onto the adapter, so a
+static contribution costs no box call, while a dynamic one costs a real call
+into the guest (cached until the plugin reloads — see `_cached_prompt`). So
+`_collect` accepts either, and that tolerance is load-bearing rather than
+tidy: a string shadowing a method raises `TypeError` into `_collect`'s
+`except`, and the guidance would vanish with **no symptom at all**.
+
+For the same reason `_collect` and `bridge._prompt_method` still answer to the
+old `agent_prompt_for`: the store is half migrated, and dropping the unmigrated
+half silently is precisely the failure this doorway exists to prevent. Delete
+that fallback when the last store plugin is renamed, not before.
 
 ## Hardening applied for kernel reliability
 
@@ -428,7 +450,7 @@ entry point. Stdlib-only and self-contained — it is the shippable unit a
 container image would copy. Everything else is *host*: `policy` (the single
 `classify()` that decides safe/unsafe), `handlers` (the only code that touches
 the world), `interpreter` (serial gate, parallel execution), the two runners,
-`boxes`, `facade`, `bridge`, `validator`, `parity`, `migrate`. **The guest never
+`boxes`, `facade`, `bridge`, `validator`. **The guest never
 imports the host** — pinned by `tests/test_sandbox_guest_boundary.py`, the
 sandbox's counterpart to the kernel boundary test.
 
@@ -878,12 +900,15 @@ are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
 per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs).
 
-**Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a
-plugin involves, line by line, with the Request each effect becomes.
-`sandbox.parity.compare(path, entry, ...)` runs the working tree against
-`git show HEAD:<path>` with the *same context object* and diffs the return
-values — so **commit before migrating**, since HEAD is the baseline. Templates
-in `templates/` still teach the old contract and should be migrated before any
+**Migration tooling:** `sandbox.validator.validate_file(path).render()` is the
+whole of it — it names every line that needs converting and the Request each
+effect becomes, and `conforms.` means the file will load in a box. There were
+once two more tools (`sandbox.migrate.plan`, a checklist the validator already
+prints; `sandbox.parity.compare`, which diffed a migrated plugin's return value
+against `git show HEAD:`). Both were deleted: nothing but their own tests ever
+called them, and parity could compare only return values, never effects, so it
+could not answer the question a migration actually raises. Templates in
+`templates/` still teach the old contract and should be migrated before any
 plugin, since they are what gets copied.
 
 ---

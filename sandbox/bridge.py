@@ -310,15 +310,21 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
                          method="form") or []
         return [s for s in map(_form_step, steps) if s is not None]
 
-    def agent_prompt_for(self, ctx):
+    def agent_prompt(self, ctx):
         """Native prompt-contribution contract, answered inside the box.
+
+        Only attached when the guest defines ``agent_prompt`` as a *method*.
+        A guest that declares it as a plain string needs nothing here — the
+        declaration is copied onto the adapter as an ordinary attribute and
+        ``_collect`` reads it directly, which is why the static case costs no
+        box call at all.
 
         Bridged for the same reason ``form`` and ``run_event`` are: a doorway
         the kernel calls and the adapter does not forward is answered by the
-        native base's default, which returns the static ``agent_prompt`` — so
-        every migrated plugin's point-of-use guidance vanished silently while
-        the plugin went on working. The failure had no symptom beyond an agent
-        that no longer knew things it used to.
+        native base's empty default, so every migrated plugin's point-of-use
+        guidance vanished silently while the plugin went on working. The
+        failure had no symptom beyond an agent that no longer knew things it
+        used to.
 
         The ``PromptContext`` the kernel hands us is deliberately *not* what the
         box answers from. It is a light read-only bag for building a prompt, not
@@ -330,7 +336,7 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         from here is refused; the guest contract already says not to make one.
         """
         return _cached_prompt(
-            self, lambda: _forward(self, None, {}, method="agent_prompt_for"))
+            self, lambda: _forward(self, None, {}, method=_prompt_name))
 
     run = {"tool": run_tool, "task": run_task,
            "command": run_command}.get(family)
@@ -356,8 +362,6 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # nothing.
         **({"run_event": run_task_event} if family == "task"
            and _defines(report.source, entry, "run_event") else {}),
-        **({"agent_prompt_for": agent_prompt_for}
-           if _defines(report.source, entry, "agent_prompt_for") else {}),
         # The sentence the approval dialog asks, rendered from the same
         # declaration the grant is built from so the question a user answers
         # and the authority they hand over cannot drift apart.
@@ -367,6 +371,12 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     for key, value in declarations.items():
         if key not in NOT_CARRIED:
             attributes[key] = value
+    # After the declaration copy, so a method always beats a literal of the
+    # same name. Only attached when the guest wrote a method: a string
+    # declaration already arrived above and needs no forwarding.
+    _prompt_name = _prompt_method(report.source, entry)
+    if _prompt_name:
+        attributes["agent_prompt"] = agent_prompt
     attributes.setdefault("name", path.stem.split("_", 1)[-1])
 
     adapter, module = _build(entry, base, attributes, path, source_path)
@@ -680,14 +690,14 @@ def _adapt_service(
             self._runtime = runtime
         _sync_hooks(self)
 
-    def agent_prompt_for(self, ctx):
+    def agent_prompt(self, ctx):
         """Prompt contribution, answered in the resident box.
 
         No spawn to pay for here, but still cached: a resident box serializes
         its calls and prompt collection runs on the turn thread, so queuing
         behind a long export every turn would be a stall for no gain.
         """
-        return _cached_prompt(self, lambda: _box_prompt(self, name))
+        return _cached_prompt(self, lambda: _box_prompt(self, name, _prompt_name))
 
     def _export(method: str):
         """One forwarding method, so callers see an ordinary service."""
@@ -738,8 +748,9 @@ def _adapt_service(
     # caller is other sandboxed code rather than the kernel.
     attributes["exports"] = exports
     attributes["bind_runtime"] = bind_runtime
-    if _defines(source, entry, "agent_prompt_for"):
-        attributes["agent_prompt_for"] = agent_prompt_for
+    _prompt_name = _prompt_method(source, entry)
+    if _prompt_name:
+        attributes["agent_prompt"] = agent_prompt
     for method in exports:
         attributes[method] = _export(method)
 
@@ -1032,10 +1043,11 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
     # ``_form_step`` does for a command's form.
     attributes["capabilities"] = _capabilities(declarations.get("capabilities"))
 
-    if _defines(source, entry, "agent_prompt_for"):
-        attributes["agent_prompt_for"] = (
-            lambda self, ctx: _cached_prompt(
-                self, lambda: _box_prompt(self, name)))
+    _prompt_name = _prompt_method(source, entry)
+    if _prompt_name:
+        attributes["agent_prompt"] = (
+            lambda self, ctx, _m=_prompt_name: _cached_prompt(
+                self, lambda: _box_prompt(self, name, _m)))
 
     adapter, module = _build(entry, base, attributes, path, source_path)
     return module
@@ -1120,7 +1132,7 @@ def _entry_from(source: str) -> str:
     return ""
 
 
-def _box_prompt(plugin, name: str) -> str:
+def _box_prompt(plugin, name: str, method: str = "agent_prompt") -> str:
     """Ask a resident box for its prompt contribution.
 
     A box that is not open contributes nothing rather than raising: a service
@@ -1130,9 +1142,9 @@ def _box_prompt(plugin, name: str) -> str:
     box = getattr(plugin, "_sandbox_box", None)
     if box is None or not box.alive:
         return ""
-    result = box.call("agent_prompt_for")
+    result = box.call(method)
     if not result.ok:
-        logger.warning("agent_prompt_for failed for '%s': %s",
+        logger.warning("agent_prompt failed for '%s': %s",
                        name, result.error)
         return ""
     return result.data or ""
@@ -1145,8 +1157,8 @@ def _cached_prompt(plugin, produce) -> str:
     plugin, and for an ephemeral family every call into the guest is a *fresh
     box* — so forwarding this uncached would cost a subprocess spawn per
     migrated tool per turn. Caching is safe because the guest contract already
-    demands it: ``BaseTool.agent_prompt_for`` is documented as cheap, stable and
-    landing in a cacheable block.
+    demands it: ``agent_prompt`` is documented as cheap, stable and landing in
+    a cacheable block.
 
     Nothing invalidates the cache, on purpose. A changed file goes through
     ``PluginWatcher``, which rebuilds the adapter — so a new instance is what a
@@ -1159,11 +1171,28 @@ def _cached_prompt(plugin, produce) -> str:
     try:
         text = produce() or ""
     except Exception:
-        logger.exception("agent_prompt_for failed for '%s'",
+        logger.exception("agent_prompt failed for '%s'",
                          getattr(plugin, "name", "?"))
         text = ""
     plugin._prompt_text = text
     return text
+
+
+def _prompt_method(source: str, class_name: str) -> str:
+    """Which spelling of the prompt doorway this class defines, if any.
+
+    ``agent_prompt_for`` was the old name for the dynamic half; the static
+    half was a separate ``agent_prompt`` string. They are one name now, but an
+    unmigrated store plugin still writes the old one, and an adapter that
+    forwarded neither would drop its guidance in silence. Returns the method
+    name to call inside the box, or "" when the file defines no method at all
+    — in which case a literal declaration (if any) was already copied across
+    and nothing needs forwarding.
+    """
+    for name in ("agent_prompt", "agent_prompt_for"):
+        if _defines(source, class_name, name):
+            return name
+    return ""
 
 
 def _defines(source: str, class_name: str, method: str) -> bool:

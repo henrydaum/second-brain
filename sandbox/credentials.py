@@ -89,11 +89,6 @@ def handle_for(name: str) -> str:
     return f"{PREFIX}{name}{SUFFIX}"
 
 
-def looks_like_handle(value) -> bool:
-    """Whether a value is a handle rather than a real credential."""
-    return isinstance(value, str) and bool(_HANDLE.fullmatch(value))
-
-
 def redact(name: str, value, *, guess: bool = False):
     """Return the value, or a handle if the name says it is a credential."""
     return handle_for(name) if is_secret(name, guess=guess) else value

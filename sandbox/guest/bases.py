@@ -111,15 +111,14 @@ class BasePlugin:
         return self.on_event(sdk, channel, payload)
 
     # ── prompt contribution ────────────────────────────────────────
+    # Guidance to add to the agent's system prompt, or "" to stay silent.
+    #
+    # Declare a plain string when the text never changes — the kernel reads it
+    # by AST at load and never calls into the box for it. Override with
+    # ``def agent_prompt(self, sdk)`` when it depends on live state; that costs
+    # a real box call, so the result is cached until the plugin reloads. Either
+    # way keep it cheap and stable: it lands in a cacheable prompt block.
     agent_prompt: str = ""
-
-    def agent_prompt_for(self, sdk) -> str:
-        """Guidance to add to the system prompt, or "" to stay silent.
-
-        Called per turn, so it must be cheap and stable — the result lands in
-        a cacheable block. Do not make Requests here.
-        """
-        return self.agent_prompt
 
     # ── introspection ──────────────────────────────────────────────
 
@@ -224,7 +223,6 @@ class BaseService(BasePlugin):
     lifetime = PERSISTENT
 
     shared: bool = True
-    is_llm_backend: bool = False
     poll_interval: float = 0.0
     max_poll_failures: int = 5
 

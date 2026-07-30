@@ -15,28 +15,25 @@ version is never registered, so it never collides on `name`.
 ### 1. Ask what it involves
 
 ```python
-from sandbox.migrate import plan
-print(plan("plugins/tools/tool_read_file.py").render())
+from sandbox.validator import validate_file
+print(validate_file("plugins/tools/tool_read_file.py").render())
 ```
 
 ```
 tool_read_file.py  (tool)
   entry: ReadFile
-  signature: run(self, context, **kwargs)  ->  run(self, sdk, **kwargs)
 
   4 effect(s) to convert:
   line   11: imports 'pathlib', which reaches the environment directly  ->  sdk.fs
   line   14: imports 'paths', which lives on the kernel side of the boundary
   line  104: calls .read_text(), which touches the environment directly  ->  sdk.fs.read
-
-  Requests needed: sdk.fs, sdk.fs.read
 ```
 
 Every line is something to change and what it becomes. If it says *"mostly a
 rename"*, it is.
 
-`plan_tree("plugins/tools")` plans a whole directory, easiest first — start
-there when picking what to do next.
+The same call is how you check your work in step 4 — before and after are the
+same command, and `conforms.` is the finish line.
 
 ### 2. Rewrite the file
 
@@ -135,52 +132,27 @@ print(validate_file("plugins/tools/tool_read_file.py").render())
 
 ### 5. Check it still answers the same
 
-```python
-from sandbox.parity import compare
+Run it. `conforms.` says it will *load*, not that it still does what it did —
+that part is yours to check, by calling the plugin and comparing against what
+you remember it doing.
 
-v = compare("plugins/tools/tool_read_file.py", "ReadFile",
-            payload={"path": "notes.md"}, context=ctx)
-print(v.render())
-```
+Where to look hardest, in order:
 
-```
-tool_read_file.py: identical.
-```
-
-or
-
-```
-tool_read_file.py: 1 difference(s)
-  llm_summary:
-    native:    'read 40 lines'
-    sandboxed: ''
-```
-
-Both versions get **the same context object**, so a difference means the
-plugin changed, not the world.
-
-### 6. Decide what a difference means
-
-- **Kernel plugins, commands especially** — a difference is a bug until
-  proven otherwise. These are load-bearing and users depend on their exact
-  output.
+- **Kernel plugins, commands especially** — a difference is a bug until proven
+  otherwise. These are load-bearing and users depend on their exact output.
 - **Store plugins** — a difference is often fine. They were built to be
   customised. Read it, decide, move on.
 
-Only return values are compared. Filesystem and database effects are not, on
-purpose: comparing those means two workspaces and a diff, and it is rarely
-worth it.
+There was once a `sandbox.parity.compare` that ran the working tree against
+`git show HEAD:<path>` and diffed the return values. It is gone, and its
+limitation is why: it compared return values only, never filesystem or database
+effects, which is where a migration actually goes wrong. A tool that checks the
+easy half invites you to skip the hard half.
 
-### 7. Commit
+### 6. Commit
 
-The next migration's baseline is this commit. Commit a plugin only when you
-are happy with its parity, because `compare` reads `HEAD`.
-
-To compare against something else:
-
-```python
-compare(path, "ReadFile", ref="HEAD~3", payload={...})
-```
+One plugin, one commit — that is what makes a bad migration a `git revert`
+rather than an excavation.
 
 ---
 

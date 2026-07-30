@@ -260,7 +260,6 @@ CEILINGS = {"load_timeout": 600.0, "timeout": 600.0, "max_calls": 25,
 LITERAL_LISTS = ("dependencies_files", "dependencies_pip",
                  "requires_services", "requests", "exports",
                  "trigger_channels", "subscribed_channels")
-LITERAL_STRINGS = ("name", "box", "lifetime")
 
 # Closed vocabularies. A typo here is silent otherwise: an unrecognised
 # lifetime reads as "unset" and the file quietly gets the default.

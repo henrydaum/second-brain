@@ -410,7 +410,7 @@ class Advisor(BaseService):
         """Answer something."""
         return "pong"
 
-    def agent_prompt_for(self, sdk):
+    def agent_prompt(self, sdk):
         """Built from state only the residency has, so a literal cannot fake it."""
         return f"Advice from {self._where}."
 '''
@@ -430,11 +430,11 @@ def test_a_resident_prompt_contribution_is_answered_in_the_box(tmp_path, box):
     # Not loaded: contributes nothing rather than taking the prompt down. And
     # "nothing" must not become the answer forever — the cache is scoped to one
     # residency, not to the adapter, so loading clears it.
-    assert service.agent_prompt_for(SimpleNamespace(config={})) == ""
+    assert service.agent_prompt(SimpleNamespace(config={})) == ""
 
     assert service.load() is True
     try:
-        assert service.agent_prompt_for(
+        assert service.agent_prompt(
             SimpleNamespace(config={})) == "Advice from in the box."
     finally:
         service.unload()
@@ -584,7 +584,7 @@ class Advisor(BaseTool):
     name = "advisor"
     description = "x"
 
-    def agent_prompt_for(self, sdk):
+    def agent_prompt(self, sdk):
         """Say where something lives — the reason this is dynamic at all."""
         return f"## Scripts\\nThey go in {sdk.paths.get('scripts')}."
 
@@ -607,7 +607,7 @@ def test_a_prompt_contribution_is_bridged(tmp_path, box):
     module = adapt(_write(tmp_path, "tool_advisor.py", PROMPTING_TOOL))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
     try:
-        text = instance.agent_prompt_for(SimpleNamespace(config={}, scope=None))
+        text = instance.agent_prompt(SimpleNamespace(config={}, scope=None))
         assert text.startswith("## Scripts")
         assert "scripts" in text
         # Computed once: ``_collect`` runs every turn, and for an ephemeral
@@ -619,10 +619,69 @@ def test_a_prompt_contribution_is_bridged(tmp_path, box):
 
 def test_a_plugin_that_contributes_nothing_keeps_the_base_default(tmp_path,
                                                                   box):
-    """Only forward what the file defines — same rule as ``form``."""
+    """Only forward what the file defines — same rule as ``form``.
+
+    ``agent_prompt`` is one name with two shapes: a method when the text is
+    dynamic, a plain string otherwise. A file defining neither must be left
+    holding the base's empty *string* and no forwarding method at all —
+    otherwise every prompt collection would pay a box spawn to be told
+    nothing. So the assertion is on the shape, then on what the real collector
+    makes of it.
+    """
+    from agent.system_prompt import _collect
+
     module = adapt(_write(tmp_path, "tool_word_count.py", MIGRATED_TOOL))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
-    assert instance.agent_prompt_for(SimpleNamespace(config={})) == ""
+
+    assert instance.agent_prompt == ""
+    assert not callable(instance.agent_prompt)
+    assert _collect([instance], SimpleNamespace(config={})) == ""
+
+
+def test_the_old_prompt_spelling_still_reaches_the_system_prompt(tmp_path, box):
+    """``agent_prompt_for`` was the old name, and store plugins still use it.
+
+    The two spellings became one name, but the store is only half migrated —
+    so an adapter that forwarded only the new name would drop the guidance of
+    every plugin that had not been touched yet, silently, which is the failure
+    the whole doorway exists to prevent. Caught in practice: two installed
+    tools went from 3.6kB of prompt text to nothing with every test passing.
+    """
+    from agent.system_prompt import _collect
+
+    source = PROMPTING_TOOL.replace("def agent_prompt(self, sdk)",
+                                    "def agent_prompt_for(self, sdk)")
+    module = adapt(_write(tmp_path, "tool_advisor.py", source))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    try:
+        assert _collect([instance], SimpleNamespace(config={}, scope=None)
+                        ).startswith("## Scripts")
+    finally:
+        unload_box("tool_advisor")
+
+
+def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
+                                                                   box):
+    """The cheap half of the same doorway.
+
+    A literal crosses as an ordinary declaration and is copied onto the
+    adapter, so the collector reads it straight off the attribute. Nothing
+    opens a box — which is the whole reason the static spelling still exists
+    now that both spellings share one name.
+    """
+    from agent.system_prompt import _collect
+
+    source = MIGRATED_TOOL.replace(
+        "    max_calls = 5",
+        '    max_calls = 5\n    agent_prompt = "## Words\\nCount them."')
+    module = adapt(_write(tmp_path, "tool_word_count.py", source))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+
+    assert instance.agent_prompt == "## Words\nCount them."
+    assert _collect([instance], SimpleNamespace(config={})) == "## Words\nCount them."
+    # No residency was opened, and no per-instance cache was written: the
+    # forwarding path was never entered.
+    assert getattr(instance, "_prompt_text", None) is None
 
 
 @pytest.mark.parametrize("filename, source, base_module, base_name", [
@@ -651,3 +710,132 @@ def test_a_bridged_plugin_is_visible_to_discovery(tmp_path, box, filename,
     found = _find_subclasses(module, base, f"plugins.x.{Path(filename).stem}")
     assert found, "a bridged plugin was invisible to discovery"
     assert issubclass(found[0], base)
+
+
+# ────────────────────────────────────────────────────────────────────
+# run_event is bridged (was test_sandbox_event_tasks.py)
+# ────────────────────────────────────────────────────────────────────
+
+from sandbox.bridge import adapt, configure
+from sandbox.validator import validate_file
+
+
+_EVENT_TASK = '''\
+"""A task that reacts to a channel."""
+
+from guest.bases import BaseTask
+
+requests = []
+
+
+class SweepTask(BaseTask):
+    """Sweep."""
+
+    name = "sweep"
+    description = "x"
+    trigger = "event"
+    trigger_channels = ["sweep_now"]
+
+    def run_event(self, sdk, payload):
+        """Answer with what arrived."""
+        return sdk.ok({"seen": payload.get("mark")})
+'''
+
+_PATH_TASK = '''\
+"""A task that reacts to files."""
+
+from guest.bases import BaseTask
+
+requests = []
+
+
+class IndexTask(BaseTask):
+    """Index."""
+
+    name = "index"
+    description = "x"
+
+    def run(self, sdk, paths):
+        """Answer with what arrived."""
+        return sdk.ok({"count": len(paths)})
+'''
+
+
+@pytest.fixture(autouse=True)
+def _sandbox():
+    configure(Sandbox())
+
+
+def _adapted(tmp_path, source, stem):
+    tasks = tmp_path / "tasks"
+    tasks.mkdir(exist_ok=True)
+    path = tasks / f"task_{stem}.py"
+    path.write_text(source, encoding="utf-8")
+    module = adapt(path)
+    assert module is not None, "the file should have adapted as a task"
+    return module
+
+
+def _instance(module):
+    name = next(n for n in dir(module) if n.startswith("Sandboxed"))
+    return getattr(module, name)()
+
+
+def test_an_event_task_reaches_its_guest(tmp_path):
+    """The orchestrator's call signature, forwarded to the guest's."""
+    task = _instance(_adapted(tmp_path, _EVENT_TASK, "sweep"))
+
+    result = task.run_event("run-1", {"mark": 7}, SimpleNamespace())
+
+    assert result.success
+    assert result.data == {"seen": 7}
+
+
+def test_an_event_task_answers_with_a_task_result(tmp_path):
+    """``run_event`` is an entry point, so it gets the family's translation.
+
+    Handing the orchestrator raw data instead would make a failed sweep
+    indistinguishable from a successful one.
+    """
+    task = _instance(_adapted(tmp_path, _EVENT_TASK, "sweep"))
+    result = task.run_event("run-1", {}, SimpleNamespace())
+
+    assert hasattr(result, "success") and hasattr(result, "error")
+
+
+def test_a_path_task_does_not_grow_the_doorway(tmp_path):
+    """Carried only when the guest defines one, like ``form`` on a command.
+
+    An adapter advertising ``run_event`` it cannot fulfil would answer the
+    orchestrator by forwarding into nothing.
+    """
+    module = _adapted(tmp_path, _PATH_TASK, "index")
+    task = _instance(module)
+
+    assert "run_event" not in vars(type(task))
+    assert task.run(["a", "b"], SimpleNamespace()).data == {"count": 2}
+
+
+def test_the_channel_declaration_survives_being_read(tmp_path):
+    """Declarations are AST-read, so a *name* reads as nothing at all.
+
+    ``trigger_channels = [CHANNEL]`` is the natural way to write it and used to
+    produce a task subscribed to no channel: it validated, loaded, registered,
+    and never fired. The validator now refuses it at authoring time.
+    """
+    task = _instance(_adapted(tmp_path, _EVENT_TASK, "sweep"))
+    assert task.trigger_channels == ["sweep_now"]
+
+
+def test_a_channel_named_by_reference_is_refused(tmp_path):
+    """The failure this rule exists for, pinned as a refusal."""
+    source = _EVENT_TASK.replace(
+        'trigger_channels = ["sweep_now"]',
+        'CHANNEL = "sweep_now"\n    trigger_channels = [CHANNEL]')
+    path = tmp_path / "task_indirect.py"
+    path.write_text(source, encoding="utf-8")
+
+    report = validate_file(path)
+
+    assert not report.ok
+    assert "trigger_channels" in report.render()

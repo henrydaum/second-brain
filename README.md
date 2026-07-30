@@ -147,7 +147,7 @@ The agent can create new plugins on-the-fly. When you ask Second Brain to make a
 5. If testing fails, fix the same file and call `test_plugin` again. Repeat until it is fixed and the plugin loads.
 6. To remove it durably and from the live runtime, delete the sandbox file; the kernel plugin watcher unloads it.
 
-These instructions are found within the test_plugin tool, inside the def agent_prompt_for method. Yes: plugins can declare their own system prompt text. If the plugin isn't loaded, then this stuff won't take up precious context. This agent-facing text can also be written as static text: agent_prompt = "blah blah blah"; agent_prompt_for is for prompts that update based on the current information. The system prompt is recalculated with every step of the conversation, making it always completely up-to-date. To maintain prompt caching (and reduce costs $) the most volatile system prompt text is inserted at the bottom of the conversation, with stable and semi-stable at the start.
+These instructions are found within the test_plugin tool, inside its agent_prompt method. Yes: plugins can declare their own system prompt text. If the plugin isn't loaded, then this stuff won't take up precious context. One name, two shapes: write agent_prompt = "blah blah blah" when the text never changes, or def agent_prompt(self, sdk) when it should reflect current information. The system prompt is recalculated with every step of the conversation, making it always completely up-to-date. To maintain prompt caching (and reduce costs $) the most volatile system prompt text is inserted at the bottom of the conversation, with stable and semi-stable at the start.
 
 In other words, the system prompt has been fully engineered.
 

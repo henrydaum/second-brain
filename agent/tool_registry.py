@@ -17,11 +17,6 @@ from events.event_channels import TOOLS_CHANGED
 
 logger = logging.getLogger("Tool")
 
-# Thread-local flag so reentrant tool calls (tool -> context.call_tool -> tool)
-# skip the timeout wrapper. Only top-level calls get wrapped, otherwise nested
-# calls would consume extra executor threads and could deadlock.
-_exec_state = threading.local()
-
 
 class ToolRegistry:
     """
@@ -123,10 +118,7 @@ class ToolRegistry:
         t0 = time.time()
 
         # A tool runs on the calling thread, including the reentrant case
-        # (tool -> call_tool -> tool). The flag is still set so a nested call
-        # can tell it is nested; nothing branches on it here any more.
-        nested = getattr(_exec_state, "in_tool", False)
-        _exec_state.in_tool = True
+        # (tool -> call_tool -> tool).
         try:
             result = tool.run(context, **kwargs)
             logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
@@ -134,8 +126,6 @@ class ToolRegistry:
         except Exception as e:
             logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
             return ToolResult.failed(str(e))
-        finally:
-            _exec_state.in_tool = nested
 
     @property
     def max_tool_calls(self) -> int:

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 # Import the state_machine package before runtime.conversation_loop to settle
 # the package-init circular import (state_machine/__init__ pulls in the loop).
-from state_machine.conversation import CallableSpec, ConversationState, Participant
+from state_machine.conversation import CallableSpec
 from state_machine.conversation_phases import BASE_PHASE
 
 from attachments.attachment import Attachment
@@ -20,60 +20,14 @@ from runtime.conversation_loop import ConversationLoop
 from runtime.hooks import HookRegistry
 
 
-def _response(content="", tool_calls=None):
-    return SimpleNamespace(
-        content=content,
-        tool_calls=tool_calls or [],
-        has_tool_calls=bool(tool_calls),
-        is_error=False,
-        prompt_tokens=0,
-    )
-
-
-class _FakeLLM:
-    """Returns queued responses, one per ``chat_with_tools`` call."""
-
-    context_size = 0  # disables proactive compaction
-    # Attachment routing is the kernel's job now, and it asks the model what
-    # it can read. A fake that declares nothing gets the text fallback for
-    # everything — correct, but it would make a vision test assert nothing.
-    capabilities = {"image": True, "audio": True, "video": True}
-
-    def __init__(self, responses):
-        self._responses = list(responses)
-        self.calls = []
-        self.attachments = []
-
-    def chat_with_tools(self, messages, tools, attachments=None):
-        self.calls.append(messages)
-        self.attachments.append(attachments)
-        return self._responses.pop(0)
-
-
-class _FakeRegistry:
-    max_tool_calls = 5
-    tools = {}  # empty -> no per-tool budget enforcement in the test
-
-    def __init__(self, schemas):
-        self._schemas = schemas
-
-    def get_all_schemas(self):
-        return self._schemas
-
-
-def _agent_state(tools=None, cache=None):
-    base_cache = {"session_key": "chat", "agent_scoped_tool_names": list((tools or {}).keys())}
-    base_cache.update(cache or {})
-    return ConversationState(
-        [Participant("user", "user"), Participant("agent", "agent", tools=tools or {})],
-        "agent",
-        BASE_PHASE,
-        base_cache,
-    )
+from tests.support import FakeLLM as _FakeLLM
+from tests.support import FakeRegistry as _FakeRegistry
+from tests.support import agent_state as _agent_state
+from tests.support import response as _response
 
 
 def _loop(llm, registry):
-    return ConversationLoop(llm, registry, {"tool_timeout": 10}, "You are a helpful agent.")
+    return ConversationLoop(llm, registry, {}, "You are a helpful agent.")
 
 
 def test_text_only_turn_records_reply_and_hands_back_to_user():
@@ -242,7 +196,7 @@ def test_session_message_emitted_for_every_transcript_row():
             _response(content="", tool_calls=[{"id": "c1", "name": "echo", "arguments": "{}"}]),
             _response(content="Done."),
         ])
-        loop = ConversationLoop(llm, _FakeRegistry([schema]), {"tool_timeout": 10}, "prompt",
+        loop = ConversationLoop(llm, _FakeRegistry([schema]), {}, "prompt",
                                 session_key="chat")
 
         loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
@@ -275,7 +229,7 @@ def test_llm_call_events_bracket_each_request():
     try:
         cs = _agent_state()
         llm = _FakeLLM([_response(content="Hello!")])
-        loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+        loop = ConversationLoop(llm, _FakeRegistry([]), {}, "prompt",
                                 session_key="chat")
         loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
     finally:
@@ -382,7 +336,7 @@ def test_streaming_emits_deltas_and_clean_final_text():
     # across 4-char fragments), and the done event carries the CLEANED text —
     # the dedup key must match what the whole-message path delivers.
     llm = _StreamingLLM([_response(content="<think>hmm</think>Hello there!")])
-    loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+    loop = ConversationLoop(llm, _FakeRegistry([]), {}, "prompt",
                             on_delta=events.append)
 
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
@@ -408,7 +362,7 @@ def test_streaming_narration_done_precedes_tool_events():
         _response(content="Done."),
     ])
     loop = ConversationLoop(
-        llm, _FakeRegistry([schema]), {"tool_timeout": 10}, "prompt",
+        llm, _FakeRegistry([schema]), {}, "prompt",
         on_tool_start=lambda *a, **k: timeline.append(("tool_start",)),
         on_delta=lambda p: timeline.append(("done", p["kind"], p["final_text"]) if p["done"] else ("delta",)),
     )
@@ -438,7 +392,7 @@ def test_cancel_mid_stream_stops_backend_and_skips_send_text():
 
     cs = _agent_state()
     llm = _CancellingLLM([_response(content="partial text and more")])
-    loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+    loop = ConversationLoop(llm, _FakeRegistry([]), {}, "prompt",
                             cancel_event=cancel, on_delta=events.append)
 
     _, new_messages, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
@@ -464,7 +418,7 @@ def test_stream_error_emits_aborted_done_then_non_streaming_retry():
             return _response(content="Recovered.")
 
     cs = _agent_state()
-    loop = ConversationLoop(_OverflowLLM(), _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+    loop = ConversationLoop(_OverflowLLM(), _FakeRegistry([]), {}, "prompt",
                             on_delta=events.append)
     history = [
         {"role": "user", "content": "a"},
@@ -512,7 +466,7 @@ def test_queued_message_is_absorbed_mid_turn():
 
     cs = _agent_state()
     llm = _QueueingLLM([_response(content="First answer."), _response(content="Second answer.")])
-    loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+    loop = ConversationLoop(llm, _FakeRegistry([]), {}, "prompt",
                             runtime=runtime, session_key="chat")
     history = [{"role": "user", "content": "hi"}]
 
@@ -561,7 +515,7 @@ def test_tool_can_stage_attachment_for_followup_llm_call():
             {"type": "function", "function": {"name": "inspect", "parameters": {}}},
             {"type": "function", "function": {"name": "noop", "parameters": {}}},
         ]),
-        {"tool_timeout": 10},
+        {},
         "prompt",
         runtime=runtime,
         session_key="chat",
@@ -773,3 +727,289 @@ def test_proactive_compaction_measures_the_brain_that_took_the_call():
 
     assert reply == "Done."
     assert compactor.calls == 1
+
+
+# ────────────────────────────────────────────────────────────────────
+# Queued user messages (was test_message_queue.py)
+# ────────────────────────────────────────────────────────────────────
+
+import state_machine  # noqa: F401
+from pipeline.database import Database
+from tests.support import plain_runtime
+
+
+def _db(tmp_path):
+    return Database(str(tmp_path / "queue.db"))
+
+
+def _busy_runtime(tmp_path):
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    rt = plain_runtime(db)
+    session = rt.load_conversation("s", cid)
+    session.busy = True
+    return rt, session
+
+
+def test_busy_send_text_is_queued_not_rejected(tmp_path):
+    rt, session = _busy_runtime(tmp_path)
+
+    out = rt.handle_action("s", "send_text", "hello mid-turn")
+
+    assert out.ok
+    assert out.data.get("queued") is True
+    assert session.pending_user_messages == ["hello mid-turn"]
+
+    rt.handle_action("s", "send_text", "and another")
+    assert session.pending_user_messages == ["hello mid-turn", "and another"]
+
+
+def test_busy_empty_text_is_still_rejected(tmp_path):
+    rt, session = _busy_runtime(tmp_path)
+
+    out = rt.handle_action("s", "send_text", "")
+
+    assert not out.ok
+    assert out.error["code"] == "empty_input"
+    assert session.pending_user_messages == []
+
+
+def test_cancel_clears_the_queue(tmp_path):
+    rt, session = _busy_runtime(tmp_path)
+    rt.handle_action("s", "send_text", "queued one")
+
+    out = rt.handle_action("s", "cancel", None)
+
+    assert "Cancelled." in out.messages
+    assert session.pending_user_messages == []
+    assert session.cancel_event.is_set()
+
+
+def test_non_send_text_actions_still_get_busy_error(tmp_path):
+    rt, _ = _busy_runtime(tmp_path)
+
+    out = rt.handle_action("s", "call_command", {"name": "anything", "args": {}})
+
+    assert not out.ok
+    assert out.error["code"] == "busy"
+
+
+def test_end_of_turn_leftover_starts_a_fresh_turn(tmp_path):
+    """A message queued in the closing race window (after the loop's final
+    drain, before busy=False) is dispatched as a real user send_text once the
+    turn ends, driving a follow-up turn."""
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    rt = plain_runtime(db)
+    session = rt.load_conversation("s", cid)
+
+    turns = []
+
+    def fake_drive(sess, out, allow_restart=True):
+        turns.append(list(m["content"] for m in sess.history if m["role"] == "user"))
+        if len(turns) == 1:
+            # Simulate the race: a message lands after the loop's final drain.
+            sess.pending_user_messages.append("leftover")
+        out.messages.append(f"reply {len(turns)}")
+        # Mimic the real driver's finally-block hand-back.
+        sess.cs.set_priority("user")
+        sess.busy = False
+        return out
+
+    rt._drive_agent_turn = fake_drive
+
+    out = rt.handle_action("s", "send_text", "first message")
+
+    assert len(turns) == 2
+    # The follow-up turn saw the leftover as a real user history row.
+    assert turns[1][-1] == "leftover"
+    assert session.pending_user_messages == []
+    assert "reply 1" in out.messages and "reply 2" in out.messages
+    assert session.cs.turn_priority == "user"
+
+
+# ────────────────────────────────────────────────────────────────────
+# The compactor as a sandboxed service (was test_service_compactor_sandbox.py)
+# ────────────────────────────────────────────────────────────────────
+
+from sandbox import Sandbox
+from sandbox.bridge import adapt, configure
+from sandbox.guest.requests import AGENT_COMPLETE
+from sandbox.handlers import HANDLERS
+
+
+def test_agent_complete_selects_the_session_llm(monkeypatch):
+    """A resident service still compacts with the session's active profile."""
+    selected = object()
+    fallback = object()
+    session = object()
+    runtime = SimpleNamespace(
+        sessions={"chat": session},
+        services={"llm": fallback},
+    )
+    ctx = SimpleNamespace(runtime=runtime, services=runtime.services)
+    seen = []
+
+    class Brain:
+        # The native backend contract, in full: ``as_brain`` wraps anything
+        # exposing this in a ``NativeBrain``, which calls it with tools and an
+        # attachment bundle. A double taking ``messages`` alone passed only
+        # because the handler used to call it directly — which meant the
+        # handler spoke a language no real brain answered to.
+        def chat_with_tools(self, messages, tools=None, attachments=None):
+            seen.append(messages)
+            return SimpleNamespace(
+                is_error=False,
+                content="summary",
+                tool_calls=[],
+                error=None,
+                error_code=None,
+                prompt_tokens=None,
+                cached_prompt_tokens=None,
+            )
+
+    brain = Brain()
+    # ``monkeypatch.setattr`` on a dotted string imports the module first, and
+    # ``runtime.runtime_config`` cannot *be* imported first: it and
+    # ``runtime.persistence`` import each other, so whichever is asked for
+    # initially fails on a partially initialized partner. ``runtime.bootstrap``
+    # is an entry point that resolves the cycle. This test passed only when
+    # some earlier test in the session had already pulled runtime in — a pass
+    # by luck, and it went green or red depending on which files pytest
+    # collected alongside it.
+    # ``from … import`` and not ``import runtime.bootstrap``: the latter binds
+    # the name ``runtime`` in this scope, shadowing the fake runtime above.
+    from runtime import bootstrap  # noqa: F401
+
+    monkeypatch.setattr(
+        "runtime.runtime_config.active_llm",
+        lambda actual_runtime, actual_session: (
+            brain
+            if actual_runtime is runtime and actual_session is session
+            else selected
+        ),
+    )
+
+    result = HANDLERS[AGENT_COMPLETE](
+        ctx,
+        {
+            "session_key": "chat",
+            "messages": [{"role": "user", "content": "history"}],
+        },
+    )
+
+    assert result.ok
+    assert result.data["content"] == "summary"
+    assert seen == [[{"role": "user", "content": "history"}]]
+
+
+def test_compactor_runs_through_the_sandbox(monkeypatch):
+    """The real service exports one serializable compaction call."""
+    sandbox = Sandbox()
+    configure(sandbox)
+    module = adapt("plugins/services/service_compactor.py")
+    service = module.build_services({})["compactor"]
+    seen = []
+
+    def complete(_ctx, args):
+        seen.append(args)
+        from sandbox.guest.requests import Result
+
+        return Result(data={"content": "  compacted  ", "tool_calls": []})
+
+    monkeypatch.setitem(HANDLERS, AGENT_COMPLETE, complete)
+    try:
+        assert service.load()
+        assert service.compact(
+            session_key="chat",
+            transcript="USER: hello",
+        ) == "compacted"
+        assert seen[0]["session_key"] == "chat"
+        assert seen[0]["messages"][1]["content"] == "USER: hello"
+    finally:
+        service.unload()
+        configure(None)
+        sandbox.shutdown()
+
+
+# ── naming a model, rather than holding one ───────────────────────────
+#
+# ``ModelRequest.llm`` is a name the kernel resolves, and ``agent.complete``
+# works the same way for the same reason: a box cannot hold a live model, so a
+# background chore that wants a cheap one has to be able to say which.
+
+def test_agent_complete_resolves_a_named_profile(monkeypatch):
+    """An explicit profile wins over whatever the session drives with."""
+    from sandbox.guest.llm import LLMResponse
+
+    placed = []
+
+    class Cheap:
+        name = "cheap"
+
+        def chat(self, request, on_delta=None):
+            placed.append(request)
+            return LLMResponse(content="six words or fewer")
+
+    monkeypatch.setattr("llm.registry.usable_brain",
+                        lambda name: Cheap() if name == "cheap" else None)
+
+    result = HANDLERS[AGENT_COMPLETE](
+        SimpleNamespace(config={}),
+        {"profile": "cheap", "messages": [{"role": "user", "content": "hi"}]})
+
+    assert result.ok
+    assert result.data["content"] == "six words or fewer"
+    assert result.data["llm"] == "cheap"
+    assert placed[0].messages == [{"role": "user", "content": "hi"}]
+
+
+def test_a_named_profile_that_does_not_exist_says_so(monkeypatch):
+    """Falling back to the default would title conversations with the
+    expensive model and never mention it."""
+    monkeypatch.setattr("llm.registry.usable_brain", lambda name: None)
+
+    result = HANDLERS[AGENT_COMPLETE](
+        SimpleNamespace(config={}), {"profile": "gone", "prompt": "hi"})
+
+    assert not result.ok
+    assert "gone" in result.error
+
+
+def test_no_profile_and_no_session_uses_the_default_brain(monkeypatch):
+    """The fallback used to be ``services["llm"]`` — a service that stopped
+    existing when the LLM moved kernel-side, so this path was simply dead."""
+    from sandbox.guest.llm import LLMResponse
+
+    class Default:
+        name = "default"
+
+        def chat(self, request, on_delta=None):
+            return LLMResponse(content="from the default")
+
+    monkeypatch.setattr("llm.default_brain", lambda config: Default())
+
+    result = HANDLERS[AGENT_COMPLETE](SimpleNamespace(config={}),
+                                      {"prompt": "hi"})
+
+    assert result.ok
+    assert result.data["content"] == "from the default"
+
+
+def test_a_prompt_becomes_one_user_message(monkeypatch):
+    """``prompt`` is the convenience shape; ``messages`` is the real one."""
+    from sandbox.guest.llm import LLMResponse
+
+    seen = []
+
+    class Brain:
+        name = "b"
+
+        def chat(self, request, on_delta=None):
+            seen.append(request.messages)
+            return LLMResponse(content="ok")
+
+    monkeypatch.setattr("llm.default_brain", lambda config: Brain())
+    HANDLERS[AGENT_COMPLETE](SimpleNamespace(config={}), {"prompt": "hello"})
+
+    assert seen == [[{"role": "user", "content": "hello"}]]

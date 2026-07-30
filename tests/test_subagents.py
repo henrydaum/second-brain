@@ -550,7 +550,6 @@ def _turn_harness(tmp_path, responses, turn=None):
 
     class LLM:
         context_size = 0
-        is_llm_backend = True
         model_name = "fake"
         loaded = True
 

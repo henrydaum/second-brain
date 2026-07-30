@@ -5,17 +5,15 @@ argument names only), so the agent knows the user changed state out-of-band.
 
 import state_machine  # noqa: F401  (import-order: break the runtime import cycle)
 
-from pipeline.database import Database
-from runtime.conversation_runtime import ConversationRuntime
+from tests.support import make_runtime
 from state_machine.conversation import CallableSpec, FormStep
 
 
 def _runtime(tmp_path, config, commands):
-    db = Database(str(tmp_path / "reveal.db"))
-    cid = db.create_conversation("x")
-    rt = ConversationRuntime(db=db, services={}, config=config, commands=commands)
-    rt.load_conversation("s", cid)
-    return rt, db, cid
+    """The shared rig, with no model and this file's own db name."""
+    rt, session, _ = make_runtime(tmp_path, name="reveal.db", services={},
+                                  config=config, commands=commands)
+    return rt, rt.db, session.conversation_id
 
 
 def _notes(history):

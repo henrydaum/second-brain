@@ -47,7 +47,6 @@ class BaseService(ABC):
 
     model_name: str = ""
     shared: bool = True
-    is_llm_backend: bool = False
     lifecycle: str = MANAGED
 
     # Wall-clock seconds before load() abandons a hung _load() and reports
@@ -74,16 +73,11 @@ class BaseService(ABC):
                 setattr(cls, attr, value.copy())
 
     # --- Agent system-prompt contribution ---
-    # Static guidance injected into the agent's system prompt when this service
-    # is loaded. Override agent_prompt_for() instead for dynamic text.
+    # Guidance injected into the agent's system prompt when this service is loaded.
+    # Declare a plain string, or override with ``def agent_prompt(self, ctx)``
+    # when the text depends on the session (``ctx`` is a PromptContext:
+    # db/services/orchestrator/config/scope/...). The collector accepts either.
     agent_prompt: str = ""
-
-    def agent_prompt_for(self, ctx) -> str:
-        """Guidance for the agent system prompt, or '' to contribute nothing.
-
-        ``ctx`` is a PromptContext (db/services/orchestrator/config/scope/...).
-        Default returns the static ``agent_prompt``; override for dynamic text."""
-        return self.agent_prompt
 
     def __init__(self):
         """Initialize the base service."""

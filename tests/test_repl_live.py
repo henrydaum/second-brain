@@ -71,3 +71,40 @@ def test_repl_subprocess_drives_a_live_command(tmp_path, monkeypatch):
         thread.join(timeout=2)
         sandbox.shutdown()
         configure(None)
+
+
+# ────────────────────────────────────────────────────────────────────
+# Stopping the REPL (was test_repl_stop.py)
+# ────────────────────────────────────────────────────────────────────
+
+import state_machine  # noqa: F401  (import-order: break the runtime import cycle)
+from sandbox.bridge import adapt
+
+
+def _frontend(app_shutdown):
+    module = adapt(Path("plugins/frontends/frontend_repl.py"))
+    cls = next(
+        value for value in vars(module).values()
+        if isinstance(value, type) and getattr(value, "_sandboxed", False)
+    )
+    return cls(shutdown_event=app_shutdown)
+
+
+def test_stop_does_not_set_the_shared_shutdown_event():
+    app_shutdown = threading.Event()
+    fe = _frontend(app_shutdown)
+
+    fe.stop()
+
+    assert not app_shutdown.is_set()  # the app keeps running
+    assert fe._stopping.is_set()      # the adapter loop ends this instance
+
+
+def test_app_shutdown_still_ends_the_loop_condition():
+    app_shutdown = threading.Event()
+    fe = _frontend(app_shutdown)
+
+    app_shutdown.set()
+
+    # Mirrors the start() loop condition.
+    assert fe._done()

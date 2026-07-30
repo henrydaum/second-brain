@@ -21,10 +21,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from runtime.context import build_context
-from runtime.heartbeat import heartbeat
 from pipeline.database import set_thread_priority_low
 from parsing import get_modality
-from plugins.BaseTask import BaseTask, TaskResult
+from plugins.BaseTask import BaseTask
 from events.event_bus import bus
 from events.event_channels import TASK_STARTED, TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
 
@@ -646,25 +645,15 @@ class Orchestrator:
 		logger.info("Orchestrator stopped")
 
 	def _dispatch_loop(self):
-		# Periodically sweep for stuck PROCESSING entries and reset them to
-		# PENDING so the pipeline can make forward progress again.
-		"""Internal helper to handle dispatch loop."""
+		"""Dispatch pending work until the orchestrator stops.
+
+		Periodically sweeps for stuck PROCESSING entries and resets them to
+		PENDING so the pipeline can make forward progress again.
+		"""
 		stuck_check_interval = 60  # seconds between recovery sweeps
 		last_stuck_check = 0.0     # force an immediate first check
 
-		# Stall-watchdog probe: one beat per iteration suffices — the idle
-		# path sleeps poll_interval (~1s) and the busy path only does
-		# non-blocking executor submits (task bodies run on worker threads).
-		probe = heartbeat.register("dispatch")
-		try:
-			self._run_dispatch(probe, stuck_check_interval, last_stuck_check)
-		finally:
-			probe.unregister()  # stop()/restart must not strand a stale probe
-
-	def _run_dispatch(self, probe, stuck_check_interval, last_stuck_check):
-		"""Internal helper: dispatch iterations under the liveness probe."""
 		while self.running:
-			probe.beat()
 			dispatched_any = False
 
 			now = time.time()

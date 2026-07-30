@@ -1,8 +1,8 @@
-﻿"""The Request catalogue wired to handlers: completeness, secrets, scoping.
+"""The Request catalogue wired to handlers: completeness, secrets, scoping.
 
 Three properties matter more than any individual handler:
 
-- every Request in the catalogue is *classified* â€” nothing reaches an effect
+- every Request in the catalogue is *classified* — nothing reaches an effect
   without a decision
 - every Request is either serviced or explicitly listed as unwired
 - the SDK can actually reach everything the catalogue defines
@@ -564,7 +564,7 @@ def test_every_namespace_is_exactly_one_request_family():
 
 def test_revealing_a_secret_always_asks():
     """Handles work when the kernel makes the call. A plugin driving a
-    foreign library performs its own I/O, so it genuinely needs the value â€”
+    foreign library performs its own I/O, so it genuinely needs the value —
     and that is worth a dialog every single time."""
     decision = classify(Request(R.SECRET_REVEAL, {"name": "gmail_secret"}),
                         Chain(root="user"))
@@ -769,7 +769,7 @@ def test_live_object_modalities_are_refused_with_an_explanation(modality):
     """These resolve to PIL images, numpy arrays, an open av.Container.
 
     None of them can cross, and handing back a broken object would be worse
-    than saying so â€” the message has to point at the way that does work.
+    than saying so — the message has to point at the way that does work.
     """
     calls = _register(object(), modality=modality)
     result = _parse(modality)

@@ -23,6 +23,7 @@ from state_machine.conversation_phases import BASE_PHASE
 
 from runtime.conversation_loop import ConversationLoop
 from runtime.conversation_runtime import ConversationRuntime
+from tests.support import FakeLLM, response
 
 
 def _db(tmp_path):
@@ -140,28 +141,13 @@ def test_failed_action_records_error_row(tmp_path):
 
 # ── Agent-side enacts (the _enact_logged gateway) ────────────────────
 
-def _response(content):
-    return SimpleNamespace(content=content, tool_calls=[], has_tool_calls=False,
-                           is_error=False, prompt_tokens=0)
-
-
-class _FakeLLM:
-    context_size = 0
-
-    def __init__(self, responses):
-        self._responses = list(responses)
-
-    def chat_with_tools(self, messages, tools, attachments=None):
-        return self._responses.pop(0)
-
-
 def test_agent_turn_records_send_text_and_end_turn(tmp_path):
     db = _db(tmp_path)
     cid = db.create_conversation("x")
     cs = ConversationState(
         [Participant("user", "user"), Participant("agent", "agent")],
         "agent", BASE_PHASE, {"session_key": "chat"})
-    loop = ConversationLoop(_FakeLLM([_response("Hello!")]), None, {}, "prompt",
+    loop = ConversationLoop(FakeLLM([response("Hello!")]), None, {}, "prompt",
                             session_key="chat")
 
     loop.drive(cs, "agent", [{"role": "user", "content": "hi"}], db, cid)

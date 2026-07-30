@@ -1,7 +1,7 @@
 from plugins.BaseFrontend import BaseFrontend
 from events.event_bus import bus
 from pipeline.database import Database
-from runtime.conversation_runtime import ConversationRuntime
+from tests.support import plain_runtime
 from state_machine.conversation import CallableSpec, FormStep
 from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_state, save_state_marker
@@ -17,7 +17,7 @@ def test_stale_busy_marker_recovers_to_user_without_replay(tmp_path):
     db.save_message(cid, "user", "do a thing")
     save_state_marker(db, cid, {"busy": True, "turn_priority": "agent", "phase": BASE_PHASE, "cache": {"phases": []}})
 
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     session = rt.load_conversation("s", cid)
 
     marker = latest_state(db.get_conversation_messages(cid))
@@ -32,14 +32,14 @@ def test_restored_command_form_can_be_reprompted(tmp_path):
     db = _db(tmp_path)
     cid = db.create_conversation("x")
     spec = CallableSpec("setup", lambda *_: "done", form=[FormStep("name", "Enter name.")])
-    rt = ConversationRuntime(db=db, services={}, config={}, commands={"setup": spec})
+    rt = plain_runtime(db, commands={"setup": spec})
     rt.load_conversation("s", cid)
     assert rt.handle_action("s", "call_command", {"name": "setup", "args": {}}).ok
 
     # Restart: restore re-emits FORM_REQUESTED on the bus, the bound frontend
     # re-prompts the current field — no explicit "render the restored prompt" call.
     frontend = _PromptFrontend()
-    rt2 = ConversationRuntime(db=db, services={}, config={}, commands={"setup": spec},
+    rt2 = plain_runtime(db, commands={"setup": spec},
                               emit_event=lambda c, p: bus.emit(c, p))
     frontend.bind(rt2, {})
     try:
@@ -55,12 +55,12 @@ def test_replayable_approval_survives_restart_and_runs(tmp_path):
     cid = db.create_conversation("x")
     ran = []
     spec = CallableSpec("restart", lambda _cs, _actor, args: ran.append(args) or "ok", require_approval=True, approval_actor_id="user")
-    rt = ConversationRuntime(db=db, services={}, config={}, commands={"restart": spec})
+    rt = plain_runtime(db, commands={"restart": spec})
     rt.load_conversation("s", cid)
     assert rt.handle_action("s", "call_command", {"name": "restart", "args": {}}).ok
 
     events = []
-    rt2 = ConversationRuntime(db=db, services={}, config={}, commands={"restart": spec}, emit_event=lambda c, p: events.append((c, p)))
+    rt2 = plain_runtime(db, commands={"restart": spec}, emit_event=lambda c, p: events.append((c, p)))
     rt2.load_conversation("s", cid)
     req = events[-1][1]
     out = rt2.answer_request("s", req.id, True)
@@ -88,7 +88,7 @@ def test_process_local_input_request_expires_on_restart(tmp_path):
         }]},
     })
 
-    rt = ConversationRuntime(db=db, services={}, config={}, emit_event=lambda *_: None)
+    rt = plain_runtime(db, emit_event=lambda *_: None)
     session = rt.load_conversation("s", cid)
 
     assert session.cs.phase == BASE_PHASE
@@ -113,3 +113,52 @@ class _PromptFrontend(BaseFrontend):
     def render_approval_request(self, *_): pass
     def render_buttons(self, *_): pass
     def render_error(self, *_): pass
+
+
+# ────────────────────────────────────────────────────────────────────
+# Approval priority across a restart (was test_approval_priority.py)
+# ────────────────────────────────────────────────────────────────────
+
+import state_machine  # noqa: F401
+
+
+def _session(tmp_path):
+    db = Database(str(tmp_path / "approval.db"))
+    cid = db.create_conversation("x")
+    rt = plain_runtime(db)
+    return rt, rt.load_conversation("s", cid)
+
+
+def test_answering_a_request_restores_the_user_as_priority(tmp_path):
+    rt, session = _session(tmp_path)
+    session.cs.set_priority("user")
+
+    req = rt.request_input("s", "Change settings", "config.write", type="boolean")
+    assert session.cs.turn_priority == "user"
+
+    out = rt.handle_action("s", "answer_approval", {"value": True, "request_id": req.id})
+
+    assert out.ok
+    assert session.cs.turn_priority == "user"
+
+
+def test_a_request_raised_during_an_agent_turn_hands_back_to_the_agent(tmp_path):
+    rt, session = _session(tmp_path)
+    session.cs.set_priority("agent")
+
+    req = rt.request_input("s", "Run a command", "proc.run", type="boolean")
+    assert session.cs.turn_priority == "user"
+
+    rt.handle_action("s", "answer_approval", {"value": True, "request_id": req.id})
+
+    assert session.cs.turn_priority == "agent"
+
+
+def test_cancelling_a_request_also_restores_priority(tmp_path):
+    rt, session = _session(tmp_path)
+    session.cs.set_priority("user")
+
+    rt.request_input("s", "Change settings", "config.write", type="boolean")
+    rt.handle_action("s", "cancel", None)
+
+    assert session.cs.turn_priority == "user"

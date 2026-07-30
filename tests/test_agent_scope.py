@@ -52,7 +52,7 @@ class _Injected(_Lexical):
 
 def _registry():
     """Internal helper to handle registry."""
-    registry = ToolRegistry(None, {"tool_timeout": 10})
+    registry = ToolRegistry(None, {})
     for tool in (_Hybrid(), _Lexical(), _Semantic()):
         registry.register(tool)
     return registry

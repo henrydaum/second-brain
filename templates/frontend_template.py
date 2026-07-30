@@ -162,6 +162,9 @@ class Chat(BaseFrontend):
 
     name = "chat"
     description = "Relays a chat service into Second Brain."
+    # Guidance added to the agent's system prompt for sessions running on
+    # this frontend. A method (``def agent_prompt(self, sdk)``) works too.
+    agent_prompt = "## Chat\nReplies render as markdown; keep them short."
 
     # Paid only when a poll finds nothing. Keep it small: it is also the
     # longest a render can be delayed by an idle loop.

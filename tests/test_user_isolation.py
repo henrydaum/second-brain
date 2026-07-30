@@ -15,6 +15,7 @@ import pytest
 # runtime class (state_machine/__init__ pulls the runtime in).
 import state_machine  # noqa: F401
 from state_machine import ConversationRuntime
+from tests.support import plain_runtime
 from pipeline.database import Database, DEFAULT_USER_ID
 from plugins.BaseFrontend import BaseFrontend
 from sandbox import Sandbox
@@ -24,7 +25,7 @@ from sandbox.handlers.kernel import _config_write
 @pytest.fixture
 def runtime(tmp_path):
     db = Database(str(tmp_path / "iso.db"))
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     # Two sessions bound to different users. Stub the session objects directly —
     # the guard only reads ``user_id`` and the DB, so this keeps the test focused
     # on enforcement rather than full session hydration.
@@ -92,7 +93,7 @@ def test_last_active_conversation_is_per_user(tmp_path):
     base_cid = db.create_conversation(title="base", user_id=DEFAULT_USER_ID)
     other_cid = db.create_conversation(title="alice", user_id=other_uid)
 
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("base", DEFAULT_USER_ID)
     rt.set_session_user("alice", other_uid)
     rt.active_session_key = "base"
@@ -104,7 +105,7 @@ def test_last_active_conversation_is_per_user(tmp_path):
     assert db.get_user_config(other_uid)["last_active_conversation_id"] == other_cid
     assert "last_active_conversation_id" not in rt.config
 
-    rt2 = ConversationRuntime(db=db, services={}, config={})
+    rt2 = plain_runtime(db)
     rt2.set_session_user("alice", other_uid)
     notice = rt2.restore_last_active("alice")
     assert notice and "alice" in notice
@@ -127,7 +128,7 @@ def test_set_session_user_switches_account_and_never_crosses_ownership(tmp_path)
     alice_cid = db.create_conversation(title="alice", user_id=alice)
     db.set_user_config(alice, {"last_active_conversation_id": alice_cid})
 
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("s", DEFAULT_USER_ID)
     rt.load_conversation("s", base_cid)
     assert rt.sessions["s"].conversation_id == base_cid
@@ -160,7 +161,7 @@ def test_load_history_preserves_session_user_binding(tmp_path):
     first = db.create_conversation(title="first", user_id=alice)
     second = db.create_conversation(title="second", user_id=alice)
 
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("s", alice)
     rt.load_conversation("s", first)
 
@@ -182,7 +183,7 @@ def test_delete_conversation_detaches_live_sessions(tmp_path):
     with a FOREIGN KEY violation. It must be detached to ``None`` instead.
     """
     db = Database(str(tmp_path / "del.db"))
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("A", DEFAULT_USER_ID)
     cid = db.create_conversation(title="x", user_id=DEFAULT_USER_ID)
     rt.load_conversation("A", cid)
@@ -206,7 +207,7 @@ def test_handle_action_self_heals_stale_binding_from_raw_delete(tmp_path):
     with a FOREIGN KEY violation when ``persist_marker`` runs.
     """
     db = Database(str(tmp_path / "heal.db"))
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("A", DEFAULT_USER_ID)
     cid = db.create_conversation(title="x", user_id=DEFAULT_USER_ID)
     rt.load_conversation("A", cid)
@@ -230,7 +231,7 @@ def test_close_session_clears_dangling_active_session_key(tmp_path):
     reconciling state a guard relies on.
     """
     db = Database(str(tmp_path / "active.db"))
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("A", DEFAULT_USER_ID)
     rt.active_session_key = "A"
 
@@ -244,7 +245,7 @@ def test_set_session_user_with_no_prior_conversation_is_a_plain_bind(tmp_path):
     """The up-front bind path (no conversation yet) stays a simple identity set."""
     db = Database(str(tmp_path / "bind.db"))
     alice = db.upsert_user("web", "alice")
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
 
     rt.set_session_user("s", alice)  # no session/conversation existed yet
 
@@ -255,7 +256,7 @@ def test_set_session_user_with_no_prior_conversation_is_a_plain_bind(tmp_path):
 def test_agent_switch_persists_active_profile_per_user(tmp_path):
     db = Database(str(tmp_path / "agent-profile.db"))
     uid = db.upsert_user("web", "alice")
-    rt = ConversationRuntime(db=db, services={}, config={
+    rt = plain_runtime(db, config={
         "agent_profiles": {"default": {"llm": "default"}, "writer": {"llm": "default"}},
     })
     rt.set_session_user("alice", uid)
@@ -287,7 +288,7 @@ def test_agent_switch_persists_active_profile_per_user(tmp_path):
 def test_skip_permissions_persist_per_user(tmp_path):
     db = Database(str(tmp_path / "skip.db"))
     uid = db.upsert_user("web", "alice")
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     rt.set_session_user("alice", uid)
     context = SimpleNamespace(
         config={"skip_permissions": []},
@@ -310,7 +311,7 @@ def test_open_session_binds_identity_prebound_session(tmp_path):
     db = Database(str(tmp_path / "prebind.db"))
     alice = db.upsert_user("web", "alice")
     cid = db.create_conversation(title="alice", user_id=alice)
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
 
     rt.set_session_user("s", alice)  # creates the session, conversation None
     session = rt.open_session("s", conversation_id=cid)
@@ -327,7 +328,7 @@ def test_identity_switch_restores_last_active_even_without_prior_conversation(tm
     bob = db.upsert_user("web", "bob")
     a_cid = db.create_conversation(title="alice", user_id=alice)
     db.set_user_config(alice, {"last_active_conversation_id": a_cid})
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
 
     rt.set_session_user("s", bob)    # bob bound, no conversation yet
     rt.set_session_user("s", alice)  # switch with prev_conv None
@@ -341,7 +342,7 @@ def test_frontend_identify_can_mint_user_type(tmp_path):
         name = "web"
 
     db = Database(str(tmp_path / "frontend-user-type.db"))
-    rt = ConversationRuntime(db=db, services={}, config={})
+    rt = plain_runtime(db)
     frontend = WebFrontend()
     frontend.runtime = rt
 

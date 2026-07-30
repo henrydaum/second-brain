@@ -66,12 +66,3 @@ def prints_to_stdout(sdk):
     """Print, which must not corrupt the protocol stream."""
     print("this must not reach the wire")
     return "survived"
-
-
-def bench(sdk, path, iterations=300):
-    """Time many small Requests, to measure per-Request overhead."""
-    import time
-    t0 = time.perf_counter()
-    for _ in range(iterations):
-        sdk.fs.read(path)
-    return time.perf_counter() - t0

@@ -20,8 +20,10 @@ class BaseCommand:
     dependencies_pip: list[str] = []
 
     # --- Agent system-prompt contribution ---
-    # Static guidance injected into the agent's system prompt when this command
-    # is in scope. Override agent_prompt_for() instead for dynamic text.
+    # Guidance injected into the agent's system prompt when this command is in scope.
+    # Declare a plain string, or override with ``def agent_prompt(self, ctx)``
+    # when the text depends on the session (``ctx`` is a PromptContext:
+    # db/services/orchestrator/config/scope/...). The collector accepts either.
     agent_prompt: str = ""
 
     def __init_subclass__(cls, **kwargs):
@@ -31,13 +33,6 @@ class BaseCommand:
             value = getattr(cls, attr)
             if isinstance(value, list):
                 setattr(cls, attr, value.copy())
-
-    def agent_prompt_for(self, ctx) -> str:
-        """Guidance for the agent system prompt, or '' to contribute nothing.
-
-        ``ctx`` is a PromptContext (db/services/orchestrator/config/scope/...).
-        Default returns the static ``agent_prompt``; override for dynamic text."""
-        return self.agent_prompt
 
     def requires_approval(self, args: dict) -> bool:
         """Whether these completed form arguments perform a privileged action."""

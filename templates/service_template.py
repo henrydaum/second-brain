@@ -118,6 +118,13 @@ class Embedder(BaseService):
 
     name = "embedder"
     description = "Sentence embeddings for search and clustering."
+    # Guidance added to the agent's system prompt while this service is
+    # loaded, and gone when it is not. Use ``def agent_prompt(self, sdk)``
+    # instead when the text depends on live state.
+    agent_prompt = (
+        "## Embeddings\n"
+        "Ask the embedder service for vectors; do not compute them yourself."
+    )
 
     # A foreign library does its own work, so the kernel puts a process around
     # this automatically — the import is what decides, not a declaration.

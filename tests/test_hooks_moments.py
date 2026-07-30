@@ -36,43 +36,10 @@ from runtime.hooks import (
 from runtime.session import RuntimeSession
 
 
-def _response(content="", tool_calls=None):
-    return SimpleNamespace(
-        content=content,
-        tool_calls=tool_calls or [],
-        has_tool_calls=bool(tool_calls),
-        is_error=False,
-        prompt_tokens=0,
-    )
-
-
-class _FakeLLM:
-    """Returns queued responses; records every call with its kwargs."""
-
-    context_size = 0  # disables proactive compaction
-    model_name = "fake"
-
-    def __init__(self, responses=None):
-        self._responses = list(responses or [])
-        self.calls = []
-
-    def chat_with_tools(self, messages, tools, attachments=None, **kwargs):
-        self.calls.append({"messages": list(messages), "tools": tools, "kwargs": kwargs})
-        return self._responses.pop(0) if self._responses else _response(content="done.")
-
-
-class _ToolChoiceLLM(_FakeLLM):
-    supports_tool_choice = True
-
-
-class _FakeRegistry:
-    def __init__(self, schemas, max_tool_calls=5):
-        self._schemas = schemas
-        self.max_tool_calls = max_tool_calls
-        self.tools = {}  # empty -> no per-tool budget enforcement
-
-    def get_all_schemas(self):
-        return self._schemas
+from tests.support import FakeLLM as _FakeLLM
+from tests.support import FakeRegistry as _FakeRegistry
+from tests.support import ToolChoiceLLM as _ToolChoiceLLM
+from tests.support import response as _response
 
 
 def _rig(tools=None, schemas=None, llm=None, max_tool_calls=5):
@@ -144,7 +111,7 @@ def test_escort_can_inspect_and_retry():
 
     assert reply == "better answer"
     assert len(llm.calls) == 2
-    assert llm.calls[1]["messages"][-1]["content"] == "try harder"
+    assert llm.calls[1][-1]["content"] == "try harder"
 
 
 def test_raising_escort_before_dialing_is_transparent():
@@ -226,7 +193,7 @@ def test_doorman_ephemeral_note_reaches_model_but_not_history():
     reply, new_messages, _ = loop.drive(cs, "agent", history)
 
     assert reply == "second"
-    assert llm.calls[1]["messages"][-1]["content"] == "secret nudge"
+    assert llm.calls[1][-1]["content"] == "secret nudge"
     assert all(m.get("content") != "secret nudge" for m in history)
 
 
@@ -259,7 +226,7 @@ def test_doorman_require_tool_forces_the_call_when_supported():
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert ran == [{"via": "forced"}]
-    forced_call = llm.calls[1]
+    forced_call = llm.records[1]
     assert forced_call["kwargs"]["tool_choice"] == {"type": "function", "function": {"name": "echo"}}
     assert [s["function"]["name"] for s in forced_call["tools"]] == ["echo"]
     assert reply == "Echo sent."
@@ -279,7 +246,7 @@ def test_doorman_require_tool_degrades_to_a_note_without_backend_support():
     history = [{"role": "user", "content": "hi"}]
     reply, _, _ = loop.drive(cs, "agent", history)
 
-    followup = llm.calls[1]
+    followup = llm.records[1]
     assert "tool_choice" not in followup["kwargs"]  # never forwarded unsupported
     assert "echo" in followup["messages"][-1]["content"]  # prompt-level instruction
     assert all("Before finishing" not in (m.get("content") or "") for m in history)
@@ -315,7 +282,7 @@ def test_budget_exhaustion_doorman_can_replace_the_wrapup_note():
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert reply == "brief."
-    summary_call = llm.calls[-1]
+    summary_call = llm.records[-1]
     assert summary_call["messages"][-1]["content"] == "Wrap up in one word."
     assert summary_call["tools"] is None  # wrap-up is text-only
     assert cs.turn_priority == "user"
@@ -365,7 +332,6 @@ def test_every_doorway_threads_a_real_runtime_into_ctx(tmp_path):
 
     class _ServiceLLM(_FakeLLM):
         loaded = True
-        is_llm_backend = True
 
     db = Database(str(tmp_path / "ctx.db"))
     cid = db.create_conversation("x")
@@ -474,7 +440,6 @@ def test_turn_finish_fires_once_per_logical_turn_across_redrive(tmp_path):
 
     class _ServiceLLM(_FakeLLM):
         loaded = True
-        is_llm_backend = True
 
     db = Database(str(tmp_path / "moments.db"))
     cid = db.create_conversation("x")
@@ -500,3 +465,211 @@ def test_turn_finish_fires_once_per_logical_turn_across_redrive(tmp_path):
     assert len(fired) == 1       # one logical turn → one finish
     assert fired[0].ok is True
     assert fired[0].final_text == "whole"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Every moment named anywhere must be a moment that exists.
+# ──────────────────────────────────────────────────────────────────────
+
+def _hook_moment_literals(source: str) -> list[tuple[int, str]]:
+    """Every literal moment name a file names, from either registration path.
+
+    Two ways exist to stand at a doorway: native code calls ``hooks.add(name,
+    fn)``, sandboxed code declares ``hooks = {name: method}``. Both take a
+    string, and a string is exactly the kind of thing a rename leaves behind.
+    """
+    import ast
+
+    found = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return found
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            found.append((node.lineno, node.args[0].value))
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+            if not any(isinstance(t, ast.Name) and t.id == "hooks"
+                       for t in node.targets):
+                continue
+            for key in node.value.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    found.append((node.lineno, key.value))
+    return found
+
+
+def test_no_plugin_names_a_hook_moment_that_does_not_exist():
+    """A renamed moment must not be able to rot in a plugin unnoticed.
+
+    ``HookRegistry.add`` raises on an unknown moment, which sounds like enough
+    — but a plugin registers its hooks in a batch, so the raise takes the
+    *rest* of the batch down with it and leaves the plugin half-wired. That is
+    what happened: the moment was renamed ``model_call`` -> ``llm_call``, the
+    store's escalate service kept the old string, and escalation was dead for
+    as long as nobody ran it, with a green suite the whole time.
+
+    Derived from ``MOMENTS`` rather than restating it, so adding a moment needs
+    no edit here and removing one fails loudly — the same shape as
+    ``test_command_approval_declarations``.
+    """
+    from pathlib import Path
+
+    from runtime.hooks import MOMENTS
+
+    roots = [Path(__file__).resolve().parents[1] / "plugins",
+             Path(__file__).resolve().parents[1] / "templates"]
+    try:
+        from paths import INSTALLED_PLUGINS, SANDBOX_PLUGINS
+        roots += [Path(SANDBOX_PLUGINS), Path(INSTALLED_PLUGINS)]
+    except Exception:
+        pass
+
+    offenders = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8", errors="replace")
+            for line, name in _hook_moment_literals(source):
+                # ``hooks`` is a common attribute name; only judge strings that
+                # look like they were meant to be moments.
+                if name in MOMENTS or "_" not in name:
+                    continue
+                if name.split("_")[-1] in {"call", "turn", "start", "finish",
+                                           "scope", "permission"}:
+                    offenders.append(f"{path}:{line} names {name!r}")
+
+    assert not offenders, (
+        "unknown hook moments (valid: " + ", ".join(MOMENTS) + "):\n  "
+        + "\n  ".join(offenders))
+
+
+# ────────────────────────────────────────────────────────────────────
+# turn_start in a live runtime (was test_turn_hooks.py)
+# ────────────────────────────────────────────────────────────────────
+
+import json
+from events.event_bus import bus
+from events.event_channels import SESSION_TURN_COMPLETED
+from tests.support import make_runtime, response
+
+
+def _runtime(tmp_path, responses=None):
+    """The shared rig under this file's historical name."""
+    return make_runtime(tmp_path, responses, name="hooks.db")
+
+
+def test_starter_runs_before_drive_and_sees_latest_user_text(tmp_path):
+    rt, session, llm = _runtime(tmp_path)
+    seen = []
+
+    def starter(ctx, _payload):
+        sess = ctx.session
+        seen.append((len(llm.calls), [m["content"] for m in sess.history if m["role"] == "user"]))
+
+    rt.hooks.add("turn_start", starter)
+    out = rt.handle_action("s", "send_text", "remember the milk")
+
+    assert out.ok
+    calls_at_start, user_texts = seen[0]
+    assert calls_at_start == 0  # ran before any LLM call
+    assert "remember the milk" in user_texts
+
+
+def test_starter_prompt_extra_reaches_the_model(tmp_path):
+    rt, session, llm = _runtime(tmp_path)
+
+    def starter(ctx, _payload):
+        ctx.session.system_prompt_extras["memory"] = "MEMOMARK-7731"
+
+    rt.hooks.add("turn_start", starter)
+    rt.handle_action("s", "send_text", "hello")
+
+    assert llm.calls, "the drive never reached the model"
+    assert "MEMOMARK-7731" in json.dumps(llm.calls[0])
+
+
+def test_raising_starter_never_blocks_the_turn(tmp_path):
+    rt, session, llm = _runtime(tmp_path, [response(content="fine.")])
+
+    def boom(ctx, _payload):
+        raise RuntimeError("memory service down")
+
+    rt.hooks.add("turn_start", boom)
+    out = rt.handle_action("s", "send_text", "hello")
+
+    assert out.ok
+    assert "fine." in out.messages
+
+
+def test_starter_skipped_on_restart_redrive(tmp_path):
+    rt, session, _ = _runtime(tmp_path)
+    starts, drives = [], []
+
+    def fake_drive(sess, out, allow_restart=True):
+        drives.append(len(drives) + 1)
+        if len(drives) == 1:
+            sess.restart_turn = True  # what the escalate tool does
+        out.messages.append(f"reply {len(drives)}")
+        sess.cs.set_priority("user")
+        sess.busy = False
+        return out
+
+    rt._drive_agent_turn = fake_drive
+    rt.hooks.add("turn_start", lambda ctx, _p: starts.append(1))
+    rt.handle_action("s", "send_text", "hello")
+
+    assert drives == [1, 2]  # the logical turn was two drives...
+    assert len(starts) == 1  # ...but the starter ran once
+
+
+def test_starter_runs_again_for_closing_race_follow_up_turn(tmp_path):
+    rt, session, _ = _runtime(tmp_path)
+    starts, drives = [], []
+
+    def fake_drive(sess, out, allow_restart=True):
+        drives.append(len(drives) + 1)
+        if len(drives) == 1:
+            # Simulate the race: a message lands after the loop's final drain.
+            sess.pending_user_messages.append("leftover")
+        out.messages.append(f"reply {len(drives)}")
+        sess.cs.set_priority("user")
+        sess.busy = False
+        return out
+
+    rt._drive_agent_turn = fake_drive
+    rt.hooks.add("turn_start", lambda ctx, _p: starts.append(1))
+    rt.handle_action("s", "send_text", "first message")
+
+    assert drives == [1, 2]
+    assert len(starts) == 2  # the follow-up is a fresh logical turn
+
+
+def test_remove_unregisters_a_starter(tmp_path):
+    rt, session, _ = _runtime(tmp_path)
+    starts = []
+    starter = lambda ctx, _p: starts.append(1)  # noqa: E731
+
+    rt.hooks.add("turn_start", starter)
+    rt.handle_action("s", "send_text", "one")
+    rt.hooks.remove(starter)
+    rt.handle_action("s", "send_text", "two")
+
+    assert len(starts) == 1
+
+
+def test_turn_completed_carries_user_id(tmp_path):
+    rt, session, _ = _runtime(tmp_path, [response(content="Hi.")])
+    seen = []
+    unsub = bus.subscribe(SESSION_TURN_COMPLETED, lambda p: seen.append(p))
+    try:
+        rt.handle_action("s", "send_text", "hello")
+    finally:
+        unsub()
+
+    assert len(seen) == 1
+    assert seen[0]["user_id"] == rt.session_user_id("s")
+    assert seen[0]["ok"] is True

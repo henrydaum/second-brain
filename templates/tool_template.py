@@ -101,6 +101,16 @@ class WordCount(BaseTool):
         "required": ["path"],
     }
 
+    # Your text in the agent's system prompt, present only while you are
+    # installed. Point-of-use guidance belongs here rather than in the kernel's
+    # static prompt, which every turn pays for whether or not you exist. A
+    # plain string is read from this file without importing it and costs
+    # nothing; see RecentNotes below for the shape that depends on live state.
+    agent_prompt = (
+        "## Counting words\n"
+        "word_count reads one UTF-8 file. For many files, glob first."
+    )
+
     def run(self, sdk, path):
         """Read the file and count its words."""
         # No error branch: if the read fails, that failure becomes this tool's
@@ -128,6 +138,18 @@ class RecentNotes(BaseTool):
             },
         },
     }
+
+    def agent_prompt(self, sdk):
+        """The other shape of the same declaration: a method, when the text
+        depends on something only the running system knows.
+
+        Same name as the string form on purpose — the collector accepts
+        either. This one is a real call into your box, so the kernel caches
+        the result until your plugin reloads. Keep it cheap and keep it
+        stable, and reach for the string form whenever you can.
+        """
+        return (f"## Recent notes\n"
+                f"Conversations live under {sdk.paths.get('data')}.")
 
     def run(self, sdk, limit=10):
         """Query the current user's conversations, newest first."""

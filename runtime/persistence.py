@@ -29,7 +29,7 @@ from events.event_channels import (
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_compaction, latest_state, messages_to_history, save_history_message, save_state_marker
-from runtime.runtime_config import new_state, refresh_specs
+from runtime.runtime_config import new_state
 from runtime.session import RuntimeSession, SessionConflict
 from pipeline.database import DEFAULT_USER_ID
 from runtime.notifications import (
@@ -522,33 +522,3 @@ def announce_session_conversation(runtime, session: RuntimeSession) -> None:
         "conversation_id": session.conversation_id,
         "title": conversation_title(runtime, session.conversation_id),
     })
-
-
-# ──────────────────────────────────────────────────────────────────────
-
-def _format_history_preview(history: list[dict[str, Any]], limit: int = 2) -> str:
-    """Render the last ``limit`` user/assistant turns as a quoted preview.
-
-    Skips system markers, tool calls, and empty content. Trims long bodies
-    so the preview stays scannable.
-    """
-    relevant = []
-    for msg in reversed(history):
-        role = msg.get("role")
-        if role not in {"user", "assistant"}:
-            continue
-        content = (msg.get("content") or "").strip()
-        if not content:
-            continue
-        relevant.append((role, content))
-        if len(relevant) >= limit:
-            break
-    if not relevant:
-        return ""
-    lines = []
-    for role, content in reversed(relevant):
-        snippet = content if len(content) <= 240 else content[:240].rstrip() + "…"
-        prefix = "you" if role == "user" else "agent"
-        for i, line in enumerate(snippet.splitlines() or [snippet]):
-            lines.append(f"> [{prefix}] {line}" if i == 0 else f"> {line}")
-    return "\n".join(lines)

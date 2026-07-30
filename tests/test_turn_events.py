@@ -7,8 +7,6 @@ agent-side SESSION_TURN_CHANGED that mirrors what user actions already get
 from the dispatch layer.
 """
 
-from types import SimpleNamespace
-
 # Import the state_machine package before runtime modules to settle the
 # package-init circular import (state_machine/__init__ pulls in the runtime).
 import state_machine  # noqa: F401
@@ -19,38 +17,12 @@ from events.event_channels import (
     SESSION_TURN_COMPLETED,
     SESSION_TURN_STARTED,
 )
-from pipeline.database import Database
-from runtime.conversation_runtime import ConversationRuntime
-
-
-def _response(content="", tool_calls=None):
-    return SimpleNamespace(
-        content=content,
-        tool_calls=tool_calls or [],
-        has_tool_calls=bool(tool_calls),
-        is_error=False,
-        prompt_tokens=0,
-    )
-
-
-class _FakeLLM:
-    context_size = 0
-    is_llm_backend = True
-    model_name = "fake"
-    loaded = True
-
-    def __init__(self, responses=None):
-        self._responses = list(responses or [])
-
-    def chat_with_tools(self, messages, tools, attachments=None):
-        return self._responses.pop(0) if self._responses else _response(content="done.")
+from tests.support import make_runtime, response
 
 
 def _runtime(tmp_path, responses=None):
-    db = Database(str(tmp_path / "events.db"))
-    cid = db.create_conversation("x")
-    rt = ConversationRuntime(db=db, services={"llm": _FakeLLM(responses)}, config={})
-    session = rt.load_conversation("s", cid)
+    """The shared rig, minus the llm handle these tests never read."""
+    rt, session, _ = make_runtime(tmp_path, responses, name="events.db")
     return rt, session
 
 
@@ -61,7 +33,7 @@ def _capture(*channels):
 
 
 def test_turn_started_and_completed_bracket_a_foreground_turn(tmp_path):
-    rt, session = _runtime(tmp_path, [_response(content="Hi there.")])
+    rt, session = _runtime(tmp_path, [response(content="Hi there.")])
     seen, unsubs = _capture(SESSION_TURN_STARTED, SESSION_TURN_COMPLETED, SESSION_TURN_CHANGED)
     try:
         out = rt.handle_action("s", "send_text", "hello")
@@ -146,7 +118,7 @@ def test_turn_finish_restart_redrives_with_agent_priority(tmp_path):
     of exiting instantly with the no-reply fallback."""
     rt, session = _runtime(
         tmp_path,
-        [_response(content="Hang tight."), _response(content="Here is the briefing.")],
+        [response(content="Hang tight."), response(content="Here is the briefing.")],
     )
 
     fired = []

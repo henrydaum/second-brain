@@ -30,7 +30,7 @@ SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
 
 @dataclass
 class PromptContext:
-    """Read-only bag passed to each plugin's ``agent_prompt_for``.
+    """Read-only bag passed to each plugin's ``agent_prompt``.
 
     Plugins read whatever they need (db/services/orchestrator/config/scope/
     frontend_name) to build their system-prompt contribution. Kept distinct from
@@ -71,7 +71,7 @@ def build_prompt_sections(
     """Build ordered system prompt messages.
 
     Optional per-plugin guidance is collected from whatever tools/services/tasks/
-    commands/frontend are currently in scope (each plugin's ``agent_prompt_for``),
+    commands/frontend are currently in scope (each plugin's ``agent_prompt``),
     so installed packages bring their own guidance and uninstalling removes it —
     the kernel no longer hardcodes prompt text for plugins it may not ship.
     """
@@ -119,22 +119,37 @@ def build_prompt_sections(
     ]
 
 
-def build_system_prompt(*args, **kwargs) -> str:
-    """Compatibility wrapper for old callers that expect one system string."""
-    return "\n\n".join(m["content"] for m in build_prompt_sections(*args, **kwargs) if m.get("content"))
-
-
 def _section(title: str, content: str) -> str:
     """Render a labeled section as a string."""
     return f"[{title}]\n{content.strip()}"
 
 
 def _collect(plugins, ctx: PromptContext) -> str:
-    """Join non-empty ``agent_prompt_for`` contributions from in-scope plugins."""
+    """Join non-empty ``agent_prompt`` contributions from in-scope plugins.
+
+    One name, two shapes. A plugin with nothing conditional to say declares a
+    plain string (``agent_prompt = "..."``), which the loader reads by AST and
+    copies onto the adapter for free; one that needs the session declares a
+    method taking the context. Accepting both here is what lets those be the
+    same name — and it is load-bearing rather than merely tidy, because a
+    string shadowing a method would otherwise raise ``TypeError`` into the
+    ``except`` below and the guidance would vanish with no symptom at all.
+    """
     parts = []
     for plugin in plugins:
         try:
-            text = (plugin.agent_prompt_for(ctx) or "").strip()
+            raw = getattr(plugin, "agent_prompt", "")
+            text = ((raw(ctx) if callable(raw) else raw) or "").strip()
+            if not text:
+                # ``agent_prompt_for`` was the old spelling of the dynamic
+                # half. Unmigrated store plugins still write it, and dropping
+                # them silently is the exact failure this doorway exists to
+                # prevent — an agent that quietly stops knowing things. Costs
+                # one getattr per plugin per turn and disappears when the last
+                # store plugin is migrated.
+                legacy = getattr(plugin, "agent_prompt_for", None)
+                if callable(legacy):
+                    text = (legacy(ctx) or "").strip()
         except Exception:
             text = ""
         if text:

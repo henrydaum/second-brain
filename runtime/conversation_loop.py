@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Any, Callable
 
 from agent.system_prompt import SYSTEM_CONTEXT_MARKER
@@ -1379,8 +1378,3 @@ class ConversationLoop:
             self.on_tool_result(name, call_id, result, error)
         except TypeError:
             self.on_tool_result(name, (getattr(result, "data", None) or {}).get("result") if result else None)
-
-    @staticmethod
-    def _is_image(path: str) -> bool:
-        """Return whether image."""
-        return Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
