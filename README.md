@@ -20,7 +20,7 @@ packages/
 ```
 
 A **package** is the unit you install. Its `files/` land under
-`DATA_DIR/installed_plugins` (same layout) where the kernel auto-discovers them.
+`DATA_DIR/installed` (same layout) where the kernel auto-discovers them.
 `requires` lists other package ids, installed first. `entrypoints` (optional —
 auto-detected from `files` otherwise) are the top-level plugin files to load;
 helper files under `<family>/helpers/` are payload, not entrypoints.

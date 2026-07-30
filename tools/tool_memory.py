@@ -1,7 +1,7 @@
 """Agent memory tool.
 
 Memory is a folder of per-topic markdown files plus a ``MEMORY.md`` index
-(see ``plugins/helpers/memory_paths.py`` in the kernel). The system prompt
+(see ``plugins/memory_paths.py`` in the kernel). The system prompt
 inlines only the index; this tool is how the agent reads topic bodies and
 writes new memories. Writes are unapproved by design — they are hard
 path-validated to the current user's memory folder and nothing else.
@@ -11,7 +11,7 @@ dependencies_files = []
 dependencies_pip = []
 
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers.memory_paths import INDEX_FILENAME, list_topics, memory_root, topic_path
+from plugins.memory_paths import INDEX_FILENAME, list_topics, memory_root, topic_path
 
 MAX_READ_CHARS = 20_000
 

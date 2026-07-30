@@ -59,7 +59,7 @@ class ScheduleSubagent(BaseTool):
         "Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear "
         "from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include "
         "unambiguous, step-by-step instructions in the prompt for the agent to follow.\n\n"
-        "Determine whether creating a new event-driven task, scheduling a subagent, or editing memory.md is "
+        "Determine whether creating a new event-driven task, scheduling a subagent, or editing memory is "
         "the best way to accomplish the user's underlying goal."
     )
 

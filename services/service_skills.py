@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plugins.BaseService import BaseService, EXTENSION
-from plugins.helpers.plugin_paths import PLUGIN_ROOTS
+from plugins.plugin_paths import PLUGIN_ROOTS
 
 logger = logging.getLogger("SkillsService")
 

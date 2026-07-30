@@ -28,7 +28,7 @@ from guest.bases import BaseTool
 # path. The helper is a sibling here even though it ships in a subdirectory.
 from . import file_reads
 
-PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use test_plugin(plugin_path=...) to make sure it is correct."
+PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use validate(path=...) to make sure it is correct."
 READ_FIRST = "Read the file with read_file before editing it."
 STALE_READ = "File changed on disk since it was last read — re-read it with read_file."
 DENIED_STOP = (" STOP — do not retry this edit. Ask the user what they would "
@@ -287,8 +287,8 @@ def _plugin_edit_reminder(sdk, path) -> str:
     """
     if sdk.path.suffix(path) != ".py":
         return ""
-    for name in ("sandbox_plugins", "installed_plugins"):
+    for name in ("workspace", "installed"):
         if sdk.path.within(path, sdk.paths.get(name)):
             return PLUGIN_EDIT_REMINDER
-    project_plugins = sdk.path.join(sdk.paths.get("project"), "plugins")
-    return PLUGIN_EDIT_REMINDER if sdk.path.within(path, project_plugins) else ""
+    bundled = sdk.paths.get("bundled")
+    return PLUGIN_EDIT_REMINDER if sdk.path.within(path, bundled) else ""

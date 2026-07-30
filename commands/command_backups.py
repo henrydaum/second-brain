@@ -5,7 +5,7 @@ dependencies_pip = []
 
 from paths import DATA_DIR
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import detail_card, md_table
+from bundled.frontends.helpers.formatters import detail_card, md_table
 from runtime.ledger import record_system
 from state_machine.conversation import FormStep
 

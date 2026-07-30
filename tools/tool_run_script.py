@@ -73,7 +73,7 @@ class RunScript(BaseTool):
     max_calls = 15
     background_safe = True
 
-    def agent_prompt_for(self, sdk) -> str:
+    def agent_prompt(self, sdk) -> str:
         """Where scripts go and why to reach for one."""
         scripts = sdk.paths.get("scripts")
         sep = "\\" if "\\" in scripts else "/"

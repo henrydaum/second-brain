@@ -32,8 +32,8 @@ MANIFEST_MEMBER = "manifest.json"
 # What a backup contains, relative to DATA_DIR. Missing entries are skipped.
 # attachment_cache/ (bulky, re-syncable), app.log*, heartbeat, desktop.ini
 # and backups/ itself are deliberately excluded.
-SCOPE_FILES = ("config.json", "plugin_config.json", "memory.md")
-SCOPE_DIRS = ("memory", "sandbox_plugins", "installed_plugins", "packages")
+SCOPE_FILES = ("config.json", "plugin_config.json")
+SCOPE_DIRS = ("memory", "workspace", "installed")
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 

@@ -68,8 +68,8 @@ class ManagePackages(BaseTool):
     )
 
     def run(self, context, **kwargs) -> ToolResult:
-        from plugins.commands.helpers import package_manager
-        from plugins.commands.helpers.store_backend import StoreBackendError
+        from bundled.commands.helpers import package_manager
+        from bundled.commands.helpers.store_backend import StoreBackendError
 
         action = (kwargs.get("action") or "").strip()
         target = (kwargs.get("target") or "").strip()

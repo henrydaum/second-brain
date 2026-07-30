@@ -37,7 +37,7 @@ Migrated to the SDK, and three things changed shape:
   is precisely the case that line exists for.
 """
 
-dependencies_files = ['helpers/llm_litellm.py']
+dependencies_files = ['llm/llm_litellm.py']
 dependencies_pip = []
 
 import json

@@ -2,14 +2,14 @@
 
 Fired by the ``dream_memory`` event channel. It reads recent user
 conversations plus the current memory folder (MEMORY.md index + per-topic
-markdown files — see ``plugins/helpers/memory_paths.py`` in the kernel),
+markdown files — see ``plugins/memory_paths.py`` in the kernel),
 asks the configured LLM for a strict JSON *patch* (topics to upsert, topics
 to forget, index hooks), and applies it without a user approval step.
 """
 
 from __future__ import annotations
 
-dependencies_files = ['helpers/llm_litellm.py']
+dependencies_files = ['llm/llm_litellm.py']
 dependencies_pip = []
 
 import json
@@ -21,7 +21,7 @@ from typing import Any
 
 from paths import DATA_DIR
 from plugins.BaseTask import BaseTask, TaskResult
-from plugins.helpers.memory_paths import INDEX_FILENAME, list_topics, memory_root, topic_path
+from plugins.memory_paths import INDEX_FILENAME, list_topics, memory_root, topic_path
 from runtime.agent_scope import resolve_agent_llm
 from runtime.token_stripper import strip_model_tokens
 

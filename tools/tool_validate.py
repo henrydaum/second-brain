@@ -89,9 +89,9 @@ class Validate(BaseTool):
     max_calls = 5
     background_safe = True
 
-    def agent_prompt_for(self, sdk) -> str:
+    def agent_prompt(self, sdk) -> str:
         """The authoring workflow, plus a live listing of what is in the tree."""
-        sandbox_root = sdk.paths.get("sandbox_plugins")
+        sandbox_root = sdk.paths.get("workspace")
         return (
             f"""## Writing and running your own code
 You can write code into {sandbox_root}/ and run it, without asking permission for either. That is not a loophole: everything under that tree runs in a subprocess and cannot act, only ask. Every effect it performs — disk, network, database, process — is a separate request the kernel judges on its own. So writing code changes what you can *ask for*; it never changes what you are allowed to *affect*.

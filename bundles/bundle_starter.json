@@ -2,7 +2,7 @@
   "description": "Basic everyday setup: Telegram, LiteLLM, read/edit/shell/SQL tools, ask-user-question, writing and running sandboxed scripts and plugins, memory, dream-memory, title updates, and the location service.",
   "files": [
     "frontends/frontend_telegram.py",
-    "helpers/llm_litellm.py",
+    "llm/llm_litellm.py",
     "services/service_location.py",
     "tasks/task_dream_memory.py",
     "tasks/task_update_titles.py",

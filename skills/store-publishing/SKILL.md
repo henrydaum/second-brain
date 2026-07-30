@@ -7,7 +7,7 @@ dependencies_files: tools/tool_use_skill.py
 # Publishing to the package store
 
 The store is the `store` git branch: a tree mirror of what
-`installed_plugins/` would look like with everything installed
+`installed/` would look like with everything installed
 (`tools/tool_*.py`, `services/service_*.py`, ..., family `helpers/`,
 plus `bundles/*.json` manifests). `/packages` installs read `origin/store`.
 

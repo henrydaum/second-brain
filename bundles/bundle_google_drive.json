@@ -2,8 +2,8 @@
   "description": "Google Drive service plus the Google Docs and Google Sheets parser helpers.",
   "files": [
     "services/service_drive.py",
-    "helpers/parse_gdoc.py",
-    "helpers/parse_tabular.py"
+    "parsers/parse_gdoc.py",
+    "parsers/parse_tabular.py"
   ],
   "name": "Google Drive"
 }
