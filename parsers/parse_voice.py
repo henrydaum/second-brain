@@ -32,17 +32,19 @@ AUDIO_EXTENSIONS = [
 
 def parse_voice(sdk, path: str, config: dict = None) -> ParseResult:
     """Return the spoken contents of an audio file as text via the Whisper service."""
-    whisper = (services or {}).get("whisper")
-    if whisper is None or not getattr(whisper, "loaded", False):
+    try:
+        text = (sdk.services.call("whisper", "transcribe",
+                                  audio_path=str(path)) or "").strip()
+    except sdk.Failed as e:
+        # Not installed, not loaded, or it broke. One answer for all three:
+        # leave the audio untranscribed and let the attachment fall back to
+        # the pointer blurb.
+        sdk.log(f"Transcription unavailable for {basename(path)}: {e}",
+                level="warning")
         return ParseResult.failed(
-            "Whisper service not loaded — audio left untranscribed.",
+            f"Whisper is unavailable — audio left untranscribed ({e}).",
             modality="text",
         )
-    try:
-        text = (whisper.transcribe(path) or "").strip()
-    except Exception as e:
-        sdk.log(f"Transcription failed for {basename(path)}: {e}", level="warning")
-        return ParseResult.failed(str(e), modality="text")
 
     if not text:
         # No detectable speech (or filtered as a hallucination). Fail the parse so

@@ -1,335 +1,283 @@
-"""Service plugin for OCR."""
+"""Optical character recognition, using whatever engine this machine has.
 
+Three engines, one service. The native version was three ``BaseService``
+subclasses and a ``build_services`` that picked one by platform, which made
+sense when a file could hold several classes for the kernel to choose between.
+It cannot mean that any more: a file declaring several services now registers
+*all* of them and gives them one shared box (see ``sandbox/bridge.py``), which
+is the opposite of what this file wants. Only one engine is ever usable here,
+so choosing is something ``start()`` does, once, from
+``sdk.paths.get("platform")``.
+
+**No engine ships with this package.** They are platform-specific, large, or
+both — Windows OCR is a set of WinRT projections, macOS Vision is resident in
+the OS behind pyobjc, Linux uses EasyOCR and torch. Declaring all three in
+``dependencies_pip`` would make ``pip install`` fail on every platform, since
+each list is uninstallable on the other two. So the package brings only the
+image handling, and a missing engine is reported with the exact command to
+install it.
+"""
 
 dependencies_files = []
-dependencies_pip = ['pillow-heif']
+dependencies_pip = ['pillow', 'pillow-heif']
 
 import asyncio
-import os
-import tempfile
-import logging
-from pathlib import Path
 
-from plugins.BaseService import BaseService
+from guest.bases import BaseService
 
-# 3rd Party
-from PIL import Image
-try:
-    import pillow_heif
-    pillow_heif.register_heif_opener() # Enables opening .heic/.heif
-except ImportError:
-    pass
+#: The longest edge an image is scaled to before OCR. Engines choke on very
+#: large inputs, and text that survives past this is not being read anyway.
+MAX_DIMENSION = 2500
 
-logger = logging.getLogger("OCRClass")
-
-
-def _engine_missing_msg(engine: str, install: str, err: Exception) -> str:
-    """Actionable message when the platform OCR engine isn't installed.
-
-    OCR ships without a bundled engine (they're platform-specific and/or
-    heavy), so the user installs the one for their machine. This turns a bare
-    ImportError into a clear next step.
-    """
-    return (
-        f"OCR is installed but its engine isn't available on this machine "
-        f"({engine}: {err}).\n"
-        f"Install it yourself with:\n"
-        f"    pip install {install}\n"
-        f"or ask the agent to run that for you with the run_command tool. "
-        f"Then reload the OCR service via /services (or restart)."
-    )
+#: ``sys.platform`` prefix -> (engine label, pip install line).
+ENGINES = {
+    "win32": (
+        "winrt_windows_ocr",
+        "winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging "
+        "winrt-Windows.Storage",
+    ),
+    "darwin": (
+        "apple_vision_ocr",
+        "pyobjc-framework-Vision pyobjc-framework-Quartz "
+        "pyobjc-framework-Cocoa",
+    ),
+    "linux": ("easyocr", "easyocr torch"),
+}
 
 
-def _create_optimized_temp_file(original_path):
-    """Resize/normalize the image to a temp PNG so the OCR engine doesn't
-    choke on huge or unusual files. Shared by all OCR backends."""
-    try:
-        with Image.open(original_path) as img:
-            max_dim = 2500
-            if img.width > max_dim or img.height > max_dim:
-                img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+class OCRService(BaseService):
+    """Read text out of images, with this platform's OCR engine."""
 
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
+    name = "ocr"
+    description = "Extract text from images using the platform's OCR engine."
+    shared = True
+    timeout = 300
+    requests = ["paths.get", "fs.temp", "fs.delete", "fs.list"]
+    exports = ["process_image", "describe"]
 
-            # delete=False required for Windows
-            temp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            img.save(temp.name, format="PNG")
-            temp.close()
-            return temp.name
-    except Exception as e:
-        logger.error(f"Image preprocess failed for {Path(original_path).name}: {e}")
-        return None
-
-
-class WindowsOCR(BaseService):
-    """Windows OCR."""
     def __init__(self):
-        """Initialize the windows OCR."""
-        super().__init__()
-        self.model_name = "winrt_windows_ocr"
-        self.shared = True
+        """Nothing is chosen until start()."""
+        self.engine = ""
+        self.platform = ""
+        self.reader = None          # EasyOCR only; the others are stateless
 
-    def _load(self):
-        """Verify the engine is present, with an actionable error if it isn't."""
-        # torch's greedy DLL loading conflicts with winrt's DLLs if it loads
-        # second, so import it FIRST when it happens to be installed (e.g. the
-        # user also has the easyocr path). Windows OCR itself does not need
-        # torch, so its absence is fine — don't make it a hard requirement.
+    # ── lifecycle ───────────────────────────────────────────────────
+
+    def start(self, sdk):
+        """Pick an engine for this platform and check it actually imports.
+
+        Verifying at load rather than at first use is deliberate: an OCR
+        service that loads cleanly and then fails every image is a service the
+        user has no reason to look at. Failing here means ``/services`` shows
+        it as not loaded, with the reason.
+        """
+        try:
+            from PIL import Image  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(_missing("Pillow", "pillow", exc))
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()   # enables .heic / .heif
+        except ImportError:
+            pass    # HEIC support is a bonus, not a requirement
+
+        self.platform = str(sdk.paths.get("platform") or "")
+        matched = next((key for key in ENGINES
+                        if self.platform.startswith(key)), "")
+        if not matched:
+            sdk.log(f"no OCR engine for platform {self.platform!r}",
+                    level="warning")
+            return False
+
+        self.engine, install = ENGINES[matched]
+        starter = {"win32": self._start_windows, "darwin": self._start_mac,
+                   "linux": self._start_linux}[matched]
+        starter(sdk, install)
+        sdk.log(f"OCR ready: {self.engine}")
+        return True
+
+    def _start_windows(self, sdk, install):
+        """Check the WinRT projections import."""
+        # torch loads DLLs greedily and collides with winrt's if it lands
+        # second, so import it first *when it happens to be installed*.
+        # Windows OCR does not need it; its absence is fine.
         try:
             import torch  # noqa: F401
         except ImportError:
             pass
-        # Modern PyWinRT ships one wheel per namespace under the ``winrt.*``
-        # import root; there is no package literally named ``winrt`` on PyPI.
         try:
             from winrt.windows.media.ocr import OcrEngine  # noqa: F401
-        except ImportError as e:
-            raise RuntimeError(_engine_missing_msg(
-                "Windows OCR via winrt",
-                "winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging winrt-Windows.Storage",
-                e,
-            ))
+        except ImportError as exc:
+            raise RuntimeError(_missing("Windows OCR via winrt", install, exc))
 
-        self.loaded = True
-        return True
+    def _start_mac(self, sdk, install):
+        """Check the Vision frameworks import; the model is OS-resident."""
+        try:
+            import Quartz  # noqa: F401
+            import Vision  # noqa: F401
+            from Foundation import NSURL  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(_missing("macOS Vision", install, exc))
 
-    def unload(self):
-        """Handle unload."""
-        self.loaded = False
-        logger.info("Windows OCR unloaded.")
+    def _start_linux(self, sdk, install):
+        """Build the EasyOCR reader, which downloads weights on first use."""
+        try:
+            import easyocr
+            import torch
+        except ImportError as exc:
+            raise RuntimeError(_missing("EasyOCR", install, exc))
+        gpu = torch.cuda.is_available()
+        self.reader = easyocr.Reader(["en"], gpu=gpu)
+        sdk.log(f"EasyOCR initialized (gpu={gpu})")
 
-    def process_image(self, image_path):
+    def stop(self, sdk):
+        """Release the reader. The stateless engines have nothing to drop."""
+        self.reader = None
+        return None
+
+    # ── exports ─────────────────────────────────────────────────────
+
+    def describe(self, sdk):
+        """Which engine is loaded.
+
+        The bridge names an adapter after the service, so a caller reading
+        ``ocr.model_name`` would get "ocr". Every OCR row records the engine
+        that produced it, so it has to be askable.
         """
-        Run OCR on a single image file. Returns extracted text or empty string.
-        Pre-processes the image first (resize, convert to RGB) for stability.
-        """
-        import time as _time
+        return {
+            "model_name": self.engine,
+            "engine": self.engine,
+            "platform": self.platform,
+            "loaded": bool(self.engine),
+        }
 
-        if not self.loaded: return ""
-        if not os.path.exists(image_path): return ""
+    def process_image(self, sdk, image_path):
+        """Read text out of one image file. Returns "" when there is none."""
+        if not self.engine:
+            return ""
+        if not sdk.fs.list(image_path):
+            return ""
 
-        temp_path = _create_optimized_temp_file(image_path)
-        if not temp_path:
+        name = sdk.path.name(image_path)
+        prepared = self._prepare(sdk, image_path)
+        if not prepared:
             return ""
 
         try:
-            logger.debug(f"OCR starting: {Path(image_path).name}")
-            t0 = _time.time()
-            text = asyncio.run(self._run_windows_ocr_task(temp_path))
-            logger.debug(f"OCR completed: {Path(image_path).name} in {_time.time() - t0:.2f}s")
-            return text if text else ""
-        except Exception as e:
-            logger.warning(f"OCR failed for {Path(image_path).name}: {e}")
+            if self.platform.startswith("win32"):
+                return asyncio.run(self._read_windows(sdk, prepared)) or ""
+            if self.platform.startswith("darwin"):
+                return self._read_mac(sdk, prepared) or ""
+            return self._read_linux(sdk, prepared) or ""
+        except Exception as exc:
+            sdk.log(f"OCR failed for {name}: {exc}", level="warning")
             return ""
         finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception as e:
-                    logger.debug(f"Temp cleanup failed: {e}")
+            try:
+                sdk.fs.delete(prepared)
+            except Exception:
+                sdk.log(f"could not clean up {prepared}", level="debug")
 
-    async def _run_windows_ocr_task(self, image_path):
+    # ── preparation ─────────────────────────────────────────────────
+
+    def _prepare(self, sdk, original):
+        """Normalize an image into a scratch PNG the engines can all read.
+
+        Scratch space is a Request the kernel always grants, which is what
+        makes this cost no dialog — unlike ``tempfile``, which reaches the
+        filesystem directly and the validator refuses.
         """
-        Your exact async logic. Creates engine ON THE FLY to prevent crashes.
-        """
-        from winrt.windows.media.ocr import OcrEngine
+        from PIL import Image
+
+        try:
+            scratch = sdk.fs.temp(suffix=".png")
+            with Image.open(original) as img:
+                if img.width > MAX_DIMENSION or img.height > MAX_DIMENSION:
+                    img.thumbnail((MAX_DIMENSION, MAX_DIMENSION),
+                                  Image.Resampling.LANCZOS)
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(scratch, format="PNG")
+            return scratch
+        except Exception as exc:
+            sdk.log(f"image preprocess failed for "
+                    f"{sdk.path.name(original)}: {exc}", level="error")
+            return ""
+
+    # ── the three engines ───────────────────────────────────────────
+
+    async def _read_windows(self, sdk, path):
+        """Windows OCR. The engine is built per call, on this thread."""
         from winrt.windows.graphics.imaging import BitmapDecoder
+        from winrt.windows.media.ocr import OcrEngine
         from winrt.windows.storage import StorageFile
 
-        try:
-            abs_path = os.path.abspath(image_path)
+        handle = await StorageFile.get_file_from_path_async(path)
+        stream = await handle.open_async(0)
+        decoder = await BitmapDecoder.create_async(stream)
+        bitmap = await decoder.get_software_bitmap_async()
 
-            # A. File Access
-            f = await StorageFile.get_file_from_path_async(abs_path)
-            stream = await f.open_async(0)
-
-            # B. Decode
-            decoder = await BitmapDecoder.create_async(stream)
-            bitmap = await decoder.get_software_bitmap_async()
-
-            # C. Create Engine (Thread-Local Safety!)
-            engine = OcrEngine.try_create_from_user_profile_languages()
-            if not engine:
-                return None
-
-            # D. Recognize
-            result = await engine.recognize_async(bitmap)
-            lines = [line.text for line in result.lines]
-            return "\n".join(lines)
-
-        except Exception as e:
-            logger.error(f"Async OCR failed: {e}")
-            return None
-
-
-class MacOCR(BaseService):
-    """OCR backed by Apple's Vision framework (VNRecognizeTextRequest).
-
-    The model ships with macOS — no separate download or system install.
-    Requires `pyobjc-framework-Vision` and `pyobjc-framework-Quartz` (pip).
-    """
-
-    def __init__(self):
-        """Initialize the mac OCR."""
-        super().__init__()
-        self.model_name = "apple_vision_ocr"
-        self.shared = True
-
-    def _load(self):
-        """Verify the frameworks import; the OCR model is OS-resident."""
-        try:
-            import Vision  # noqa: F401
-            import Quartz  # noqa: F401
-            from Foundation import NSURL  # noqa: F401
-        except ImportError as e:
-            raise RuntimeError(_engine_missing_msg(
-                "macOS Vision",
-                "pyobjc-framework-Vision pyobjc-framework-Quartz pyobjc-framework-Cocoa",
-                e,
-            ))
-        self.loaded = True
-        return True
-
-    def unload(self):
-        """Handle unload."""
-        self.loaded = False
-        logger.info("Mac OCR unloaded.")
-
-    def process_image(self, image_path):
-        """Handle process image."""
-        import time as _time
-
-        if not self.loaded: return ""
-        if not os.path.exists(image_path): return ""
-
-        temp_path = _create_optimized_temp_file(image_path)
-        if not temp_path:
+        # Created per call rather than held: a shared engine across threads
+        # crashes, and building one is cheap next to decoding the image.
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        if not engine:
             return ""
+        result = await engine.recognize_async(bitmap)
+        return "\n".join(line.text for line in result.lines)
 
-        try:
-            logger.debug(f"OCR starting: {Path(image_path).name}")
-            t0 = _time.time()
-            text = self._run_vision_ocr(temp_path)
-            logger.debug(f"OCR completed: {Path(image_path).name} in {_time.time() - t0:.2f}s")
-            return text or ""
-        except Exception as e:
-            logger.warning(f"OCR failed for {Path(image_path).name}: {e}")
-            return ""
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception as e:
-                    logger.debug(f"Temp cleanup failed: {e}")
-
-    def _run_vision_ocr(self, image_path):
-        """Internal helper to run vision OCR."""
-        import Vision
+    def _read_mac(self, sdk, path):
+        """Apple Vision, via VNRecognizeTextRequest."""
         import Quartz
+        import Vision
         from Foundation import NSURL
 
-        url = NSURL.fileURLWithPath_(os.path.abspath(image_path))
-        src = Quartz.CGImageSourceCreateWithURL(url, None)
-        if not src:
+        url = NSURL.fileURLWithPath_(path)
+        source = Quartz.CGImageSourceCreateWithURL(url, None)
+        if not source:
             return ""
-        cg_image = Quartz.CGImageSourceCreateImageAtIndex(src, 0, None)
-        if not cg_image:
+        image = Quartz.CGImageSourceCreateImageAtIndex(source, 0, None)
+        if not image:
             return ""
 
         request = Vision.VNRecognizeTextRequest.alloc().init()
-        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        request.setRecognitionLevel_(
+            Vision.VNRequestTextRecognitionLevelAccurate)
         request.setUsesLanguageCorrection_(True)
 
-        handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
-        success, error = handler.performRequests_error_([request], None)
-        if not success:
-            logger.error(f"Vision OCR error: {error}")
+        handler = (Vision.VNImageRequestHandler.alloc()
+                   .initWithCGImage_options_(image, None))
+        ok, error = handler.performRequests_error_([request], None)
+        if not ok:
+            sdk.log(f"Vision OCR error: {error}", level="error")
             return ""
 
-        observations = request.results() or []
         lines = []
-        for obs in observations:
-            candidate = obs.topCandidates_(1)
-            if candidate and candidate.count() > 0:
-                lines.append(str(candidate.objectAtIndex_(0).string()))
+        for observation in request.results() or []:
+            candidates = observation.topCandidates_(1)
+            if candidates and candidates.count() > 0:
+                lines.append(str(candidates.objectAtIndex_(0).string()))
         return "\n".join(lines)
 
-
-class EasyOCR(BaseService):
-    """Linux OCR backed by EasyOCR."""
-
-    def __init__(self):
-        """Initialize the EasyOCR service."""
-        super().__init__()
-        self.model_name = "easyocr"
-        self.shared = True
-        self.reader = None
-
-    def _load(self):
-        """Load EasyOCR and prepare the reader."""
-        try:
-            import torch
-            import easyocr
-        except ImportError as e:
-            raise RuntimeError(_engine_missing_msg("EasyOCR", "easyocr torch", e))
-
-        gpu_available = torch.cuda.is_available()
-        self.reader = easyocr.Reader(["en"], gpu=gpu_available)
-        self.loaded = True
-        logger.info(f"EasyOCR initialized (gpu={gpu_available}).")
-        return True
-
-    def unload(self):
-        """Handle unload."""
-        self.reader = None
-        self.loaded = False
-        logger.info("EasyOCR unloaded.")
-
-    def process_image(self, image_path):
-        """Run OCR on a single image file."""
-        import time as _time
-
-        if not self.loaded or self.reader is None:
+    def _read_linux(self, sdk, path):
+        """EasyOCR."""
+        if self.reader is None:
             return ""
-        if not os.path.exists(image_path):
-            return ""
-
-        temp_path = _create_optimized_temp_file(image_path)
-        if not temp_path:
-            return ""
-
-        try:
-            logger.debug(f"OCR starting: {Path(image_path).name}")
-            t0 = _time.time()
-            lines = self.reader.readtext(temp_path, detail=0, paragraph=True)
-            text = "\n".join(
-                line.strip()
-                for line in lines
-                if isinstance(line, str) and line.strip()
-            )
-            logger.debug(f"OCR completed: {Path(image_path).name} in {_time.time() - t0:.2f}s")
-            return text
-        except Exception as e:
-            logger.warning(f"OCR failed for {Path(image_path).name}: {e}")
-            return ""
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception as e:
-                    logger.debug(f"Temp cleanup failed: {e}")
+        found = self.reader.readtext(path, detail=0, paragraph=True)
+        return "\n".join(line.strip() for line in found
+                         if isinstance(line, str) and line.strip())
 
 
-def build_services(config: dict) -> dict:
-    """Build services."""
-    import platform
-    system = platform.system()
-    if system == "Windows":
-        return {"ocr": WindowsOCR()}
-    if system == "Darwin":
-        return {"ocr": MacOCR()}
-    if system == "Linux":
-        return {"ocr": EasyOCR()}
-    logger.info(f"OCR service skipped (no backend for platform: {system}).")
-    return {}
+def _missing(engine: str, install: str, err: Exception) -> str:
+    """What to say when the platform's OCR engine is not installed.
+
+    OCR ships without one — see the module docstring — so this turns a bare
+    ImportError into the command that fixes it.
+    """
+    return (
+        f"OCR is installed but its engine is not available on this machine "
+        f"({engine}: {err}).\n"
+        f"Install it with:\n"
+        f"    pip install {install}\n"
+        f"or ask the agent to run that for you. Then reload the OCR service "
+        f"via /services (or restart)."
+    )

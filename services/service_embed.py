@@ -1,241 +1,240 @@
-"""Service plugin for embed."""
+"""Text and image embeddings, from sentence-transformers models.
 
+Two services in one file, which is the shape this has always had and now has a
+sharper reason for: a file declaring several services gets **one box** (see
+``sandbox/bridge.py``), so the two embedders share a process — one import of
+torch, one accelerator context, one set of CUDA kernels compiled. Two files
+would cost all of that twice for models that are never used simultaneously
+anyway, since a box serializes its calls.
+
+They are separate *services* rather than one service with a ``kind`` argument
+because the pipeline reaches them by name: ``task_embed_text`` declares
+``requires_services = ["text_embedder"]`` and must be schedulable when only
+the text model is loaded.
+
+**Vectors cross as bytes.** ``encode`` answers with one raw float32 buffer per
+input — exactly what goes into the ``embedding`` BLOB column — rather than a
+list of Python floats. Bytes cross the boundary natively (``guest/protocol.py``
+packs them), so nothing here encodes anything by hand, and the value a caller
+hands to ``sdk.db.write`` is the value sqlite stores.
+"""
 
 dependencies_files = []
 dependencies_pip = ['numpy', 'sentence-transformers', 'torch']
 
-import os
-from pathlib import Path
-import gc
-import shutil
-import socket
-import logging
-# 3rd Party - also includes torch, sentence_transformers (imported later)
-import numpy as np
+from guest.bases import BaseService
 
-from plugins.BaseService import BaseService
-from paths import DATA_DIR
 
-logger = logging.getLogger("EmbedClass")
+class _SentenceTransformerEmbedder:
+    """The half both embedders share.
 
-BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-
-# --- BASE CLASS ---
-class BaseEmbedder(BaseService):
-    """
-    Abstract base class for all embedding models.
-    Enforces a standard interface for Loading, Unloading, and Encoding.
+    Deliberately not a ``BaseService`` subclass: the validator counts plugin
+    classes by what they subclass, and a shared implementation that registered
+    itself as a third service would be an empty service the kernel tries to
+    load.
     """
 
+    #: Set by each subclass — the config key naming its model.
+    setting = ""
+    #: Set by each subclass — the model to use when nothing is configured.
+    fallback = ""
+
+    def __init__(self):
+        """Nothing is loaded until start()."""
+        self.model = None
+        self.model_name = self.fallback
+        self.device = "cpu"
+        self.chunk_size = 512
+
+    # ── lifecycle ───────────────────────────────────────────────────
+
+    def start(self, sdk):
+        """Resolve the model, find or fetch its weights, and load it.
+
+        Two things the native version did are gone, both because they were
+        working around problems this file no longer has:
+
+        - **The HuggingFace offline environment dance.** It set
+          ``HF_HUB_OFFLINE`` and ``TRANSFORMERS_OFFLINE`` around loading,
+          which reaches ``os.environ`` and is refused. It was also redundant:
+          both load paths already pass ``local_files_only=True``, which is the
+          actual guarantee the env vars were reaching for.
+        - **The connectivity probe.** ``is_connected()`` opened a socket to
+          8.8.8.8 to decide whether attempting a download was worthwhile.
+          Attempting it and handling the failure is both simpler and more
+          accurate — a machine with DNS and no route to HuggingFace passed the
+          probe and failed the download anyway.
+        """
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        self.model_name = str(
+            sdk.config.read(self.setting) or self.fallback).strip() \
+            or self.fallback
+        self.chunk_size = int(sdk.config.read("embed_chunk_size") or 512)
+        wants_cuda = bool(sdk.config.read("embed_use_cuda"))
+        self.device = "cuda" if wants_cuda and torch.cuda.is_available() \
+            else "cpu"
+
+        folder = self.model_name.replace("/", "_")
+        bundled = sdk.path.join(sdk.paths.get("installed"), "services", folder)
+        downloaded = sdk.path.join(sdk.paths.get("data"), folder)
+
+        weights = ""
+        if sdk.fs.list(bundled):
+            weights = bundled
+            sdk.log(f"using bundled weights for {self.model_name}")
+        elif sdk.fs.list(downloaded):
+            weights = downloaded
+            sdk.log(f"using downloaded weights for {self.model_name}")
+        elif self._download(sdk, downloaded):
+            weights = downloaded
+
+        if not weights:
+            return False
+
+        self.model = SentenceTransformer(weights, device=self.device,
+                                         local_files_only=True)
+        self.model.max_seq_length = self.chunk_size
+        sdk.log(f"{self.model_name} loaded on {self.device}")
+        return True
+
+    def _download(self, sdk, destination) -> bool:
+        """Fetch the weights and save them where we will look next time.
+
+        The download is the library's own network I/O, past the kernel's
+        reach — it holds no credential and the host is HuggingFace's, which is
+        the documented limit of what the boundary covers. A partial download
+        is cleaned up, so a failure here does not poison the next attempt into
+        loading half a model.
+        """
+        from sentence_transformers import SentenceTransformer
+
+        sdk.log(f"downloading {self.model_name}; this may take a while")
+        try:
+            fetched = SentenceTransformer(self.model_name)
+            fetched.save(destination)
+            sdk.log(f"saved {self.model_name} to {destination}")
+            return True
+        except Exception as exc:
+            sdk.log(f"download of {self.model_name} failed: {exc}",
+                    level="error")
+            try:
+                sdk.fs.delete(destination)
+            except Exception:
+                pass    # nothing was written, or it is not ours to remove
+            return False
+
+    def stop(self, sdk):
+        """Drop the model.
+
+        No ``gc.collect()`` and no ``torch.cuda.empty_cache()``: this service
+        is its process, and closing the box ends it. Both calls existed to
+        reclaim memory inside a process that outlived the service.
+        """
+        self.model = None
+        return None
+
+    # ── exports ─────────────────────────────────────────────────────
+
+    def describe(self, sdk):
+        """Which model is loaded, and how wide its vectors are.
+
+        Load-bearing rather than informational. The bridge names an adapter
+        after the *service*, so ``embedder.model_name`` reads "text_embedder";
+        but the value stored in the ``model_name`` column — and matched by
+        ``WHERE model_name = ?`` when searching — has to be the model's own
+        id, or a search finds nothing and cannot say why.
+        """
+        return {
+            "model_name": self.model_name,
+            "dim": (self.model.get_sentence_embedding_dimension()
+                    if self.model is not None else 0),
+            "device": self.device,
+            "loaded": self.model is not None,
+        }
+
+    def encode(self, sdk, inputs):
+        """Embed a batch, returning one float32 buffer per input.
+
+        ``inputs`` is a list of strings for text, or of image *paths* for the
+        image model. A single string is accepted and answered with a one-item
+        list, so a caller never has to branch on how many it asked about.
+
+        The vectors are L2-normalized, which is what makes a dot product a
+        cosine similarity for whoever searches them later.
+
+        No ``except Exception`` around the encode. A raise here becomes a
+        failed Result with the traceback intact; catching it to return ``None``
+        cost the cause and left the caller reporting "embedder returned None",
+        which is what the native version did and what made encode failures
+        undiagnosable.
+        """
+        if self.model is None:
+            raise RuntimeError(f"{self.model_name} is not loaded")
+
+        batch = [inputs] if isinstance(inputs, str) else list(inputs)
+        if not batch:
+            return []
+
+        import numpy as np
+
+        vectors = self.model.encode(batch, normalize_embeddings=True,
+                                    convert_to_numpy=True)
+        sdk.log(f"encoded {len(batch)} input(s) with {self.model_name}",
+                level="debug")
+        # ``astype`` rather than trusting the model's dtype: the stored column
+        # is read back with ``np.frombuffer(..., dtype=np.float32)``, and a
+        # model that answered in float16 would produce buffers of the wrong
+        # length that only fail at search time.
+        return [np.asarray(vector, dtype=np.float32).tobytes()
+                for vector in vectors]
+
+
+class TextEmbedder(_SentenceTransformerEmbedder, BaseService):
+    """Embed text chunks for semantic search."""
+
+    name = "text_embedder"
+    description = "Embed text into vectors for semantic search."
+    shared = True
+    timeout = 300
+    requests = ["config.read", "paths.get", "fs.list", "fs.delete"]
+    exports = ["encode", "describe"]
+    setting = "embed_text_model_name"
+    fallback = "BAAI/bge-small-en-v1.5"
     config_settings = [
         ("Text Embedding Model", "embed_text_model_name",
          "SentenceTransformer model for text embeddings.",
          "BAAI/bge-small-en-v1.5",
          {"type": "text"}),
 
-        ("Image Embedding Model", "embed_image_model_name",
-         "CLIP model for image embeddings.",
-         "clip-ViT-B-32",
-         {"type": "text"}),
-
         ("GPU Acceleration", "embed_use_cuda",
-         "Use GPU for embedding. Provides a significant speed-up.",
+         "Use the GPU for embedding. Provides a significant speed-up.",
          True,
          {"type": "bool"}),
 
         ("Chunk Size", "embed_chunk_size",
-         "Size in tokens for text splitting. Smaller chunks store specific facts; larger chunks preserve more context.",
+         "Size in tokens for text splitting. Smaller chunks store specific "
+         "facts; larger chunks preserve more context.",
          512,
          {"type": "slider", "range": (64, 2048, 31), "is_float": False}),
     ]
 
-    def __init__(self, model_name, chunk_size=512, use_cuda=True):
-        """Initialize the base embedder."""
-        super().__init__()
-        self.model_name = model_name
-        self.shared = True  # Embedders are thread-safe (encode() is stateless)
-        self.chunk_size = chunk_size
-        self.use_cuda = use_cuda
 
-    def _load(self):
-        """Must implement model loading logic."""
-        raise NotImplementedError
+class ImageEmbedder(_SentenceTransformerEmbedder, BaseService):
+    """Embed images with CLIP, for searching pictures by description."""
 
-    def unload(self):
-        """Must implement RAM cleanup logic."""
-        raise NotImplementedError
-
-    def encode(self, inputs):
-        """Must return a numpy array (or list of arrays) of embeddings."""
-        raise NotImplementedError
-    
-    @staticmethod
-    def is_connected():
-        """Helper: Checks for internet connectivity."""
-        try:
-            socket.create_connection(("8.8.8.8", 53), timeout=3)
-            return True
-        except OSError:
-            return False
-
-# --- SUBCLASS: SENTENCE TRANSFORMERS ---
-class SentenceTransformerEmbedder(BaseEmbedder):
-    """Sentence transformer embedder."""
-    def __init__(self, model_name="BAAI/bge-small-en-v1.5", chunk_size=512, use_cuda=True):
-        """Initialize the sentence transformer embedder."""
-        super().__init__(model_name, chunk_size=chunk_size, use_cuda=use_cuda)
-        self.model = None
-        self.device = None
-        
-        # Create a safe folder name (e.g., "BAAI_bge-small-en-v1.5")
-        self.bundled_path = BASE_DIR / self.model_name.replace('/', '_')
-        self.model_is_bundled = os.path.exists(self.bundled_path)
-
-        self.download_path = DATA_DIR / self.model_name.replace('/', '_')
-        self.model_is_downloaded = os.path.exists(self.download_path)
-
-    def _set_offline_env(self, offline=True):
-        """Toggles HuggingFace offline mode environment variables."""
-        if offline:
-            os.environ['HF_HUB_OFFLINE'] = '1'
-            os.environ['TRANSFORMERS_OFFLINE'] = '1'
-            logger.info("Offline: Using local models only.")
-        else:
-            os.environ.pop('HF_HUB_OFFLINE', None)
-            os.environ.pop('TRANSFORMERS_OFFLINE', None)
-            logger.info("Online: Will download models if needed.")
-
-    def download(self):
-        """Downloads the model and saves it to the custom local folder. Returns True if successful, False otherwise."""
-        from sentence_transformers import SentenceTransformer
-
-        logger.info(f"Downloading {self.model_name}... Do not close the app.")
-        try:
-
-            # 1. Download to temporary cache
-            temp_model = SentenceTransformer(self.model_name)
-            
-            # 2. Save to our permanent local folder
-            # This extracts the weights/config from the cache to your folder
-            temp_model.save(str(self.download_path))
-            
-            logger.info(f"Successfully saved model to {self.download_path}")
-            
-            # Clean up temp model from RAM
-            del temp_model
-            gc.collect()
-            return True
-        except Exception as e:
-            logger.error(f"Download failed: {e}")
-            # Clean up partial download if it failed
-            if self.download_path.exists():
-                shutil.rmtree(self.download_path, ignore_errors=True)
-            return False
-
-    def _load(self):
-        """Loads the model into memory. Returns True if successful, False otherwise."""
-        if self.loaded and self.model is not None:
-            return True
-
-        import torch 
-        from sentence_transformers import SentenceTransformer
-        
-        # Determine Device — uses self.use_cuda from __init__
-        self.device = "cuda" if torch.cuda.is_available() and self.use_cuda else "cpu"
-        logger.debug(f"Using device: {self.device}")
-
-        # 1. Check Internet / Environment
-        connected = self.is_connected()
-        self._set_offline_env(not connected)
-
-        if not self.model_is_bundled:  # If not bundled, check download folder
-            if not self.model_is_downloaded:  # If not downloaded, check internet
-                if not connected:
-                    logger.error(f"Model {self.model_name} not bundled and no internet.")
-                    return False
-                
-                # If internet, attempt download
-                success = self.download()
-                if not success:
-                    # Download failed
-                    return False
-            # Model is downloaded, load from download path
-            logger.info(f"Found downloaded model weights for: {self.model_name}")
-            self.model = SentenceTransformer(
-                str(self.download_path),
-                device=self.device, 
-                local_files_only=True 
-            )
-        else:
-            # Model is bundled, load from BASE_DIR
-            try:
-                logger.info(f"Found bundled model weights for: {self.model_name}")
-                self.model = SentenceTransformer(
-                    str(self.bundled_path), 
-                    device=self.device, 
-                    local_files_only=True 
-                )
-            except Exception as e:
-                logger.error(f"Load failed: {e}")
-                return False
-        
-        # Set Context Length
-        self.model.max_seq_length = self.chunk_size
-        
-        self.loaded = True
-        return True
-
-    def unload(self):
-        """Handle unload."""
-        if self.model:
-            del self.model
-            self.model = None
-            self.loaded = False
-            
-            gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
-            logger.info("Sentence Transformer model unloaded.")
-
-    def encode(self, inputs, batch_size=11):
-        """
-        Accepts string or list of strings.
-        For images (image models), the input should be a list of image file paths.
-        Returns numpy array.
-        """
-        if not self.model or not self.loaded:
-            logger.warning("Attempted generation while model is unloaded.")
-            return None
-
-        import time as _time
-        input_count = len(inputs) if isinstance(inputs, list) else 1
-        logger.debug(f"Encoding {input_count} input(s) with {self.model_name} on {self.device}...")
-        t0 = _time.time()
-        try:
-            # normalize_embeddings=True is critical for Cosine Similarity
-            result = self.model.encode(inputs, normalize_embeddings=True, convert_to_numpy=True)
-            logger.debug(f"Encoded {input_count} input(s) in {_time.time() - t0:.2f}s")
-            return result
-        except Exception as e:
-            logger.error(f"Inference failed after {_time.time() - t0:.2f}s: {e}")
-            return None
-
-
-def build_services(config: dict) -> dict:
-    """Build services."""
-    return {
-        "text_embedder": SentenceTransformerEmbedder(
-            model_name=config.get("embed_text_model_name", "BAAI/bge-small-en-v1.5"),
-            use_cuda=config.get("embed_use_cuda", False),
-            chunk_size=config.get("embed_chunk_size", 512),
-        ),
-        "image_embedder": SentenceTransformerEmbedder(
-            model_name=config.get("embed_image_model_name", "clip-ViT-L-14"),
-            use_cuda=config.get("embed_use_cuda", False),
-            chunk_size=config.get("embed_chunk_size", 512),
-        ),
-    }
+    name = "image_embedder"
+    description = "Embed images into vectors for semantic search."
+    shared = True
+    timeout = 300
+    requests = ["config.read", "paths.get", "fs.list", "fs.delete"]
+    exports = ["encode", "describe"]
+    setting = "embed_image_model_name"
+    fallback = "clip-ViT-B-32"
+    config_settings = [
+        ("Image Embedding Model", "embed_image_model_name",
+         "CLIP model for image embeddings.",
+         "clip-ViT-B-32",
+         {"type": "text"}),
+    ]

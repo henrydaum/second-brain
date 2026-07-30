@@ -4,11 +4,12 @@
 dependencies_files = []
 dependencies_pip = ['librosa', 'numpy', 'soundfile']
 
-# soundfile/librosa decode audio in C and read the file themselves,
-# so their actions cannot be turned into Requests. A process boundary is
-# what actually contains them — and a malformed file that kills a box is a
-# failed parse rather than a dead kernel.
-isolation = "subprocess"
+# soundfile/librosa decode audio in C and read the file themselves, so their
+# actions cannot be turned into Requests. A process boundary is what actually
+# contains them — and a malformed file that kills a box is a failed parse
+# rather than a dead kernel. That boundary is not declared here: the kernel
+# derives it from the imports it can see (``sandbox/isolation.py``), because
+# code being contained may not be the authority on its own containment.
 
 import json
 from guest.parsing import ParseResult, basename, register
@@ -160,22 +161,24 @@ def parse_audio_text(sdk, path: str, config: dict = None) -> ParseResult:
     if the Whisper package isn't installed, this fails cleanly and the
     attachment falls back to pointer routing.
     """
-    whisper = (services or {}).get("whisper")
-    if whisper is None:
+    try:
+        text = (sdk.services.call("whisper", "transcribe",
+                                  audio_path=str(path)) or "").strip()
+    except sdk.Failed as exc:
+        # Not installed, not loaded, or it broke. All three are the same
+        # answer here: there is no text rendering for this file, and the
+        # attachment falls back to pointer routing.
         return ParseResult.failed(
-            "Whisper service not installed — no text rendering for audio",
+            f"Whisper is unavailable — no text rendering for audio ({exc})",
             modality="text",
         )
-    if not whisper.loaded:
-        if not whisper.load():
-            return ParseResult.failed(
-                "Whisper service failed to load", modality="text"
-            )
-
-    text = (whisper.transcribe(path) or "").strip()
 
     metadata = _probe_metadata(sdk, path)
-    metadata["model_name"] = getattr(whisper, "model_name", "unknown")
+    try:
+        described = sdk.services.call("whisper", "describe") or {}
+        metadata["model_name"] = described.get("model_name") or "unknown"
+    except sdk.Failed:
+        metadata["model_name"] = "unknown"
     limit = (config or {}).get("max_chars")
     if limit and len(text) > limit:
         text = text[:limit]
