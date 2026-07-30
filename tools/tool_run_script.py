@@ -44,7 +44,11 @@ class RunScript(BaseTool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Path to the script, in the scripts/ directory.",
+                "description": (
+                    "Absolute path to the script. It must already live in the "
+                    "scripts directory named in the Scripts section of your "
+                    "instructions — a script anywhere else is refused."
+                ),
             },
             "entry": {
                 "type": "string",
@@ -72,9 +76,16 @@ class RunScript(BaseTool):
     def agent_prompt_for(self, sdk) -> str:
         """Where scripts go and why to reach for one."""
         scripts = sdk.paths.get("scripts")
+        sep = "\\" if "\\" in scripts else "/"
         return (
             f"""## Scripts
-Write a script when you need to *do* something rather than build a capability: read a hundred files and summarize them, reshape some data, call an API in a loop, clean up a directory. Put it in {scripts} and run it with run_script.
+Write a script when you need to *do* something rather than build a capability: read a hundred files and summarize them, reshape some data, call an API in a loop, clean up a directory. Write it into the scripts directory and run it with run_script.
+
+**Write it to this exact directory, by absolute path:**
+
+    {scripts}
+
+So a script called `tidy.py` is written to `{scripts}{sep}tidy.py` — spell that whole path out when you create the file and again when you call run_script. A relative filename lands wherever the process happens to be sitting, which is the project root, not here; that is not the scripts directory, so the run is *refused* rather than asked about, and you have left a stray file behind. Nothing else about the file says it is a script — the directory is the entire declaration.
 
 A script is a plain file with functions that take `sdk`:
 
