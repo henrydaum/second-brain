@@ -253,3 +253,44 @@ def _read_request():
     """A CONFIG_READ Request, built where the import is cheap."""
     from sandbox.guest.requests import Request
     return Request(CONFIG_READ, {"key": "anything"})
+
+
+def test_a_failure_that_merely_says_denied_is_not_a_denial(interp,
+                                                           monkeypatch):
+    """The bug this field exists to fix.
+
+    ``denied`` used to be ``error.startswith("denied")``, so a handler
+    reporting a *remote* refusal made guest code catch ``sdk.Denied`` — the
+    kernel's own word for policy — and treat a web server's "no" as its own.
+    """
+    def remote_no(_ctx, _args):
+        return Result.failure("denied by the remote host")
+
+    monkeypatch.setitem(HANDLERS, CONFIG_READ, remote_no)
+
+    def plugin(sdk):
+        try:
+            sdk.config.read("k")
+        except sdk.Denied:
+            return sdk.ok("wrongly denied")
+        except sdk.Failed:
+            return sdk.ok("failed, correctly")
+        return sdk.ok("no failure")
+
+    assert run_in_process(interp, plugin, name="remote").data == \
+        "failed, correctly"
+
+
+def test_a_genuine_refusal_still_raises_denied(interp):
+    """The contract every ``except sdk.Denied:`` block depends on."""
+    def plugin(sdk):
+        try:
+            sdk.net.http("https://example.invalid/")
+        except sdk.Denied:
+            return sdk.ok("denied, correctly")
+        except sdk.Failed:
+            return sdk.ok("plain failure")
+        return sdk.ok("allowed")
+
+    assert run_in_process(interp, plugin, name="egress").data == \
+        "denied, correctly"

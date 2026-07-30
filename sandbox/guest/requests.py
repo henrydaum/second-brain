@@ -401,14 +401,17 @@ class Result:
     def denied(self) -> bool:
         """Whether this failure was a refusal rather than a breakage.
 
-        Reads :attr:`code`, with the old message-prefix check kept as a
-        fallback for a Result built by a peer that predates the field — a
-        subprocess runner from an older build, or one rebuilt from a stored
-        payload. A coded Result never consults the prefix.
+        Membership in :data:`~guest.codes.DENIAL_CODES`, and nothing else.
+
+        This used to read the *message*: a failure whose text began with the
+        word "denied" was taken for a policy refusal. That made a handler
+        reporting ``"denied by the remote host"`` raise :class:`Denied` in
+        guest code, so a web server's refusal was indistinguishable from the
+        kernel's. Every refusal is minted by :meth:`refusal`, which supplies a
+        code, so nothing needs the prefix any more — it stays in the text only
+        so a person reading the sentence still sees the word.
         """
-        if not self.ok and self.code:
-            return self.code in DENIAL_CODES
-        return not self.ok and self.error.startswith(DENIED)
+        return not self.ok and self.code in DENIAL_CODES
 
     @staticmethod
     def failure(error: str, retryable: bool = False,
