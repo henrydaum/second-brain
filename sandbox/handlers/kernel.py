@@ -2330,12 +2330,9 @@ def _console_write(ctx, args: dict) -> Result:
     if not token or CONSOLE.owner != token:
         return Result.refusal(
             "the console belongs to another frontend, or to none")
-    try:
-        CONSOLE.write(str(args.get("text") or ""),
-                      end=str(args.get("end", "\n")))
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"console write failed: {exc}")
+    CONSOLE.write(str(args.get("text") or ""),
+                  end=str(args.get("end", "\n")))
+    return Result(data=True)
 
 
 def _task_enqueue(ctx, args: dict) -> Result:
@@ -2343,12 +2340,9 @@ def _task_enqueue(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        for path in args.get("paths") or []:
-            db.enqueue_task(args.get("name"), path)
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"enqueue failed: {exc}")
+    for path in args.get("paths") or []:
+        db.enqueue_task(args.get("name"), path)
+    return Result(data=True)
 
 
 def _task_status(ctx, args: dict) -> Result:
@@ -2356,11 +2350,8 @@ def _task_status(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        return Result(data=db.get_task_status(args.get("name"),
-                                              args.get("path")))
-    except Exception as exc:
-        return Result.failure(f"status failed: {exc}")
+    return Result(data=db.get_task_status(args.get("name"),
+                                          args.get("path")))
 
 
 def _task_output(ctx, args: dict) -> Result:
@@ -2368,11 +2359,8 @@ def _task_output(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        return Result(data=_rows(db.get_task_output(args.get("name"),
-                                                    args.get("path"))))
-    except Exception as exc:
-        return Result.failure(f"output failed: {exc}")
+    return Result(data=_rows(db.get_task_output(args.get("name"),
+                                                args.get("path"))))
 
 
 def _task_list(ctx, args: dict) -> Result:
@@ -2446,10 +2434,7 @@ def _task_graph(ctx, args: dict) -> Result:
     graph = getattr(orchestrator, "dependency_pipeline_graph", None)
     if (bad := _need(graph, "the dependency pipeline")) is not None:
         return bad
-    try:
-        return Result(data=graph())
-    except Exception as exc:
-        return Result.failure(f"pipeline graph failed: {exc}")
+    return Result(data=graph())
 
 
 def _task_pause(ctx, args: dict) -> Result:
@@ -2487,17 +2472,14 @@ def _task_reset(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        if args.get("failed_only"):
-            db.reset_failed_tasks(name)
-        else:
-            db.reset_task(name)
-        clear = getattr(orchestrator, "clear_skip_cache", None)
-        if clear is not None:
-            clear(name)
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"task reset failed: {exc}")
+    if args.get("failed_only"):
+        db.reset_failed_tasks(name)
+    else:
+        db.reset_task(name)
+    clear = getattr(orchestrator, "clear_skip_cache", None)
+    if clear is not None:
+        clear(name)
+    return Result(data=True)
 
 
 def _task_trigger(ctx, args: dict) -> Result:
@@ -2526,16 +2508,18 @@ def _task_trigger(ctx, args: dict) -> Result:
         if key in properties
     }
     run_id = f"{name}:{uuid4().hex[:12]}"
+    # The payload's *values* came from the guest, so this is its mistake to
+    # hear about rather than a kernel failure.
     try:
-        creator(
-            run_id, name, triggered_by="manual",
-            payload_json=json.dumps(payload))
-        notify = getattr(orchestrator, "on_run_enqueued", None)
-        if notify is not None:
-            notify(run_id, name)
-        return Result(data=run_id)
-    except Exception as exc:
-        return Result.failure(f"task trigger failed: {exc}")
+        payload_json = json.dumps(payload)
+    except (TypeError, ValueError) as exc:
+        return Result.failure(f"payload is not JSON-serializable: {exc}",
+                              code=ERROR_INVALID_ARGUMENT)
+    creator(run_id, name, triggered_by="manual", payload_json=payload_json)
+    notify = getattr(orchestrator, "on_run_enqueued", None)
+    if notify is not None:
+        notify(run_id, name)
+    return Result(data=run_id)
 
 
 def _file_register(ctx, args: dict) -> Result:
@@ -2543,11 +2527,8 @@ def _file_register(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        db.upsert_file(args.get("path"), **(args.get("meta") or {}))
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"register failed: {exc}")
+    db.upsert_file(args.get("path"), **(args.get("meta") or {}))
+    return Result(data=True)
 
 
 def _file_list(ctx, args: dict) -> Result:
@@ -2555,13 +2536,10 @@ def _file_list(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    try:
-        modality = args.get("modality")
-        rows = (db.get_files_by_modality(modality) if modality
-                else db.get_all_files())
-        return Result(data=_rows(rows))
-    except Exception as exc:
-        return Result.failure(f"file list failed: {exc}")
+    modality = args.get("modality")
+    rows = (db.get_files_by_modality(modality) if modality
+            else db.get_all_files())
+    return Result(data=_rows(rows))
 
 
 # What a parse can hand back across the boundary. The other modalities
@@ -2636,10 +2614,7 @@ def _ledger_read(ctx, args: dict) -> Result:
     limit, bad = int_arg(args, "limit", 50, lo=1)
     if bad is not None:
         return bad
-    try:
-        return Result(data=_rows(db.get_ledger_rows(limit=limit)))
-    except Exception as exc:
-        return Result.failure(f"ledger read failed: {exc}")
+    return Result(data=_rows(db.get_ledger_rows(limit=limit)))
 
 
 # How often the wait below looks up to see whether the caller still wants an
@@ -2742,10 +2717,7 @@ def _app_stop(ctx, args: dict) -> Result:
         return Result.failure(
             "restart is not supported in this frontend" if restart
             else "stopping the application is not available")
-    try:
-        message = action()
-    except Exception as exc:
-        return Result.failure(f"could not stop the application: {exc}")
+    message = action()
     # No message means nothing was scheduled — a frontend that cannot restart.
     # Answering ok with no data would print as silence and read as success.
     if not message:
