@@ -2206,14 +2206,11 @@ def _frontend_bind(ctx, args: dict) -> Result:
 
     session_key = str(args.get("session_key") or "")
     external_id = args.get("external_id")
-    try:
-        if external_id is None:
-            return Result(data=adapter.bind_session(session_key))
-        return Result(data=adapter.identify(
-            session_key, external_id, args.get("config") or None,
-            user_type=str(args.get("user_type") or "user")))
-    except Exception as exc:
-        return Result.failure(f"bind failed: {exc}")
+    if external_id is None:
+        return Result(data=adapter.bind_session(session_key))
+    return Result(data=adapter.identify(
+        session_key, external_id, args.get("config") or None,
+        user_type=str(args.get("user_type") or "user")))
 
 
 def _frontend_attend(ctx, args: dict) -> Result:
@@ -2223,14 +2220,11 @@ def _frontend_attend(ctx, args: dict) -> Result:
         return refusal
 
     session_key = str(args.get("session_key") or "")
-    try:
-        if args.get("present"):
-            adapter.mark_attended(session_key)
-        else:
-            adapter.mark_unattended(session_key)
-        return Result(data=True)
-    except Exception as exc:
-        return Result.failure(f"attendance failed: {exc}")
+    if args.get("present"):
+        adapter.mark_attended(session_key)
+    else:
+        adapter.mark_unattended(session_key)
+    return Result(data=True)
 
 
 def _frontend_resolve(ctx, args: dict) -> Result:
@@ -2256,11 +2250,8 @@ def _frontend_resolve(ctx, args: dict) -> Result:
     request_id = str(args.get("request_id") or "")
     value = args.get("value")
 
-    try:
-        if not adapter.is_approval_pending(session_key, request_id or None):
-            return Result(data=False)
-    except Exception as exc:
-        return Result.failure(f"resolve failed: {exc}")
+    if not adapter.is_approval_pending(session_key, request_id or None):
+        return Result(data=False)
 
     def resolve():
         if request_id:
@@ -2269,6 +2260,9 @@ def _frontend_resolve(ctx, args: dict) -> Result:
 
     if (detached := _drive(adapter, resolve, "resolve")) is not None:
         return detached
+    # Inline only when the frontend did not ask to be detached — and inline
+    # means the whole turn runs here, tools and all. That is foreign code, so
+    # it keeps a guard where the lookup above does not.
     try:
         return Result(data=bool(resolve()))
     except Exception as exc:
@@ -2288,16 +2282,13 @@ def _frontend_pending(ctx, args: dict) -> Result:
         return refusal
 
     session_key = str(args.get("session_key") or "")
-    try:
-        if not adapter.has_pending_approval(session_key):
-            return Result(data=None)
-        order = getattr(adapter, "_pending_approval_order", None) or {}
-        waiting = list(order.get(session_key) or [])
-        # The id is enough to answer and only enough to answer — the same
-        # projection the ``approval`` render makes.
-        return Result(data=waiting[0] if waiting else True)
-    except Exception as exc:
-        return Result.failure(f"pending lookup failed: {exc}")
+    if not adapter.has_pending_approval(session_key):
+        return Result(data=None)
+    order = getattr(adapter, "_pending_approval_order", None) or {}
+    waiting = list(order.get(session_key) or [])
+    # The id is enough to answer and only enough to answer — the same
+    # projection the ``approval`` render makes.
+    return Result(data=waiting[0] if waiting else True)
 
 
 def _console_read(ctx, args: dict) -> Result:
