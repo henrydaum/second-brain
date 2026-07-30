@@ -108,7 +108,8 @@ def test_an_invented_request_type_cannot_even_be_built():
 def _populated_result() -> Result:
     """A Result with every field set to something distinguishable."""
     values = {"ok": False, "data": {"n": 1}, "error": "went wrong",
-              "retryable": True, "llm_summary": "a summary",
+              "retryable": True, "code": "a_code",
+              "llm_summary": "a summary",
               "attachment_paths": ["/tmp/a.png"], "also_contains": ["x"],
               "discovered_paths": ["/tmp/b"]}
     missing = {f.name for f in dataclasses.fields(Result)} - set(values)
@@ -166,3 +167,20 @@ def test_every_denial_code_is_a_real_code():
     # Breakage must never be catchable as a policy refusal.
     assert codes.ERROR_TIMEOUT not in codes.DENIAL_CODES
     assert codes.ERROR_HANDLER_ERROR not in codes.DENIAL_CODES
+
+
+def test_a_refusal_carries_the_denial_code_without_being_asked():
+    """All 20 existing `refusal` sites classify correctly untouched."""
+    from sandbox.guest.codes import ERROR_DENIED, ERROR_NOT_PERMITTED
+
+    assert Result.refusal("nope").code == ERROR_DENIED
+    assert Result.refusal().code == ERROR_DENIED
+    # A narrower reason can be named where it is known.
+    assert Result.refusal("outside", code=ERROR_NOT_PERMITTED).code == \
+        ERROR_NOT_PERMITTED
+
+
+def test_an_ordinary_failure_carries_no_code_by_default():
+    """The 166 existing `failure` sites are unchanged."""
+    assert Result.failure("went wrong").code == ""
+    assert Result.failure("went wrong", retryable=True).retryable is True

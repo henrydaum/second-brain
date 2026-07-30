@@ -303,7 +303,12 @@ class Request:
 # The return contract.
 # ──────────────────────────────────────────────────────────────────────
 
-DENIED = "denied"
+from .codes import DENIAL_CODES, ERROR_DENIED  # noqa: E402
+
+#: The word a refusal's message opens with. Cosmetic now that :attr:`Result.
+#: code` carries the signal, but kept so a person or the model reading the
+#: sentence still sees it. One definition, shared with the code vocabulary.
+DENIED = ERROR_DENIED
 
 
 class RequestFailed(Exception):
@@ -368,6 +373,10 @@ class Result:
     data: Any = None
     error: str = ""
     retryable: bool = False
+    #: Why it failed, for code rather than for a person — one of the
+    #: ``ERROR_*`` names in :mod:`guest.codes`, or empty. Empty is the norm and
+    #: is not a bug: most failures are only ever read. See that module.
+    code: str = ""
 
     # ── how a result reaches the agent and the frontend ────────────
     # ``data`` is for the caller; these carry the rest of what a plugin
@@ -394,20 +403,31 @@ class Result:
         return not self.ok and self.error.startswith(DENIED)
 
     @staticmethod
-    def failure(error: str, retryable: bool = False) -> "Result":
-        """Build a failure report."""
-        return Result(ok=False, error=error, retryable=retryable)
+    def failure(error: str, retryable: bool = False,
+                code: str = "") -> "Result":
+        """Build a failure report.
+
+        ``code`` is optional and usually stays empty — see ``guest/codes.py``
+        for when one is worth adding.
+        """
+        return Result(ok=False, error=error, retryable=retryable, code=code)
 
     @staticmethod
-    def refusal(reason: str = "") -> "Result":
-        """Build a denial — a failure whose cause is policy, not breakage."""
+    def refusal(reason: str = "", code: str = ERROR_DENIED) -> "Result":
+        """Build a denial — a failure whose cause is policy, not breakage.
+
+        ``code`` defaults to the generic refusal, so every existing caller
+        classifies correctly without being touched. Pass a narrower one from
+        ``DENIAL_CODES`` where the reason is known.
+        """
         detail = f"{DENIED}: {reason}" if reason else DENIED
-        return Result(ok=False, error=detail, retryable=False)
+        return Result(ok=False, error=detail, retryable=False, code=code)
 
     def to_dict(self) -> dict:
         """Serialize for the subprocess runner."""
         return {"ok": self.ok, "data": self.data,
                 "error": self.error, "retryable": self.retryable,
+                "code": self.code,
                 "llm_summary": self.llm_summary,
                 "attachment_paths": list(self.attachment_paths),
                 "also_contains": list(self.also_contains),
@@ -419,6 +439,7 @@ class Result:
         return Result(ok=raw["ok"], data=raw.get("data"),
                       error=raw.get("error", ""),
                       retryable=raw.get("retryable", False),
+                      code=raw.get("code", ""),
                       llm_summary=raw.get("llm_summary", ""),
                       attachment_paths=list(raw.get("attachment_paths") or []),
                       also_contains=list(raw.get("also_contains") or []),
