@@ -196,6 +196,13 @@ class _FS(_Namespace):
         Pointing this at a **file** returns that one entry, which is how you
         ask "has this changed?" without building a glob out of a filename.
 
+        **Not an existence test as written.** A missing path is a failed
+        Request, and a failed Request raises — so ``if sdk.fs.list(p):``
+        throws at exactly the moment the answer would have been "no". Wrap it
+        in ``try: ... except sdk.Failed: return False``. Ordinary SDK
+        behaviour, called out because this is the one place the failing case
+        is an answer you were expecting rather than something going wrong.
+
         Passing any of ``recursive`` / ``files_only`` / ``sort`` / ``limit``
         switches on the walking listing and changes the answer's shape to
         ``{"root", "entries", "truncated", "scan_truncated"}``. Use it for

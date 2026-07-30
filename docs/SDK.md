@@ -166,7 +166,7 @@ sdk.fs.list(path, pattern="*")             # -> [str]
 sdk.fs.list(path, details=True)            # -> [{path, name, is_dir, size, mtime}]
                                            # point it at a *file* for just that
                                            # one entry — this is how you ask
-                                           # "does it exist / has it changed?"
+                                           # "has it changed?"
                                            # mtime is st_mtime_ns; compare with !=
 sdk.fs.list(path, recursive=True, files_only=True,
             sort="mtime", limit=100)       # -> {root, entries, truncated,
@@ -178,7 +178,29 @@ sdk.fs.search(pattern, root=".", regex=True, mode="content",
 sdk.fs.delete(path)
 sdk.fs.move(src, dst, copy=False)
 sdk.fs.temp(directory=False, suffix="")    # scratch space; always allowed
+```
 
+**Testing whether a path exists.** There is no `sdk.fs.exists`, and
+`sdk.fs.list` is not one in disguise: a missing path is a *failed* Request,
+and a failed Request raises. So `if sdk.fs.list(p):` does not answer the
+question — it throws the moment the answer would have been "no", which is the
+only time you were asking. Catch it:
+
+```python
+def exists(sdk, path) -> bool:
+    """Whether a path is there."""
+    try:
+        return bool(sdk.fs.list(path))
+    except sdk.Failed:
+        return False
+```
+
+This is the shape every Request has — the value or a raise (see **Failure**
+above) — and it is not special to `fs.list`. It is called out here because
+this is the one place where the failing case is a perfectly ordinary answer
+you were expecting, rather than something going wrong.
+
+```python
 sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body,
                                            #     headers}
 
