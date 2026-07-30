@@ -589,3 +589,70 @@ def test_the_file_overrides_its_family_default(sb, tmp_path):
     report, spec = sb.inspect(script)
     assert report.ok, report.render()
     assert not spec.persistent
+
+
+from types import SimpleNamespace
+from sandbox import Sandbox, provenance
+from sandbox.bridge import adapt, configure
+from sandbox.console import Console
+from sandbox.guest.requests import Request, Result
+from sandbox.interpreter import Execution, Interpreter
+from sandbox.policy import SAFE, UNSAFE, Chain, Decision, classify
+
+# ──────────────────────────────────────────────────────────────────────
+# A deadline must measure the guest, not the clock.
+# ──────────────────────────────────────────────────────────────────────
+
+def _execution():
+    """A bare execution to account time against."""
+    return Execution(name="probe", chain=Chain())
+
+
+def test_waiting_on_the_kernel_is_not_charged_to_the_guest():
+    """An escort placing a model call, or a service inside sdk.ui.ask, is
+    waiting for something the kernel itself started. Charging that to its
+    deadline killed the healthy case — and made escorts unusable."""
+    execution = _execution()
+    started = time.monotonic()
+    execution.entered()
+    time.sleep(0.4)
+    execution.left()
+
+    assert execution.running_for(started) < 0.2
+
+
+def test_a_runaway_that_spins_on_requests_still_runs_out():
+    """The tempting simplification — "time since the guest last did
+    something" — makes ``while True: sdk.fs.list('.')`` immortal, because it
+    is never idle for more than a millisecond. Blocked time is subtracted
+    instead, which takes one long wait off in full and a thousand short ones
+    off to nearly nothing."""
+    execution = _execution()
+    started = time.monotonic()
+    end = time.time() + 0.4
+    while time.time() < end:
+        execution.entered()
+        execution.left()
+
+    assert execution.running_for(started) > 0.15
+
+
+def test_pure_compute_is_charged_in_full():
+    """Nothing is discounted for code that never asks the kernel anything."""
+    execution = _execution()
+    started = time.monotonic()
+    time.sleep(0.3)
+    assert execution.running_for(started) >= 0.3
+
+
+def test_nothing_outlives_the_hard_ceiling():
+    """Blocked time is discounted, so a runaway that hides inside long
+    Requests would otherwise never be overdue at all."""
+    from sandbox.watchdog import HARD_CEILING, overdue
+
+    execution = _execution()
+    execution.entered()          # blocked, and staying blocked
+    started = time.monotonic()
+    # Far under the running deadline, far over the wall-clock ceiling.
+    assert overdue(execution, started, deadline=1e9,
+                   now=started + HARD_CEILING + 1)

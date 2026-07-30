@@ -190,3 +190,65 @@ def test_the_guest_never_sees_the_chain(sb, tmp_path):
     finally:
         unload_box("probe_chain")
     assert result.data == []
+
+
+import time
+from types import SimpleNamespace
+from sandbox import Sandbox, provenance
+from sandbox.bridge import adapt, configure
+from sandbox.console import Console
+from sandbox.guest.requests import Request, Result
+from sandbox.interpreter import Execution, Interpreter
+from sandbox.policy import SAFE, UNSAFE, Chain, Decision, classify
+
+# ──────────────────────────────────────────────────────────────────────
+# Provenance has to survive a Request that re-enters the sandbox.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_callee_descends_from_its_caller():
+    """``Chain.push`` was only ever called at the outermost run, so every
+    chain was one link deep and the callee started a fresh one beside its
+    caller rather than below it."""
+    outer = Chain(root="user").push("tool_a")
+    with provenance.serving(outer, None):
+        caller = provenance.current()
+        assert caller is not None
+        inner = caller.chain.push("service_b")
+
+    assert inner.render() == "user -> tool_a -> service_b"
+    assert inner.depth == 2
+
+
+def test_a_tool_reaching_itself_is_refused():
+    """The cycle detector could never fire while chains were one link deep,
+    so a tool calling itself recursed until a pool ran dry."""
+    chain = Chain(root="user").push("tool_a")
+    with provenance.serving(chain, None):
+        recursive = provenance.current().chain.push("tool_a")
+
+    assert recursive.cyclic
+    verdict = classify(Request("fs.read", {"path": "x"}), recursive)
+    assert verdict.level == UNSAFE
+    assert "cycle" in verdict.reason
+
+
+def test_the_ambient_caller_is_cleared_even_when_a_handler_raises():
+    """A pool worker keeps its context between tasks, so a value left behind
+    would be believed by the next, unrelated Request that landed on it."""
+    assert provenance.current() is None
+    with pytest.raises(RuntimeError):
+        with provenance.serving(Chain(root="user"), None):
+            raise RuntimeError("handler blew up")
+    assert provenance.current() is None
+
+
+def test_a_grant_is_not_re_derived_by_a_callee():
+    """``push`` copies the caller's grant down unchanged. A callee that read
+    its *own* declaration instead would widen the set the user answered."""
+    approved = Chain(root="user", approved=frozenset({"net.http"})).push("cmd")
+    inner = approved.push("tool_b")
+
+    assert inner.approved == frozenset({"net.http"})
+    assert classify(Request("net.http", {"url": "https://x"}), inner).level == SAFE
+    # And nothing outside the grant rides in on it.
+    assert classify(Request("proc.run", {"argv": ["ls"]}), inner).level == UNSAFE

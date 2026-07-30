@@ -364,3 +364,83 @@ def _settle(console, timeout=1.0):
             if console._lines or console._closed:
                 return
         time.sleep(0.005)
+
+
+from sandbox.console import Console
+
+# ──────────────────────────────────────────────────────────────────────
+# The console is lent, not surrendered.
+# ──────────────────────────────────────────────────────────────────────
+
+class _Feed:
+    """A source that yields slowly, so a reader is still blocked in it."""
+
+    def __init__(self, lines, pause=0.2):
+        self._lines = list(lines)
+        self._pause = pause
+        self._at = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        time.sleep(self._pause)
+        if self._at >= len(self._lines):
+            raise StopIteration
+        self._at += 1
+        return self._lines[self._at - 1]
+
+
+def test_reclaiming_the_console_does_not_start_a_second_reader():
+    """Release used to stop the reader, which cleared the handle while that
+    thread was still blocked in ``readline`` — so the liveness guard could not
+    see it and the next claim started another. Two readers split a person's
+    keystrokes, which presents as the machine dropping characters."""
+    console = Console()
+    feed = _Feed(["one\n", "two\n", "three\n"])
+    before = _readers()
+
+    console.claim("first", source=feed)
+    time.sleep(0.05)
+    console.release("first")
+    console.claim("second", source=feed)
+    time.sleep(0.05)
+
+    assert _readers() - before == 1
+    console.stop()
+
+
+def test_a_superseded_reader_cannot_close_the_console_under_its_successor():
+    """The orphan's ``finally`` set ``_closed``, so a frontend that had just
+    claimed the console successfully got EOFError on its next read and stopped
+    itself. A frontend restart therefore killed the terminal."""
+    console = Console()
+    console.claim("first", source=_Feed(["a\n"], pause=0.15))
+    time.sleep(0.02)
+    console.release("first")
+    console.claim("second", source=_Feed(["b\n"] * 5, pause=0.15))
+
+    time.sleep(0.4)
+    console.read_line()          # must not raise
+    console.stop()
+
+
+def test_release_does_not_hand_the_next_claimant_stale_keystrokes():
+    """What was typed belonged to the frontend that has gone away.
+
+    Replaying it into a fresh session would answer a prompt nobody had seen
+    with a stranger's keystrokes.
+    """
+    console = Console()
+    console.claim("first", source=_Feed(["secret\n"] * 5, pause=0.02))
+    time.sleep(0.15)
+    assert console._lines, "nothing was buffered, so the test proves nothing"
+
+    console.release("first")
+    assert not console._lines
+    console.stop()
+
+
+def _readers() -> int:
+    """How many console reader threads are alive right now."""
+    return sum(1 for t in threading.enumerate() if t.name == "console-reader")

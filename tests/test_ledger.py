@@ -214,3 +214,60 @@ def test_install_records_provenance_with_hashes(tmp_path, monkeypatch):
     data = json.loads(row["data_json"])
     assert data["commit"] == "abc123"
     assert data["files"]["tools/tool_demo.py"] == package_manager._sha256(content)
+
+
+import sandbox  # noqa: F401  - installs the ``guest`` package alias
+from guest.loader import unload_box
+from sandbox import Sandbox, provenance
+from sandbox.bridge import adapt, configure
+from sandbox.console import Console
+from sandbox.guest.requests import Request, Result
+from sandbox.interpreter import Execution, Interpreter
+from sandbox.policy import SAFE, UNSAFE, Chain, Decision, classify
+
+# ──────────────────────────────────────────────────────────────────────
+# The flight recorder was not recording.
+# ──────────────────────────────────────────────────────────────────────
+
+def _sink(tmp_path):
+    """A real database and the sandbox sink that writes to it."""
+    from pipeline.database import Database
+    from runtime.ledger import sandbox_sink
+
+    db = Database(str(tmp_path / "ledger.db"))
+    return db, sandbox_sink(db)
+
+
+def test_an_effect_is_recorded_with_its_whole_chain(tmp_path):
+    """Nothing wired ``record=``, so no Request a plugin ever made reached the
+    ledger — the one place unattended work is meant to be reconstructable
+    from."""
+    from runtime.ledger import SANDBOX_ORIGIN
+
+    db, record = _sink(tmp_path)
+    chain = Chain(root="cron:nightly").push("task_index").push("service_web")
+    record(chain, Request("fs.write", {"path": "/tmp/x"}),
+           Decision(SAFE, "scratch"), Result(data=True))
+
+    [row] = db.get_ledger_rows(origin=SANDBOX_ORIGIN)
+    assert row["action_type"] == "fs.write"
+    assert row["ok"] == 1
+    assert "cron:nightly -> task_index -> service_web" in row["data_json"]
+
+
+def test_polling_reads_are_not_recorded_but_denials_are(tmp_path):
+    """A console frontend reads every poll — twenty rows a second, forever,
+    burying everything worth reading. But a *denied* read is a real event."""
+    from runtime.ledger import SANDBOX_ORIGIN
+
+    db, record = _sink(tmp_path)
+    chain = Chain(root="user").push("frontend_repl")
+
+    record(chain, Request("console.read", {}), Decision(SAFE, "ok"),
+           Result(data="hi"))
+    record(chain, Request("fs.read", {"path": "/etc/x"}),
+           Decision(UNSAFE, "no"), Result.refusal("nope"))
+
+    rows = db.get_ledger_rows(origin=SANDBOX_ORIGIN)
+    assert [r["action_type"] for r in rows] == ["fs.read"]
+    assert rows[0]["error_code"] == "denied"

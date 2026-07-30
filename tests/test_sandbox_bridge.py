@@ -108,7 +108,7 @@ def clean_boxes():
     yield
     for name in ("tool_word_count", "tool_shout", "task_extract",
                  "command_status", "tool_broken", "service_counter",
-                 "command_deploy", "frontend_web"):
+                 "command_deploy", "frontend_web", "service_keeper"):
         unload_box(name)
 
 
@@ -839,3 +839,111 @@ def test_a_channel_named_by_reference_is_refused(tmp_path):
 
     assert not report.ok
     assert "trigger_channels" in report.render()
+
+
+import time
+from sandbox import Sandbox, provenance
+from sandbox.console import Console
+from sandbox.guest.requests import Request, Result
+from sandbox.interpreter import Execution, Interpreter
+from sandbox.policy import SAFE, UNSAFE, Chain, Decision, classify
+
+# ──────────────────────────────────────────────────────────────────────
+# A resident service must have something to answer Requests from.
+# ──────────────────────────────────────────────────────────────────────
+
+SERVICE = '''
+"""A service that persists a setting it owns."""
+
+from guest.bases import BaseService
+
+
+class Keeper(BaseService):
+    """Reads and writes its own config."""
+
+    name = "keeper"
+    exports = ["remember", "recall"]
+    requests = ["config.read", "config.write"]
+
+    def start(self, sdk):
+        """Nothing to open."""
+        return True
+
+    def remember(self, sdk, value):
+        """Persist through the service-owned setting."""
+        sdk.config.write("keeper_note", value, scope="plugin")
+        return True
+
+    def recall(self, sdk):
+        """Read it back."""
+        return sdk.config.read("keeper_note")
+'''
+
+
+def _keeper(tmp_path, sandbox_):
+    """Build and load the migrated service the way discovery would."""
+    path = tmp_path / "service_keeper.py"
+    path.write_text(SERVICE, encoding="utf-8")
+    module = adapt(path)
+    assert module is not None, "the service did not bridge"
+    return module.build_services({})["keeper"]
+
+
+def test_a_resident_service_can_reach_config(tmp_path, box):
+    """A service is loaded before any session exists, so nothing handed it a
+    context — and a handler with no context answers from nothing.
+
+    ``config.read`` is the probe because it is classified SAFE and therefore
+    actually reaches a handler. It is also where the damage was worst: it
+    returned None for every key, which is indistinguishable from unset, so the
+    timekeeper read back an empty job list and carried on.
+    """
+    store = {"keeper_note": "already on disk"}
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        config=store, db=None, services={}, runtime=None, user_id=1,
+        session_key=session_key))
+
+    service = _keeper(tmp_path, box)
+    assert service.load() is True
+    try:
+        assert service.recall() == "already on disk"
+    finally:
+        service.unload()
+
+
+def test_without_a_context_a_service_reads_nothing(tmp_path, box):
+    """The regression, stated as the bug: no context, no answer.
+
+    Note what this does *not* do — raise. That is the whole reason it survived
+    a green suite for so long: an unwired service looks exactly like a
+    correctly wired one whose setting happens to be unset.
+    """
+    service = _keeper(tmp_path, box)
+    assert service.load() is True
+    try:
+        assert service.recall() is None
+    finally:
+        service.unload()
+
+
+def test_a_service_write_outside_its_own_settings_is_refused(tmp_path, box):
+    """Reaching the handler is not the same as being allowed to.
+
+    A plugin persisting a setting the registry says it owns is safe; anything
+    else is a config change and asks. This service is synthetic and owns
+    nothing, so it is refused at the gate — which is the correct answer and
+    confirms the context did not quietly widen anything.
+    """
+    from sandbox.bridge import ServiceCallFailed
+
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        config={}, db=None, services={}, runtime=None, user_id=1,
+        session_key=session_key))
+    service = _keeper(tmp_path, box)
+    assert service.load() is True
+    try:
+        with pytest.raises(ServiceCallFailed) as caught:
+            service.remember("not mine to write")
+        assert "denied" in str(caught.value)
+    finally:
+        service.unload()

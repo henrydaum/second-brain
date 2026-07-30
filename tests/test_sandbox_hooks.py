@@ -526,3 +526,44 @@ def test_a_missing_handler_is_rejected(tmp_path):
     report = validate_file(path)
     assert not report.ok
     assert "no such method" in report.render()
+
+
+import time
+from sandbox import Sandbox, provenance
+from sandbox.console import Console
+from sandbox.guest.requests import Request, Result
+from sandbox.interpreter import Execution, Interpreter
+from sandbox.policy import SAFE, UNSAFE, Chain, Decision, classify
+
+# ──────────────────────────────────────────────────────────────────────
+# The escort's view of the model.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_an_escort_is_shown_the_profile_name(monkeypatch):
+    """``ModelRequest.llm`` is a name. Reaching for ``.model_name`` on a string
+    yields nothing, so every escort ever built was shown ""."""
+    from runtime.hooks import ModelRequest
+    from sandbox.hooks import project_model_request
+
+    request = ModelRequest(llm="fast-profile", messages=[])
+    assert project_model_request(request)["llm"] == "fast-profile"
+
+
+def test_an_escort_swaps_by_name_and_unknown_names_are_ignored(monkeypatch):
+    """Backends stopped being services when the LLM became kernel routing, so
+    looking a profile up in ``runtime.services`` found nothing and no
+    sandboxed escort could swap a model at all."""
+    import llm as llm_registry
+    from runtime.hooks import ModelRequest
+    from sandbox.hooks import apply_model_request
+
+    monkeypatch.setattr(llm_registry, "brain",
+                        lambda name: object() if name == "big" else None)
+    runtime = SimpleNamespace(services={}, config={})
+    request = ModelRequest(llm="small", messages=[])
+
+    apply_model_request(request, {"llm": "big"}, runtime)
+    assert request.llm == "big"          # the name, never a brain object
+
+    apply_model_request(request, {"llm": "does-not-exist"}, runtime)
+    assert request.llm == "big"          # silently retargeting is the worst case
