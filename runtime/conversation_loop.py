@@ -334,13 +334,25 @@ class ConversationLoop:
                     break
 
             if cs.turn_priority == actor_id and not restarting and not self._restart_requested():
-                # Only nudge the LLM for a wrap-up when the loop genuinely ran
-                # out of budget/iterations — a failed action ending the turn
-                # would make the "you've hit the tool-call limit" premise false.
-                if not self._cancelled() and not action_failed:
-                    self._finish_over_budget(cs, actor_id, history, new_messages, attachments, db, conversation_id)
-                if not self._restart_requested():
-                    self._enact_logged(cs, "end_turn", None, actor_id)
+                # The barrier before anything else that ends the turn. It used
+                # to live only inside the two doorways, which meant a turn
+                # leaving by any *other* route — a failed non-tool action, a
+                # cancel, a priority handoff — walked out past its own
+                # children and their reports were never delivered. That is
+                # the quiet failure this whole mechanism exists to prevent,
+                # so it is asked on every path out rather than on the two
+                # that happened to be doorways.
+                if self._subagent_barrier(self._session()):
+                    restarting = True
+                else:
+                    # Only nudge the LLM for a wrap-up when the loop genuinely
+                    # ran out of budget/iterations — a failed action ending the
+                    # turn would make the "you've hit the tool-call limit"
+                    # premise false.
+                    if not self._cancelled() and not action_failed:
+                        self._finish_over_budget(cs, actor_id, history, new_messages, attachments, db, conversation_id)
+                    if not self._restart_requested():
+                        self._enact_logged(cs, "end_turn", None, actor_id)
 
             return self._final_text, new_messages, attachments
         finally:

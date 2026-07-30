@@ -99,6 +99,13 @@ SETTINGS_DATA = [
      4,
      {"type": "slider", "range": (1, 16, 15), "is_float": False}),
 
+    ("Max Subagent Depth", "max_subagent_depth",
+     "How deep spawned agents may nest. 1 (default) means a subagent may not "
+     "spawn agents of its own. Raise it only deliberately: a fan-out is "
+     "multiplicative, and nothing in the tree can answer an approval dialog.",
+     1,
+     {"type": "slider", "range": (1, 4, 3), "is_float": False}),
+
     ("Subagent Timeout", "subagent_timeout_seconds",
      "Max seconds a spawned agent may run. A child still running at this "
      "deadline is cancelled and reported as failed — never silently dropped.",

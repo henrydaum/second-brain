@@ -941,6 +941,43 @@ collecting children must not depend on which plugins are installed. It stands
 ahead of the doormen *and* ahead of `DOORMAN_FIRE_LIMIT`, because a turn that
 spent its doorman budget must still not abandon agents it started.
 
+**And it is asked twice, on purpose.** The doorways are the *right* place —
+they hold agent priority for the whole wait, so no user message lands between
+the halves of one logical turn. But they are not the *only* way out of a
+drive: a failed action, a priority handoff, an exhausted iteration budget all
+leave without reaching one, and on those paths the children were abandoned
+with their reports produced and never delivered. That failure is silent, which
+is the worst kind — the agent simply reports nothing and, in practice, spawns
+the same work again. So `_drive_agent_turn` asks again after `loop.drive()`
+returns: one line every drive passes through, whatever route it took.
+`barrier()` settles what it collects, so the second ask on a normal turn finds
+nothing. The re-drive loop already restores agent priority for a restart set
+after `end_turn`, which is what makes the late ask work.
+
+**Depth is lineage on the handle, not chain depth.** A subagent's turn is not
+a nested sandbox call — its Requests build a *fresh* `Chain`, so `Chain.depth`
+is back to zero for every generation and cannot bound recursion. Each `Handle`
+carries `depth` and `parent`, `max_subagent_depth` (default 1) bounds it, and
+a spawner whose handle can no longer be identified is read as depth 1 rather
+than 0 — being forgotten must not buy unlimited nesting. Cancellation walks
+*down* that lineage: `cancel` takes a child's descendants with it, `cancel_for`
+is what `/cancel` reaches for, and `cancel_all` is the kill switch shutdown
+uses. Stopping an agent while its children keep spending money on a question
+nobody is waiting for is the worst of both.
+
+**A deadline measures running, not waiting.** The clock starts when a pool
+worker picks a child up, not when it was submitted: a fan-out wider than
+`max_concurrent_subagents` queues, and charging a child for the queue cancels
+the tail of a large fan-out before it has said a word. Same distinction the
+sandbox watchdog draws between elapsed and blocked time.
+
+**A subagent renders to no frontend.** Its session belongs to nobody, and
+`BaseFrontend._live_session_keys` used to return *every* session the runtime
+knew about — so a child spawned from Telegram typed its tool calls into the
+REPL in front of whoever was sitting there. The filter is ownership, not the
+subagent prefix as such: a session no person is looking at has no frontend to
+render to.
+
 Two mechanisms died with the migration and should not come back: the
 session-side set of "children the parent already cancelled" (needed only to
 suppress a stale completion echo from a run with no state of its own — a handle

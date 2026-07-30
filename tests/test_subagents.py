@@ -105,11 +105,106 @@ def settle(registry, handle, timeout=5.0):
 # The guards. Each one is a way a spawn can go badly wrong quietly.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_a_subagent_cannot_spawn_a_subagent():
-    """A child cannot answer a dialog, so a tree of them steers itself."""
+def test_a_subagent_cannot_spawn_a_subagent_at_the_default_depth():
+    """max_subagent_depth is 1: a turn may spawn, a child may not."""
     registry, _ = registry_for()
-    with pytest.raises(PermissionError, match="cannot spawn"):
+    with pytest.raises(PermissionError, match="nest more than 1"):
         registry.spawn("go", owner=f"{SESSION_PREFIX}42")
+
+
+def test_an_unidentifiable_spawner_is_treated_as_a_child_not_a_turn():
+    """Fail closed. A subagent session whose handle the registry no longer
+    holds — collected, or a restart under it — must not read as depth 0,
+    which would buy unlimited nesting for the price of being forgotten."""
+    registry, _ = registry_for(config={"max_subagent_depth": 2})
+    # No handle exists for conversation 999, but the key says it is a child.
+    child = registry.spawn("go", owner=f"{SESSION_PREFIX}999")
+    settle(registry, child)
+    assert registry.get(child.id).depth == 1
+
+    registry2, _ = registry_for(config={"max_subagent_depth": 1})
+    with pytest.raises(PermissionError):
+        registry2.spawn("go", owner=f"{SESSION_PREFIX}999")
+
+
+def test_depth_is_counted_down_the_lineage_when_nesting_is_allowed():
+    registry, runtime = registry_for(config={"max_subagent_depth": 3,
+                                             "max_concurrent_subagents": 4})
+    parent = registry.spawn("parent work", owner="repl")
+    # A grandchild spawned from inside the parent's own session.
+    child = registry.spawn("child work",
+                           owner=f"{SESSION_PREFIX}{parent.conversation_id}")
+    assert (parent.depth, child.depth) == (0, 1)
+    assert child.parent == parent.id
+
+
+def test_cancelling_a_parent_takes_its_children_with_it():
+    """A child of a stopped agent is work for a parent that is gone."""
+    release = threading.Event()
+
+    def turn(key, prompt, **kw):
+        release.wait(5)
+        return SimpleNamespace(ok=True, messages=["late"], error=None)
+
+    registry, _ = registry_for(turn=turn, config={"max_subagent_depth": 3})
+    parent = registry.spawn("parent", owner="repl")
+    child = registry.spawn("child",
+                           owner=f"{SESSION_PREFIX}{parent.conversation_id}")
+    try:
+        assert registry.cancel(parent.id) is True
+        assert registry.get(child.id).state == CANCELLED
+    finally:
+        release.set()
+
+
+def test_cancel_for_stops_everything_one_session_started():
+    """What /cancel reaches for."""
+    release = threading.Event()
+
+    def turn(key, prompt, **kw):
+        release.wait(5)
+        return SimpleNamespace(ok=True, messages=["late"], error=None)
+
+    registry, _ = registry_for(turn=turn)
+    mine = [registry.spawn(f"job {i}", owner="repl") for i in range(3)]
+    theirs = registry.spawn("other", owner="telegram")
+    try:
+        assert registry.cancel_for("repl") == 3
+        assert all(registry.get(h.id).state == CANCELLED for h in mine)
+        assert registry.get(theirs.id).state == RUNNING
+    finally:
+        release.set()
+
+
+def test_a_queued_child_does_not_burn_its_deadline_while_it_waits():
+    """A fan-out wider than the pool queues, and a deadline running in the
+    queue cancels the tail before it has said a word."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def turn(key, prompt, **kw):
+        started.set()
+        release.wait(5)
+        return SimpleNamespace(ok=True, messages=["done"], error=None)
+
+    # One worker: the second spawn cannot start until the first finishes.
+    registry, _ = registry_for(turn=turn,
+                               config={"max_concurrent_subagents": 1,
+                                       "subagent_timeout_seconds": 2})
+    first = registry.spawn("first", owner="repl")
+    queued = registry.spawn("queued", owner="repl")
+    try:
+        assert started.wait(5)
+        # Its deadline has not started, so it cannot be overdue however long
+        # the queue is.
+        assert queued.deadline == float("inf")
+        time.sleep(0.5)
+        assert registry.get(queued.id).state == RUNNING
+    finally:
+        release.set()
+    settle(registry, first)
+    settle(registry, queued)
+    assert registry.get(queued.id).state == DONE
 
 
 def test_a_subagent_refuses_the_conversation_the_user_is_looking_at():
@@ -427,6 +522,151 @@ def test_the_barrier_survives_a_broken_session():
             raise RuntimeError("no lock here")
 
     assert registry.barrier(Hostile()) is False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The barrier, from inside a real drive.
+#
+# The bug these exist for: the barrier used to live only inside the two
+# end_turn doorways, so a turn leaving by any other route walked out past its
+# own children and their reports were never delivered. It reproduces only with
+# a real ConversationLoop, because a hand-called barrier is by definition on
+# the path that works.
+# ──────────────────────────────────────────────────────────────────────
+
+def _turn_harness(tmp_path, responses, turn=None):
+    """A real runtime whose agent gets scripted responses."""
+    from agent.tool_registry import ToolRegistry
+    from pipeline.database import Database
+    from plugins.BaseTool import BaseTool, ToolResult
+    from runtime.conversation_runtime import ConversationRuntime
+
+    def _resp(content="", tool_calls=None):
+        return SimpleNamespace(content=content, tool_calls=tool_calls or [],
+                               has_tool_calls=bool(tool_calls),
+                               is_error=False, prompt_tokens=0, error=None)
+
+    seen = []
+
+    class LLM:
+        context_size = 0
+        is_llm_backend = True
+        model_name = "fake"
+        loaded = True
+
+        def chat_with_tools(self, messages, tools=None, attachments=None):
+            text = "\n".join(str(m.get("content") or "") for m in messages)
+            if "[Note: you are a background agent" in text:
+                return _resp(content="CHILD REPORT")
+            seen.append(text)
+            kind, value = responses[min(len(seen) - 1, len(responses) - 1)]
+            if kind == "spawn":
+                import json
+                return _resp(tool_calls=[{
+                    "id": f"c{len(seen)}", "name": "spawner",
+                    "arguments": json.dumps({"prompt": value})}])
+            if kind == "boom":
+                return _resp(tool_calls=[{"id": "b", "name": "boom",
+                                          "arguments": "{}"}])
+            return _resp(content=value)
+
+    class Spawner(BaseTool):
+        name = "spawner"
+        description = "spawn"
+        parameters = {"type": "object",
+                      "properties": {"prompt": {"type": "string"}}}
+        requires_services = []
+        max_calls = 20
+
+        def run(self, context, **kwargs):
+            handle = context.runtime.subagents.spawn(
+                kwargs.get("prompt") or "x", title=kwargs.get("prompt") or "x",
+                owner=context.session_key,
+                owner_conversation_id=(context.runtime.sessions
+                                       .get(context.session_key)
+                                       .conversation_id))
+            return ToolResult(True, data={"id": handle.id},
+                              llm_summary="spawned")
+
+    db = Database(str(tmp_path / "turn.db"))
+    cid = db.create_conversation("parent")
+    registry = ToolRegistry(db, {}, {})
+    registry.register(Spawner())
+    rt = ConversationRuntime(
+        db=db, services={"llm": LLM()}, tool_registry=registry,
+        config={"max_concurrent_subagents": 4,
+                "subagent_timeout_seconds": 30})
+    registry.runtime = rt
+    if turn is not None:
+        rt.subagents._config = rt.config
+    rt.load_conversation("repl", cid)
+    rt.active_session_key = "repl"
+    return rt, seen
+
+
+def test_a_turn_with_a_failing_tool_call_still_collects_its_children(tmp_path):
+    """A failed tool call is feedback, not a turn-ender, so this one does
+    reach a doorway. Pinned anyway: it is the shape the live failure was
+    reported in, and it must keep working whichever barrier catches it."""
+    rt, seen = _turn_harness(tmp_path, [
+        ("spawn", "do the thing"),
+        ("boom", None),              # a tool that does not exist -> failure
+        ("text", "PARENT FINAL"),
+    ])
+    try:
+        rt.iterate_agent_turn("repl", "go")
+        history = "\n".join(seen)
+        assert "[Background agent" in history, (
+            "the child's report never reached the model")
+        assert not rt.subagents.pending_for("repl")
+    finally:
+        rt.subagents.stop()
+
+
+def test_children_are_collected_even_when_the_loop_never_reaches_a_doorway(tmp_path):
+    """The backstop, exercised on a drive that leaves by no doorway at all.
+
+    ``drive`` is stubbed to return the way a failed action, a priority handoff
+    or an exhausted iteration budget leaves it: without enacting end_turn and
+    without consulting either end_turn doorway. Before the backstop in
+    ``_drive_agent_turn`` this abandoned every pending child silently.
+    """
+    rt, seen = _turn_harness(tmp_path, [("text", "unused")])
+    session = rt.sessions["repl"]
+    handle = rt.subagents.spawn("do the thing", title="Orphan", owner="repl",
+                                owner_conversation_id=session.conversation_id)
+    settle(rt.subagents, handle)
+
+    import runtime.runtime_config as cfg
+    from runtime.session import RuntimeResult
+
+    class SilentLoop:
+        def drive(self, *a, **kw):
+            return "", [], []          # no doorway, no end_turn
+
+    original, cfg.build_loop = cfg.build_loop, lambda *a, **kw: SilentLoop()
+    try:
+        rt._drive_agent_turn(session, RuntimeResult())
+    finally:
+        cfg.build_loop = original
+        rt.subagents.stop()
+
+    assert any("Background agent" in m for m in session.pending_user_messages), (
+        "a drive that reached no doorway abandoned its child")
+
+
+def test_a_normal_turn_still_collects_its_children(tmp_path):
+    """The path that always worked, kept working."""
+    rt, seen = _turn_harness(tmp_path, [
+        ("spawn", "do the thing"),
+        ("text", "spawned, ending"),
+        ("text", "PARENT FINAL"),
+    ])
+    try:
+        rt.iterate_agent_turn("repl", "go")
+        assert "[Background agent" in "\n".join(seen)
+    finally:
+        rt.subagents.stop()
 
 
 # ──────────────────────────────────────────────────────────────────────

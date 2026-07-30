@@ -877,13 +877,33 @@ class BaseFrontend:
     def _live_session_keys(self) -> list[str]:
         """Session keys this frontend currently has open.
 
-        Default: every session the runtime knows about. Subclasses that
-        multiplex multiple platforms behind one runtime should override to
-        scope this to their own sessions.
+        Every session the runtime knows about, *except* the ones no frontend
+        owns. A background driver — a subagent above all — drives a session
+        that belongs to nobody, and it renders exactly like any other turn:
+        tool statuses, streamed text, typing. Without this filter every
+        frontend rendered every one of them, so a subagent spawned from
+        Telegram typed its tool calls into the REPL in front of whoever
+        happened to be sitting there.
+
+        The rule is ownership, not the subagent prefix specifically: a session
+        driven by nothing a person is looking at has no frontend to render to.
+        Subclasses that multiplex several platforms behind one runtime should
+        still override this to scope it to their own sessions.
         """
         if self.runtime is None:
             return []
-        return list(self.runtime.sessions.keys())
+        return [key for key, session in list(self.runtime.sessions.items())
+                if not self._is_background_session(key, session)]
+
+    @staticmethod
+    def _is_background_session(key: str, session) -> bool:
+        """Whether this session is driven by code rather than by a person.
+
+        Asked of the runtime's own marker for it — a spawned agent's session
+        key — rather than of anything the session claims about itself.
+        """
+        from runtime.subagents import is_subagent_session
+        return is_subagent_session(key)
 
     def _render_tool_status_event(self, payload: dict) -> None:
         """Internal helper to render tool status event."""

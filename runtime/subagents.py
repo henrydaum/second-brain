@@ -50,6 +50,10 @@ SESSION_PREFIX = "spawn_subagent:"
 
 DEFAULT_TIMEOUT = 300
 DEFAULT_CEILING = 4
+# One level: a turn may spawn, a child may not. Nothing in the tree can answer
+# a dialog, and a fan-out is multiplicative, so the depth someone is willing to
+# run unattended is theirs to choose rather than a constant.
+DEFAULT_DEPTH = 1
 POLL_SECONDS = 0.25
 BARRIER_POLL_SECONDS = 1.0
 
@@ -82,7 +86,13 @@ class Handle:
     id: str
     conversation_id: int
     title: str
-    deadline: float
+    # How long this child may *run*. The clock starts when a pool worker picks
+    # it up, not when it was submitted: a fan-out wider than the pool queues,
+    # and a deadline running while queued would cancel the tail of a large
+    # fan-out before it ever spoke to a model. ``deadline`` is infinite until
+    # then, so a queued child is never overdue.
+    timeout: float
+    deadline: float = float("inf")
     state: str = RUNNING
     text: str = ""
     error: str = ""
@@ -94,6 +104,14 @@ class Handle:
     # has since switched conversations must not receive the notice; the result
     # still lives in the child's own conversation.
     owner_conversation_id: int | None = None
+    # Where this sits in the spawn tree. Depth 0 was started by a real turn;
+    # depth 1 by a child of one. This cannot be read off the provenance chain:
+    # a subagent's turn is not a nested sandbox call, so its Requests build a
+    # *fresh* chain and ``Chain.depth`` is back to zero for every generation.
+    # The lineage has to be carried here, which is also what lets a cancel
+    # walk down it.
+    depth: int = 0
+    parent: str | None = None
     collected: bool = False
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
@@ -174,10 +192,7 @@ class SubagentRegistry:
                 logger.exception("could not unsubscribe from %s",
                                  SUBAGENT_SPAWN)
             self._unsubscribe = None
-        with self._lock:
-            running = [h.id for h in self._handles.values() if not h.finished]
-        for handle_id in running:
-            self.cancel(handle_id)
+        self.cancel_all()
         pool, self._pool = self._pool, None
         if pool is not None:
             pool.shutdown(wait=False)
@@ -201,6 +216,39 @@ class SubagentRegistry:
                               or DEFAULT_TIMEOUT))
         except (TypeError, ValueError):
             return DEFAULT_TIMEOUT
+
+    @property
+    def max_depth(self) -> int:
+        """How deep the spawn tree may go. 1 = a child may not spawn."""
+        config = self._config or getattr(self.runtime, "config", None) or {}
+        try:
+            return max(1, int(config.get("max_subagent_depth")
+                              or DEFAULT_DEPTH))
+        except (TypeError, ValueError):
+            return DEFAULT_DEPTH
+
+    def _spawner(self, owner: str | None) -> Handle | None:
+        """The handle whose child turn is doing this spawning, if any.
+
+        A subagent session's key carries its conversation id, which is what
+        connects a running child back to its own handle — the child cannot be
+        asked, and would not be believed if it could.
+        """
+        if not is_subagent_session(owner):
+            return None
+        try:
+            cid = int(str(owner).split(":", 1)[1])
+        except (IndexError, ValueError):
+            return None
+        with self._lock:
+            # A running handle first — that is the child actually spawning.
+            # Falling back to the newest handle for the conversation matters
+            # because a scheduled job reuses its conversation, so the id alone
+            # can match several generations of the same job.
+            matches = [h for h in self._handles.values()
+                       if h.conversation_id == cid]
+        running = [h for h in matches if not h.finished]
+        return (running or matches or [None])[-1]
 
     def _executor(self) -> ThreadPoolExecutor:
         """The pool, sized on first use so a config edit before boot counts."""
@@ -233,11 +281,26 @@ class SubagentRegistry:
         prompt = (prompt or "").strip()
         if not prompt:
             raise ValueError("prompt is required")
-        # No recursive spawning. A child cannot answer a dialog, so a tree of
-        # them is a tree nobody is steering — and the fan-out is multiplicative.
-        if is_subagent_session(owner):
+
+        # How deep this would sit. A fan-out is multiplicative, and nobody in
+        # the tree can answer a dialog, so the depth a person is willing to
+        # run unattended is a setting rather than a constant.
+        spawner = self._spawner(owner)
+        if spawner is not None:
+            depth = spawner.depth + 1
+        elif is_subagent_session(owner):
+            # A subagent whose own handle we can no longer identify — it was
+            # collected, or the registry was restarted under it. Fail closed:
+            # the one thing known for certain is that it *is* a child, so its
+            # child is at least depth 1. Reading this as depth 0 would let a
+            # forgotten handle buy unlimited nesting.
+            depth = 1
+        else:
+            depth = 0
+        if depth >= self.max_depth:
             raise PermissionError(
-                "a spawned agent cannot spawn agents of its own")
+                f"subagents may not nest more than {self.max_depth} deep "
+                f"(max_subagent_depth); this would be depth {depth + 1}")
 
         title = (title or "Subagent").strip() or "Subagent"
         paths = self._attachment_paths(attachments)
@@ -266,12 +329,17 @@ class SubagentRegistry:
             id=uuid.uuid4().hex[:12],
             conversation_id=cid,
             title=title,
-            deadline=time.time() + timeout,
+            timeout=timeout,
             owner=owner or None,
             owner_conversation_id=owner_conversation_id,
+            depth=depth,
+            parent=spawner.id if spawner is not None else None,
         )
         with self._lock:
             self._handles[handle.id] = handle
+        logger.info("subagent %s spawned: %r in conversation #%s (owner=%s, "
+                    "depth=%d, timeout=%ds)",
+                    handle.id, title, cid, owner, depth, timeout)
         self._executor().submit(self._run, handle, prompt, paths)
         return handle
 
@@ -336,6 +404,11 @@ class SubagentRegistry:
             # work whose failure has already been reported.
             if handle.state == CANCELLED:
                 return
+            # The clock starts here, not at submission: everything above this
+            # line may have been spent queued behind the concurrency ceiling,
+            # and charging a child for the queue cancels the tail of a large
+            # fan-out before it has said a word.
+            handle.deadline = time.time() + handle.timeout
             if handle.owner:
                 prompt += REPORT_FRAMING
             runtime.open_session(session_key,
@@ -449,20 +522,49 @@ class SubagentRegistry:
                 return
 
     def cancel(self, handle_id: str) -> bool:
-        """End a child now, and record that it delivered nothing."""
+        """End a child now, along with anything it started.
+
+        Cancellation walks *down* the lineage. A child that spawned children
+        of its own is about to stop making Requests, so nothing would ever
+        reach its descendants — they would run to their own deadlines doing
+        work for a parent that is gone. The walk is bounded by
+        ``max_subagent_depth`` on the way in, so it terminates.
+        """
         handle = self.get(handle_id)
         if handle is None or handle.finished:
             return False
         with self._lock:
             handle.state = CANCELLED
             handle.error = "cancelled"
+            children = [h.id for h in self._handles.values()
+                        if h.parent == handle.id and not h.finished]
         session = (getattr(self.runtime, "sessions", None) or {}).get(
             f"{SESSION_PREFIX}{handle.conversation_id}")
         event = getattr(session, "cancel_event", None)
         if event is not None:
             event.set()
         handle._done.set()
+        for child in children:
+            self.cancel(child)
+        logger.info("subagent %s cancelled (%d descendant(s))",
+                    handle.id, len(children))
         return True
+
+    def cancel_for(self, owner: str) -> int:
+        """Stop every child this session started. Returns how many.
+
+        What ``/cancel`` reaches for: stopping a turn should stop the work
+        that turn set going, or the agent is gone and its children carry on
+        spending money on a question nobody is waiting for.
+        """
+        running = [h.id for h in self.pending_for(owner) if not h.finished]
+        return sum(1 for h in running if self.cancel(h))
+
+    def cancel_all(self) -> int:
+        """The kill switch: stop every running child, whoever owns it."""
+        with self._lock:
+            running = [h.id for h in self._handles.values() if not h.finished]
+        return sum(1 for h in running if self.cancel(h))
 
     def forget(self, owner: str) -> None:
         """Drop a finished owner's handles so the registry does not grow."""

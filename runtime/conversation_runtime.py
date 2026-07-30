@@ -148,11 +148,19 @@ class ConversationRuntime:
         # proceed. Everything else is told to wait or cancel first.
         if session.busy or session.cs.phase in BUSY_PHASES:
             if action_type == "cancel" and session.cs.phase != PHASE_APPROVING_REQUEST:
-                # Cancel means "stop everything" — drop queued messages too.
+                # Cancel means "stop everything" — drop queued messages too,
+                # and take the background agents this turn started with it
+                # (and anything *they* started). Stopping the agent while its
+                # children carry on is the worst of both: the work continues,
+                # costs money, and reaches nobody.
+                stopped = self.subagents.cancel_for(session_key)
                 with session.lock:
                     session.pending_user_messages.clear()
                 session.cancel_event.set()
-                return RuntimeResult(messages=["Cancelled."])
+                return RuntimeResult(messages=[
+                    f"Cancelled ({stopped} background agent"
+                    f"{'' if stopped == 1 else 's'} stopped)."
+                    if stopped else "Cancelled."])
             if action_type in {"answer_approval", "cancel"} and session.cs.phase == PHASE_APPROVING_REQUEST:
                 pass  # fall through and dispatch
             elif action_type == "send_text":
@@ -393,6 +401,18 @@ class ConversationRuntime:
                 self.db,
                 session.conversation_id,
             )
+            # The subagent backstop. The loop consults the barrier at its
+            # end_turn doorways, which is the right place: it holds agent
+            # priority for the whole wait and there is no window for a user
+            # message between the halves of one logical turn. But a drive can
+            # leave by other routes — a failed action, a priority handoff, an
+            # iteration budget — and on those the children were abandoned with
+            # their reports produced and never delivered, which is silent.
+            # This is the one line every drive passes through, so the question
+            # gets asked here too. ``barrier`` settles what it collects, so
+            # the second ask on a normal turn finds nothing and costs nothing.
+            if self.subagents.barrier(session):
+                session.restart_turn = True
             if session.restart_turn and not allow_restart:
                 logger.warning("Turn restart requested with the drive budget exhausted; ending the turn instead.")
                 session.restart_turn = False
