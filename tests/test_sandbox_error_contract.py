@@ -141,3 +141,28 @@ def test_from_dict_tolerates_a_peer_that_omits_a_field():
     assert not rebuilt.ok
     assert rebuilt.error == ""
     assert rebuilt.attachment_paths == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The code vocabulary.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_the_vocabulary_is_closed_and_unique():
+    """Two constants sharing a value would make them indistinguishable."""
+    from sandbox.guest import codes
+
+    named = {name: value for name, value in vars(codes).items()
+             if name.startswith("ERROR_")}
+    assert len(set(named.values())) == len(named), "duplicate code value"
+    assert codes.ALL_CODES == set(named.values())
+
+
+def test_every_denial_code_is_a_real_code():
+    """DENIAL_CODES is what sdk.Denied is raised for — a typo here widens it."""
+    from sandbox.guest import codes
+
+    assert codes.DENIAL_CODES <= codes.ALL_CODES
+    assert codes.ERROR_DENIED in codes.DENIAL_CODES
+    # Breakage must never be catchable as a policy refusal.
+    assert codes.ERROR_TIMEOUT not in codes.DENIAL_CODES
+    assert codes.ERROR_HANDLER_ERROR not in codes.DENIAL_CODES
