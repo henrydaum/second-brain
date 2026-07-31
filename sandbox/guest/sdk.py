@@ -1313,16 +1313,6 @@ class _Text:
         return text[:max(0, limit - len(suffix))] + suffix
 
     @staticmethod
-    def cosine(a, b) -> float:
-        """Cosine similarity between two vectors."""
-        if not a or not b or len(a) != len(b):
-            return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
-        na = sum(x * x for x in a) ** 0.5
-        nb = sum(y * y for y in b) ** 0.5
-        return dot / (na * nb) if na and nb else 0.0
-
-    @staticmethod
     def value(value) -> str:
         """Render a configuration value without Python repr artifacts."""
         if isinstance(value, bool):

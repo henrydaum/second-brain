@@ -969,7 +969,6 @@ These run inside the sandbox. No Request, no approval, no cost:
 
 ```python
 sdk.text.truncate(text, limit)
-sdk.text.cosine(vector_a, vector_b)
 sdk.md.table(headers, rows)
 sdk.md.card(title, pairs)
 sdk.md.plain(text)                # monospace: padded tables, fences stripped

@@ -182,10 +182,23 @@ class Embedder(BaseService):
         return [list(map(float, v)) for v in model.encode(texts)]
 
     def similarity(self, sdk, a, b):
-        """Cosine similarity between two texts."""
+        """Cosine similarity between two texts.
+
+        Arithmetic is not a Request. Nothing here touches disk, network, clock
+        or process, so it runs right where it is written, at no cost and with
+        nothing to approve — the SDK is for *effects*, and computation was
+        never on the other side of the boundary.
+
+        Note what this is not for. Comparing two things you already hold is
+        this; ranking a table of stored vectors is a query, and it belongs in
+        SQL over ``vec_cosine`` so the answer crosses the boundary instead of
+        the corpus. See ``sdk.db.query`` in docs/SDK.md.
+        """
         first, second = self.embed(sdk, [a, b])
-        # A pure helper — no Request, no cost, runs right here.
-        return sdk.text.cosine(first, second)
+        dot = sum(x * y for x, y in zip(first, second))
+        norms = (sum(x * x for x in first) ** 0.5
+                 * sum(y * y for y in second) ** 0.5)
+        return dot / norms if norms else 0.0
 
 
 class Weather(BaseService):
