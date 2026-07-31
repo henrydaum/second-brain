@@ -327,7 +327,9 @@ ALWAYS_SAFE = {
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
     R.SESSION_STATE_GET, R.SESSION_STATE_SET, R.SESSION_REMOVE_TOOL,
     R.SESSION_REMOVE_PROMPT,
-    R.UI_APPROVE, R.UI_RENDER,
+    # UI_APPROVE is *not* here. It asks a person a question, exactly as UI_ASK
+    # does, and is branched with it below.
+    R.UI_RENDER,
     R.USER_READ,
     # PLUGIN_VALIDATE sits with the listings, not with REGISTER and friends,
     # because it changes nothing: the validator is a pure AST walk that never
@@ -415,7 +417,7 @@ _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
              R.COMMAND_CALL,
-             UI_ASK, SESSION_ADD_TOOL,
+             UI_ASK, R.UI_APPROVE, SESSION_ADD_TOOL,
              SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE,
              R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
@@ -897,7 +899,16 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"run the command /{args.get('name', '')}")
 
     # ── asking a human is only possible when one is there ─────────
-    if kind == UI_ASK:
+    #
+    # Both spellings of it. ``ui.approve`` asks a person a yes/no question and
+    # blocks on the answer, which is ``ui.ask`` with a fixed answer type — but
+    # it sat in ALWAYS_SAFE, so the attendance test that governs one of them
+    # governed neither in practice. Its handler reaches the *other* approval
+    # doorway (``context.approve_command``), which has no attendance check of
+    # its own, so an unattended session would block for the full 300s dialog
+    # timeout on a question nobody could see. Same act, same question, same
+    # branch.
+    if kind in (UI_ASK, R.UI_APPROVE):
         # ``attended_now`` and not ``chain.attended``: a tool the agent called
         # mid-turn roots at the session key, so the bare property reads False
         # with the person sitting right there — which made asking a question
