@@ -325,6 +325,8 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
     default the kernel uses when every permission hook abstains.
     """
 
+    from .policy import chain_session
+
     def approve(chain, request, decision) -> bool:
         """Decide whether one unsafe Request may proceed."""
         if runtime is None:
@@ -375,10 +377,16 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
                         request.type, chain.render())
             return False
 
-        # 4. Ask.
+        # 4. Ask — on the session the work belongs to, which is not always the
+        #    one this approver was built with. ``build_approver`` is wired with
+        #    no key, so ``key`` is whatever happens to be active; the chain
+        #    names the session the agent was actually acting in. Reaching here
+        #    at all means attendance was resolved against that same session, so
+        #    the dialog lands where the person who can answer it is looking.
+        target = chain_session(chain) or key
         title, body = describe(chain, request, decision)
         try:
-            pending = runtime.request_input(key, title, body, type="boolean")
+            pending = runtime.request_input(target, title, body, type="boolean")
         except Exception:
             logger.exception("could not render an approval dialog")
             return False
@@ -386,7 +394,7 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
         if not pending.wait(timeout=timeout):
             pending.metadata["timed_out"] = True
             try:
-                runtime.answer_request(key, pending.id, False)
+                runtime.answer_request(target, pending.id, False)
             except Exception:
                 pass
             return False
@@ -438,16 +446,16 @@ def _command_text(request) -> str:
 def _attended(runtime, session_key, chain) -> bool:
     """Whether a human is present to answer *this* work.
 
-    **The chain is a floor, and that ordering is the whole of it.** The chain
-    says what caused the work; the runtime's reader says whether somebody is
-    sitting at a session. Only the first can distinguish "the user asked for
-    this" from "a background agent did", so a chain that says unattended is
-    final — asking anyway does not find the right person, it interrupts an
-    unrelated one.
+    **The chain decides which session is asked; the runtime decides whether
+    anybody is at it.** The chain says what caused the work — and, when the
+    cause was an agent, *which session* it was acting in, which is the only
+    thing separating a foreground turn from a subagent's. The runtime's reader
+    answers the rest. Neither half is sufficient alone, and the whole of it is
+    :func:`policy.attended_now`.
 
-    It was the other way round, and the consequence was ugly. ``is_attended``
-    won whenever a session key existed, and ``build_approver`` is wired with
-    none (``runtime/bootstrap.py``), so the key fell back to
+    It was once the other way round, and the consequence was ugly.
+    ``is_attended`` won whenever a session key existed, and ``build_approver``
+    is wired with none (``runtime/bootstrap.py``), so the key fell back to
     ``active_session_key`` — trivially attended, by definition. An unsafe
     Request from a scheduled subagent therefore raised a dialog on the
     foreground session, pushing it into ``approving_request``, where the only
@@ -455,15 +463,16 @@ def _attended(runtime, session_key, chain) -> bool:
     back ``invalid_action``, once per firing, about work the person could not
     see and had never started.
 
-    ``sandbox/policy.py`` states the invariant this restores: a subagent is
-    safe *because* it can approve nothing.
+    The correction was ``chain.attended`` as a hard floor, which overshot in
+    the other direction: that property is True only for a root of ``user``,
+    and an agent's own tool call roots at the session key instead. So every
+    unsafe Request any tool made was refused without a dialog, in a session
+    the person was watching. Handing the chain's *root* to ``is_attended``
+    restores both cases at once — a subagent's root is a session key that is
+    not the active one, so it still approves nothing.
+
+    ``sandbox/policy.py`` rests the safety of ``agent.spawn`` on that.
     """
-    if not chain.attended:
-        return False
-    reader = getattr(runtime, "is_attended", None)
-    if reader is not None and session_key:
-        try:
-            return bool(reader(session_key))
-        except Exception:
-            pass
-    return True
+    from .policy import attended_now
+
+    return attended_now(chain, runtime, session_key)

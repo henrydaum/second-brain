@@ -131,6 +131,71 @@ class Chain:
         return " -> ".join((self.root,) + self.links)
 
 
+def chain_session(chain) -> str:
+    """The session key a chain's root names, or "" if it names none.
+
+    ``bridge._root_for`` roots an *agent-caused* call at the session key it
+    happened in, because which session it was is the only thing separating a
+    foreground turn from a subagent's. A person's own action roots at ``user``
+    or ``user:command`` instead, which names no session — the caller supplies
+    that.
+
+    Roots that are not sessions (``kernel``, ``agent``, ``service:x``,
+    ``cron:x``) are handed back unchanged rather than filtered out here. Every
+    one of them matches no live session and no active key, so the reader
+    answers False for all of them on its own; an allowlist would be a second
+    list to keep in step with ``_root_for`` for no decision's sake.
+    """
+    root = str(getattr(chain, "root", "") or "")
+    if root == "user" or root.startswith("user:"):
+        return ""
+    return root
+
+
+def attended_now(chain, runtime=None, session_key=None) -> bool:
+    """Whether a human is present for the work ``chain`` describes.
+
+    :attr:`Chain.attended` answers who *caused* the work. This answers whether
+    anybody is there to be asked, which is the question an approval dialog
+    actually needs — and the two come apart in the most ordinary case there
+    is. An agent's tool call during a foreground turn roots at the session
+    key, so the chain reads unattended while a person sits watching the turn.
+    Read as a floor, that refused every unsafe Request a tool ever made:
+    egress, the whole ``proc.*`` family, ``plugin.install``, and ``ui.ask``
+    with the reason "nobody is present to answer this question".
+
+    The root goes to ``runtime.is_attended`` unchanged, which is what keeps
+    the fix from widening anything. A subagent's root is a real session key
+    too and still comes back False, for exactly the reason that makes a
+    subagent safe: its session is not the active one. Everything with no
+    session at all — a service's poll tick, a bus delivery, a cron-fired task,
+    a frontend's own loop — fails closed the same way, so attendance stays a
+    fact about *why* something is running rather than a rule per plugin family.
+
+    Absent a runtime nobody can be asked, so the chain's own verdict stands.
+    """
+    if runtime is None:
+        try:
+            from runtime.context import kernel_runtime
+
+            runtime = kernel_runtime()
+        except Exception:
+            runtime = None
+    reader = getattr(runtime, "is_attended", None)
+    if reader is None:
+        return bool(chain.attended)
+    # A user root names no session, so the caller's own key is the one to ask
+    # about — a frontend that owns its attendance policy still gets to say
+    # nobody is there for work the person started.
+    key = chain_session(chain) or (session_key if chain.attended else "")
+    if not key:
+        return bool(chain.attended)
+    try:
+        return bool(reader(key))
+    except Exception:
+        return False
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Path scoping.
 # ──────────────────────────────────────────────────────────────────────
@@ -833,7 +898,11 @@ def classify(request: Request, chain: Chain) -> Decision:
 
     # ── asking a human is only possible when one is there ─────────
     if kind == UI_ASK:
-        if not chain.attended:
+        # ``attended_now`` and not ``chain.attended``: a tool the agent called
+        # mid-turn roots at the session key, so the bare property reads False
+        # with the person sitting right there — which made asking a question
+        # the one thing an interactive tool could not do.
+        if not attended_now(chain):
             return Decision(UNSAFE,
                             "nobody is present to answer this question")
         return Decision(SAFE, "asking the user")

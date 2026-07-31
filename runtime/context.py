@@ -216,6 +216,18 @@ def kernel_config() -> dict:
     return _KERNEL_PARTS.get("config") or {}
 
 
+def kernel_runtime():
+    """The live :class:`ConversationRuntime`, or ``None``.
+
+    The counterpart to :func:`kernel_config`, and for the same caller: policy
+    code that is handed a Request and a chain and nothing else, but has to ask
+    the runtime a question only it can answer — whether anybody is sitting at
+    the session a chain names. ``None`` before the composition root has built
+    one, which every reader must treat as "nobody is there".
+    """
+    return _KERNEL_PARTS.get("runtime")
+
+
 _POSITIONAL = ("db", "config", "services")
 
 

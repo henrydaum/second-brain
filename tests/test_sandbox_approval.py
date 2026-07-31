@@ -46,8 +46,15 @@ class FakeRuntime:
         self.answered = []
 
     def is_attended(self, key):
-        """Whether a human is present."""
-        return self._attended
+        """Whether a human is present at ``key``, keyed like the real one.
+
+        ``ConversationRuntime.is_attended`` is the single-active-session rule,
+        so it is a question *about a session* and not a global flag. A fake
+        that answered the same for every key would call a subagent's session
+        attended because the foreground one is — which is precisely the
+        confusion these tests exist to pin.
+        """
+        return self._attended and key == self.active_session_key
 
     def user_setting(self, key, name):
         """The user's trusted list."""
@@ -267,6 +274,76 @@ def test_a_user_chain_still_defers_to_the_frontend_on_attendance():
     assert build_approver(runtime)(Chain(root="user").push("tool"), request,
                                    decision) is False
     assert runtime.asked == []
+
+
+def test_the_agents_own_tool_call_is_attended_and_a_subagents_is_not():
+    """The pair is the invariant; either alone is a bug that has shipped.
+
+    ``bridge._root_for`` roots an agent-caused call at the *session key*, so
+    both of these chains read False for ``Chain.attended`` — the property is
+    True only for a root of ``user``. Judging attendance on that alone refused
+    every unsafe Request any tool ever made, with the person watching the turn
+    it happened in. Judging it on the runtime alone put a subagent's dialog on
+    the foreground session. The root is what tells them apart, and it does so
+    without any rule about plugin families.
+    """
+    runtime = FakeRuntime(attended=True)          # somebody is at the REPL
+    request, decision = _egress()
+    approve = build_approver(runtime)
+
+    foreground = Chain(root="repl").push("tool_web_search").push("service_web")
+    background = Chain(root="spawn_subagent:41").push("tool_web_search")
+    assert not foreground.attended and not background.attended
+
+    assert approve(foreground, request, decision) is True
+    assert approve(background, request, decision) is False
+    assert len(runtime.asked) == 1, "asked about the wrong one, or twice"
+    assert runtime.asked[0]["key"] == "repl"
+
+
+def test_an_unattended_session_refuses_its_own_agents_tool_call():
+    """The session the chain names is the one whose attendance decides.
+
+    A background driver holding a session nobody is looking at roots its tool
+    calls there, and gets the same answer a subagent does. Nothing here keys
+    off the ``spawn_subagent:`` prefix — a session with no one at it is enough.
+    """
+    runtime = FakeRuntime(attended=True)
+    request, decision = _egress()
+
+    allowed = build_approver(runtime)(
+        Chain(root="nightly_sweep").push("tool_web_search"), request, decision)
+
+    assert allowed is False
+    assert runtime.asked == []
+
+
+def test_asking_a_question_is_safe_from_the_agents_own_tool_call():
+    """``ui.ask`` read the bare property too, and lost interactive tools.
+
+    The classifier answered "nobody is present to answer this question" for a
+    tool the agent called mid-turn — so the one Request whose entire purpose
+    is reaching the user was refused for the user's absence.
+    """
+    import runtime as runtime_pkg
+    from sandbox import policy
+    from sandbox.guest.requests import Request
+
+    ask = Request(type="ui.ask", args={"prompt": "which one?"})
+    fake = FakeRuntime(attended=True)
+    # ``attended_now`` reaches the composition root the same way the egress
+    # allowlist does, so this patches what it reads rather than what it is.
+    original = runtime_pkg.context.kernel_runtime
+    try:
+        runtime_pkg.context.kernel_runtime = lambda: fake
+        foreground = policy.classify(ask, Chain(root="repl").push("tool_ask"))
+        background = policy.classify(
+            ask, Chain(root="spawn_subagent:41").push("tool_ask"))
+    finally:
+        runtime_pkg.context.kernel_runtime = original
+
+    assert foreground.level == policy.SAFE
+    assert background.level == policy.UNSAFE
 
 
 def test_no_runtime_means_refuse():
