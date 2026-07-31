@@ -10,6 +10,8 @@ from contextlib import contextmanager
 
 from paths import ATTACHMENT_CACHE
 
+from . import sql_functions
+
 logger = logging.getLogger("Database")
 
 # Paths under these roots are enqueued with elevated priority so the user
@@ -132,6 +134,9 @@ class Database:
 		self.db_path = db_path
 		self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row  # dict-like access on rows
+		# Scalar functions any query may use, plugin queries included — see
+		# pipeline/sql_functions.py for why an operator rather than a Request.
+		sql_functions.register(self.conn)
 		self.lock = _PriorityLock()
 		# The single retention knob (``data_retention_days`` config, days;
 		# 0 = keep everything). Set from config at bootstrap; a full prune

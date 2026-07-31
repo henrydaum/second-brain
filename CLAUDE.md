@@ -929,6 +929,34 @@ is a dict with `truncated`/`scan_truncated`. Which types exist and what
 migrations — the boundary got narrower by adding kernel code. Ask "is the part
 core actually needs standing knowledge?" before adding a type.
 
+**And sometimes not even an argument** (`pipeline/sql_functions.py`). Semantic
+search ranks a hundred thousand vectors and wants five rows, but cosine
+similarity over a BLOB column is not expressible in SQLite — so the only way
+to rank was to read every vector into the asking box: measured at 214 MB of
+JSON across ~200 gate-serialized round trips, *per query*. `DB_MAX_ROWS` is
+the statement that **the answer crosses, not the data**, and raising it would
+have been fixing the symptom.
+
+FTS5 is the precedent sitting in the same schema: `lexical_search` scans the
+whole corpus and five rows cross, because the index is in the database and
+`ORDER BY rank LIMIT ?` expresses the reduction. The vector case is the same
+shape and was only missing the **operator**, so the kernel registers
+`vec_cosine` as a scalar function on its connection and the plugin writes
+ordinary `db.query` SQL. No Request, no SDK change, no policy change — and
+the cap it was fighting simply stops applying, which is the tell that this was
+the right level to fix it at.
+
+What makes it kernel-general is that it is not a search: it knows nothing
+about embeddings, models, streams or top-k, and it composes with `WHERE`,
+`JOIN`, `ORDER BY` and `LIMIT` because it is an *expression*. A
+`vector.search` Request would have needed a table, a column, a filter and a
+limit — reimplementing SQL, badly, which is how you know the Request was the
+wrong shape. numpy accelerates it when a package has installed one and is
+never required; the two implementations are pinned equal by test. It returns
+NULL rather than raising for anything it cannot compare, because a raising
+scalar function fails the whole statement, which would turn one stale row into
+a search that never works again.
+
 Two types *were* added, both because they had no honest home. `plugin.validate`
 runs the loader's own validator over a source file, so its verdict is the real
 one, and it is read-only in the strongest sense — a pure AST walk that never
@@ -1421,6 +1449,9 @@ move between built-in, sandbox, and installed trees.
 - [pipeline/orchestrator.py](pipeline/orchestrator.py) — task scheduling and
   the dependency-pipeline DAG. `runtime` is wired in
   [runtime/bootstrap.py](runtime/bootstrap.py).
+- [pipeline/sql_functions.py](pipeline/sql_functions.py) — scalar functions
+  every query gets, plugin queries included. `vec_cosine` is why a sandboxed
+  semantic search can rank a corpus it is never allowed to hold.
 - [parsing/registry.py](parsing/registry.py) — the file-type authority:
   routing, discovery, and `parser_for` (the importable half). Not a service,
   on purpose.

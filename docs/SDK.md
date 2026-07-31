@@ -380,6 +380,30 @@ touching `sqlite_master`, any `PRAGMA`, `ATTACH`/`DETACH`/`VACUUM`, and
 table — it is the one row write you cannot undo by writing again. Your own
 tables, made with `sdk.db.define`, are yours to delete from freely.
 
+**The 500-row cap means the answer crosses, not the data.** If your query
+would return more than that, the reduction belongs in SQL — an aggregate, a
+`GROUP BY`, an `ORDER BY … LIMIT`. Paging the whole table over and computing
+in Python works and is nearly always the wrong shape.
+
+Vectors are the case where that used to be impossible, so SQLite carries an
+extra operator for them:
+
+```python
+sdk.db.query(
+    "SELECT path, chunk_index, vec_cosine(embedding, ?) AS score "
+    "FROM text_embeddings WHERE model_name = ? AND length(embedding) = ? "
+    "ORDER BY score DESC LIMIT ?",
+    [query_vector, model, len(query_vector), 5])
+```
+
+`vec_cosine(a, b)` takes two float32 BLOBs — bytes cross as bytes, so the
+query vector binds as an ordinary parameter — and answers with cosine
+similarity, or `NULL` for anything it cannot compare (different lengths, a
+non-BLOB column, a zero vector). It never raises, because a scalar function
+that raised would fail the whole statement over one stale row. Filtering on
+`length(embedding)` first skips vectors left behind by a different model
+before the arithmetic runs.
+
 ### People and sessions
 
 ```python
