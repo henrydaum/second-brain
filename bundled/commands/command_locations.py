@@ -3,9 +3,21 @@
 from guest.bases import BaseCommand
 
 
-#: The three trees, plus the two roots they hang off. Named for where the code
-#: came from, which is the only thing the tree name has ever carried.
+#: The three code trees, plus the two directories they hang off. Named for
+#: where the code came from, which is the only thing a tree name has ever
+#: carried.
 KINDS = ["root", "bundled", "installed", "workspace"]
+KIND_LABELS = [
+    "Project root and data directory",
+    "Bundled — ships with the app",
+    "Installed — from the package store",
+    "Workspace — written by the agent",
+]
+_TREE_BLURB = {
+    "bundled": "Ships with the app. Read-only in practice.",
+    "installed": "What the package store has put here.",
+    "workspace": "What the agent has written. Free to edit, always sandboxed.",
+}
 
 
 class LocationsCommand(BaseCommand):
@@ -13,7 +25,7 @@ class LocationsCommand(BaseCommand):
     name = "locations"
     description = "Show project and plugin directories"
     category = "System"
-    requests = ["paths.get", "fs.list"]
+    requests = ["paths.get", "fs.list", "plugin.list"]
 
     def form(self, sdk, args):
         """Handle form."""
@@ -22,29 +34,88 @@ class LocationsCommand(BaseCommand):
             "prompt": "Choose which location map to show.",
             "required": True,
             "enum": KINDS,
+            "enum_labels": KIND_LABELS,
         }]
 
     def run(self, sdk, args):
         """Execute `/locations` for the active session."""
-        project = sdk.paths.get("project")
-        data_dir = sdk.paths.get("data")
-        bundled = sdk.paths.get("bundled")
-        installed = sdk.paths.get("installed")
-        workspace = sdk.paths.get("workspace")
-        locations = {
-            "root": (project, data_dir),
-            "bundled": (bundled, bundled),
-            "installed": (installed, installed),
-            "workspace": (workspace, workspace),
-        }
-        root, data = locations.get(
-            args.get("kind") or "root", locations["root"])
-        return _format_locations(
-            root, _tree(sdk, root), data, _tree(sdk, data))
+        kind = args.get("kind") or "root"
+        if kind == "root":
+            return _format_root(
+                sdk, sdk.paths.get("project"), sdk.paths.get("data"))
+        if kind not in KINDS:
+            return f"Unknown location: {kind}"
+        return _format_tree(sdk, kind, sdk.paths.get(kind))
 
 
-def _tree(sdk, path):
-    """Internal helper to handle tree."""
+def _format_root(sdk, project, data):
+    """The two directories the whole layout hangs off."""
+    return "\n\n".join([
+        _section("Project root", project, _entries(sdk, project)),
+        _section("Data directory", data, _entries(sdk, data)),
+    ])
+
+
+def _format_tree(sdk, kind, path):
+    """One tree, one section per declared root.
+
+    Every kind but ``root`` used to map to ``(path, path)`` and get rendered
+    through the two-directory shape above — so ``/locations bundled`` printed
+    the same directory twice, once labelled "Project root" and once "Data
+    directory", both of them wrong. And because the listing was one level deep,
+    the three trees came out as three near-identical lists of folder names with
+    nothing to tell them apart.
+
+    The roots are what actually distinguishes a tree, so they are what this
+    shows: all of them, including the empty ones. An empty ``tools/`` is
+    information — it says this tree *may* hold tools and does not — which a
+    listing that simply omits it cannot express.
+    """
+    sections = [
+        f"**{kind}**\n`{path}`\n{_TREE_BLURB.get(kind, '')}".rstrip()]
+    for root in _roots(sdk):
+        inside = _join(path, root)
+        sections.append(_section(
+            f"{root}/", inside,
+            _entries(sdk, inside, missing="(not created)")))
+    return "\n\n".join(sections)
+
+
+def _join(root, name):
+    """Join a path in the separator style the platform already gave us.
+
+    A command cannot import ``os.path`` — and does not need to, since the
+    kernel handed it an absolute path whose separator is the answer.
+    """
+    separator = "\\" if "\\" in root else "/"
+    return root.rstrip("/\\") + separator + name
+
+
+def _roots(sdk):
+    """The declared roots, in the layout's own order.
+
+    Asked of the kernel rather than restated here: ``trees.py`` is the layout
+    authority and a command cannot import it, so a hardcoded copy would be a
+    second declaration that silently goes stale the day a ninth root is added.
+    """
+    try:
+        families = sdk.plugins.list(source="families") or []
+    except sdk.Failed:
+        return []
+    # ``skills`` and ``bundles`` come back too; they are store families rather
+    # than tree roots and no tree has a directory for them.
+    return [name for name in families if name not in {"skills", "bundles"}]
+
+
+def _section(label, path, listing):
+    """One fenced block. Fenced because a rich renderer folds the single
+    newlines of a bare listing into one paragraph."""
+    body = "\n".join(listing) if listing else "(empty)"
+    return f"**{label}**\n`{path}`\n```\n{body}\n```"
+
+
+def _entries(sdk, path, missing="(missing)"):
+    """Names in one directory, folders first."""
     try:
         entries = sdk.fs.list(path, details=True)
     except sdk.Failed as exc:
@@ -53,23 +124,15 @@ def _tree(sdk, path):
         # path, so rewording the handler silently turned "(missing)" into a
         # raised error.
         if "no such directory or file" in exc.error:
-            return ["(missing)"]
+            return [missing]
         raise
     entries.sort(key=lambda entry: (
         not entry["is_dir"], entry["name"].lower()))
     return [
         entry["name"] + ("/" if entry["is_dir"] else "")
         for entry in entries
-    ]
-
-
-def _format_locations(root_path, root_tree, data_path, data_tree):
-    """Render the same fenced location map as the native command."""
-    def section(label, path, tree):
-        listing = "\n".join(tree) if tree else "(empty)"
-        return f"**{label}**\n`{path}`\n```\n{listing}\n```"
-
-    return "\n\n".join([
-        section("Project root", root_path, root_tree),
-        section("Data directory", data_path, data_tree),
-    ])
+        # This is a map of what is *here*, and a bytecode cache is not. Left
+        # in, it appeared in almost every root and was the only content of
+        # several, so an empty root read as an occupied one.
+        if entry["name"] != "__pycache__"
+    ] or []

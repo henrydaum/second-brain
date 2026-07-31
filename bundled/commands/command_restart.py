@@ -8,7 +8,7 @@ class RestartCommand(BaseCommand):
 
     name = "restart"
     description = "Restart the app"
-    category = "Conversation"
+    category = "System"
     requests = ["app.stop"]
     # See command_quit: declared up front so the state machine asks before the
     # body runs, rather than the body asking mid-shutdown.

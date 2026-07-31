@@ -7,7 +7,7 @@ class UpdateCommand(BaseCommand):
     """Slash-command handler for `/update`."""
     name = "update"
     description = "Pull latest changes from the Second Brain repo"
-    category = "Config & System"
+    category = "System"
     require_approval = True
     approval_actor_id = "user"
     requests = ["paths.get", "proc.run"]

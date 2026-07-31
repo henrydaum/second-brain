@@ -4,9 +4,34 @@ from guest.bases import BaseCommand
 from guest.forms import FormStep
 
 
-PATH_ACTIONS = ["pause", "unpause", "reset", "retry"]
-EVENT_ACTIONS = ["pause", "unpause", "trigger"]
 PIPELINE = "Show pipeline"
+
+# What each trigger kind can do, minus the pause/unpause pair, which depends on
+# the task's live state and is added by ``_actions_for``.
+PATH_ACTIONS = [("reset", "Reset it"), ("retry", "Retry failures")]
+EVENT_ACTIONS = [("trigger", "Trigger it")]
+
+
+def _actions_for(task):
+    """Only the half of the pause toggle that does anything.
+
+    The mechanism was already here — this branched on ``trigger`` to pick
+    between two action lists — but nothing read ``paused``, so both halves of
+    the one genuinely stateful pair were always offered. It also passed the
+    raw action strings as labels, so the menu read "pause / unpause / reset /
+    retry" in lowercase machine words.
+    """
+    paused = bool(task.get("paused"))
+    rest = (EVENT_ACTIONS if task.get("trigger", "path") == "event"
+            else PATH_ACTIONS)
+    pairs = [("unpause", "Resume it") if paused else ("pause", "Pause it")]
+    pairs += rest
+    return [name for name, _ in pairs], [label for _, label in pairs]
+
+
+def _task_label(task):
+    """A name with its state in front of it, as ``/services`` does."""
+    return f"{'⏸' if task.get('paused') else '●'} {task['name']}"
 
 
 class TasksCommand(BaseCommand):
@@ -14,7 +39,7 @@ class TasksCommand(BaseCommand):
 
     name = "tasks"
     description = "Pick a task — pause, unpause, reset, retry, or trigger"
-    category = "System"
+    category = "Automation"
     requests = [
         "task.list", "task.graph", "task.pause", "task.reset",
         "task.trigger", "config.write",
@@ -28,17 +53,14 @@ class TasksCommand(BaseCommand):
             "Select a task to manage, or view the pipeline.",
             True,
             enum=[*[task["name"] for task in tasks], PIPELINE],
+            enum_labels=[*[_task_label(task) for task in tasks], PIPELINE],
             columns=2,
         )]
         if args.get("task_name") == PIPELINE:
             return steps
         task = _find(tasks, args.get("task_name"))
         if task:
-            actions = (
-                EVENT_ACTIONS
-                if task.get("trigger", "path") == "event"
-                else PATH_ACTIONS
-            )
+            actions, action_labels = _actions_for(task)
             links, labels = sdk.forms.setting_actions(
                 task.get("config_settings"))
             steps.append(FormStep(
@@ -47,7 +69,7 @@ class TasksCommand(BaseCommand):
                 + _describe(sdk, task),
                 True,
                 enum=actions + links,
-                enum_labels=list(actions) + labels,
+                enum_labels=action_labels + labels,
             ))
         action = args.get("action")
         if task and action == "trigger":
@@ -73,9 +95,16 @@ class TasksCommand(BaseCommand):
             # Failed branch alone is not enough — a falsy result would be
             # dropped by the frontend and print as silence.
             try:
-                return sdk.tasks.graph() or "No pipeline tasks are registered."
+                graph = sdk.tasks.graph()
             except sdk.Failed:
                 return "Pipeline unavailable."
+            if not graph:
+                return "No pipeline tasks are registered."
+            # Fenced, because a rich renderer folds consecutive non-blank
+            # lines into one paragraph — which turned the whole dependency
+            # tree into a single unreadable line. The REPL is unaffected
+            # either way: ``render_plain`` strips the fence markers back off.
+            return f"```\n{graph}\n```"
         task = _find(tasks, name)
         if not task:
             return "Unknown task."
@@ -139,6 +168,11 @@ def _describe(sdk, task):
         **(task.get("counts") or {}),
     }
     pairs = [
+        # First, because it is the one thing on this card that changes what
+        # the task *does* — and the card did not show it at all, so the only
+        # way to learn a task was paused was to notice nothing happening.
+        ("Status", "Paused" if task.get("paused") else "Active"),
+        ("Trigger", task.get("trigger", "path")),
         ("Pending", counts["PENDING"]),
         ("Running", counts["PROCESSING"]),
         ("Done", counts["DONE"]),

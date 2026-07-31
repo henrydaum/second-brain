@@ -4,8 +4,6 @@ from guest.bases import BaseCommand
 from guest.forms import FormStep
 
 
-ACTIONS = ["configure", "enable", "disable"]
-ACTION_LABELS = ["Edit", "Enable", "Disable"]
 FIELDS = [
     "agent_profile",
     "whitelist_or_blacklist_commands",
@@ -24,7 +22,7 @@ class FrontendsCommand(BaseCommand):
 
     name = "frontends"
     description = "Enable/disable a frontend or configure its access profile"
-    category = "System"
+    category = "Capabilities"
     requests = [
         "plugin.list", "config.read", "config.write", "command.list",
     ]
@@ -32,11 +30,14 @@ class FrontendsCommand(BaseCommand):
     def form(self, sdk, args):
         """Build frontend, action, quicklink, profile-field, and value steps."""
         frontends = _frontends(sdk)
+        enabled = set(sdk.config.read("enabled_frontends") or [])
         steps = [FormStep(
             "frontend_name",
             "Select a frontend.",
             True,
             enum=[frontend["name"] for frontend in frontends],
+            enum_labels=[_frontend_label(enabled, frontend)
+                         for frontend in frontends],
             columns=2,
         )]
         name = args.get("frontend_name")
@@ -45,13 +46,14 @@ class FrontendsCommand(BaseCommand):
             settings = (
                 frontend.get("config_settings") if frontend else [])
             links, labels = sdk.forms.setting_actions(settings)
+            actions, action_labels = _actions_for(enabled, name)
             steps.append(FormStep(
                 "action",
                 "What do you want to do with this frontend?\n\n"
                 + _describe(sdk, name, frontend),
                 True,
-                enum=ACTIONS + links,
-                enum_labels=ACTION_LABELS + labels,
+                enum=actions + links,
+                enum_labels=action_labels + labels,
             ))
 
         setting = sdk.forms.setting_for_action(
@@ -104,6 +106,25 @@ class FrontendsCommand(BaseCommand):
 def _frontends(sdk):
     return sdk.plugins.list(
         category="frontends", details=True)
+
+
+def _frontend_label(enabled, frontend):
+    """A name with its state in front of it, as ``/services`` does."""
+    return f"{'●' if frontend['name'] in enabled else '○'} {frontend['name']}"
+
+
+def _actions_for(enabled, name):
+    """Only the half of the toggle that does anything.
+
+    Both were always offered, so half of every menu was a no-op the user had
+    to know to avoid — and picking the wrong one looked like a broken command
+    rather than a redundant option. ``/services`` has always got this right;
+    the pattern is one stable action *value* with a state-dependent label,
+    which keeps ``run`` branching on a single name.
+    """
+    if name in enabled:
+        return ["configure", "disable"], ["Edit", "Disable it"]
+    return ["configure", "enable"], ["Edit", "Enable it"]
 
 
 def _find(frontends, name):

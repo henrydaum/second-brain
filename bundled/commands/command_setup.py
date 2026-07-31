@@ -19,6 +19,11 @@ ATLAS_CODING_PLAN_URL = "https://www.atlascloud.ai/console/coding-plan"
 ATLAS_DEFAULT_MODEL = "minimaxai/minimax-m2.7"
 DEFAULT_ENV_VAR = "ATLAS_API_KEY"
 DEFAULT_CONTEXT_SIZE = 0
+# The name a profile falls back to when discovery has not run or has found
+# nothing. Deliberately the *retired* spelling: the live backend declares
+# ``replaces = ["LiteLLMService"]``, so this still resolves through the alias
+# map, whereas guessing the current class name would break the moment the
+# backend is renamed again. Anything actually installed is preferred over it.
 DEFAULT_BACKEND = "LiteLLMService"
 
 ESSENTIALS_BUNDLE = "bundle_essentials"
@@ -123,7 +128,7 @@ class SetupCommand(BaseCommand):
     approval_actor_id = "user"
     requests = [
         "plugin.list", "plugin.install", "config.write",
-        "paths.get", "env.read", "net.http",
+        "paths.get", "env.read", "net.http", "llm.list",
     ]
 
     def form(self, sdk, args):
@@ -195,11 +200,13 @@ class SetupCommand(BaseCommand):
 
     def _other_steps(self, args, backends):
         """Generic LLM profile collection (mirrors /llm add)."""
-        backends = backends or [DEFAULT_BACKEND]
+        backends = backends or [(DEFAULT_BACKEND, DEFAULT_BACKEND)]
+        names = [name for name, _label in backends]
         return [
             FormStep("other_model_name", OTHER_MODEL_PROMPT, True),
             FormStep("other_service_class", OTHER_SERVICE_PROMPT, True,
-                     enum=backends, default=backends[0], columns=1),
+                     enum=names, default=names[0], columns=1,
+                     enum_labels=[label for _name, label in backends]),
             FormStep("other_endpoint", OTHER_ENDPOINT_PROMPT, False, default="", prompt_when_missing=True),
             FormStep("other_api_key", OTHER_KEY_PROMPT, False, default="", prompt_when_missing=True),
             FormStep("other_context_size", OTHER_CONTEXT_PROMPT, False, "integer", default=0, prompt_when_missing=True),
@@ -424,10 +431,16 @@ def _has_internet(sdk) -> bool:
 
 
 def _llm_backends(sdk):
-    """Return installed LLM backend class names."""
+    """Installed LLM backends as ``(class_name, label)`` pairs.
+
+    The class name is what a profile stores; the label is what the file
+    declares in ``display_name`` and is the only one of the two worth showing
+    a person. Nothing read that declaration before, so every picker in the app
+    offered raw class names.
+    """
     try:
-        return sdk.plugins.list(
-            source="registered", category="services", role="llm_backend")
+        return [(entry["name"], entry.get("display_name") or entry["name"])
+                for entry in (sdk.llm.list() or {}).get("backends") or []]
     except sdk.Failed:
         return []
 

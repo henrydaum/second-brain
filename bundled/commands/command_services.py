@@ -12,7 +12,7 @@ class ServicesCommand(BaseCommand):
 
     name = "services"
     description = "Inspect services and load or unload managed ones"
-    category = "System"
+    category = "Capabilities"
     approval_actions = (
         "toggle_loaded", "load", "unload", "toggle_autoload",
     )
@@ -26,9 +26,16 @@ class ServicesCommand(BaseCommand):
     def form(self, sdk, args):
         """Build the dependent service, action, and setting-value steps."""
         services = sdk.services.list(details=True)
+        # The status table goes in the *prompt*, and the state goes in the
+        # labels. It used to take one round trip per service to learn which
+        # were running, because ``_show`` — which renders exactly this — was
+        # reachable only from the no-argument path, i.e. never from the menu.
+        # ``/schedule`` has always done it this way.
         steps = [FormStep(
-            "service_name", "Select a service.", True,
-            enum=[service["name"] for service in services], columns=2)]
+            "service_name", _select_prompt(services), True,
+            enum=[service["name"] for service in services],
+            enum_labels=[_service_label(service) for service in services],
+            columns=2)]
         service = _find(services, args.get("service_name"))
         if service is None:
             return steps
@@ -149,19 +156,35 @@ def _toggle_autoload(sdk, name):
     )
 
 
+def _status(service):
+    """The one word for a service's state, spelled the same everywhere."""
+    if service["lifecycle"] == "extension":
+        return "Extension"
+    return "Loaded" if service["loaded"] else "Unloaded"
+
+
+def _service_label(service):
+    """A name with its state in front of it.
+
+    Filled circle for running, hollow for available, dot for an extension —
+    which has no lifecycle to show because the kernel loads it automatically.
+    """
+    mark = {"Loaded": "●", "Unloaded": "○"}.get(_status(service), "·")
+    return f"{mark} {service['name']}"
+
+
+def _select_prompt(services):
+    """The picker's prompt, carrying the whole status table."""
+    if not services:
+        return "No services are registered."
+    return _show(services) + "\n\nSelect a service."
+
+
 def _show(services):
     if not services:
         return "No services registered."
     rows = [
-        (
-            service["name"],
-            (
-                "Extension"
-                if service["lifecycle"] == "extension"
-                else "Loaded" if service["loaded"] else "Unloaded"
-            ),
-            service["model_name"],
-        )
+        (service["name"], _status(service), service["model_name"])
         for service in services
     ]
     return "Services:\n\n" + _md_table(
@@ -169,13 +192,8 @@ def _show(services):
 
 
 def _describe(service):
-    status = (
-        "Extension"
-        if service["lifecycle"] == "extension"
-        else "Loaded" if service["loaded"] else "Unloaded"
-    )
     pairs = [
-        ("Status", status),
+        ("Status", _status(service)),
         ("Model", service["model_name"] or "-"),
     ]
     pairs += [

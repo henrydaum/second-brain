@@ -23,12 +23,28 @@ SUBAGENT = "background agent"
 # test rather than by an import.
 SUBAGENT_CHANNEL = "subagent.spawn"
 
-ACTIONS = ["edit", "delete", "enable", "disable"]
-ACTION_LABELS = ["Edit it", "Delete it", "Enable it", "Disable it"]
+def _actions_for(job):
+    """Only the half of the enable/disable toggle that does anything.
+
+    Both were always shown, so half the menu was a no-op — and the job's
+    enabled state was already read two functions away to build its label.
+    One stable action *value* with a state-dependent label, as ``/services``
+    does, so ``run`` still branches on one name.
+    """
+    if job.get("enabled", True):
+        return (["edit", "disable", "delete"],
+                ["Edit it", "Disable it", "Delete it"])
+    return (["edit", "enable", "delete"],
+            ["Edit it", "Enable it", "Delete it"])
 
 # What a background-agent job carries. The kernel's spawn subscriber reads
 # these keys; the shape mirrors what an event task declares for itself.
 SUBAGENT_SCHEMA = {
+    # ``prompt`` is required, and saying so is not decoration: a scheduled
+    # agent with an empty one gets as far as ``spawn``, raises "prompt is
+    # required", and pushes that failure into the chat once per firing until
+    # somebody deletes the job.
+    "required": ["prompt"],
     "properties": {
         "title": {"type": "string",
                   "description": "Short title for the agent's conversation."},
@@ -44,7 +60,7 @@ class ScheduleCommand(BaseCommand):
 
     name = "schedule"
     description = "Manage scheduled jobs: background agents and pipeline tasks"
-    category = "Tasks"
+    category = "Automation"
     # Creating, editing and deleting a schedule all commit the system to
     # unattended future work, which is what ALWAYS_UNSAFE singles out. The
     # up-front gate states the whole scope before the body runs; without it
@@ -70,28 +86,16 @@ class ScheduleCommand(BaseCommand):
             columns=1)]
 
         if args.get("job_name") == ADD:
-            targets = _targets(sdk)
-            steps += [
-                FormStep("target", "What should run on this schedule?", True,
-                         enum=sorted(targets) or [NONE], columns=1),
-                FormStep("new_job_name",
-                         "Enter a unique name for this schedule.", True),
-                FormStep("cron",
-                         "Enter the cron expression, for example 0 9 * * *.",
-                         True),
-            ]
-            schema = (targets.get(args.get("target")) or {}).get("schema")
-            if schema:
-                steps += _schema_steps(schema, {})
-            return steps
+            return steps + _add_steps(sdk, args)
 
         job = jobs.get(args.get("job_name"))
         if job:
+            actions, labels = _actions_for(job)
             steps.append(FormStep(
                 "action",
                 "What do you want to do with this scheduled job?\n\n"
                 + _describe(sdk, args["job_name"], job),
-                True, enum=ACTIONS, enum_labels=ACTION_LABELS, columns=2))
+                True, enum=actions, enum_labels=labels, columns=2))
         if job and args.get("action") == "edit":
             one_time = bool(job.get("one_time"))
             steps.append(FormStep(
@@ -175,6 +179,60 @@ def _target_name(sdk, job) -> str:
 # Forms.
 # ──────────────────────────────────────────────────────────────────────
 
+#: The two things that can be scheduled, as a *question* rather than as a
+#: menu entry buried among task names.
+AGENT_KIND = "agent"
+TASK_KIND = "task"
+KIND_LABELS = {
+    AGENT_KIND: "A background agent — give an AI agent written instructions",
+    TASK_KIND: "A pipeline task — re-run one of the registered tasks",
+}
+
+
+def _add_steps(sdk, args):
+    """The 'schedule something new' branch, kind first.
+
+    It used to open with one enum mixing ``background agent`` in among the
+    event-task names, so the only clue that the first was a completely
+    different sort of thing was that it had a space in it. Asking the kind
+    outright means each half can then ask for what it actually needs, and a
+    person who does not know the vocabulary can still answer the first
+    question.
+    """
+    targets = _targets(sdk)
+    tasks = sorted(name for name in targets if name != SUBAGENT)
+    kinds = [AGENT_KIND] + ([TASK_KIND] if tasks else [])
+
+    steps = [FormStep(
+        "kind", "What kind of job is this?", True,
+        enum=kinds, enum_labels=[KIND_LABELS[k] for k in kinds], columns=1)]
+    kind = args.get("kind")
+    if not kind:
+        return steps
+
+    target = SUBAGENT
+    if kind == TASK_KIND:
+        steps.append(FormStep(
+            "target", "Which task should run?", True,
+            enum=tasks or [NONE], columns=1))
+        target = args.get("target")
+        if not target:
+            return steps
+
+    steps += [
+        FormStep("new_job_name",
+                 "Enter a unique name for this schedule.", True),
+        FormStep("cron",
+                 "Enter the cron expression, for example `0 9 * * *` for "
+                 "9am daily, or `*/15 * * * *` for every fifteen minutes.",
+                 True),
+    ]
+    schema = (targets.get(target) or {}).get("schema")
+    if schema:
+        steps += _schema_steps(schema, {})
+    return steps
+
+
 def _schema_steps(schema: dict, payload: dict):
     """One optional step per declared payload key.
 
@@ -218,7 +276,11 @@ def _payload_from(schema: dict, args: dict, current: dict | None = None) -> dict
 
 def _create(sdk, args) -> str:
     """Create one schedule from the answered form."""
-    target = _targets(sdk).get(args.get("target"))
+    # ``kind`` decides which name to look up: the agent is the kernel's own
+    # and has no task to pick, so it never sets ``target``.
+    target_name = (SUBAGENT if args.get("kind") == AGENT_KIND
+                   else args.get("target"))
+    target = _targets(sdk).get(target_name)
     if target is None:
         return "Choose something to schedule."
     name = (args.get("new_job_name") or "").strip()
@@ -226,14 +288,27 @@ def _create(sdk, args) -> str:
     if not name or not cron:
         return "Enter both a schedule name and a cron expression."
     payload = _payload_from(target["schema"], args)
+    if (missing := _missing_required(target["schema"], payload)):
+        # Every payload step is optional, because most schemas have no
+        # required key and prompting for one that does not matter is worse
+        # than not asking. But a background agent with no prompt is a job that
+        # can only ever fail — it reached ``spawn``, raised "prompt is
+        # required", and reported that once a minute forever.
+        return f"{target_name} needs: {', '.join(missing)}."
     try:
         sdk.cron.create(name, {"cron": cron, "channel": target["channel"],
                                "payload": payload, "enabled": True})
     except Exception as exc:
         return f"Failed to create job: {exc}"
     job = sdk.cron.get(name) or {"cron": cron}
-    return (f"Created schedule '{name}' for {args.get('target')}: "
+    return (f"Created schedule '{name}' for {target_name}: "
             f"{_schedule_text(sdk, job)}.")
+
+
+def _missing_required(schema: dict, payload: dict) -> list:
+    """Declared-required payload keys the form did not answer."""
+    return [key for key in ((schema or {}).get("required") or [])
+            if not str(payload.get(key) or "").strip()]
 
 
 def _edit(sdk, name: str, job: dict, args) -> str:

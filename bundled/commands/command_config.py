@@ -19,7 +19,7 @@ class ConfigCommand(BaseCommand):
 
     name = "config"
     description = "Select a config setting, then edit it"
-    category = "Config & System"
+    category = "System"
     requests = ["config.read", "config.write"]
 
     def form(self, sdk, args):

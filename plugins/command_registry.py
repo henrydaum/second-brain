@@ -14,7 +14,11 @@ from state_machine.conversation import CallableSpec, FormStep
 
 logger = logging.getLogger("Commands")
 
-_HELP_SECTIONS = ["Conversation", "System", "Services & Tools", "Tasks", "Config & System", "Other"]
+# Keep in step with ``bundled/commands/command_commands.py``, which is the
+# same list for the same purpose — this copy serves the native ``help_text``
+# path. Two declarations is one too many, but collapsing them would mean the
+# kernel importing a command plugin, which the boundary does not allow.
+_HELP_SECTIONS = ["Conversation", "Capabilities", "Automation", "System"]
 
 
 def command_allowed(config: dict | None, frontend_name: str | None, name: str) -> bool:

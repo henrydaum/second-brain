@@ -12,17 +12,45 @@ ACTION_LABELS = [
     "Uninstall",
     "Update installed",
 ]
-CATEGORIES = [
-    "tools", "tasks", "services", "commands", "frontends", "bundles"]
-CATEGORY_LABELS = [
-    "Tools", "Tasks", "Services", "Commands", "Frontends", "Bundles"]
+# Labels and one-liners for the families the kernel reports. Deliberately a
+# *lookup* rather than a list: the categories themselves come from
+# ``plugins.list(source="families")``, which derives them from ``trees.ROOTS``.
+# This was two parallel lists zipped together, so a family the kernel knew
+# about but this file had not heard of was dropped without a word — which is
+# what hid `llm` and `parsers` from a menu built out of their own counts.
+_LABELS = {
+    "tools": "Tools",
+    "tasks": "Tasks",
+    "services": "Services",
+    "commands": "Commands",
+    "frontends": "Frontends",
+    "parsers": "Parsers",
+    "llm": "LLM backends",
+    "scripts": "Scripts",
+    "skills": "Skills",
+    "bundles": "Bundles",
+}
 _BLURB = {
     "tools": "agent-callable tools",
     "tasks": "pipeline tasks",
     "services": "persistent backends and helpers",
     "commands": "slash commands",
     "frontends": "chat frontends and helpers",
+    "parsers": "file-type readers",
+    "llm": "model providers",
+    "scripts": "runnable SDK snippets",
+    "skills": "agent instructions",
     "bundles": "named groups of store files",
+}
+# What a family's members are called in a heading. Only the exceptions: a
+# parser is not a plugin and an LLM backend is not one either, so calling them
+# "parser plugins" is wrong in the one place the wording is load-bearing.
+_NOUN = {
+    "bundles": "bundles",
+    "parsers": "parsers",
+    "llm": "LLM backends",
+    "scripts": "scripts",
+    "skills": "skills",
 }
 
 
@@ -31,7 +59,7 @@ class PackagesCommand(BaseCommand):
 
     name = "packages"
     description = "Browse, install, or uninstall store files by category"
-    category = "System"
+    category = "Capabilities"
     agent_prompt = (
         "Installing or uninstalling a package changes the live catalogs: new "
         "tools and commands appear on the next turn, not instantly. After an "
@@ -56,9 +84,11 @@ class PackagesCommand(BaseCommand):
             enum=ACTIONS, enum_labels=ACTION_LABELS)]
         action = args.get("action")
         if action in {"available", "installed"}:
+            categories = _categories(sdk)
             steps.append(FormStep(
                 "category", _category_prompt(sdk, action), True,
-                enum=CATEGORIES, enum_labels=CATEGORY_LABELS, columns=2))
+                enum=categories,
+                enum_labels=[_label(item) for item in categories], columns=2))
         elif action == "install":
             steps.append(FormStep(
                 "package_id",
@@ -99,6 +129,14 @@ def _category_prompt(sdk, action):
     return _overview(sdk, action) + "\n\nChoose a category."
 
 
+def _categories(sdk):
+    """Every family the store can hold, straight from the layout."""
+    try:
+        return sdk.plugins.list(source="families") or []
+    except sdk.Failed:
+        return sorted(_LABELS)
+
+
 def _overview(sdk, action):
     counts = _counts(sdk, action)
     header = (
@@ -107,8 +145,8 @@ def _overview(sdk, action):
         else "Available files by category:"
     )
     rows = [
-        (label, counts.get(category, 0), _BLURB[category])
-        for category, label in zip(CATEGORIES, CATEGORY_LABELS)
+        (_label(category), counts.get(category, 0), _BLURB.get(category, ""))
+        for category in _categories(sdk)
     ]
     return header + "\n\n" + _md_table(
         ["Category", "Count", "What"], rows)
@@ -184,8 +222,9 @@ def _md_table(headers, rows):
 
 
 def _heading(prefix, category):
-    if category == "bundles":
-        return f"{prefix} bundles:"
+    noun = _NOUN.get(category)
+    if noun:
+        return f"{prefix} {noun}:"
     label = _label(category).lower()
     return (
         f"{prefix} "
@@ -194,6 +233,4 @@ def _heading(prefix, category):
 
 
 def _label(category):
-    if category in CATEGORIES:
-        return CATEGORY_LABELS[CATEGORIES.index(category)]
-    return category or ""
+    return _LABELS.get(category) or (category or "").replace("_", " ").title()

@@ -3,13 +3,24 @@
 from guest.bases import BaseCommand
 
 
+# Four sections, in the order a person meets them: what you are doing now,
+# what the app can do, what it does unattended, and the machinery.
+#
+# There were six, and two of them were never used by anything ("Services &
+# Tools", "Other") while two more overlapped so plainly that /config and
+# /update sat in "Config & System" with /setup one section away in "System".
+# Nine of twenty commands were "System", which is another way of saying the
+# taxonomy had stopped sorting anything. /quit and /restart were filed under
+# "Conversation", where they read as ways to end a *chat*.
+#
+# ``category`` is a per-command attribute, so this list only orders the
+# sections and names the ones a bundled command actually uses; an unknown
+# category from an installed command still renders, after these.
 _HELP_SECTIONS = [
     "Conversation",
+    "Capabilities",
+    "Automation",
     "System",
-    "Services & Tools",
-    "Tasks",
-    "Config & System",
-    "Other",
 ]
 
 

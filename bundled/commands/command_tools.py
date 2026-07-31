@@ -13,7 +13,7 @@ class ToolsCommand(BaseCommand):
 
     name = "tools"
     description = "Select a tool, then call it"
-    category = "System"
+    category = "Capabilities"
     requests = [
         "tool.list", "tool.call", "config.read", "config.write",
         "session.get",

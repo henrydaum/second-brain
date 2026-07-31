@@ -8,7 +8,7 @@ class QuitCommand(BaseCommand):
 
     name = "quit"
     description = "Shutdown"
-    category = "Conversation"
+    category = "System"
     requests = ["app.stop"]
     # Answered by the state machine before the body runs, which is the right
     # doorway for a command with one consequential act: the grant is stated and

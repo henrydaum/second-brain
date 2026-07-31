@@ -295,19 +295,6 @@ def format_tools(tools: list[dict], compact: bool = False) -> str:
     return "Tools:\n\n" + md_table(["Tool", "Args", "Description"], rows)
 
 
-def format_locations(data: dict) -> str:
-    """Format the locations data as fenced file trees (rich renderers
-    collapse the single newlines of a bare listing)."""
-    def section(label: str, path: str, tree: list[str]) -> str:
-        listing = "\n".join(tree) if tree else "(empty)"
-        return f"**{label}**\n`{path}`\n```\n{listing}\n```"
-
-    return "\n\n".join([
-        section("Project root", data.get("root_path", ""), data.get("root_tree", [])),
-        section("Data directory", data.get("data_path", ""), data.get("data_tree", [])),
-    ])
-
-
 # ── Scheduled jobs ───────────────────────────────────────────────────
 
 def _format_schedule_summary(job: dict, timekeeper=None) -> str:

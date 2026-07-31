@@ -4,8 +4,6 @@ from guest.bases import BaseCommand
 from guest.forms import FormStep
 
 
-ACTIONS = ["edit", "set_default", "load", "unload", "remove"]
-ACTION_LABELS = ["Edit", "Set default", "Load", "Unload", "Remove"]
 PROFILE_FIELDS = [
     "llm_endpoint", "secret_llm_api_key", "llm_context_size",
     "llm_service_class", "llm_capability_image",
@@ -16,7 +14,6 @@ FIELD_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
     "Service class", "Images", "Audio", "Video",
 ]
-DEFAULT_BACKEND = "LiteLLMService"
 CAPABILITY_FIELDS = {
     "llm_capability_image": "image",
     "llm_capability_audio": "audio",
@@ -29,7 +26,7 @@ class LlmCommand(BaseCommand):
 
     name = "llm"
     description = "Select an LLM profile, then edit, set default, or remove it"
-    category = "System"
+    category = "Capabilities"
     # Every one of the five actions is consequential — they open or close real
     # processes and rewrite profile settings including API keys. The read-only
     # path is `run()` with no profile named, which never reaches an action, so
@@ -41,7 +38,7 @@ class LlmCommand(BaseCommand):
     approval_actor_id = "user"
     requests = [
         "config.read", "config.write", "plugin.list",
-        "service.list", "service.load", "service.unload",
+        "llm.list", "llm.load", "llm.unload",
     ]
     agent_prompt = (
         "The default LLM can be switched mid-conversation with /llm. Earlier "
@@ -53,16 +50,18 @@ class LlmCommand(BaseCommand):
     def form(self, sdk, args):
         profiles = sdk.config.read("llm_profiles") or {}
         default = sdk.config.read("default_llm_profile") or ""
+        registry = _registry(sdk)
         names = [*sorted(profiles), "add"]
         steps = [FormStep(
             "model_name",
             _default_prompt(default),
             True,
             enum=names,
-            enum_labels=[_model_label(default, item) for item in names],
+            enum_labels=[_model_label(registry, default, item)
+                         for item in names],
         )]
         if args.get("model_name") == "add":
-            backends = _backends(sdk)
+            backends = _backend_names(registry)
             return steps + [
                 FormStep(
                     "llm_service_class",
@@ -93,11 +92,12 @@ class LlmCommand(BaseCommand):
             ]
         name = args.get("model_name")
         if name:
+            actions, labels = _actions_for(registry, default, name)
             steps.append(FormStep(
                 "action",
                 "What do you want to do with this LLM profile?\n\n"
-                + _describe(sdk, profiles, default, name),
-                True, enum=ACTIONS, enum_labels=ACTION_LABELS))
+                + _describe(sdk, registry, profiles, default, name),
+                True, enum=actions, enum_labels=labels))
         if args.get("action") == "edit":
             field = args.get("field")
             steps += [
@@ -105,8 +105,8 @@ class LlmCommand(BaseCommand):
                     "field", "Choose which LLM setting to edit.", True,
                     enum=FIELDS, enum_labels=FIELD_LABELS),
                 FormStep(
-                    "value", _value_prompt(field, _backends(sdk)), True,
-                    _value_type(field)),
+                    "value", _value_prompt(field, _backend_names(registry)),
+                    True, _value_type(field)),
             ]
         return steps
 
@@ -130,7 +130,7 @@ class LlmCommand(BaseCommand):
         action = args.get("action")
         if action == "edit":
             field = args.get("field")
-            was_loaded = _service(sdk, name).get("loaded", False)
+            was_loaded = _profile_row(_registry(sdk), name).get("loaded", False)
             if field == "llm_model_name":
                 new_name = _coerce(field, args.get("value")).strip()
                 if not new_name:
@@ -151,7 +151,11 @@ class LlmCommand(BaseCommand):
                 profiles[name][field] = _coerce(field, args.get("value"))
             sdk.config.write("llm_profiles", profiles, scope="plugin")
             if was_loaded:
-                sdk.services.load(name)
+                # Reopen on the edited profile. This never fired before: the
+                # loaded flag came from the service registry, which has never
+                # heard of an LLM profile, so it read False every time and an
+                # edit silently left the old settings running in the open box.
+                sdk.llm.load(name)
             return f"Updated LLM profile: {name}"
         if action == "set_default":
             sdk.config.write(
@@ -159,27 +163,23 @@ class LlmCommand(BaseCommand):
             return f"Default LLM profile set to: {name}"
         if action == "load":
             try:
-                loaded = sdk.services.load(name)
+                loaded = sdk.llm.load(name)
             except sdk.Failed as exc:
-                if "not registered" in exc.error:
-                    return f"No backend is installed for {name}."
-                raise
+                # The registry names the backend the profile asked for, which
+                # is the thing the person has to go and install.
+                return exc.error
             return (
                 f"Loaded LLM profile: {name}"
                 if loaded
                 else f"Could not load {name}. Check the app log."
             )
         if action == "unload":
-            service = _service(sdk, name)
-            if not service or not service.get("loaded"):
-                return f"LLM profile {name} is not loaded."
-            sdk.services.unload(name)
+            sdk.llm.unload(name)
             return f"Unloaded LLM profile: {name}"
         if action == "remove":
             names = sorted(profiles)
-            service = _service(sdk, name)
-            if service and service.get("loaded"):
-                sdk.services.unload(name)
+            if _profile_row(_registry(sdk), name).get("loaded"):
+                sdk.llm.unload(name)
             profiles.pop(name, None)
             if default == name:
                 remaining = [item for item in names if item != name]
@@ -210,22 +210,73 @@ def _capability_steps():
     ]
 
 
-def _backends(sdk):
-    return (
-        sdk.plugins.list(category="services", role="llm_backend")
-        or [DEFAULT_BACKEND]
-    )
+def _registry(sdk):
+    """Everything the kernel knows about models, in one Request.
+
+    This whole command used to ask ``sdk.services`` these questions, and had
+    done since before ``service_llm.py`` was deleted and profiles stopped
+    being services. Nothing raised — the service registry simply had no key
+    for any profile, so every lookup returned ``{}`` and the command reported
+    each model uninstalled and unloaded while conversations drove those very
+    models without trouble.
+    """
+    try:
+        return sdk.llm.list() or {}
+    except sdk.Failed:
+        return {}
 
 
-def _services(sdk):
-    return {
-        service["name"]: service
-        for service in sdk.services.list(details=True)
-    }
+def _profile_row(registry, name):
+    """One profile's live registry row: is it open, what backend serves it."""
+    for row in registry.get("profiles") or []:
+        if row.get("model_name") == name:
+            return row
+    return {}
 
 
-def _service(sdk, name):
-    return _services(sdk).get(name, {})
+def _backend_names(registry):
+    """Backend class names, which is what a profile stores."""
+    return [entry["name"] for entry in registry.get("backends") or []] or [""]
+
+
+def _backend_label(registry, configured):
+    """What a person should read for a configured backend name.
+
+    Two hops, and both are needed. A profile stores whatever name it was
+    written with, and a migrated backend claims its predecessor's — so
+    ``LiteLLMService`` has to become ``LiteLLMBackend`` before the display
+    name for it can be found. Skipping that is why the card said
+    "LiteLLMService" for a backend whose file has declared
+    ``display_name = "LiteLLM (any provider)"` all along.
+    """
+    resolved = (registry.get("aliases") or {}).get(configured, configured)
+    for entry in registry.get("backends") or []:
+        if entry["name"] == resolved:
+            return entry.get("display_name") or resolved
+    return f"{configured} (not installed)"
+
+
+def _actions_for(registry, default, name):
+    """Which actions this profile can actually take, with live labels.
+
+    Only one half of a toggle is ever offered — ``/services`` has always done
+    this and the rest of the commands showed both, so half of every menu was a
+    no-op the user had to know to avoid. The action *value* stays stable and
+    only the label moves, so ``run`` still branches on one name.
+    """
+    if name == "add":
+        return ["edit"], ["Edit"]
+    row = _profile_row(registry, name)
+    actions = ["edit"]
+    labels = ["Edit"]
+    if default != name:
+        actions.append("set_default")
+        labels.append("Set default")
+    actions.append("unload" if row.get("loaded") else "load")
+    labels.append("Unload it" if row.get("loaded") else "Load it")
+    actions.append("remove")
+    labels.append("Remove")
+    return actions, labels
 
 
 def _profile(args):
@@ -255,11 +306,11 @@ def _coerce(field, value):
     return "" if value is None else str(value)
 
 
-def _describe(sdk, profiles, default, name):
+def _describe(sdk, registry, profiles, default, name):
     profile = profiles.get(name)
     if not profile:
         return "Action"
-    service = _service(sdk, name)
+    row = _profile_row(registry, name)
     mark = " (default)" if default == name else ""
     context = int(profile.get("llm_context_size", 0) or 0)
     context_text = (
@@ -268,21 +319,24 @@ def _describe(sdk, profiles, default, name):
         key for key, value in (
             profile.get("llm_capabilities") or {}).items() if value
     ) or "none declared"
-    backend = profile.get("llm_service_class", DEFAULT_BACKEND)
-    if not service:
-        backend += " (not installed)"
     return sdk.md.card(f"{name}{mark}", [
-        ("Status", "Loaded" if service.get("loaded") else "Unloaded"),
-        ("Class", backend),
+        ("Status", "Loaded" if row.get("loaded") else "Unloaded"),
+        ("Backend", _backend_label(
+            registry, profile.get("llm_service_class", ""))),
         ("Context", context_text),
         ("Native attachments", capabilities),
     ])
 
 
-def _model_label(default, name):
+def _model_label(registry, default, name):
     if name == "add":
         return "Add profile"
-    return f"{name} (default)" if default == name else name
+    mark = " (default)" if default == name else ""
+    # A filled circle for an open pool, hollow for a configured but closed
+    # one. The status used to be visible only after picking a profile, so
+    # "which of these is actually running" took one round trip per model.
+    dot = "●" if _profile_row(registry, name).get("loaded") else "○"
+    return f"{dot} {name}{mark}"
 
 
 def _default_prompt(default):
