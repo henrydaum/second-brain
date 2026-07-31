@@ -792,8 +792,11 @@ Request type and never was. The dialog states the grant rather than the
 command name (`approval.describe_grant`, rendered by the bridge from the same
 declaration) — a scope nobody is shown is not consent.
 
-**Services are resident boxes.** A sandboxed `BaseService` bridges to a native
-one whose `_load()` opens a persistent box and whose `unload()` closes it.
+**Services are resident boxes**, and with frontends they are the half of the
+bridge that lives in `sandbox/residency.py` — a residency is not a call, so
+it is a different file rather than a branch. A sandboxed `BaseService` bridges
+to a native one whose `_load()` opens a persistent box and whose `unload()`
+closes it.
 Methods named in `exports` become real attributes on the adapter, because
 native callers reach a service by attribute access (`services.get("x").m()`),
 not through `service.call`. The synthetic module supplies `build_services`,
@@ -1624,7 +1627,12 @@ move between built-in, sandbox, and installed trees.
   `run()` blocks, `start()` returns a `Run` to wait on or cancel, `open()`
   loads a resident box.
 - [sandbox/bridge.py](sandbox/bridge.py) — the only doorway a plugin enters
-  by: SDK code in, a native-looking adapter out.
+  by: SDK code in, a native-looking adapter out. Tools, tasks and commands
+  in full; services and frontends hand off to `residency.py`.
+- [sandbox/residency.py](sandbox/residency.py) — the other half, for the two
+  families that hold a process rather than answer a call: the refcounted box
+  two services share, declared hooks and bus subscriptions, the poll loop,
+  and the frontend's inverted start/render loop.
 - [sandbox/guest/sdk.py](sandbox/guest/sdk.py) — what plugin authors actually
   type. Each namespace is exactly one Request family.
 - [sandbox/hooks.py](sandbox/hooks.py) — the two-way translation between the

@@ -709,7 +709,7 @@ def test_the_box_closes_once_the_last_service_unloads(
 
 def test_calling_an_unloaded_service_fails_clearly(tmp_path, box):
     """The failure names the service, rather than surfacing a None box."""
-    from sandbox.bridge import ServiceCallFailed
+    from sandbox.residency import ServiceCallFailed
 
     service = _service(tmp_path)
     with pytest.raises(ServiceCallFailed, match="not loaded"):
@@ -723,7 +723,7 @@ def test_calling_an_unloaded_service_fails_clearly(tmp_path, box):
 
 def test_a_failing_export_raises_rather_than_returning(tmp_path, box):
     """Native callers expect a value or an exception, never a Result."""
-    from sandbox.bridge import ServiceCallFailed
+    from sandbox.residency import ServiceCallFailed
 
     source = MIGRATED_SERVICE.replace("ISOLATION", "").replace(
         "self._n += by\n        return self._n",
@@ -1234,7 +1234,7 @@ def test_a_service_write_outside_its_own_settings_is_refused(tmp_path, box):
     nothing, so it is refused at the gate — which is the correct answer and
     confirms the context did not quietly widen anything.
     """
-    from sandbox.bridge import ServiceCallFailed
+    from sandbox.residency import ServiceCallFailed
 
     box.bind_context(lambda session_key=None: SimpleNamespace(
         config={}, db=None, services={}, runtime=None, user_id=1,
