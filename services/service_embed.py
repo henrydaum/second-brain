@@ -261,6 +261,7 @@ class ImageEmbedder(_SentenceTransformerEmbedder, BaseService):
     timeout = 300
     requests = ["config.read", "paths.get", "fs.list", "fs.delete"]
     exports = ["encode", "describe"]
+    exports = ["encode", "encode_text", "describe"]
     setting = "embed_image_model_name"
     fallback = "clip-ViT-B-32"
     config_settings = [
@@ -309,3 +310,27 @@ class ImageEmbedder(_SentenceTransformerEmbedder, BaseService):
                     image.close()
                 except Exception:     # noqa: BLE001 - closing is best effort
                     pass
+
+    def encode_text(self, sdk, inputs):
+        """Embed *text* into the same space the images live in.
+
+        CLIP has two towers writing into one shared space, which is the whole
+        reason searching pictures by description works: a caption's vector
+        lands near the vectors of images it describes. So a query needs the
+        text tower while the corpus needed the image tower, and the two are
+        reached from the same model by handing ``encode`` different types.
+
+        This exists as a separate export because :meth:`encode` no longer
+        guesses. It used to, and that was the bug — strings went to the text
+        tower silently, so *indexing* a batch of image paths embedded the
+        filenames. Splitting the two makes each caller say which it meant, and
+        the failure mode of getting it wrong is now a missing file rather than
+        an index full of plausible nonsense.
+        """
+        if self.model is None:
+            raise RuntimeError(f"{self.model_name} is not loaded")
+
+        batch = [inputs] if isinstance(inputs, str) else list(inputs)
+        if not batch:
+            return []
+        return self._to_buffers(sdk, batch)

@@ -1,25 +1,28 @@
 """
 Lexical Search tool.
 
-BM25-ranked keyword search across the FTS5 lexical_index. Searches all
-indexed content (text chunks, OCR text, and any future modalities that
-write to lexical_content with new source values).
+BM25-ranked keyword search across the FTS5 ``lexical_index``. Searches all
+indexed content (text chunks, OCR text, tabular text, and any future source
+that writes into ``lexical_content``).
 
-Returns a list of SearchResult dicts, one per matching chunk.
+**The whole search happens in SQL, and five rows cross the boundary.** That is
+not an optimization, it is what makes the tool expressible at all: ``db.query``
+caps its answer, so a tool that ranked in Python would have to page the entire
+corpus over the wire. FTS5 puts the index in the database and ``ORDER BY rank
+LIMIT ?`` expresses the reduction, so the answer is what travels. The semantic
+tool beside this one now works the same way, over ``vec_cosine``.
 """
 
 
 dependencies_files = ['tools/helpers/SearchResult.py']
 dependencies_pip = []
+requests = ["db.query"]
 
-import logging
 import re
-import time
 
-from plugins.BaseTool import BaseTool, ToolResult
+from guest.bases import BaseTool
+
 from .helpers.SearchResult import SearchResult
-
-logger = logging.getLogger("LexicalSearch")
 
 
 class LexicalSearch(BaseTool):
@@ -64,27 +67,26 @@ class LexicalSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = []
+    background_safe = True
 
-    def run(self, context, **kwargs):
+    def run(self, sdk, **kwargs):
         """Run lexical search."""
-        query = kwargs.get("query", "").strip()
-        top_k = kwargs.get("top_k", 5)
-        sources = kwargs.get("sources", None)
-        folder = kwargs.get("folder", None)
+        query = (kwargs.get("query") or "").strip()
+        top_k = max(1, int(kwargs.get("top_k") or 5))
+        sources = kwargs.get("sources") or None
+        folder = kwargs.get("folder") or None
 
         if not query:
-            return ToolResult.failed("No query provided.")
+            return sdk.fail("No query provided.")
 
-        # --- 1. Build the FTS5 query ---
-        # Clean the query for safe FTS5 matching.
-        # If the user didn't use explicit FTS5 syntax, extract keywords.
-        fts_query = self._prepare_fts_query(query)
+        fts_query = _prepare_fts_query(query)
         if not fts_query:
-            return ToolResult.failed("Query produced no searchable terms.")
+            return sdk.fail("Query produced no searchable terms.")
 
-        # --- 2. Build SQL with optional filters ---
         sql_parts = [
-            "SELECT sc.path, sc.chunk_index, sc.content, sc.source, si.rank",
+            "SELECT sc.path AS path, sc.chunk_index AS chunk_index,",
+            "       sc.content AS content, sc.source AS source,",
+            "       si.rank AS rank",
             "FROM lexical_index si",
             "JOIN lexical_content sc ON si.rowid = sc.rowid",
             "WHERE lexical_index MATCH ?",
@@ -97,89 +99,87 @@ class LexicalSearch(BaseTool):
             params.extend(sources)
 
         if folder:
-            normalized_folder = folder.replace("\\", "/").rstrip("/")
-            sql_parts.append("AND (replace(sc.path, char(92), '/') = ? OR replace(sc.path, char(92), '/') LIKE ?)")
-            params.extend([normalized_folder, normalized_folder + "/%"])
+            normalized = folder.replace("\\", "/").rstrip("/")
+            sql_parts.append("AND (replace(sc.path, char(92), '/') = ?"
+                             " OR replace(sc.path, char(92), '/') LIKE ?)")
+            params.extend([normalized, normalized + "/%"])
 
         sql_parts.append("ORDER BY si.rank")
         sql_parts.append("LIMIT ?")
         params.append(top_k)
 
-        sql = "\n".join(sql_parts)
-
-        # --- 3. Execute ---
-        t0 = time.time()
         try:
-            with context.db.lock:
-                cur = context.db.conn.execute(sql, params)
-                rows = cur.fetchall()
-            logger.debug(f"FTS5 query returned {len(rows)} rows in {time.time() - t0:.3f}s")
-        except Exception as e:
-            logger.error(f"Lexical search failed: {e}")
-            return ToolResult.failed(f"Search failed: {e}")
+            rows = sdk.db.query("\n".join(sql_parts), params)
+        except sdk.Failed as failed:
+            # A missing lexical_index means the indexing package is not
+            # installed, which is a fact about this system rather than a bug.
+            return sdk.fail(f"Search failed: {failed.error}")
 
         if not rows:
-            return ToolResult(data=[], llm_summary=f'No results found for "{query}".')
+            return sdk.ok([], llm_summary=f'No results found for "{query}".')
 
-        # --- 4. Look up modalities for result paths ---
-        paths = list({row[0] for row in rows})
-        modality_map = self._get_modalities(context.db, paths)
+        modalities = _modalities(sdk, {row["path"] for row in rows})
 
-        # --- 5. Build SearchResult objects ---
-        results = []
-        for path, chunk_index, content, source, rank in rows:
-            results.append(SearchResult(
-                path=path,
-                score=-1.0 * float(rank),  # FTS5 rank is negative; invert so higher = better
-                source=source,
+        results = [
+            SearchResult(
+                path=row["path"],
+                # FTS5 rank is negative and better when smaller; invert so
+                # every stream agrees that higher means better, which is what
+                # the hybrid tool's fusion assumes.
+                score=-1.0 * float(row["rank"]),
+                source=row["source"],
                 stream="lexical",
-                modality=modality_map.get(path, "unknown"),
-                content=content,
-                chunk_index=int(chunk_index),
-            ).to_dict())
+                modality=modalities.get(row["path"], "unknown"),
+                content=row["content"],
+                chunk_index=int(row["chunk_index"] or 0),
+            ).to_dict()
+            for row in rows
+        ]
 
-        paths = list({r["path"] for r in results})
-        return ToolResult(
-            data=results,
-            llm_summary=_search_summary(query, results),
-            attachment_paths=paths,
-        )
+        return sdk.ok(results,
+                      llm_summary=_search_summary(query, results),
+                      attachments=list({r["path"] for r in results}))
 
-    # --- Helpers ---
 
-    def _prepare_fts_query(self, query: str) -> str:
-        """
-        Prepare a query string for FTS5 MATCH.
+# --- Helpers, module level so the other two tools can import them ---
 
-        If the query contains explicit FTS5 operators (AND, OR, NOT, quotes, *),
-        pass it through as-is. Otherwise, extract alphanumeric tokens and
-        join them so FTS5 implicitly ANDs them.
-        """
-        has_operators = any(op in query for op in ['"', " AND ", " OR ", " NOT ", "*"])
-        if has_operators:
-            return query
 
-        # Extract word tokens, ignore punctuation
-        tokens = re.findall(r'\w+', query.lower())
-        if not tokens:
-            return ""
-        return " ".join(tokens)
+def _prepare_fts_query(query: str) -> str:
+    """
+    Prepare a query string for FTS5 MATCH.
 
-    def _get_modalities(self, db, paths: list) -> dict:
-        """Batch-fetch modality from the files table for a list of paths."""
-        if not paths:
-            return {}
+    If the query contains explicit FTS5 operators (AND, OR, NOT, quotes, *),
+    pass it through as-is. Otherwise, extract alphanumeric tokens and
+    join them so FTS5 implicitly ANDs them.
+    """
+    has_operators = any(op in query
+                        for op in ['"', " AND ", " OR ", " NOT ", "*"])
+    if has_operators:
+        return query
 
-        placeholders = ", ".join("?" for _ in paths)
-        sql = f"SELECT path, modality FROM files WHERE path IN ({placeholders})"
+    tokens = re.findall(r'\w+', query.lower())
+    return " ".join(tokens)
 
-        try:
-            with db.lock:
-                cur = db.conn.execute(sql, paths)
-                return {row[0]: row[1] for row in cur.fetchall()}
-        except Exception as e:
-            logger.error(f"Modality lookup failed: {e}")
-            return {}
+
+def _modalities(sdk, paths) -> dict:
+    """Batch-fetch modality from the files table for a set of paths.
+
+    Answers ``{}`` on failure rather than raising: a result with an unknown
+    modality is still a usable result, and losing the whole search because a
+    decoration query failed would be the wrong trade.
+    """
+    paths = list(paths)
+    if not paths:
+        return {}
+    placeholders = ", ".join("?" for _ in paths)
+    try:
+        rows = sdk.db.query(
+            f"SELECT path, modality FROM files WHERE path IN ({placeholders})",
+            paths)
+    except sdk.Failed as failed:
+        sdk.log(f"modality lookup failed: {failed.error}", level="warning")
+        return {}
+    return {row["path"]: row["modality"] for row in rows}
 
 
 def _search_summary(query: str, results: list) -> str:

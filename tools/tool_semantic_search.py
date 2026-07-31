@@ -9,23 +9,30 @@ Results from different streams are NOT merged — each carries its stream tag
 so the hybrid search tool can apply RRF fusion across them.
 
 Adding a new modality = one entry in EMBEDDING_STREAMS.
+
+**The ranking happens in SQL, and only the top few rows cross the boundary.**
+The native version read every vector in the table into the tool and did the
+arithmetic in numpy, which cannot survive a sandbox: ``db.query`` caps its
+answer, and at a hundred thousand chunks the corpus is a couple of hundred
+megabytes of JSON *per query*. So the reduction moved to where the vectors
+already are. ``vec_cosine`` is a scalar function the kernel registers on its
+SQLite connection — an operator, not a search: it knows nothing about
+embeddings, models or streams, and everything else here is ordinary SQL
+composed around it. The shape is deliberately the same one ``lexical_search``
+has always had with FTS5.
 """
 
 
-dependencies_files = ['services/service_embed.py', 'tools/helpers/SearchResult.py', 'tools/tool_lexical_search.py']
-dependencies_pip = ['numpy']
+dependencies_files = ['services/service_embed.py',
+                      'tools/helpers/SearchResult.py',
+                      'tools/tool_lexical_search.py']
+dependencies_pip = []
+requests = ["db.query", "service.call"]
 
-import logging
-import os
-import time
+from guest.bases import BaseTool
 
-import numpy as np
-
-from plugins.BaseTool import BaseTool, ToolResult
 from .helpers.SearchResult import SearchResult
 from .tool_lexical_search import _search_summary
-
-logger = logging.getLogger("SemanticSearch")
 
 
 # =====================================================================
@@ -49,6 +56,10 @@ EMBEDDING_STREAMS = {
         "source": "text_embedding",
         "content_table": "text_chunks",     # WHERE to get text content
         "content_join_col": "chunk_index",  # JOIN column (besides path)
+        # How to embed the *query* for this stream. The text model has one
+        # encoder; CLIP has two, and asking it to encode a query the way it
+        # encodes an image would open the query string as a file.
+        "query_method": "encode",
     },
     "image": {
         "table": "image_embeddings",
@@ -57,6 +68,7 @@ EMBEDDING_STREAMS = {
         "source": "image_embedding",
         "content_table": "ocr_text",    # OCR text for images (if available)
         "content_join_col": None,       # JOIN on path only (ocr_text has no index col)
+        "query_method": "encode_text",  # CLIP's text tower, into the shared space
     },
     # "audio": {
     #     "table": "audio_embeddings",
@@ -65,6 +77,7 @@ EMBEDDING_STREAMS = {
     #     "source": "audio_embedding",
     #     "content_table": "audio_transcripts",
     #     "content_join_col": "segment_index",
+    #     "query_method": "encode",
     # },
 }
 
@@ -116,229 +129,172 @@ class SemanticSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = []  # Checked dynamically per stream
+    background_safe = True
 
-    def run(self, context, **kwargs):
+    def run(self, sdk, **kwargs):
         """Run semantic search."""
-        query = kwargs.get("query", "").strip()
-        top_k = kwargs.get("top_k", 5)
-        requested_streams = kwargs.get("streams", None)
-        folder = kwargs.get("folder", None)
+        query = (kwargs.get("query") or "").strip()
+        top_k = max(1, int(kwargs.get("top_k") or 5))
+        requested = kwargs.get("streams") or None
+        folder = kwargs.get("folder") or None
 
         if not query:
-            return ToolResult.failed("No query provided.")
+            return sdk.fail("No query provided.")
 
-        # Determine which streams to search
-        if requested_streams:
-            stream_names = [s for s in requested_streams if s in EMBEDDING_STREAMS]
+        if requested:
+            stream_names = [s for s in requested if s in EMBEDDING_STREAMS]
             if not stream_names:
-                available = list(EMBEDDING_STREAMS.keys())
-                return ToolResult.failed(
-                    f"No valid streams requested. Available: {available}"
-                )
+                return sdk.fail("No valid streams requested. Available: "
+                                f"{list(EMBEDDING_STREAMS)}")
         else:
-            stream_names = list(EMBEDDING_STREAMS.keys())
+            stream_names = list(EMBEDDING_STREAMS)
 
-        # Search each stream
-        all_results = []
-        streams_searched = []
-        streams_skipped = []
+        results = []
+        for name in stream_names:
+            found = self._search_stream(sdk, name, query, top_k, folder)
+            if found is None:
+                sdk.log(f"skipping {name} stream: embedder unavailable",
+                        level="debug")
+                continue
+            results.extend(found)
 
-        for stream_name in stream_names:
-            stream_results = self._search_stream(
-                context, stream_name, query, top_k, folder
-            )
-            if stream_results is None:
-                streams_skipped.append(stream_name)
-            else:
-                streams_searched.append(stream_name)
-                all_results.extend(stream_results)
+        return sdk.ok(results,
+                      llm_summary=_search_summary(query, results),
+                      attachments=list({r["path"] for r in results}))
 
-        paths = list({r["path"] for r in all_results})
-        return ToolResult(
-            data=all_results,
-            llm_summary=_search_summary(query, all_results),
-            attachment_paths=paths,
-        )
-
-    def _search_stream(self, context, stream_name, query, top_k, folder):
+    def _search_stream(self, sdk, stream_name, query, top_k, folder):
         """
-        Search a single embedding stream. Returns list of result dicts,
+        Search a single embedding stream. Returns a list of result dicts,
         or None if the stream's embedder isn't available.
         """
         config = EMBEDDING_STREAMS[stream_name]
-        table = config["table"]
-        index_col = config["index_col"]
-        service_name = config["service"]
-        source = config["source"]
-        stream_tag = f"{stream_name}_semantic"
+        service = config["service"]
 
-        # 1. Get embedder service
-        embedder = context.services.get(service_name)
-        if not embedder or not embedder.loaded:
-            logger.info(f"Skipping {stream_name} stream: {service_name} not loaded")
-            return None
-
-        # 2. Encode query — this calls the embedding model and can be slow
-        logger.debug(f"Encoding query for {stream_name} stream...")
+        # 1. The embedder, and which model it holds. ``describe`` answers both
+        #    in one call, and it is the model's *own* id — the adapter is named
+        #    after the service, so reading model_name off it would give
+        #    "text_embedder" and match no stored row.
         try:
-            query_vec = embedder.encode(query)
-        except Exception as e:
-            logger.error(f"Failed to encode query for {stream_name}: {e}")
+            described = sdk.services.call(service, "describe")
+        except sdk.Failed:
             return None
-
-        if query_vec is None:
-            logger.error(f"Encoder returned None for {stream_name}")
+        if not described or not described.get("loaded"):
             return None
+        model_name = described.get("model_name")
 
-        # Handle both 1D (single string) and 2D (list) encode results
-        if query_vec.ndim == 2:
-            query_vec = query_vec[0]
-
-        # 3. Load embeddings from DB
-        sql_parts = [f"SELECT path, {index_col}, embedding FROM {table}"]
-        sql_parts.append(f"WHERE model_name = ?")
-        params = [embedder.model_name]
-
-        if folder:
-            normalized_folder = os.path.normpath(folder)
-            sql_parts.append("AND path LIKE ? || '%'")
-            params.append(normalized_folder)
-
-        sql = "\n".join(sql_parts)
-
+        # 2. Encode the query. Slow — this is a model call.
         try:
-            with context.db.lock:
-                cur = context.db.conn.execute(sql, params)
-                rows = cur.fetchall()
-        except Exception as e:
-            logger.error(f"Failed to load embeddings from {table}: {e}")
+            encoded = sdk.services.call(service, config["query_method"],
+                                        inputs=query)
+        except sdk.Failed as failed:
+            sdk.log(f"failed to encode query for {stream_name}: {failed.error}",
+                    level="error")
+            return None
+        vector = encoded[0] if encoded else None
+        if not vector:
+            sdk.log(f"{service} returned no vector for the query",
+                    level="error")
             return None
 
+        rows = self._rank(sdk, config, vector, model_name, top_k, folder)
         if not rows:
-            logger.info(f"No embeddings in {table} for model {embedder.model_name}")
             return []
 
-        # 4. Deserialize embedding blobs into numpy vectors and stack into
-        # a matrix. Skip any rows with dimension mismatches (stale embeddings
-        # from a different model).
-        paths = []
-        indices = []
-        valid_vecs = []
+        index_field = INDEX_FIELD_MAP.get(config["index_col"],
+                                          config["index_col"])
+        return [
+            SearchResult(**{
+                "path": row["path"],
+                "score": float(row["score"]),
+                "source": config["source"],
+                "stream": f"{stream_name}_semantic",
+                "modality": row.get("modality") or "unknown",
+                "content": row.get("content"),
+                index_field: int(row["idx"] or 0),
+            }).to_dict()
+            for row in rows
+        ]
 
-        for row in rows:
-            path, idx, blob = row[0], row[1], row[2]
-            if blob:
-                vec = np.frombuffer(blob, dtype=np.float32)
-                if vec.shape[0] == query_vec.shape[0]:
-                    paths.append(path)
-                    indices.append(idx)
-                    valid_vecs.append(vec)
+    def _rank(self, sdk, config, vector, model_name, top_k, folder):
+        """The whole search, as one statement.
 
-        if not valid_vecs:
+        Tried twice at most: the content table belongs to a *different*
+        package (``ocr_text`` exists only when the OCR task is installed), so
+        a missing one is an uninstalled capability rather than an error. The
+        fallback drops the join and returns results without snippets, which is
+        the same degrade-quietly rule ``task_lexical_index`` follows per source.
+        """
+        try:
+            return sdk.db.query(*_ranking_sql(config, vector, model_name,
+                                              top_k, folder, content=True))
+        except sdk.Failed as failed:
+            if not config.get("content_table"):
+                raise
+            sdk.log(f"ranking without content from "
+                    f"{config['content_table']}: {failed.error}",
+                    level="debug")
+
+        try:
+            return sdk.db.query(*_ranking_sql(config, vector, model_name,
+                                              top_k, folder, content=False))
+        except sdk.Failed as failed:
+            # Now it is the embeddings table itself, i.e. nothing has been
+            # embedded into this stream yet.
+            sdk.log(f"no {config['table']} to search: {failed.error}",
+                    level="debug")
             return []
 
-        emb_matrix = np.vstack(valid_vecs)
 
-        # 5. Cosine similarity — both query and stored vectors are pre-normalized
-        # during encoding, so dot product == cosine similarity.
-        t_sim = time.time()
-        scores = np.dot(emb_matrix, query_vec)
-        logger.debug(
-            f"Similarity search over {len(valid_vecs)} vectors in {time.time() - t_sim:.3f}s"
-        )
+def _ranking_sql(config, vector, model_name, top_k, folder, content: bool):
+    """Build (sql, params) for one stream's ranking query.
 
-        # 6. Top-k
-        k = min(top_k, len(scores))
-        top_indices = np.argsort(scores)[-k:][::-1]
+    The inner SELECT is where the work happens: it is the only place
+    ``vec_cosine`` runs, over the base table alone, so the joins that decorate
+    the answer never see more than ``top_k`` rows. ``length(embedding) = ?``
+    drops vectors left behind by a different model *before* the arithmetic —
+    the same dimension check the native version did in numpy, moved to where
+    it costs nothing.
+    """
+    inner = [
+        f"SELECT path, {config['index_col']} AS idx,",
+        "       vec_cosine(embedding, ?) AS score",
+        f"FROM {config['table']}",
+        "WHERE model_name = ? AND length(embedding) = ?",
+    ]
+    params = [vector, model_name, len(vector)]
 
-        # 7. Fetch content for top results
-        top_paths = [paths[i] for i in top_indices]
-        top_idx_values = [indices[i] for i in top_indices]
-        content_map = self._fetch_content(
-            context.db, config, top_paths, top_idx_values
-        )
+    if folder:
+        normalized = str(folder).replace("\\", "/").rstrip("/")
+        inner.append("AND (replace(path, char(92), '/') = ?"
+                     " OR replace(path, char(92), '/') LIKE ?)")
+        params.extend([normalized, normalized + "/%"])
 
-        # 8. Look up modalities
-        modality_map = self._get_modalities(context.db, list(set(top_paths)))
+    inner.append("ORDER BY score DESC")
+    inner.append("LIMIT ?")
+    params.append(top_k)
 
-        # 9. Build SearchResult objects
-        index_field = INDEX_FIELD_MAP.get(index_col, index_col)
-        results = []
+    select = ["t.path AS path", "t.idx AS idx", "t.score AS score",
+              "f.modality AS modality"]
+    joins = ["LEFT JOIN files f ON f.path = t.path"]
 
-        for i in top_indices:
-            path = paths[i]
-            idx_value = indices[i]
+    content_table = config.get("content_table")
+    if content and content_table:
+        select.append("c.content AS content")
+        join_col = config.get("content_join_col")
+        on = "c.path = t.path"
+        if join_col:
+            on += f" AND c.{join_col} = t.idx"
+        joins.append(f"LEFT JOIN {content_table} c ON {on}")
 
-            result_kwargs = {
-                "path": path,
-                "score": float(scores[i]),
-                "source": source,
-                "stream": stream_tag,
-                "modality": modality_map.get(path, "unknown"),
-                "content": content_map.get((path, idx_value)),
-                index_field: int(idx_value),
-            }
-            results.append(SearchResult(**result_kwargs).to_dict())
-
-        return results
-
-    def _fetch_content(self, db, stream_config, paths, indices):
-        """
-        Fetch text content for a list of (path, index) pairs.
-        Returns a dict mapping (path, index) -> content string.
-        """
-        content_table = stream_config.get("content_table")
-        if not content_table or not paths:
-            return {}
-
-        join_col = stream_config.get("content_join_col")
-
-        try:
-            with db.lock:
-                if join_col:
-                    # JOIN on (path, index_col) — e.g. text_chunks
-                    # Build a query for each (path, index) pair
-                    placeholders = " OR ".join(
-                        f"(path = ? AND {join_col} = ?)" for _ in paths
-                    )
-                    params = []
-                    for p, idx in zip(paths, indices):
-                        params.extend([p, idx])
-
-                    sql = f"SELECT path, {join_col}, content FROM {content_table} WHERE {placeholders}"
-                    cur = db.conn.execute(sql, params)
-                    return {(row[0], row[1]): row[2] for row in cur.fetchall()}
-                else:
-                    # JOIN on path only — e.g. ocr_text (one row per path)
-                    unique_paths = list(set(paths))
-                    placeholders = ", ".join("?" for _ in unique_paths)
-                    sql = f"SELECT path, content FROM {content_table} WHERE path IN ({placeholders})"
-                    cur = db.conn.execute(sql, unique_paths)
-                    path_content = {row[0]: row[1] for row in cur.fetchall()}
-
-                    # Map back to (path, index) keys for uniform access
-                    result = {}
-                    for p, idx in zip(paths, indices):
-                        if p in path_content:
-                            result[(p, idx)] = path_content[p]
-                    return result
-
-        except Exception as e:
-            logger.error(f"Content fetch from {content_table} failed: {e}")
-            return {}
-
-    def _get_modalities(self, db, paths: list) -> dict:
-        """Batch-fetch modality from the files table for a list of paths."""
-        if not paths:
-            return {}
-
-        placeholders = ", ".join("?" for _ in paths)
-        sql = f"SELECT path, modality FROM files WHERE path IN ({placeholders})"
-
-        try:
-            with db.lock:
-                cur = db.conn.execute(sql, paths)
-                return {row[0]: row[1] for row in cur.fetchall()}
-        except Exception as e:
-            logger.error(f"Modality lookup failed: {e}")
-            return {}
+    sql = "\n".join([
+        "SELECT " + ", ".join(select),
+        "FROM (" + "\n".join(inner) + ") t",
+        *joins,
+        # A NULL score is a vector vec_cosine could not compare at all; SQLite
+        # sorts those last under DESC, so they only appear when the stream has
+        # fewer usable rows than asked for. Dropping them here is cheaper than
+        # computing the function twice to filter in the inner query.
+        "WHERE t.score IS NOT NULL",
+        "ORDER BY t.score DESC",
+    ])
+    return sql, params

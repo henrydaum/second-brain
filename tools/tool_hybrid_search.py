@@ -2,26 +2,29 @@
 Hybrid Search tool.
 
 Fuses results from lexical and semantic search using Reciprocal Rank Fusion
-(RRF). Calls the existing search tools via context.call_tool(), deduplicates
+(RRF). Calls the existing search tools via ``sdk.tools.call``, deduplicates
 chunks into documents, applies RRF across all streams, and groups final
 results by modality.
 
 Modality-agnostic — works with whatever modalities the sub-tools return
 (text, image, audio, tabular, etc.) without hardcoding any of them.
+
+Everything below the two sub-tool calls is arithmetic over dicts, which is why
+this migrated almost unchanged: the fusion never touched the database or the
+filesystem. ``tool.call`` is SAFE for the same reason a script is — the
+callee's own Requests are classified with this tool still in the chain, so
+routing through it launders nothing.
 """
 
 
-dependencies_files = ['tools/tool_lexical_search.py', 'tools/tool_semantic_search.py']
+dependencies_files = ['tools/tool_lexical_search.py',
+                      'tools/tool_semantic_search.py']
 dependencies_pip = []
+requests = ["tool.call"]
 
-import logging
-import time
-from collections import defaultdict
+from guest.bases import BaseTool
 
-from plugins.BaseTool import BaseTool, ToolResult
 from .tool_lexical_search import _search_summary
-
-logger = logging.getLogger("HybridSearch")
 
 # RRF constant — higher values give less weight to rank differences.
 # 60 is the standard value from the original RRF paper.
@@ -63,6 +66,7 @@ class HybridSearch(BaseTool):
     }
     requires_services = []
     dependencies_tools = ["lexical_search", "semantic_search"]
+    background_safe = True
     agent_prompt = (
         "## Searching indexed files\n"
         "Three retrieval tools search the indexed corpus — your sync_directories plus dropped-in attachments. "
@@ -73,17 +77,16 @@ class HybridSearch(BaseTool):
         "Results are excerpts (chunks) grouped by document; follow up with read_file for full context."
     )
 
-    def run(self, context, **kwargs):
+    def run(self, sdk, **kwargs):
         """Run hybrid search."""
-        query = kwargs.get("query", "").strip()
-        max_results = kwargs.get("max_results", 5)
-        folder = kwargs.get("folder", None)
-        modality = kwargs.get("modality", None)
+        query = (kwargs.get("query") or "").strip()
+        max_results = max(1, int(kwargs.get("max_results") or 5))
+        folder = kwargs.get("folder") or None
+        modality = kwargs.get("modality") or None
 
         if not query:
-            return ToolResult.failed("No query provided.")
+            return sdk.fail("No query provided.")
 
-        # --- 1. Fetch from sub-tools ---
         # Over-fetch to give RRF enough candidates to fuse meaningfully.
         fetch_limit = max(200, max_results * 10)
 
@@ -96,15 +99,8 @@ class HybridSearch(BaseTool):
             # Map modality to the corresponding semantic embedding stream
             sem_kwargs["streams"] = [modality]
 
-        t0 = time.time()
-        lex_result = context.call_tool("lexical_search", **lex_kwargs)
-        sem_result = context.call_tool("semantic_search", **sem_kwargs)
-        logger.debug(f"Sub-tool fetch completed in {time.time() - t0:.2f}s")
-
-        lex_data = lex_result.data if lex_result.success and lex_result.data else []
-        sem_data = sem_result.data if sem_result.success and sem_result.data else []
-
-        all_raw = lex_data + sem_data
+        all_raw = (_sub_search(sdk, "lexical_search", lex_kwargs)
+                   + _sub_search(sdk, "semantic_search", sem_kwargs))
 
         # Filter by modality if requested (lexical search doesn't filter by
         # modality natively, so we apply the filter here after the fact)
@@ -112,42 +108,52 @@ class HybridSearch(BaseTool):
             all_raw = [r for r in all_raw if r.get("modality") == modality]
 
         if not all_raw:
-            return ToolResult(data={}, llm_summary=f'No results found for "{query}".')
+            return sdk.ok([], llm_summary=f'No results found for "{query}".')
 
-        # --- 2. Group by stream ---
-        by_stream = defaultdict(list)
+        # --- Group by stream ---
+        by_stream = {}
         for result in all_raw:
-            by_stream[result["stream"]].append(result)
+            by_stream.setdefault(result["stream"], []).append(result)
 
-        # --- 3. Deduplicate within each stream (collapse chunks into docs) ---
-        deduped_streams = {}
-        for stream_name, results in by_stream.items():
-            deduped_streams[stream_name] = _dedup_by_path(results)
+        # --- Deduplicate within each stream (collapse chunks into docs) ---
+        deduped_streams = {name: _dedup_by_path(results)
+                           for name, results in by_stream.items()}
 
-        # --- 4. RRF across streams ---
+        # --- RRF across streams ---
         merged_docs, rrf_scores = _apply_rrf(deduped_streams)
 
-        # --- 5. Sort globally and take max_results ---
+        # --- Sort globally and take max_results ---
         for path, doc in merged_docs.items():
             doc["score"] = rrf_scores[path]
 
-        flat_results = sorted(
-            merged_docs.values(),
-            key=lambda d: d["score"],
-            reverse=True,
-        )[:max_results]
+        flat_results = sorted(merged_docs.values(),
+                              key=lambda d: d["score"],
+                              reverse=True)[:max_results]
 
-        logger.info(
-            f"Hybrid search: {len(by_stream)} streams, "
-            f"{len(merged_docs)} unique docs, {len(flat_results)} returned"
-        )
+        sdk.log(f"hybrid search: {len(by_stream)} streams, "
+                f"{len(merged_docs)} unique docs, "
+                f"{len(flat_results)} returned")
 
-        paths = [d["path"] for d in flat_results]
-        return ToolResult(
-            data=flat_results,
-            llm_summary=_search_summary(query, flat_results),
-            attachment_paths=paths,
-        )
+        return sdk.ok(flat_results,
+                      llm_summary=_search_summary(query, flat_results),
+                      attachments=[d["path"] for d in flat_results])
+
+
+def _sub_search(sdk, name: str, kwargs) -> list:
+    """One sub-tool's results, or an empty list.
+
+    Either retriever may legitimately be missing — semantic search needs an
+    embedder loaded, lexical search needs the FTS index built — and fusing one
+    stream is still a useful answer. So a failure here degrades the ranking
+    rather than failing the search, which is what the native version got from
+    reading ``result.success`` off a returned envelope.
+    """
+    try:
+        data = sdk.tools.call(name, **kwargs)
+    except sdk.Failed as failed:
+        sdk.log(f"{name} unavailable: {failed.error}", level="debug")
+        return []
+    return data if isinstance(data, list) else []
 
 
 def _dedup_by_path(results):
