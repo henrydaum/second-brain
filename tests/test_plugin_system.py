@@ -602,3 +602,78 @@ def test_format_services_labels_lifecycles():
     assert "| extension | Extension |" in text
     assert "| managed | Loaded |" in text
     assert "| cold | Unloaded |" in text
+
+
+# ────────────────────────────────────────────────────────────────────
+# Reinstalling a service that is already registered.
+# ────────────────────────────────────────────────────────────────────
+
+_MIGRATED_SERVICE = '''
+"""A migrated service."""
+
+from guest.bases import BaseService
+
+
+class Counter(BaseService):
+    """Counts."""
+
+    name = "counter"
+    description = "counts"
+    exports = ["bump"]
+
+    def start(self, sdk):
+        """Nothing to acquire."""
+        return True
+
+    def bump(self, sdk, by=1):
+        """Add."""
+        return by
+'''
+
+
+def test_reinstalling_a_bridged_service_keeps_its_runtime(tmp_path, monkeypatch):
+    """One attribute name, two meanings — and the collision only fired live.
+
+    ``_load_single_service`` preserved the bindings of the instance it was
+    replacing by reading ``svc._runtime``. The only writer of that attribute
+    is the bridge, which stores the live ``ConversationRuntime`` there because
+    ``_sync_hooks`` needs ``runtime.hooks``. While services were native
+    nothing set it and the read produced ``{}``; once every service is bridged
+    it finds a runtime object, and ``dict()`` of one raises
+    "'ConversationRuntime' object is not iterable" — so *every reinstall of
+    an already-registered service* failed at registration, with the install
+    itself already done and the files already on disk.
+    """
+    from types import SimpleNamespace
+
+    import sandbox  # noqa: F401  - installs the ``guest`` alias
+    from sandbox import Sandbox
+    from sandbox.bridge import configure
+
+    services_dir = tmp_path / "services"
+    services_dir.mkdir()
+    _patch_plugin_dir(monkeypatch, services_dir, "service")
+
+    configure(Sandbox())
+    try:
+        path = services_dir / "service_counter.py"
+        path.write_text(_MIGRATED_SERVICE, encoding="utf-8")
+        runtime = SimpleNamespace(hooks=None)
+        services = {}
+
+        first, error = plugin_discovery._load_single_service(
+            path, services, {}, {"runtime": runtime})
+        assert error is None, error
+        assert first == "counter"
+        assert services["counter"]._runtime is runtime
+
+        # The second install is the one that used to fail.
+        again, error = plugin_discovery._load_single_service(
+            path, services, {}, {"runtime": runtime})
+        assert error is None, error
+        assert again == "counter"
+        # And the bindings survived the replacement, which is what the
+        # preservation existed for in the first place.
+        assert services["counter"]._runtime is runtime
+    finally:
+        configure(None)

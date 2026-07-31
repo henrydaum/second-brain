@@ -575,8 +575,20 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
         name for name, svc in services.items()
         if getattr(svc, "_source_path", None) == source and getattr(svc, "loaded", False)
     }
+    # What was bound to the *previous* instance, so a reload that arrives with
+    # thinner bindings than the original registration does not quietly drop
+    # them. Kept under a name this function owns.
+    #
+    # It used to read ``svc._runtime``, and the only writer of that attribute
+    # is the bridge — which stores the live ``ConversationRuntime`` there,
+    # because ``_sync_hooks`` needs ``runtime.hooks``. So one name meant two
+    # things: a bindings dict here, a runtime object there. While services
+    # were native nothing ever set it and this silently produced ``{}``; once
+    # every service is bridged it finds a runtime, and ``dict()`` of one
+    # raises "'ConversationRuntime' object is not iterable" — which surfaced
+    # as *every reinstall of any service* failing at registration.
     old_bindings = {
-        name: dict(getattr(svc, "_runtime", {}) or {})
+        name: dict(getattr(svc, "_runtime_bindings", None) or {})
         for name, svc in services.items()
         if getattr(svc, "_source_path", None) == source
     }
@@ -598,6 +610,9 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
         runtime_bindings = old_bindings.get(svc_name) or (bindings or {})
         if runtime_bindings and hasattr(svc, "bind_runtime"):
             svc.bind_runtime(**runtime_bindings)
+            # Remembered on the instance rather than in this function, because
+            # the next reload is a different call with a different `bindings`.
+            svc._runtime_bindings = dict(runtime_bindings)
         # Load on reload (it was live before) or on a fresh registration whose
         # config says it should autoload — the latter is how an installed
         # extension/autoload service comes up live instead of waiting for the
