@@ -1007,7 +1007,8 @@ class _Parse(_Namespace):
     what changed is that there is now something to do about it.
     """
 
-    def file(self, path, modality: str = "text", detail: bool = False):
+    def file(self, path, modality: str = "text", detail: bool = False,
+             config: dict = None):
         """Parse a file. Local parser if one was provisioned, else the kernel.
 
         Answers the parser's ``output``: a string for text, a list of child
@@ -1039,8 +1040,11 @@ class _Parse(_Namespace):
 
         # Called with this sdk, exactly as the kernel calls it with its own
         # stand-in. The parser cannot tell which it has, which is what lets one
-        # file serve both callers.
-        parsed = parser(self._sdk, str(path), None)
+        # file serve both callers — including the empty dict: parsers read
+        # their tuning with ``config.get(...)`` and ``parsing.parse`` does
+        # ``config or {}``, so passing None here would crash every parser that
+        # has a knob rather than every parser that does not.
+        parsed = parser(self._sdk, str(path), dict(config or {}))
         if not getattr(parsed, "success", True):
             raise RequestFailed(Result.failure(
                 str(getattr(parsed, "error", "") or "parse failed")))

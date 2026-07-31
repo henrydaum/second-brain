@@ -169,6 +169,41 @@ def test_a_live_object_is_usable_inside_the_box_that_parsed_it(tmp_path):
     assert result.data == {"count": 2, "type": "Canvas", "size": 4}
 
 
+def test_a_parser_reading_its_config_is_handed_a_dict(tmp_path):
+    """Parsers do ``config.get(...)``; None would crash the ones with knobs.
+
+    ``parsing.parse`` normalizes with ``config or {}`` before calling, so a
+    kernel-side parse never sees None. The local path has to agree or the two
+    callers a parser is written for would not actually be interchangeable —
+    ``parse_csv`` reads ``max_rows`` and would raise AttributeError here while
+    working perfectly through the kernel.
+    """
+    parser = _write(tmp_path / "parsers", "parse_knob.py", '''
+from guest.parsing import ParseResult, register
+
+
+def parse_knob(sdk, path, config=None):
+    """Reads a knob the way the real tabular parsers do."""
+    return ParseResult(modality="image",
+                       output=[config.get("max_rows", 50)])
+
+
+register([".knob"], "image", parse_knob)
+''')
+    probe = _write(tmp_path, "probe.py", '''
+def run(sdk):
+    """Once with no config, once with one."""
+    return sdk.ok([sdk.parse.file("a.knob", "image"),
+                   sdk.parse.file("a.knob", "image", config={"max_rows": 7})])
+''')
+
+    result = run_in_subprocess(Interpreter(), str(probe), "run", name="probe",
+                               parsers=[str(parser)])
+
+    assert result.ok, result.error
+    assert result.data == [[50], [7]]
+
+
 def test_an_undeclared_modality_is_refused_with_the_fix(tmp_path):
     """No provisioning means the Request path, which refuses — actionably.
 
