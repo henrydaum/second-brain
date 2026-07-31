@@ -1,32 +1,33 @@
+"""Transcribe audio files with the Whisper service.
+
+The thinnest task in the bundle, and deliberately so: the audio never moves.
+The service holds the model, the task names a path, and a string comes back —
+which is the shape every heavy modality wants and the reason ``whisper`` is a
+service rather than a parser call.
+
+No parser is provisioned here for the same reason. Decoding audio produces a
+waveform, and a waveform is an *intermediate* on its way to text; the service
+does that decode inside its own box, beside the model that consumes it.
 """
-Audio transcription task.
-
-Transcribes audio files using the Whisper service and stores the result
-in the audio_transcripts table. Mirrors the ocr_images pattern.
-
-Requires the "whisper" service to be loaded.
-"""
-
 
 dependencies_files = ['services/service_whisper.py']
 dependencies_pip = []
 
-import logging
 import time
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
-
-logger = logging.getLogger("TranscribeAudio")
+from guest.bases import BaseTask
+from guest.parsing import basename
 
 
 class TranscribeAudio(BaseTask):
-    """Transcribe audio."""
+    """Turn speech into text, one file at a time."""
+
     name = "transcribe_audio"
     modalities = ["audio"]
     reads = []
     writes = ["audio_transcripts"]
     requires_services = ["whisper"]
+    requests = ["service.call"]
     output_schema = """
         CREATE TABLE IF NOT EXISTS audio_transcripts (
             path TEXT PRIMARY KEY,
@@ -37,37 +38,49 @@ class TranscribeAudio(BaseTask):
         );
     """
     batch_size = 4
-    max_workers = 1  # Whisper is CPU/GPU-heavy, don't saturate
+    # Whisper saturates whatever it is given, so a second concurrent file
+    # makes both slower rather than either faster.
+    max_workers = 1
     timeout = 600
 
-    def run(self, paths, context):
-        """Run transcribe audio."""
-        whisper = context.services.get("whisper")
-        if whisper is None or not whisper.loaded:
-            return [TaskResult.failed("Whisper service not available") for _ in paths]
+    def run(self, sdk, paths):
+        """Transcribe each path.
 
-        results = []
+        No "is the service loaded?" guard: the orchestrator's ``_services_ready``
+        already refuses to dispatch a task whose ``requires_services`` are not
+        loaded, so a guard here could only ever be checking something the
+        kernel had checked a moment earlier.
+        """
+        # Asked once for the batch rather than per file. The bridge names an
+        # adapter after the *service*, so reading ``model_name`` off it would
+        # record the string "whisper" against every transcript instead of the
+        # model that produced it.
+        described = sdk.services.call("whisper", "describe") or {}
+        model_name = described.get("model_name") or "unknown"
+
+        now = time.time()
+        outcomes = []
+
         for path in paths:
             try:
-                text = (whisper.transcribe(path) or "").strip()
+                text = (sdk.services.call("whisper", "transcribe",
+                                          audio_path=path) or "").strip()
+            except sdk.Failed as failed:
+                outcomes.append({"ok": False, "error": str(failed)})
+                continue
 
-                if text:
-                    logger.info(f"Transcribed {len(text)} chars from {Path(path).name}")
-                else:
-                    logger.info(f"No speech detected in {Path(path).name}")
+            sdk.log(f"transcribed {len(text)} chars from {basename(path)}"
+                    if text else f"no speech detected in {basename(path)}")
 
-                results.append(TaskResult(
-                    success=True,
-                    data=[{
-                        "path": path,
-                        "content": text,
-                        "char_count": len(text),
-                        "model_name": getattr(whisper, "model_name", "unknown"),
-                        "transcribed_at": time.time(),
-                    }],
-                ))
-            except Exception as e:
-                logger.error(f"Transcription failed for {Path(path).name}: {e}")
-                results.append(TaskResult.failed(str(e)))
+            outcomes.append({
+                "ok": True,
+                "data": [{
+                    "path": path,
+                    "content": text,
+                    "char_count": len(text),
+                    "model_name": model_name,
+                    "transcribed_at": now,
+                }],
+            })
 
-        return results
+        return sdk.ok(per_path=outcomes)

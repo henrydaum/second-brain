@@ -1,119 +1,145 @@
+"""Embed every image in a file, so pictures can be found by description.
+
+Same shape as ``task_ocr_images`` and for the same reason: the parser runs in
+this box because a parsed image is a live PIL object, and the embedder receives
+a *path* because that is what two boxes can both name. Declared with
+``parse_modalities`` so the kernel provisions the parsers and knows to contain
+this task.
+
+Images are pooled across the whole batch before encoding. One ``encode`` call
+over thirty images is much faster than thirty calls over one, because the GPU
+batches, and the box serializes its calls anyway — so per-file encoding would
+pay the round-trip cost thirty times for no parallelism.
 """
-Embed Images task.
-
-Uses the parser system to extract images from any file type (PDF, DOCX,
-standalone images, etc.), then batches and encodes them using the
-image_embedder service (e.g. CLIP). One embedding per extracted image.
-
-No upstream dependencies — images don't need text extraction first.
-Requires the image_embedder service to be loaded.
-"""
-
 
 dependencies_files = ['services/service_embed.py']
 dependencies_pip = []
 
-import logging
+parse_modalities = ["image"]
+
 import time
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
+from guest.bases import BaseTask
+from guest.parsing import basename
 
-logger = logging.getLogger("EmbedImages")
+#: CLIP sees 224px; anything past this is scaled away before it reaches the
+#: model, so writing it to scratch first is wasted bytes.
+MAX_DIMENSION = 512
 
 
 class EmbedImages(BaseTask):
-	"""Embed images."""
-	name = "embed_images"
-	modalities = ["image"]
-	reads = []
-	writes = ["image_embeddings"]
-	requires_services = ["image_embedder"]
-	output_schema = """
-		CREATE TABLE IF NOT EXISTS image_embeddings (
-			path TEXT,
-			image_index INTEGER,
-			embedding BLOB,
-			model_name TEXT,
-			embedded_at REAL,
-			PRIMARY KEY (path, image_index)
-		);
-	"""
-	batch_size = 12
-	max_workers = 4
-	timeout = 300
+    """One vector per image found in a file."""
 
-	def run(self, paths, context):
-		"""Run embed images."""
-		embedder = context.services.get("image_embedder")
-		if not embedder or not embedder.loaded:
-			return [TaskResult.failed("image_embedder service not loaded") for _ in paths]
+    name = "embed_images"
+    modalities = ["image"]
+    reads = []
+    writes = ["image_embeddings"]
+    requires_services = ["image_embedder"]
+    requests = ["parse.file", "service.call", "fs.temp", "fs.delete"]
+    output_schema = """
+        CREATE TABLE IF NOT EXISTS image_embeddings (
+            path TEXT,
+            image_index INTEGER,
+            embedding BLOB,
+            model_name TEXT,
+            embedded_at REAL,
+            PRIMARY KEY (path, image_index)
+        );
+    """
+    batch_size = 12
+    max_workers = 4
+    timeout = 300
 
-		now = time.time()
+    def run(self, sdk, paths):
+        """Extract every image in the batch, then encode them in one go."""
+        described = sdk.services.call("image_embedder", "describe") or {}
+        model_name = described.get("model_name") or "unknown"
+        now = time.time()
 
-		# --- 1. Extract images via parser system ---
-		# Each entry: (path, image_index, PIL.Image)
-		image_entries = []
-		failed = {}  # path -> error
+        # ── 1. Extract, per file, so one bad file fails alone ──────────
+        staged = {}          # path -> [scratch png, ...]
+        failures = {}        # path -> why
+        for path in paths:
+            try:
+                staged[path] = self._stage(sdk, path)
+            except sdk.Failed as failed:
+                failures[path] = str(failed)
 
-		for path in paths:
-			try:
-				parse_result = context.services.get("parser").parse(path, "image")
+        pooled = [scratch for path in paths
+                  for scratch in staged.get(path, ())]
 
-				if not parse_result.success:
-					logger.error(f"Image parse failed for {Path(path).name}: {parse_result.error}")
-					failed[path] = parse_result.error
-					continue
+        # ── 2. Encode the pool in one call ─────────────────────────────
+        vectors = []
+        if pooled:
+            try:
+                sdk.log(f"encoding {len(pooled)} image(s) from "
+                        f"{len(staged)} file(s)")
+                vectors = sdk.services.call("image_embedder", "encode",
+                                            inputs=pooled) or []
+            except sdk.Failed as failed:
+                # The encode is one call over the whole batch, so its failure
+                # genuinely is the batch's — every file goes down together and
+                # each is told the same true reason.
+                return sdk.ok(per_path=[{"ok": False,
+                                         "error": f"encode failed: {failed}"}
+                                        for _ in paths])
+            finally:
+                # Runs on the way out of the return above too, so the scratch
+                # files are cleaned up exactly once on both paths.
+                self._discard(sdk, pooled)
 
-				images = parse_result.output or []
-				if not images:
-					logger.info(f"No images found in {Path(path).name}")
-					failed[path] = "No images found"
-					continue
+        if pooled and len(vectors) != len(pooled):
+            return sdk.ok(per_path=[
+                {"ok": False,
+                 "error": f"embedder returned {len(vectors)} vectors for "
+                          f"{len(pooled)} images"} for _ in paths])
 
-				for idx, img in enumerate(images):
-					img = img.convert("RGB")
-					img.thumbnail((512, 512))
-					image_entries.append((path, idx, img))
+        # ── 3. Hand each file back its own slice ───────────────────────
+        outcomes = []
+        cursor = 0
+        for path in paths:
+            if path in failures:
+                outcomes.append({"ok": False, "error": failures[path]})
+                continue
 
-			except Exception as e:
-				logger.error(f"Failed to extract images from {Path(path).name}: {e}")
-				failed[path] = str(e)
+            mine = staged.get(path, [])
+            rows = [{
+                "path": path,
+                "image_index": index,
+                "embedding": vectors[cursor + index],
+                "model_name": model_name,
+                "embedded_at": now,
+            } for index in range(len(mine))]
+            cursor += len(mine)
 
-		# --- 2. Encode all images at once ---
-		embeddings = None
-		if image_entries:
-			logger.debug(f"Encoding {len(image_entries)} images across {len(paths)} file(s)...")
-			try:
-				pil_images = [entry[2] for entry in image_entries]
-				embeddings = embedder.encode(pil_images)
-			except Exception as e:
-				logger.error(f"Image embedding failed: {e}")
-				return [TaskResult.failed(f"Encode failed: {e}") for _ in paths]
+            sdk.log(f"embedded {len(rows)} image(s) from {basename(path)}")
+            outcomes.append({"ok": True, "data": rows})
 
-			if embeddings is None:
-				return [TaskResult.failed("Embedder returned None") for _ in paths]
+        return sdk.ok(per_path=outcomes)
 
-		# --- 3. Build results ---
-		# Group embeddings by path
-		path_rows = {path: [] for path in paths}
-		for i, (path, idx, _img) in enumerate(image_entries):
-			path_rows[path].append({
-				"path": path,
-				"image_index": idx,
-				"embedding": embeddings[i].tobytes(),
-				"model_name": embedder.model_name,
-				"embedded_at": now,
-			})
+    @staticmethod
+    def _stage(sdk, path) -> list:
+        """Write one file's images to scratch, and return their paths.
 
-		results = []
-		for path in paths:
-			if path in failed:
-				results.append(TaskResult.failed(failed[path]))
-			else:
-				results.append(TaskResult(success=True, data=path_rows[path]))
+        Scaled down first. The embedder resizes to the model's input anyway,
+        so a full-resolution PNG on the way there is bytes written and read
+        for nothing.
+        """
+        written = []
+        for image in sdk.parse.file(path, "image") or []:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
+            scratch = sdk.fs.temp(suffix=".png")
+            image.save(scratch, format="PNG")
+            written.append(scratch)
+        return written
 
-		embedded_count = len(image_entries)
-		file_count = len(paths) - len(failed)
-		logger.info(f"Embedded {embedded_count} images from {file_count} file(s)")
-		return results
+    @staticmethod
+    def _discard(sdk, scratches) -> None:
+        """Clean up staged images. Failing to is not worth failing a batch."""
+        for scratch in scratches:
+            try:
+                sdk.fs.delete(scratch)
+            except sdk.Failed:
+                sdk.log(f"could not clean up {scratch}", level="debug")

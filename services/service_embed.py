@@ -20,7 +20,7 @@ hands to ``sdk.db.write`` is the value sqlite stores.
 """
 
 dependencies_files = []
-dependencies_pip = ['numpy', 'sentence-transformers', 'torch']
+dependencies_pip = ['numpy', 'pillow', 'sentence-transformers', 'torch']
 
 from guest.bases import BaseService
 
@@ -178,14 +178,15 @@ class _SentenceTransformerEmbedder:
         }
 
     def encode(self, sdk, inputs):
-        """Embed a batch, returning one float32 buffer per input.
+        """Embed a batch of strings, returning one float32 buffer per input.
 
-        ``inputs`` is a list of strings for text, or of image *paths* for the
-        image model. A single string is accepted and answered with a one-item
-        list, so a caller never has to branch on how many it asked about.
+        A single string is accepted and answered with a one-item list, so a
+        caller never has to branch on how many it asked about.
 
-        The vectors are L2-normalized, which is what makes a dot product a
-        cosine similarity for whoever searches them later.
+        ``ImageEmbedder`` overrides this: its inputs are paths that have to
+        become PIL objects before the model sees them, and the base class
+        deliberately does not try to guess which it was handed. See that
+        override for why guessing would fail silently.
 
         No ``except Exception`` around the encode. A raise here becomes a
         failed Result with the traceback intact; catching it to return ``None``
@@ -199,7 +200,14 @@ class _SentenceTransformerEmbedder:
         batch = [inputs] if isinstance(inputs, str) else list(inputs)
         if not batch:
             return []
+        return self._to_buffers(sdk, batch)
 
+    def _to_buffers(self, sdk, batch) -> list:
+        """Run the model and hand back raw float32 buffers.
+
+        The vectors are L2-normalized, which is what makes a dot product a
+        cosine similarity for whoever searches them later.
+        """
         import numpy as np
 
         vectors = self.model.encode(batch, normalize_embeddings=True,
@@ -261,3 +269,43 @@ class ImageEmbedder(_SentenceTransformerEmbedder, BaseService):
          "clip-ViT-B-32",
          {"type": "text"}),
     ]
+
+    def encode(self, sdk, inputs):
+        """Embed a batch of image *paths*, one float32 buffer per image.
+
+        Opening the files here rather than inheriting the text encode is not
+        a convenience — it is the difference between working and silently
+        not. CLIP is multimodal, and ``SentenceTransformer.encode`` decides
+        what a batch *is* from the type of its members: hand it strings and it
+        embeds them as text, cheerfully and without error. A batch of paths
+        would therefore produce perfectly valid embeddings *of the filenames*,
+        which nothing would flag, no test on shapes would catch, and which
+        would surface only as image search that returns nonsense.
+
+        Paths rather than image bytes because the caller has already written
+        each image to scratch: a file is something both boxes can name, while
+        a PIL object is precisely the thing that cannot cross between them.
+        """
+        if self.model is None:
+            raise RuntimeError(f"{self.model_name} is not loaded")
+
+        from PIL import Image
+
+        batch = [inputs] if isinstance(inputs, str) else list(inputs)
+        if not batch:
+            return []
+
+        opened = []
+        try:
+            for path in batch:
+                image = Image.open(path)
+                image.load()          # before the file handle goes away
+                opened.append(image.convert("RGB")
+                              if image.mode != "RGB" else image)
+            return self._to_buffers(sdk, opened)
+        finally:
+            for image in opened:
+                try:
+                    image.close()
+                except Exception:     # noqa: BLE001 - closing is best effort
+                    pass

@@ -1,249 +1,227 @@
+"""Split extracted text into overlapping chunks for embedding.
+
+Character-based, breaking on natural boundaries: paragraphs, then newlines,
+then sentences, then words, then characters. Overlap carries the tail of one
+chunk into the next so meaning is not lost at a boundary — which is what makes
+the embeddings downstream worth anything.
+
+Pure stdlib, which is worth noticing: with nothing foreign in it this task runs
+*in-process* even from the installed tree, so chunking a batch costs no process
+spawn. The three functions below moved across from the native version
+unchanged; only ``run`` had to be rewritten.
 """
-Chunk Text task.
-
-Reads extracted text from the extracted_text table and splits it into
-overlapping chunks for downstream embedding. Uses character-based splitting
-with natural boundary detection (paragraphs → newlines → sentences → words).
-
-Config keys:
-    embed_chunk_size    Target chunk size in characters (default 512)
-    embed_chunk_overlap Overlap between adjacent chunks (default 50)
-"""
-
 
 dependencies_files = ['tasks/task_extract_text.py']
 dependencies_pip = []
 
-import logging
 import time
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
-
-logger = logging.getLogger("ChunkText")
+from guest.bases import BaseTask
+from guest.parsing import basename
 
 
 def _looks_like_gibberish(text: str) -> bool:
-	"""Conservative reject: only flag chunks that are almost certainly junk
-	from a broken parser (mojibake, binary leakage, replacement-char soup).
+    """Conservative reject: only flag chunks almost certainly junk.
 
-	Bias is toward keeping content — false-negative is fine, false-positive
-	(dropping real text) is not. Two cheap signals:
-	  1. Replacement-char density > 5% — the U+FFFD "�" pattern from bad decodes.
-	  2. Alpha-or-CJK ratio < 25% over a chunk of 80+ non-space chars — catches
-	     binary noise, hex dumps, control-char streams. The 80-char floor
-	     keeps short legit fragments (numbers, code, tables) safe.
-	"""
-	if not text:
-		return False
+    Mojibake, binary leakage, replacement-character soup — the output of a
+    parser that failed without saying so. The bias is deliberately toward
+    keeping content: a false negative wastes a little index space, a false
+    positive silently loses the user's data. Two cheap signals:
 
-	# Replacement chars: very strong signal, low false-positive rate.
-	if text.count("�") / max(len(text), 1) > 0.05:
-		return True
+      1. Replacement-char density > 5% — the U+FFFD pattern from bad decodes.
+      2. Word-like ratio < 25% over 80+ non-space chars — binary noise, hex
+         dumps, control-character streams. The 80-char floor keeps short
+         legitimate fragments (numbers, code, table cells) safe.
+    """
+    if not text:
+        return False
 
-	# Skip the alpha-ratio check on short chunks — too easy to false-positive
-	# on legitimate numeric/code/table fragments.
-	non_space = [c for c in text if not c.isspace()]
-	if len(non_space) < 80:
-		return False
+    if text.count("�") / max(len(text), 1) > 0.05:
+        return True
 
-	def _is_wordlike(c: str) -> bool:
-		# Letters in any script (Latin, CJK, Cyrillic, Arabic, etc.) plus digits.
-		"""Return whether wordlike."""
-		return c.isalpha() or c.isdigit()
+    non_space = [c for c in text if not c.isspace()]
+    if len(non_space) < 80:
+        return False
 
-	wordlike = sum(1 for c in non_space if _is_wordlike(c))
-	return (wordlike / len(non_space)) < 0.25
+    wordlike = sum(1 for c in non_space if c.isalpha() or c.isdigit())
+    return (wordlike / len(non_space)) < 0.25
 
 
-def _recursive_split(text: str, separators: list[str], chunk_size: int) -> list[str]:
-	"""
-	Break text into atomic segments by trying progressively finer separators.
+def _recursive_split(text: str, separators: list, chunk_size: int) -> list:
+    """Break text into atomic segments, coarsest boundary first.
 
-	Strategy: Try splitting on the coarsest boundary first (paragraphs).
-	If any piece is still too large, recurse with the next finer separator
-	(newlines -> sentences -> words -> characters). This preserves natural
-	reading boundaries as much as possible.
-	"""
-	if not text:
-		return []
+    Try paragraphs; anything still too large recurses onto the next finer
+    separator. This preserves natural reading boundaries as far as possible,
+    which is the difference between a chunk that means something and one that
+    starts mid-word.
+    """
+    if not text:
+        return []
 
-	sep = separators[0]
-	remaining_seps = separators[1:]
+    separator = separators[0]
+    remaining = separators[1:]
 
-	# Base case: empty separator means single-character splitting.
-	# The text itself is the smallest atomic unit we can produce.
-	if not sep:
-		return [text]
+    # Empty separator is the character-level floor: the text is already the
+    # smallest unit that can be produced.
+    if not separator:
+        return [text]
 
-	splits = text.split(sep)
+    splits = text.split(separator)
 
-	segments = []
-	for i, s in enumerate(splits):
-		# Re-attach separator to preserve whitespace in output (except last piece)
-		if i < len(splits) - 1:
-			s += sep
-		if not s:
-			continue
+    segments = []
+    for index, piece in enumerate(splits):
+        # Re-attach the separator so whitespace survives the round trip.
+        if index < len(splits) - 1:
+            piece += separator
+        if not piece:
+            continue
+        if len(piece) <= chunk_size or not remaining:
+            segments.append(piece)
+        else:
+            segments.extend(_recursive_split(piece, remaining, chunk_size))
 
-		# If this piece fits in a chunk, keep it as-is.
-		# Otherwise, recurse with a finer separator to break it down further.
-		if len(s) <= chunk_size or not remaining_seps:
-			segments.append(s)
-		else:
-			segments.extend(_recursive_split(s, remaining_seps, chunk_size))
-
-	return segments
+    return segments
 
 
-def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-	"""
-	Split text into overlapping chunks, breaking on natural boundaries.
+def _chunk_text(text: str, chunk_size: int, overlap: int) -> list:
+    """Split into overlapping chunks that break on natural boundaries."""
+    if not text or not text.strip():
+        return []
 
-	Two-phase approach:
-	1. Recursively split text into atomic segments using natural boundaries
-	   (paragraphs → newlines → sentences → words → characters).
-	2. Merge segments into chunks up to chunk_size, with overlap between
-	   adjacent chunks.
-	"""
-	if not text or not text.strip():
-		return []
+    if len(text) <= chunk_size:
+        return [text]
 
-	if len(text) <= chunk_size:
-		return [text]
+    separators = ["\n\n", "\n", ". ", "? ", "! ", " ", ""]
+    segments = _recursive_split(text, separators, chunk_size)
 
-	# Separator hierarchy: try coarse boundaries first, fall back to finer ones.
-	# Empty string at the end is the "character-level" fallback.
-	separators = ["\n\n", "\n", ". ", "? ", "! ", " ", ""]
-	segments = _recursive_split(text, separators, chunk_size)
+    chunks = []
+    current = []
+    current_len = 0
 
-	chunks = []
-	current_chunk = []
-	current_len = 0
+    for segment in segments:
+        length = len(segment)
 
-	for segment in segments:
-		seg_len = len(segment)
+        # A single "word" longer than a chunk. Rare, and unsplittable — emit
+        # it alone rather than letting it push a real chunk out of shape.
+        if length > chunk_size:
+            if current:
+                chunks.append("".join(current))
+                current = []
+                current_len = 0
+            chunks.append(segment)
+            continue
 
-		# Oversized segment that couldn't be split further — emit as-is.
-		# This only happens when a single "word" exceeds chunk_size (rare).
-		if seg_len > chunk_size:
-			if current_chunk:
-				chunks.append("".join(current_chunk))
-				current_chunk = []
-				current_len = 0
-			chunks.append(segment)
-			logger.debug(f"Oversized segment ({seg_len} chars) emitted as standalone chunk")
-			continue
+        if current_len + length > chunk_size:
+            chunks.append("".join(current))
 
-		# Adding this segment would exceed chunk_size — finalize current chunk
-		if current_len + seg_len > chunk_size:
-			chunks.append("".join(current_chunk))
+            # Carry the tail of the finished chunk into the next one, walking
+            # backwards until roughly ``overlap`` characters are accumulated.
+            carried = []
+            carried_len = 0
+            for previous in reversed(current):
+                if carried_len + len(previous) > overlap:
+                    break
+                carried.insert(0, previous)
+                carried_len += len(previous)
 
-			# Overlap: carry the tail of the previous chunk into the next one.
-			# This ensures context isn't lost at chunk boundaries — critical for
-			# embedding quality. Walk backwards through segments until we've
-			# accumulated ~overlap characters.
-			overlap_buffer = []
-			overlap_len = 0
-			for prev_seg in reversed(current_chunk):
-				prev_len = len(prev_seg)
-				if overlap_len + prev_len > overlap:
-					break
-				overlap_buffer.insert(0, prev_seg)
-				overlap_len += prev_len
+            current = carried
+            current_len = carried_len
 
-			current_chunk = overlap_buffer
-			current_len = overlap_len
+        current.append(segment)
+        current_len += length
 
-		current_chunk.append(segment)
-		current_len += seg_len
+    if current:
+        chunks.append("".join(current))
 
-	if current_chunk:
-		chunks.append("".join(current_chunk))
-
-	return chunks
+    return chunks
 
 
 class ChunkText(BaseTask):
-	"""Chunk text."""
-	name = "chunk_text"
-	modalities = ["text"]
-	reads = ["extracted_text"]
-	writes = ["text_chunks"]
-	requires_services = []
-	config_settings = [
-		("Chunk Overlap", "embed_chunk_overlap",
-		 "Number of overlapping tokens between chunks. Preserves continuity across chunk boundaries.",
-		 50,
-		 {"type": "slider", "range": (0, 200, 40), "is_float": False}),
-	]
-	output_schema = """
-		CREATE TABLE IF NOT EXISTS text_chunks (
-			path TEXT,
-			chunk_index INTEGER,
-			content TEXT,
-			char_count INTEGER,
-			chunked_at REAL,
-			PRIMARY KEY (path, chunk_index)
-		);
-	"""
-	batch_size = 8
-	timeout = 120
+    """Turn one file's extracted text into indexable chunks."""
 
-	def run(self, paths, context):
-		"""Run chunk text."""
-		chunk_size = context.config.get("embed_chunk_size", 512)
-		overlap = context.config.get("embed_chunk_overlap", 50)
-		now = time.time()
-		results = []
+    name = "chunk_text"
+    modalities = ["text"]
+    reads = ["extracted_text"]
+    writes = ["text_chunks"]
+    requires_services = []
+    requests = ["config.read", "db.query"]
+    config_settings = [
+        # Both were read by the native task and neither was declared, so
+        # ``/config`` could not show or change either — the same
+        # undeclared-setting bug service_whisper had.
+        ("Chunk Size", "embed_chunk_size",
+         "Target chunk length in characters. Larger chunks carry more context "
+         "per embedding and retrieve less precisely.",
+         512,
+         {"type": "slider", "range": (128, 2048, 128), "is_float": False}),
 
-		for path in paths:
-			try:
-				# Read extracted text from upstream task's output table
-				rows = context.db.get_task_output("extracted_text", path)
-				if not rows:
-					results.append(TaskResult.failed("No extracted text found"))
-					continue
+        ("Chunk Overlap", "embed_chunk_overlap",
+         "Characters carried from the end of one chunk into the start of the "
+         "next, so meaning is not lost at a boundary.",
+         50,
+         {"type": "slider", "range": (0, 200, 40), "is_float": False}),
+    ]
+    output_schema = """
+        CREATE TABLE IF NOT EXISTS text_chunks (
+            path TEXT,
+            chunk_index INTEGER,
+            content TEXT,
+            char_count INTEGER,
+            chunked_at REAL,
+            PRIMARY KEY (path, chunk_index)
+        );
+    """
+    batch_size = 8
+    timeout = 120
 
-				content = rows[0]["content"] or ""
-				if not content.strip():
-					results.append(TaskResult(
-						success=True,
-						data=[],
-					))
-					continue
+    def run(self, sdk, paths):
+        """Chunk each path's extracted text."""
+        chunk_size = int(sdk.config.read("embed_chunk_size") or 512)
+        overlap = int(sdk.config.read("embed_chunk_overlap") or 50)
+        now = time.time()
+        outcomes = []
 
-				chunks = _chunk_text(content, chunk_size, overlap)
+        for path in paths:
+            try:
+                rows = sdk.db.query(
+                    "SELECT content FROM extracted_text WHERE path = ?",
+                    [path])
+            except sdk.Failed as failed:
+                outcomes.append({"ok": False, "error": str(failed)})
+                continue
 
-				data = []
-				dropped = 0
-				kept_index = 0
-				for chunk in chunks:
-					if _looks_like_gibberish(chunk):
-						dropped += 1
-						continue
-					data.append({
-						"path": path,
-						"chunk_index": kept_index,
-						"content": chunk,
-						"char_count": len(chunk),
-						"chunked_at": now,
-					})
-					kept_index += 1
+            if not rows:
+                outcomes.append({"ok": False,
+                                 "error": "no extracted text found"})
+                continue
 
-				if dropped:
-					logger.info(
-						f"Chunked {Path(path).name} into {len(chunks)} chunks; "
-						f"dropped {dropped} as gibberish (size={chunk_size}, overlap={overlap})"
-					)
-				else:
-					logger.info(f"Chunked {Path(path).name} into {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
+            content = rows[0].get("content") or ""
+            if not content.strip():
+                # Nothing to chunk is a success with no rows, not a failure:
+                # an empty file is extracted correctly and has no chunks.
+                outcomes.append({"ok": True, "data": []})
+                continue
 
-				results.append(TaskResult(
-					success=True,
-					data=data,
-				))
-			except Exception as e:
-				results.append(TaskResult.failed(str(e)))
+            chunks = _chunk_text(content, chunk_size, overlap)
 
-		return results
+            data = []
+            dropped = 0
+            for chunk in chunks:
+                if _looks_like_gibberish(chunk):
+                    dropped += 1
+                    continue
+                # Indexed by what was *kept*, so the sequence has no holes.
+                data.append({
+                    "path": path,
+                    "chunk_index": len(data),
+                    "content": chunk,
+                    "char_count": len(chunk),
+                    "chunked_at": now,
+                })
+
+            sdk.log(f"chunked {basename(path)} into {len(data)} chunks"
+                    + (f" (dropped {dropped} as gibberish)" if dropped else "")
+                    + f" (size={chunk_size}, overlap={overlap})")
+            outcomes.append({"ok": True, "data": data})
+
+        return sdk.ok(per_path=outcomes)

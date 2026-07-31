@@ -1,36 +1,53 @@
+"""Read text out of images with the platform's OCR engine.
+
+Two kinds of file arrive here. A plain screenshot is itself an image. A PDF or
+a slide deck is not — it reaches this task because ``extract_text`` reported
+``also_contains = ["image"]``, and the pictures have to be pulled out of it
+first. Both routes end at the same place: a PNG on disk that the OCR service
+opens.
+
+**The parser runs in this box, because its result cannot leave one.** A parsed
+image is a live PIL object; it has no wire representation and never will. So
+this task declares ``parse_modalities = ["image"]``, the kernel resolves that
+against whichever parser packages are installed and loads them here before the
+task runs, and ``sdk.parse.file`` calls one directly. Declaring rather than
+importing the parser file is what lets the kernel see that foreign code is
+being provisioned and subprocess this task accordingly.
+
+The image then reaches the service as a *path*: scratch space is a Request the
+kernel always grants, and a file is something both boxes can name. Handing over
+the PIL object instead would be handing over exactly the thing that cannot
+cross.
 """
-OCR task.
-
-Scans image files for text using the registered OCR service. Stores
-extracted text in the ocr_text table.
-
-Requires the "ocr" service to be loaded. In manual mode, this task
-sits in the queue until the user loads the OCR engine. In auto mode,
-the system loads it before dispatching.
-"""
-
 
 dependencies_files = ['services/service_ocr.py']
 dependencies_pip = []
 
-import logging
+#: The kernel loads every installed parser that produces images — raster
+#: formats, PDF pages, embedded pictures in Office files — into this box.
+#: Which ones exist depends on what is installed, and that is deliberately not
+#: this task's business to know.
+parse_modalities = ["image"]
+
 import time
-import os
-import tempfile
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
+from guest.bases import BaseTask
+from guest.parsing import basename
 
-logger = logging.getLogger("OCRImages")
+#: Long edge an image is scaled to before OCR. Engines choke on very large
+#: inputs, and text that survives past this is not being read anyway.
+MAX_DIMENSION = 2500
 
 
 class OCRImages(BaseTask):
-    """Ocrimages."""
+    """Extract text from every image in a file."""
+
     name = "ocr_images"
     modalities = ["image"]
     reads = []
     writes = ["ocr_text"]
     requires_services = ["ocr"]
+    requests = ["parse.file", "service.call", "fs.temp", "fs.delete"]
     output_schema = """
         CREATE TABLE IF NOT EXISTS ocr_text (
             path TEXT PRIMARY KEY,
@@ -41,70 +58,73 @@ class OCRImages(BaseTask):
         );
     """
     batch_size = 4
-    max_workers = 1  # OCR is CPU-heavy, don't saturate
+    # OCR is CPU-heavy on every platform; a second worker makes both slower.
+    max_workers = 1
     timeout = 300
 
-    def run(self, paths, context):
-        """Run ocrimages."""
-        ocr = context.services.get("ocr")
-        if ocr is None or not ocr.loaded:
-            return [TaskResult.failed("OCR service not available") for _ in paths]
+    def run(self, sdk, paths):
+        """OCR each path's images."""
+        # Asked once for the batch: the adapter is named after the service, so
+        # reading ``model_name`` off it would record "ocr" against every row
+        # instead of the engine that actually read the text.
+        described = sdk.services.call("ocr", "describe") or {}
+        engine = described.get("model_name") or "unknown"
 
-        results = []
+        now = time.time()
+        outcomes = []
+
         for path in paths:
             try:
-                # Step 1: Extract images using the appropriate parser
-                parse_result = context.services.get("parser").parse(path, "image")
-                
-                if not parse_result.success:
-                    logger.error(f"Image parse failed for {Path(path).name}: {parse_result.error}")
-                    results.append(TaskResult.failed(parse_result.error))
-                    continue
+                text = self._read(sdk, path)
+            except sdk.Failed as failed:
+                outcomes.append({"ok": False, "error": str(failed)})
+                continue
 
-                images = parse_result.output or []
-                all_text = []
+            sdk.log(f"OCR extracted {len(text)} chars from {basename(path)}"
+                    if text else f"OCR found no text in {basename(path)}")
 
-                # Step 2: Process each extracted image
-                for img in images:
-                    temp_path = None
+            outcomes.append({
+                "ok": True,
+                "data": [{
+                    "path": path,
+                    "content": text,
+                    "char_count": len(text),
+                    "model_name": engine,
+                    "extracted_at": now,
+                }],
+            })
+
+        return sdk.ok(per_path=outcomes)
+
+    @staticmethod
+    def _read(sdk, path) -> str:
+        """Every image in one file, read and joined."""
+        images = sdk.parse.file(path, "image") or []
+
+        found = []
+        for image in images:
+            scratch = ""
+            try:
+                # Normalized the way the OCR service wants it: bounded size,
+                # RGB, PNG. Doing it here rather than in the service keeps the
+                # service ignorant of where its images came from.
+                if image.width > MAX_DIMENSION or image.height > MAX_DIMENSION:
+                    image.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+
+                scratch = sdk.fs.temp(suffix=".png")
+                image.save(scratch, format="PNG")
+
+                text = sdk.services.call("ocr", "process_image",
+                                         image_path=scratch)
+                if text and text.strip():
+                    found.append(text.strip())
+            finally:
+                if scratch:
                     try:
-                        # Save PIL object to a temporary file for the OCR engine
-                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-                            img.save(temp_file, format="PNG")
-                            temp_path = temp_file.name
-                        
-                        # Run OCR on the temporary file
-                        text_chunk = ocr.process_image(temp_path)
-                        if text_chunk and text_chunk.strip():
-                            all_text.append(text_chunk.strip())
-                            
-                    finally:
-                        # Clean up the temporary file
-                        if temp_path and os.path.exists(temp_path):
-                            try:
-                                os.remove(temp_path)
-                            except OSError:
-                                pass
+                        sdk.fs.delete(scratch)
+                    except sdk.Failed:
+                        sdk.log(f"could not clean up {scratch}", level="debug")
 
-                final_text = "\n\n".join(all_text).strip()
-
-                if final_text:
-                    logger.info(f"OCR extracted {len(final_text)} chars from {Path(path).name}")
-                else:
-                    logger.info(f"OCR found no text in {Path(path).name}")
-
-                results.append(TaskResult(
-                    success=True,
-                    data=[{
-                        "path": path,
-                        "content": final_text,
-                        "char_count": len(final_text),
-                        "model_name": getattr(ocr, 'model_name', 'unknown'),
-                        "extracted_at": time.time(),
-                    }],
-                ))
-            except Exception as e:
-                logger.error(f"OCR failed for {Path(path).name}: {e}")
-                results.append(TaskResult.failed(str(e)))
-
-        return results
+        return "\n\n".join(found).strip()

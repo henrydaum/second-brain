@@ -1,121 +1,123 @@
+"""Embed a batch of files' text chunks in one call to the model.
+
+Chunks are pooled across every file in the batch and encoded together, because
+that is what a GPU is good at: one call over four hundred chunks costs a
+fraction of four hundred calls over one, and the service's box serializes its
+calls anyway, so per-file encoding buys no parallelism to trade for it.
+
+Vectors come back as raw float32 buffers — one ``bytes`` per chunk, exactly
+what the ``embedding`` BLOB column stores. Bytes cross the boundary natively,
+so nothing here encodes or decodes anything; the value handed to the row is
+the value sqlite writes.
 """
-Embed Text task.
 
-Reads chunks from the text_chunks table, pools them across all files in the
-batch, and encodes them in one call to the text_embedder service. The embedder
-handles sub-batching internally.
-
-Depends on chunk_text. Requires the text_embedder service to be loaded.
-"""
-
-
-dependencies_files = ['services/service_embed.py', 'tasks/task_chunk_text.py']
+dependencies_files = ['services/service_embed.py', 'tasks/task_chunk_text.py',
+                      'tasks/helpers/rows.py']
 dependencies_pip = []
 
-import logging
 import time
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
+from guest.bases import BaseTask
+from guest.parsing import basename
 
-logger = logging.getLogger("EmbedText")
+from .rows import paged
 
 
 class EmbedText(BaseTask):
-	"""Embed text."""
-	name = "embed_text"
-	modalities = ["text"]
-	reads = ["text_chunks"]
-	writes = ["text_embeddings"]
-	requires_services = ["text_embedder"]
-	output_schema = """
-		CREATE TABLE IF NOT EXISTS text_embeddings (
-			path TEXT,
-			chunk_index INTEGER,
-			embedding BLOB,
-			model_name TEXT,
-			embedded_at REAL,
-			PRIMARY KEY (path, chunk_index)
-		);
-	"""
-	batch_size = 4
-	max_workers = 4
-	timeout = 300
+    """One vector per text chunk."""
 
-	def run(self, paths, context):
-		"""Run embed text."""
-		embedder = context.services.get("text_embedder")
-		if not embedder or not embedder.loaded:
-			return [TaskResult.failed("text_embedder service not loaded") for _ in paths]
+    name = "embed_text"
+    modalities = ["text"]
+    reads = ["text_chunks"]
+    writes = ["text_embeddings"]
+    requires_services = ["text_embedder"]
+    requests = ["db.query", "service.call"]
+    output_schema = """
+        CREATE TABLE IF NOT EXISTS text_embeddings (
+            path TEXT,
+            chunk_index INTEGER,
+            embedding BLOB,
+            model_name TEXT,
+            embedded_at REAL,
+            PRIMARY KEY (path, chunk_index)
+        );
+    """
+    batch_size = 4
+    max_workers = 4
+    timeout = 300
 
-		now = time.time()
+    def run(self, sdk, paths):
+        """Pool the batch's chunks, encode once, hand each file its slice."""
+        described = sdk.services.call("text_embedder", "describe") or {}
+        # The HF model id, not the service name. It is stored on every row and
+        # matched in ``WHERE model_name = ?`` at search time, so reading it off
+        # the adapter — which answers "text_embedder" — would make every vector
+        # unfindable by the model that produced it.
+        model_name = described.get("model_name") or "unknown"
+        now = time.time()
 
-		# --- 1. Pool all chunks across all files ---
-		pool_texts = []       # flat list of chunk strings
-		pool_keys = []        # parallel list of (path, chunk_index)
-		path_to_indices = {}  # path -> list of positions in pool
+        # ── 1. Gather, per file ────────────────────────────────────────
+        chunks = {}          # path -> [(chunk_index, content), ...]
+        failures = {}        # path -> why
+        for path in paths:
+            try:
+                rows = paged(
+                    sdk,
+                    "SELECT chunk_index, content FROM text_chunks "
+                    "WHERE path = ? ORDER BY chunk_index",
+                    [path])
+            except sdk.Failed as failed:
+                failures[path] = f"could not read chunks: {failed}"
+                continue
+            chunks[path] = [(row["chunk_index"], row["content"] or "")
+                            for row in rows]
 
-		for path in paths:
-			try:
-				rows = context.db.get_task_output("text_chunks", path)
-				if not rows:
-					path_to_indices[path] = []
-					continue
+        pooled = [content for path in paths
+                  for _index, content in chunks.get(path, ())]
 
-				path_to_indices[path] = []
-				for row in rows:
-					idx = len(pool_texts)
-					pool_texts.append(row["content"])
-					pool_keys.append((path, row["chunk_index"]))
-					path_to_indices[path].append(idx)
-			except Exception as e:
-				logger.error(f"Failed to read chunks for {Path(path).name}: {e}")
-				path_to_indices[path] = None  # sentinel for failure
+        # ── 2. One encode for the whole batch ──────────────────────────
+        vectors = []
+        if pooled:
+            try:
+                sdk.log(f"encoding {len(pooled)} chunk(s) across "
+                        f"{len(chunks)} file(s)")
+                vectors = sdk.services.call("text_embedder", "encode",
+                                            inputs=pooled) or []
+            except sdk.Failed as failed:
+                return sdk.ok(per_path=[{"ok": False,
+                                         "error": f"encode failed: {failed}"}
+                                        for _ in paths])
 
-		# --- 2. Encode the entire pool at once ---
-		# Pooling chunks across files into one encode() call is much faster
-		# than encoding per-file, because the GPU can batch efficiently.
-		embeddings = None
-		if pool_texts:
-			logger.debug(f"Encoding {len(pool_texts)} text chunks across {len(paths)} file(s)...")
-			try:
-				embeddings = embedder.encode(pool_texts)
-			except Exception as e:
-				logger.error(f"Embedding encode failed: {e}")
-				return [TaskResult.failed(f"Encode failed: {e}") for _ in paths]
+            if len(vectors) != len(pooled):
+                # Silence here would write vectors against the wrong chunks:
+                # the slicing below is positional, so a short answer shifts
+                # every file after the first by an unknown amount.
+                return sdk.ok(per_path=[
+                    {"ok": False,
+                     "error": f"embedder returned {len(vectors)} vectors for "
+                              f"{len(pooled)} chunks"} for _ in paths])
 
-			if embeddings is None:
-				return [TaskResult.failed("Embedder returned None") for _ in paths]
+        # ── 3. Slice it back out, in the order it went in ──────────────
+        outcomes = []
+        cursor = 0
+        for path in paths:
+            if path in failures:
+                outcomes.append({"ok": False, "error": failures[path]})
+                continue
 
-		# --- 3. Map results back to per-file TaskResults ---
-		results = []
-		total_embedded = 0
+            mine = chunks.get(path, [])
+            rows = [{
+                "path": path,
+                "chunk_index": chunk_index,
+                "embedding": vectors[cursor + offset],
+                "model_name": model_name,
+                "embedded_at": now,
+            } for offset, (chunk_index, _content) in enumerate(mine)]
+            cursor += len(mine)
 
-		for path in paths:
-			indices = path_to_indices.get(path)
+            if rows:
+                sdk.log(f"embedded {len(rows)} chunk(s) from {basename(path)}",
+                        level="debug")
+            outcomes.append({"ok": True, "data": rows})
 
-			if indices is None:
-				results.append(TaskResult.failed("Failed to read chunks"))
-				continue
-
-			if not indices:
-				results.append(TaskResult(success=True, data=[]))
-				continue
-
-			data = []
-			for idx in indices:
-				p, chunk_index = pool_keys[idx]
-				embedding_bytes = embeddings[idx].tobytes()
-				data.append({
-					"path": p,
-					"chunk_index": chunk_index,
-					"embedding": embedding_bytes,
-					"model_name": embedder.model_name,
-					"embedded_at": now,
-				})
-
-			total_embedded += len(data)
-			results.append(TaskResult(success=True, data=data))
-
-		logger.info(f"Embedded {total_embedded} chunks across {len(paths)} file(s)")
-		return results
+        return sdk.ok(per_path=outcomes)

@@ -1,159 +1,150 @@
-"""
-Lexical Index task.
+"""Feed every text a file produced into the FTS5 keyword index.
 
-Reads text chunks, OCR text, tabular text, and/or audio transcripts and
-writes them to the lexical_content table, which feeds an FTS5 full-text
-search index via SQLite triggers. Enables BM25-ranked keyword search
-across all indexed files.
+Four upstreams write text about a path — chunks, OCR, tabular and transcripts —
+and this gathers whichever exist into one table. Triggers on that table keep
+the FTS5 virtual table in step, so BM25 keyword search covers everything the
+pipeline understood about a file, whatever route the text arrived by.
 
-Indexes at chunk level so BM25 results align with embedding results
-for hybrid search fusion. OCR, tabular, and transcript text (typically
-short) get chunk_index=0.
+Chunk-level on purpose: BM25 results then line up with embedding results, so
+hybrid search can fuse the two rankings without comparing a whole document
+against a fragment. The short sources — OCR, tabular, a transcript — get
+``chunk_index = 0``.
 
-This is a downstream task — no modalities needed. It runs whenever
-any upstream (chunk_text, ocr_images, textualize_tabular, or
-transcribe_audio) completes for a path.
-
-require_all_inputs = False means any one suffices.
+``modalities`` is empty and ``require_all_inputs`` is False: this is a
+downstream task, run when *any* upstream finishes for a path rather than when
+a file of some type appears.
 """
 
-
-dependencies_files = ['tasks/task_chunk_text.py']
+dependencies_files = ['tasks/task_chunk_text.py', 'tasks/helpers/rows.py']
 dependencies_pip = []
 
-import logging
 import time
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
+from guest.bases import BaseTask
+from guest.parsing import basename
 
-logger = logging.getLogger("IndexLexical")
+from .rows import paged
+
+#: ``(table, source label, is_chunked)``. Chunked sources keep their own
+#: ordering; the rest are one row and take index 0.
+SOURCES = (
+    ("text_chunks", "extracted", True),
+    ("ocr_text", "ocr", False),
+    ("tabular_text", "tabular", False),
+    ("audio_transcripts", "transcript", False),
+)
 
 
 class IndexLexical(BaseTask):
-	"""Index lexical."""
-	name = "index_lexical"
-	modalities = []  # downstream task — triggered by upstream completion
-	reads = ["text_chunks", "ocr_text", "tabular_text", "audio_transcripts"]
-	writes = ["lexical_content"]
-	require_all_inputs = False  # run when either input exists
-	requires_services = []
-	output_schema = """
-		CREATE TABLE IF NOT EXISTS lexical_content (
-			path TEXT,
-			source TEXT,
-			chunk_index INTEGER,
-			content TEXT,
-			char_count INTEGER,
-			indexed_at REAL,
-			PRIMARY KEY (path, source, chunk_index)
-		);
+    """Collect a path's text into the searchable table."""
 
-		CREATE VIRTUAL TABLE IF NOT EXISTS lexical_index USING fts5(
-			path,
-			content,
-			source,
-			chunk_index,
-			content=lexical_content,
-			content_rowid=rowid,
-			tokenize='porter unicode61'
-		);
+    name = "index_lexical"
+    modalities = []
+    reads = ["text_chunks", "ocr_text", "tabular_text", "audio_transcripts"]
+    writes = ["lexical_content"]
+    require_all_inputs = False
+    requires_services = []
+    requests = ["db.query"]
+    output_schema = """
+        CREATE TABLE IF NOT EXISTS lexical_content (
+            path TEXT,
+            source TEXT,
+            chunk_index INTEGER,
+            content TEXT,
+            char_count INTEGER,
+            indexed_at REAL,
+            PRIMARY KEY (path, source, chunk_index)
+        );
 
-		CREATE TRIGGER IF NOT EXISTS lexical_content_ai AFTER INSERT ON lexical_content BEGIN
-			INSERT INTO lexical_index(rowid, path, content, source, chunk_index)
-			VALUES (new.rowid, new.path, new.content, new.source, new.chunk_index);
-		END;
+        CREATE VIRTUAL TABLE IF NOT EXISTS lexical_index USING fts5(
+            path,
+            content,
+            source,
+            chunk_index,
+            content=lexical_content,
+            content_rowid=rowid,
+            tokenize='porter unicode61'
+        );
 
-		CREATE TRIGGER IF NOT EXISTS lexical_content_ad AFTER DELETE ON lexical_content BEGIN
-			INSERT INTO lexical_index(lexical_index, rowid, path, content, source, chunk_index)
-			VALUES('delete', old.rowid, old.path, old.content, old.source, old.chunk_index);
-		END;
+        CREATE TRIGGER IF NOT EXISTS lexical_content_ai AFTER INSERT ON lexical_content BEGIN
+            INSERT INTO lexical_index(rowid, path, content, source, chunk_index)
+            VALUES (new.rowid, new.path, new.content, new.source, new.chunk_index);
+        END;
 
-		CREATE TRIGGER IF NOT EXISTS lexical_content_au AFTER UPDATE ON lexical_content BEGIN
-			INSERT INTO lexical_index(lexical_index, rowid, path, content, source, chunk_index)
-			VALUES('delete', old.rowid, old.path, old.content, old.source, old.chunk_index);
-			INSERT INTO lexical_index(rowid, path, content, source, chunk_index)
-			VALUES (new.rowid, new.path, new.content, new.source, new.chunk_index);
-		END;
-	"""
-	batch_size = 8
-	timeout = 120
+        CREATE TRIGGER IF NOT EXISTS lexical_content_ad AFTER DELETE ON lexical_content BEGIN
+            INSERT INTO lexical_index(lexical_index, rowid, path, content, source, chunk_index)
+            VALUES('delete', old.rowid, old.path, old.content, old.source, old.chunk_index);
+        END;
 
-	def run(self, paths, context):
-		"""Run index lexical."""
-		now = time.time()
-		results = []
+        CREATE TRIGGER IF NOT EXISTS lexical_content_au AFTER UPDATE ON lexical_content BEGIN
+            INSERT INTO lexical_index(lexical_index, rowid, path, content, source, chunk_index)
+            VALUES('delete', old.rowid, old.path, old.content, old.source, old.chunk_index);
+            INSERT INTO lexical_index(rowid, path, content, source, chunk_index)
+            VALUES (new.rowid, new.path, new.content, new.source, new.chunk_index);
+        END;
+    """
+    batch_size = 8
+    timeout = 120
 
-		for path in paths:
-			try:
-				data = []
+    def run(self, sdk, paths):
+        """Gather every available source of text for each path."""
+        now = time.time()
+        outcomes = []
 
-				# Index text chunks if available
-				chunks = context.db.get_task_output("text_chunks", path)
-				if chunks:
-					for row in chunks:
-						content = row["content"] or ""
-						if content.strip():
-							data.append({
-								"path": path,
-								"source": "extracted",
-								"chunk_index": row["chunk_index"],
-								"content": content,
-								"char_count": len(content),
-								"indexed_at": now,
-							})
+        for path in paths:
+            data = self._collect(sdk, path, now)
+            if data:
+                found = sorted({row["source"] for row in data})
+                sdk.log(f"indexed {len(data)} entries from {basename(path)} "
+                        f"({', '.join(found)})")
+            outcomes.append({"ok": True, "data": data})
 
-				# Index OCR text if available
-				ocr = context.db.get_task_output("ocr_text", path)
-				if ocr:
-					content = ocr[0]["content"] or ""
-					if content.strip():
-						data.append({
-							"path": path,
-							"source": "ocr",
-							"chunk_index": 0,
-							"content": content,
-							"char_count": len(content),
-							"indexed_at": now,
-						})
+        return sdk.ok(per_path=outcomes)
 
-				# Index tabular text if available
-				tabular = context.db.get_task_output("tabular_text", path)
-				if tabular:
-					content = tabular[0]["content"] or ""
-					if content.strip():
-						data.append({
-							"path": path,
-							"source": "tabular",
-							"chunk_index": 0,
-							"content": content,
-							"char_count": len(content),
-							"indexed_at": now,
-						})
+    @staticmethod
+    def _collect(sdk, path, now) -> list:
+        """Every row worth indexing for one path.
 
-				# Index audio transcripts if available
-				transcripts = context.db.get_task_output("audio_transcripts", path)
-				if transcripts:
-					content = transcripts[0]["content"] or ""
-					if content.strip():
-						data.append({
-							"path": path,
-							"source": "transcript",
-							"chunk_index": 0,
-							"content": content,
-							"char_count": len(content),
-							"indexed_at": now,
-						})
+        A missing upstream is not an error — ``require_all_inputs = False``
+        means this runs as soon as *one* of them has produced anything, so
+        three of the four being empty is the normal case. The table may not
+        even *exist*: ``ocr_text`` is created by ``task_ocr_images``, which is
+        a separate package, and querying a table sqlite has never heard of is
+        a failed Request rather than an empty answer. Caught per source, so
+        one uninstalled package cannot fail the indexing of text that four
+        others produced successfully.
+        """
+        data = []
+        for table, label, chunked in SOURCES:
+            try:
+                # Chunked sources can exceed the 500-row Request cap on a long
+                # document, so they are paged; the ORDER BY is what makes that
+                # safe, since sqlite need not be consistent between pages.
+                if chunked:
+                    rows = paged(
+                        sdk,
+                        f"SELECT chunk_index, content FROM {table} "
+                        f"WHERE path = ? ORDER BY chunk_index",
+                        [path])
+                else:
+                    rows = sdk.db.query(
+                        f"SELECT content FROM {table} WHERE path = ?",
+                        [path])[:1]
+            except sdk.Failed as failed:
+                sdk.log(f"{table} unavailable for {basename(path)}: {failed}",
+                        level="debug")
+                continue
 
-				results.append(TaskResult(success=True, data=data))
-
-				if data:
-					sources = set(d["source"] for d in data)
-					logger.info(
-						f"Indexed {len(data)} entries from {Path(path).name} "
-						f"({', '.join(sources)})"
-					)
-			except Exception as e:
-				results.append(TaskResult.failed(str(e)))
-
-		return results
+            for row in rows:
+                content = row.get("content") or ""
+                if not content.strip():
+                    continue
+                data.append({
+                    "path": path,
+                    "source": label,
+                    "chunk_index": row.get("chunk_index", 0) if chunked else 0,
+                    "content": content,
+                    "char_count": len(content),
+                    "indexed_at": now,
+                })
+        return data

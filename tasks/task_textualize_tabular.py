@@ -1,87 +1,101 @@
+"""Turn spreadsheets into markdown tables the model can read.
+
+CSV, Excel, Parquet, SQLite — whatever the tabular parsers handle — rendered as
+markdown and stored as text, so the rest of the pipeline treats a spreadsheet
+like any other document.
+
+**The DataFrames never leave this box.** ``parse_modalities = ["tabular"]``
+provisions the parsers here, ``to_markdown`` runs beside them, and only the
+resulting string crosses anything. That is the whole reason tabular is not a
+crossable modality: a DataFrame is an intermediate on the way to text, and the
+conversion belongs wherever the frame already is.
+
+Capped at ``MAX_ROWS`` per sheet. The point is to let the model reason about
+what a spreadsheet *contains*, not to paste a hundred thousand rows into a
+context window.
 """
-Textualize Tabular task.
 
-Converts CSV/XLSX files into Markdown table representations so the LLM
-can reason about tabular data. Caps at 50 rows per sheet to keep output
-manageable. Stored in the tabular_text table for the metadata scraper.
-"""
-
-
-dependencies_files = ['parsers/parse_tabular.py']
+dependencies_files = []
 dependencies_pip = []
 
-import logging
+parse_modalities = ["tabular"]
+
 import time
-from pathlib import Path
 
-from plugins.BaseTask import BaseTask, TaskResult
-
-logger = logging.getLogger("TextualizeTabular")
+from guest.bases import BaseTask
+from guest.parsing import basename
 
 MAX_ROWS = 50
 
 
 class TextualizeTabular(BaseTask):
-	"""Textualize tabular."""
-	name = "textualize_tabular"
-	modalities = ["tabular"]
-	reads = []
-	writes = ["tabular_text"]
-	requires_services = []
-	output_schema = """
-		CREATE TABLE IF NOT EXISTS tabular_text (
-			path TEXT PRIMARY KEY,
-			content TEXT,
-			char_count INTEGER,
-			textualized_at REAL
-		);
-	"""
-	batch_size = 4
-	timeout = 120
+    """Render a file's sheets as markdown."""
 
-	def run(self, paths, context):
-		"""Run textualize tabular."""
-		results = []
-		for path in paths:
-			try:
-				parse_result = context.services.get("parser").parse(path, "tabular")
+    name = "textualize_tabular"
+    modalities = ["tabular"]
+    reads = []
+    writes = ["tabular_text"]
+    requires_services = []
+    requests = ["parse.file"]
+    output_schema = """
+        CREATE TABLE IF NOT EXISTS tabular_text (
+            path TEXT PRIMARY KEY,
+            content TEXT,
+            char_count INTEGER,
+            textualized_at REAL
+        );
+    """
+    batch_size = 4
+    timeout = 120
 
-				if not parse_result.success:
-					results.append(TaskResult.failed(f"Parse failed: {parse_result.error}"))
-					continue
+    def run(self, sdk, paths):
+        """Textualize each path's sheets."""
+        now = time.time()
+        outcomes = []
 
-				sheets = parse_result.output or {}
-				sections = []
+        for path in paths:
+            try:
+                content = self._render(sdk, path)
+            except sdk.Failed as failed:
+                outcomes.append({"ok": False,
+                                 "error": f"parse failed: {failed}"})
+                continue
 
-				for sheet_name, df in sheets.items():
-					truncated = df.head(MAX_ROWS)
-					try:
-						md = truncated.to_markdown(index=False)
-					except ImportError:
-						md = truncated.to_string(index=False)
+            sdk.log(f"textualized {len(content)} chars from {basename(path)}")
+            outcomes.append({
+                "ok": True,
+                "data": [{
+                    "path": path,
+                    "content": content,
+                    "char_count": len(content),
+                    "textualized_at": now,
+                }],
+            })
 
-					header = f"## {sheet_name}" if len(sheets) > 1 else ""
-					if len(df) > MAX_ROWS:
-						footer = f"\n... ({len(df) - MAX_ROWS} more rows)"
-					else:
-						footer = ""
+        return sdk.ok(per_path=outcomes)
 
-					section = "\n".join(part for part in [header, md, footer] if part)
-					sections.append(section)
+    @staticmethod
+    def _render(sdk, path) -> str:
+        """Every sheet in one file, as markdown."""
+        sheets = sdk.parse.file(path, "tabular") or {}
 
-				content = "\n\n".join(sections)
-				logger.info(f"Textualized {len(content)} chars from {Path(path).name}")
+        sections = []
+        for name, frame in sheets.items():
+            head = frame.head(MAX_ROWS)
+            try:
+                table = head.to_markdown(index=False)
+            except ImportError:
+                # to_markdown needs tabulate. Plain text is a worse table and
+                # a perfectly good fallback — losing the sheet entirely
+                # because a formatting library is missing would not be.
+                table = head.to_string(index=False)
 
-				results.append(TaskResult(
-					success=True,
-					data=[{
-						"path": path,
-						"content": content,
-						"char_count": len(content),
-						"textualized_at": time.time(),
-					}],
-				))
-			except Exception as e:
-				logger.error(f"Textualize failed for {Path(path).name}: {e}")
-				results.append(TaskResult.failed(str(e)))
-		return results
+            # A single unnamed sheet needs no heading; several do.
+            heading = f"## {name}" if len(sheets) > 1 else ""
+            omitted = len(frame) - MAX_ROWS
+            footer = f"\n... ({omitted} more rows)" if omitted > 0 else ""
+
+            sections.append("\n".join(part for part in (heading, table, footer)
+                                      if part))
+
+        return "\n\n".join(sections)
