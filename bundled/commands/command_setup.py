@@ -21,18 +21,29 @@ DEFAULT_ENV_VAR = "ATLAS_API_KEY"
 DEFAULT_CONTEXT_SIZE = 0
 DEFAULT_BACKEND = "LiteLLMService"
 
-STARTER_BUNDLE = "bundle_starter"
-FULL_BUNDLE = "bundle_full"
+ESSENTIALS_BUNDLE = "bundle_essentials"
+KNOWLEDGEBASE_BUNDLE = "bundle_knowledgebase"
 TELEGRAM_PACKAGE = "frontend_telegram"
+
+#: What each install choice actually installs, in order. A *list* rather than
+#: one name because the second choice is the first plus one — the knowledge
+#: base is what you add to a working instance, not an alternative to it, so
+#: offering it alone would be offering a broken install.
+BUNDLE_CHOICES = {
+    ESSENTIALS_BUNDLE: [ESSENTIALS_BUNDLE],
+    "essentials_and_knowledgebase": [ESSENTIALS_BUNDLE, KNOWLEDGEBASE_BUNDLE],
+}
 
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
     "The kernel ships almost nothing on its own — capabilities are installed from a "
-    "package store. The `starter` bundle is the recommended first install: an LLM "
+    "package store. The `essentials` bundle is the recommended first install: an LLM "
     "backend (LiteLLM, which reaches most providers), the Telegram frontend, file "
-    "read/edit, sql & shell tools, ask-user-question, plugin authoring, and memory + "
-    "auto-title tasks. `full` adds every file parser, transcription/OCR, and the "
-    "indexing & search pipeline (a larger download).\n\n"
+    "read/edit/search, shell and script running, SQL, ask-user-question, plugin "
+    "validation, subagents, web search, and auto-titling. Adding `knowledgebase` "
+    "indexes your files and makes them searchable — every file parser, OCR, "
+    "transcription, embeddings and the three search tools (a much larger download, "
+    "and the natural next step once the basics work).\n\n"
     "You can browse and install more anytime with /packages.\n\n"
     "Second Brain is sponsored by Atlas Cloud — a fast way to get an API key: "
     f"{ATLAS_CODING_PLAN_URL}"
@@ -91,9 +102,10 @@ PACKAGES_SECTION = (
     "Get more with /packages:\n"
     "  /packages available        — browse the store by category\n"
     "  /packages install <id>     — install a package or bundle\n"
-    "  Handy bundles: bundle_all_parsers, bundle_indexing_search, "
-    "bundle_web_search, bundle_gmail, bundle_mcp, bundle_google_drive, "
-    "bundle_scheduling, bundle_plan_mode, bundle_full."
+    f"  Next step: `{KNOWLEDGEBASE_BUNDLE}` — parsers, OCR, transcription, "
+    "embeddings and the three search tools, so the agent can find things in "
+    "your own files. Individual packages (gmail, google_drive, mcp, skills, "
+    "plan_mode) install by name."
 )
 
 
@@ -125,10 +137,11 @@ class SetupCommand(BaseCommand):
         if not backend_ready:
             steps.append(FormStep(
                 "install_choice", WELCOME_PROMPT, True,
-                enum=[STARTER_BUNDLE, FULL_BUNDLE, "skip"],
+                enum=[ESSENTIALS_BUNDLE, "essentials_and_knowledgebase",
+                      "skip"],
                 enum_labels=[
-                    "Install the starter bundle (recommended)",
-                    "Install the full bundle (everything — larger download)",
+                    "Install the essentials bundle (recommended)",
+                    "Essentials + knowledge base (indexes your files — much larger download)",
                     "Skip — I'll use /packages myself",
                 ],
                 columns=1,
@@ -217,23 +230,26 @@ class SetupCommand(BaseCommand):
         # Phase 1 — install the chosen bundle before configuring anything that
         # depends on it. Bail clearly if there's no connectivity or the install
         # fails, so we don't pretend a half-set-up instance is ready.
-        if install_choice in (STARTER_BUNDLE, FULL_BUNDLE):
+        for bundle in BUNDLE_CHOICES.get(install_choice, ()):
             if not _has_internet(sdk):
                 return (
-                    f"No internet connection detected. Installing the `{install_choice}` "
+                    f"No internet connection detected. Installing the `{bundle}` "
                     "bundle needs to download packages and their dependencies. Connect "
                     "to the internet and run /setup again."
                 )
             try:
-                result = sdk.plugins.install(install_choice)
+                result = sdk.plugins.install(bundle)
             except sdk.Failed as e:
-                return (
-                    f"Couldn't install the `{install_choice}` bundle: {e.error}\n\n"
-                    f"Resolve the issue (or try `/packages install {install_choice}`), then re-run /setup."
-                )
-            sections.append(
-                f"Installed the `{install_choice}` bundle.\n"
-                + _indent(result))
+                # Reported rather than raised past the remaining bundles: the
+                # essentials install is what everything else depends on, so a
+                # knowledge-base failure must not lose the report of the one
+                # that worked.
+                return "\n\n".join(sections + [
+                    f"Couldn't install the `{bundle}` bundle: {e.error}\n\n"
+                    f"Resolve the issue (or try `/packages install {bundle}`), "
+                    "then re-run /setup."])
+            sections.append(f"Installed the `{bundle}` bundle.\n"
+                            + _indent(result))
 
         # Phase 2 — LLM profile.
         llm_choice = args.get("llm_choice")
@@ -342,9 +358,9 @@ class SetupCommand(BaseCommand):
             "Skipped package install.\n\n"
             "Second Brain needs at least an LLM backend before it can do anything. "
             "When you're ready:\n"
-            f"  /packages install {STARTER_BUNDLE}   — the recommended baseline\n"
-            f"  /packages install {FULL_BUNDLE}      — everything\n"
-            "  /packages available        — browse the store by category\n\n"
+            f"  /packages install {ESSENTIALS_BUNDLE}      — the recommended baseline\n"
+            f"  /packages install {KNOWLEDGEBASE_BUNDLE}   — then this, to index and search your files\n"
+            "  /packages available             — browse the store by category\n\n"
             "Then run /setup again to configure your LLM and Telegram."
         )
 

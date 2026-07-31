@@ -61,16 +61,16 @@ A fresh install has no LLM backend and no frontend beyond the REPL. The fastest 
 /setup
 ```
 
-It installs a bundle with basic plugins, configures an LLM profile, and optionally sets up Telegram. If you would rather drive it by hand, install the starter bundle directly:
+It installs a bundle with basic plugins, configures an LLM profile, and optionally sets up Telegram. If you would rather drive it by hand, install the essentials bundle directly:
 
 ```
-/packages install bundle_starter
+/packages install bundle_essentials
 ```
 
-The **starter** bundle is the recommended first install: an LLM backend (LiteLLM, which reaches most providers), the Telegram frontend, file read/edit, SQL and shell tools, ask-user-question, plugin authoring, and durable-memory plus auto-title tasks. Note: you cannot chat with an LLM in Second Brain until you install an LLM backend (LiteLLM recommended). For everything else — all file parsers, OCR, audio/video transcription, and the full indexing and search pipeline — install the larger **full** bundle:
+The **essentials** bundle is the recommended first install: an LLM backend (LiteLLM, which reaches most providers), the Telegram frontend, file read/edit/search, shell and script running, SQL, ask-user-question, plugin validation, subagents, web search, and auto-titling. Note: you cannot chat with an LLM in Second Brain until you install an LLM backend (LiteLLM recommended). Once that works, the natural next step is the **knowledge base** — every file parser, OCR, audio/video transcription, embeddings, and the lexical/semantic/hybrid search tools, so the agent can find things in your own files:
 
 ```
-/packages install bundle_full
+/packages install bundle_knowledgebase
 ```
 
 Browse and manage packages anytime:
@@ -213,19 +213,19 @@ Supported modalities:
 | Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
 | Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
 
-To parse all of these, you'll need to install the full Parser bundle from the package store:
+The kernel itself parses only plain text, code and CSV/TSV. To parse the rest, install the knowledge-base bundle, which carries every parser:
 
-`/packages install bundle_all_parsers`
+`/packages install bundle_knowledgebase`
 
-This will also give you the ability to process attachments with these file extensions.
+This will also give you the ability to process attachments with these file extensions. Individual parsers install by name too — `/packages install parse_pdf` — if you only want one.
 
 ## Events, Cron Jobs, And Subagents
 
-Second Brain is proactive, not just reactive — once the scheduling package is installed:
+Second Brain is proactive, not just reactive. `/schedule` and the Timekeeper are kernel; the agent-facing half arrives with the essentials bundle:
 
-`/packages install bundle_scheduling`
+`/packages install tool_schedule_subagent`
 
-Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper is the kernel service that creates one-time and recurring event emissions using cron expressions; the `bundle_scheduling` package adds the `/schedule` command, scheduled-subagent task, and scheduling tool on top. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat, depending on their notification mode.
+Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper is the kernel service that creates one-time and recurring event emissions using cron expressions; `tool_schedule_subagent` and `tool_spawn_subagent` are what let the agent use it. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat, depending on their notification mode.
 
 This supports workflows like:
 
@@ -241,7 +241,7 @@ It is calendar-capable. Jobs can run silently or notify the active frontend, and
 
 ## Frontends
 
-The kernel ships one base frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_starter`/`bundle_full` bundles or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present. Telegram is highly recommended for the ease of use, but it takes a hot second to set up (again, use /setup for this).
+The kernel ships one base frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_essentials` bundle or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present. Telegram is highly recommended for the ease of use, but it takes a hot second to set up (again, use /setup for this).
 
 Telegram is useful because the local runtime can reach you anywhere: approvals, proactive reminders, file delivery, scheduled-agent results, and mobile command menus all become part of the same conversation system.
 

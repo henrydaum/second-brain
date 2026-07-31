@@ -465,7 +465,7 @@ future store package, not kernel.
   `frontends/frontend_*.py`, `commands/command_*.py`, `tasks/task_*.py`, plus
   family-local `helpers/` files. `/packages install <stem>` and
   `/packages uninstall <stem>` target the file stem (`frontend_telegram`,
-  `parse_pdf`, `bundle_starter`, etc.).
+  `parse_pdf`, `bundle_essentials`, etc.).
 - **Dependency metadata lives in code.** Plugin base classes expose
   `dependencies_files` and `dependencies_pip`; helpers use the same names as
   module-level literal lists. The package manager reads these fields with AST
