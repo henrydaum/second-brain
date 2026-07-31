@@ -188,7 +188,7 @@ def _value_prompt(field):
         "prompt_suffix": (
             "Enter the extra system-prompt instructions for this agent."),
         "whitelist_or_blacklist_tools": (
-            "Enter blacklist to block listed tools, or whitelist to allow "
+            "Enter 'blacklist' to block listed tools, or 'whitelist' to allow "
             "only listed tools."),
         "tools_list": "Enter tool names.",
     }.get(field, "Enter the new value.")
