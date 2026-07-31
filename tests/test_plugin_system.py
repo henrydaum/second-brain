@@ -420,7 +420,7 @@ def test_discovery_loads_a_tool_declaring_a_family_local_helper(tmp_path, monkey
     _patch_tool_discovery(monkeypatch, (("sandbox", root, "sandbox_plugins", False),))
     registry = _ToolRegistry()
 
-    plugin_discovery.discover_tools(tmp_path, registry, {}, reload=True)
+    plugin_discovery.discover_tools(registry, reload=True)
 
     assert registry.tools["relative_tool"].dependencies_files == [
         "tools/helpers/answer.py"]
@@ -449,7 +449,7 @@ def test_discovery_precedence_prefers_sandbox_over_installed(tmp_path, monkeypat
     )
     registry = _ToolRegistry()
 
-    plugin_discovery.discover_tools(tmp_path, registry, {}, reload=True)
+    plugin_discovery.discover_tools(registry, reload=True)
 
     assert registry.tools["same_tool"].description == "sandbox"
 

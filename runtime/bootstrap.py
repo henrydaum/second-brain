@@ -162,7 +162,7 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
         return None, {}, []
 
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
-    classes = discover_frontends(root_dir, config)
+    classes = discover_frontends()
     config_manager.reconcile_plugin_config(config, get_plugin_settings())
     manager = FrontendManager(runtime, runtime.command_registry, config)
     manager.available_frontends.update(classes)
@@ -240,7 +240,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
             root_dir=root_dir, session_key=session_key,
         )
     )
-    discover_commands(root_dir, registry, config)
+    discover_commands(registry)
 
     def prompt():
         """Handle prompt."""

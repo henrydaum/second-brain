@@ -556,13 +556,13 @@ future store package, not kernel.
 
 Discovery/boot smoke (no frontend, no config writes):
 ```bash
-python -c "from pathlib import Path; _R=Path.cwd(); \
+python -c "\
 from config import config_manager; from pipeline.database import Database; \
 from pipeline.orchestrator import Orchestrator; from agent.tool_registry import ToolRegistry; \
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools; \
-c=config_manager.load(); db=Database(c['db_path']); s=discover_services(_R,c); \
-o=Orchestrator(db,c,s); discover_tasks(_R,o,c); t=ToolRegistry(db,c,s); t.orchestrator=o; \
-discover_tools(_R,t,c); print(sorted(s), sorted(o.tasks), sorted(t.tools))"
+c=config_manager.load(); db=Database(c['db_path']); s=discover_services(c); \
+o=Orchestrator(db,c,s); discover_tasks(o); t=ToolRegistry(db,c,s); t.orchestrator=o; \
+discover_tools(t); print(sorted(s), sorted(o.tasks), sorted(t.tools))"
 ```
 Plus the two kernel authorities, which discover independently of plugins:
 ```bash

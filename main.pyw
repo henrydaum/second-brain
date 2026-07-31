@@ -261,7 +261,7 @@ def main():
 		logger.exception("could not wire the sandbox host context")
 
 	t0 = time.time()
-	services = discover_services(_ROOT, config)
+	services = discover_services(config)
 	set_kernel_parts(services=services)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
@@ -303,7 +303,7 @@ def main():
 
 	# --- 5. Register tasks ---
 	t0 = time.time()
-	discover_tasks(_ROOT, orchestrator, config)
+	discover_tasks(orchestrator)
 	logger.info(f"Tasks registered: {list(orchestrator.tasks.keys())} ({time.time() - t0:.2f}s)")
 
 	# --- 5b. Initialize tool registry ---
@@ -315,7 +315,7 @@ def main():
 	# meant to be able to reach a tool, and the handler refuses for want of
 	# the callable when nothing supplies one.
 	set_kernel_parts(tool_registry=tool_registry, call_tool=tool_registry.call)
-	discover_tools(_ROOT, tool_registry, config)
+	discover_tools(tool_registry)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 
 	# --- 5c. Reconcile plugin config defaults ---

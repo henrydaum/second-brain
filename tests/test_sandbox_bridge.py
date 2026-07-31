@@ -990,17 +990,24 @@ def test_a_bridged_plugin_is_visible_to_discovery(tmp_path, box, filename,
     adapter used to look foreign and no migrated plugin could be discovered at
     all. The bridge worked; nothing could reach it. Every test here called
     ``adapt`` directly, which is exactly the step that hid it.
+
+    The fix was to compare against ``module.__name__`` instead of the name the
+    caller asked for. This used to pass a deliberately wrong third argument to
+    prove the difference; the parameter is gone now, so what is left to pin is
+    that the adapter's own ``__module__`` agrees with the synthetic module it
+    arrived in — which is the property the comparison rests on.
     """
     from plugins.plugin_discovery import _find_subclasses
 
     base = getattr(__import__(base_module, fromlist=[base_name]), base_name)
     module = adapt(_write(tmp_path, filename, source))
 
-    # The name discovery would have asked for, which is *not* the synthetic
-    # module's name — that difference is the whole bug.
-    found = _find_subclasses(module, base, f"plugins.x.{Path(filename).stem}")
+    found = _find_subclasses(module, base)
     assert found, "a bridged plugin was invisible to discovery"
     assert issubclass(found[0], base)
+    assert found[0].__module__ == module.__name__
+    # And not the name discovery would once have asked for.
+    assert found[0].__module__ != f"plugins.x.{Path(filename).stem}"
 
 
 # ────────────────────────────────────────────────────────────────────

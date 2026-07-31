@@ -1,9 +1,9 @@
 """
 Plugin discovery — unified loader for tools, tasks, services, and commands.
 
-Handles built-in, sandbox, and installed-package plugins. Used at startup for
-bulk discovery and by the watcher/package manager for single-file load/unload
-at runtime.
+Handles built-in, workspace, and installed-package plugins. Used at startup
+for bulk discovery and by the watcher/package manager for single-file
+load/unload at runtime.
 
 Public API:
     discover_all()          — startup convenience, discovers everything
@@ -11,8 +11,17 @@ Public API:
     discover_tasks()        — tasks only
     discover_services()     — services only, returns dict
     discover_commands()     — commands only
+    discover_frontends()    — frontend classes, returns dict
     load_single_plugin()    — load one sandbox file and register it
     unload_plugin()         — unregister a plugin by name
+
+**Nothing here takes a root directory.** It used to: every ``discover_*`` was
+handed one, plus a config dict, and read neither. ``plugin_dirs()`` answers
+from ``trees.py``, and the bridge loads a plugin *by file* rather than
+importing it by name — so the root to walk from, the module name to import
+under, and the config to build with all stopped being inputs at different
+points and left their parameters behind. Only ``discover_services`` still
+takes ``config``, because ``build_services(config)`` is a real call.
 """
 
 import importlib
@@ -150,14 +159,14 @@ _FRONTEND_CONFIG = _discovery_config("frontend")
 
 # ── Bulk discovery (startup) ─────────────────────────────────────────
 
-def discover_all(root_dir: Path, tool_registry, orchestrator, config: dict) -> dict:
+def discover_all(tool_registry, orchestrator, config: dict) -> dict:
     """Discover all plugins. Returns the services dict."""
-    discover_tools(root_dir, tool_registry, config)
-    discover_tasks(root_dir, orchestrator, config)
-    return discover_services(root_dir, config)
+    discover_tools(tool_registry)
+    discover_tasks(orchestrator)
+    return discover_services(config)
 
 
-def discover_commands(root_dir: Path, command_registry, config: dict | None = None, reload: bool = False):
+def discover_commands(command_registry, reload: bool = False):
     """Discover and register all slash commands."""
     from plugins.native.command import BaseCommand
     cfg = _COMMAND_CONFIG
@@ -172,11 +181,10 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
         if not plugin_dir.path.exists():
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
-            module_name = plugin_dir.module_name(py_file.stem)
             module = _load_plugin_module(py_file)
             if module is None:
                 continue
-            for instance in _find_subclass_instances(module, BaseCommand, module_name):
+            for instance in _find_subclass_instances(module, BaseCommand):
                 if not getattr(instance, "name", ""):
                     continue
                 if instance.name in seen_names:
@@ -191,7 +199,7 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
     logger.info(f"Discovered {count} command(s) in {time.time() - t0:.2f}s")
 
 
-def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool = False) -> dict[str, type]:
+def discover_frontends(reload: bool = False) -> dict[str, type]:
     """Discover frontend plugin classes.
 
     Returns ``{frontend_name: cls}``. Frontends are instantiated by the
@@ -212,11 +220,10 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
         if not plugin_dir.path.exists():
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
-            module_name = plugin_dir.module_name(py_file.stem)
             module = _load_plugin_module(py_file)
             if module is None:
                 continue
-            for cls in _find_subclasses(module, BaseFrontend, module_name):
+            for cls in _find_subclasses(module, BaseFrontend):
                 name = getattr(cls, "name", "") or ""
                 if not name:
                     continue
@@ -232,7 +239,7 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
     return found
 
 
-def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = False):
+def discover_tools(tool_registry, reload: bool = False):
     """Discover and register all tools."""
     from plugins.native.tool import BaseTool
     cfg = _TOOL_CONFIG
@@ -247,11 +254,10 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
         if not plugin_dir.path.exists():
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
-            module_name = plugin_dir.module_name(py_file.stem)
             module = _load_plugin_module(py_file)
             if module is None:
                 continue
-            for instance in _find_subclass_instances(module, BaseTool, module_name):
+            for instance in _find_subclass_instances(module, BaseTool):
                 if instance.name in seen_names:
                     logger.warning(f"Tool '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
@@ -264,7 +270,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
     logger.info(f"Discovered {count} tool(s) in {time.time() - t0:.2f}s")
 
 
-def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = False):
+def discover_tasks(orchestrator, reload: bool = False):
     """Discover and register all tasks."""
     from plugins.native.task import BaseTask
     cfg = _TASK_CONFIG
@@ -279,11 +285,10 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
         if not plugin_dir.path.exists():
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
-            module_name = plugin_dir.module_name(py_file.stem)
             module = _load_plugin_module(py_file)
             if module is None:
                 continue
-            for instance in _find_subclass_instances(module, BaseTask, module_name):
+            for instance in _find_subclass_instances(module, BaseTask):
                 if instance.name in seen_names:
                     logger.warning(f"Task '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
@@ -296,7 +301,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
     logger.info(f"Discovered {count} task(s) in {time.time() - t0:.2f}s")
 
 
-def discover_services(root_dir: Path, config: dict) -> dict:
+def discover_services(config: dict) -> dict:
     """Discover all services. Returns {name: instance}."""
     _setting_to_services.clear()
     _purge_plugin_settings({"service"})
@@ -349,7 +354,7 @@ def load_single_plugin(plugin_type: str, file_path: Path,
     if plugin_type == "tool":
         return _load_single_tool(file_path, tool_registry)
     elif plugin_type == "task":
-        return _load_single_task(file_path, orchestrator, config)
+        return _load_single_task(file_path, orchestrator)
     elif plugin_type == "service":
         return _load_single_service(file_path, services, config, {
             "tool_registry": tool_registry,
@@ -444,7 +449,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
-    instances = _find_subclass_instances(module, BaseTool, module_name)
+    instances = _find_subclass_instances(module, BaseTool)
     if not instances:
         # A tool can opt out of global auto-registration (``auto_register =
         # False``) because something instantiates it on demand instead — e.g.
@@ -453,7 +458,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
         # is installed, just not registered now), the same as boot discovery
         # silently skipping it — not a failure. Only a file with no BaseTool
         # subclass at all is an error.
-        deferred = [cls for cls in _find_subclasses(module, BaseTool, module_name) if getattr(cls, "name", "")]
+        deferred = [cls for cls in _find_subclasses(module, BaseTool) if getattr(cls, "name", "")]
         if deferred:
             return deferred[0].name, None
         return None, f"No BaseTool subclass found in {file_path.name}"
@@ -481,7 +486,7 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
-    classes = _find_subclasses(module, BaseFrontend, module_name)
+    classes = _find_subclasses(module, BaseFrontend)
     classes = [cls for cls in classes if getattr(cls, "name", "")]
     if not classes:
         return None, f"No named BaseFrontend subclass found in {file_path.name}"
@@ -509,7 +514,7 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
-    instances = _find_subclass_instances(module, BaseCommand, module_name)
+    instances = _find_subclass_instances(module, BaseCommand)
     if not instances:
         return None, f"No BaseCommand subclass found in {file_path.name}"
 
@@ -520,7 +525,7 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
     return instance.name, None
 
 
-def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str | None, str | None]:
+def _load_single_task(file_path: Path, orchestrator) -> tuple[str | None, str | None]:
     """Internal helper to load single task."""
     from plugins.native.task import BaseTask
     info, err = plugin_info(file_path)
@@ -532,7 +537,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
-    instances = _find_subclass_instances(module, BaseTask, module_name)
+    instances = _find_subclass_instances(module, BaseTask)
     if not instances:
         return None, f"No BaseTask subclass found in {file_path.name}"
 
@@ -764,14 +769,14 @@ def _ensure_external_namespaces(module_name: str):
             module.__path__.append(str(path))
 
 
-def _find_subclass_instances(module, base_class, module_name: str) -> list:
+def _find_subclass_instances(module, base_class) -> list:
     """Find and instantiate all subclasses of base_class in a module.
 
     Skips classes with ``auto_register = False`` — these are special tools
     that carry per-call construction state and are instantiated manually.
     """
     instances = []
-    for cls in _find_subclasses(module, base_class, module_name):
+    for cls in _find_subclasses(module, base_class):
         if getattr(cls, "auto_register", True) is False:
             continue
         try:
@@ -781,17 +786,15 @@ def _find_subclass_instances(module, base_class, module_name: str) -> list:
     return instances
 
 
-def _find_subclasses(module, base_class, module_name: str) -> list:
+def _find_subclasses(module, base_class) -> list:
     """Find all concrete subclasses of base_class declared in a module.
 
-    The check is against ``module.__name__`` rather than the ``module_name``
-    the caller asked for. They are the same for an ordinary import, but a
-    *bridged* plugin arrives in a synthetic module the bridge built, and
-    comparing to the requested name made every migrated plugin invisible to
-    discovery — the adapter existed, and nothing could find it.
-
-    ``module_name`` is kept in the signature because callers use it for their
-    own messages, and because it is what a caller means by "this module".
+    The check is against ``module.__name__``, and it used to take the name
+    the caller asked for instead. They are the same for an ordinary import,
+    but a *bridged* plugin arrives in a synthetic module the bridge built, so
+    comparing to the requested name made every plugin invisible to discovery
+    — the adapter existed, and nothing could find it. The parameter outlived
+    that fix by a while, read by nothing.
     """
     found = []
     for _, cls in inspect.getmembers(module, inspect.isclass):
