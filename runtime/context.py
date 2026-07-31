@@ -35,16 +35,11 @@ class SecondBrainContext:
         Helper for tool-to-tool composition. Only populated for tools.
         Example:
         context.call_tool("hybrid_search", query="revenue") -> ToolResult
-    approve_command:
-        Helper for user approval on sensitive actions. Tools only. None means
-        no state-machine session is available, so tools should treat that as
-        deny.
     """
     db: Any = None
     config: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)
     call_tool: Any = None        # callable(name, **kwargs) -> ToolResult (tools only)
-    approve_command: Any = None  # callable(command, justification) -> bool (tools only)
     request_user_input: Any = None # callable(...)->StateMachineApprovalRequest (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
@@ -62,7 +57,6 @@ class SecondBrainContext:
     user_initiated: bool = False # Explicit user command, not an autonomous agent call.
     approved_by_state_machine: bool = False
     current_tool_name: str | None = None
-    approval_denial_reason: str = ""
 
 
 def build_context(db, config: dict, services: dict, call_tool=None,
@@ -74,10 +68,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                    current_tool_name: str | None = None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
-
-    approve_command is backed by the conversation state machine when a tool
-    call belongs to a live session. The pending request is persisted with the
-    conversation marker and resolved through ``answer_approval``.
 
     Usage:
         # In orchestrator (tasks — no call_tool):
@@ -109,56 +99,17 @@ def build_context(db, config: dict, services: dict, call_tool=None,
             effective_config[key] = user_cfg[key]
     current_user = (lambda: db.get_user(user_id)) if db is not None else None
 
-    approve_command = None
     request_user_input = None
-    ctx = None
     if runtime is not None and session_key:
         def request_user_input(title: str, prompt: str, **kwargs):
             """Handle request user input."""
             return runtime.request_input(session_key, title, prompt, **kwargs)
-
-        def approve_command(command: str, justification: str) -> bool:
-            """Approve command."""
-            if ctx is not None:
-                ctx.approval_denial_reason = ""
-            session = getattr(runtime, "sessions", {}).get(session_key)
-            # Consult opt-in permission gates registered by policy plugins
-            # before the kernel's own logic. A gate may force allow/deny; None
-            # from every gate means "no opinion — fall through".
-            hooks = getattr(runtime, "hooks", None)
-            if hooks is not None:
-                verdict = hooks.vet_permission(session, current_tool_name, command, runtime=runtime)
-                if verdict is not None:
-                    if not verdict.allow and ctx is not None:
-                        ctx.approval_denial_reason = verdict.reason
-                    return verdict.allow
-            if current_tool_name and current_tool_name in (effective_config.get("skip_permissions") or []):
-                return True
-            # The command is the thing being approved — set it off as code
-            # (a span when short, a fenced block for SQL/shell/multi-line)
-            # so it can't melt into the justification prose or be mangled
-            # by markdown rendering.
-            shown = f"```\n{command}\n```" if ("\n" in command or len(command) > 60) else f"`{command}`"
-            req = runtime.request_input(
-                session_key,
-                "Agent requests approval",
-                f"{shown}\n\n{justification}".strip(),
-                type="boolean",
-            )
-            if not req.wait(timeout=300.0):
-                req.metadata["timed_out"] = True
-                runtime.answer_request(session_key, req.id, False)
-                return False
-            if req.metadata.get("cancelled"):
-                return False
-            return req.approved
 
     ctx = SecondBrainContext(
         db=db,
         config=effective_config,
         services=services,
         call_tool=call_tool_with_session if call_tool is not None else None,
-        approve_command=approve_command,
         request_user_input=request_user_input,
         tool_registry=tool_registry,
         orchestrator=orchestrator,

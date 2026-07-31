@@ -103,6 +103,11 @@ def _detail(kind: str, args: dict) -> str:
             # renders.
             return f"`{target}` -> `{destination}`"
         return f"`{target}`" if target else ""
+    if kind == "ui.approve":
+        # The plugin's own words for what it is about to do. Its
+        # ``justification`` is deliberately not here — that is the *reason*,
+        # and the body prints it one line down under "Why it needs asking".
+        return f"`{args.get('action') or '?'}`"
     if kind == "secret.reveal":
         return (f"`{args.get('name')}` — sandboxed code will then hold it "
                 f"directly")
@@ -128,6 +133,9 @@ def _detail(kind: str, args: dict) -> str:
 # a list under "wants to:".
 GRANT_PHRASES = {
     "app.stop": "shut Second Brain down or restart it",
+    # Distinct from the ``ui`` family's "ask you questions": this one is the
+    # plugin stopping to get permission, not collecting a value it needs.
+    "ui.approve": "act only with your approval",
     "proc.run": "run shell commands",
     "proc.start": "start background processes that keep running",
     # The three that only ever speak about a process already started. They are

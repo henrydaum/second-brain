@@ -303,7 +303,7 @@ never does.
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `ui.ask(prompt, title, type, choices, required, default)` | Question with typed answer | attendance | safe if attended, refused if not |
-| `ui.approve(action, justification)` | Explicit approval for a sensitive action | attendance | safe |
+| `ui.approve(action, justification)` | Explicit approval for a sensitive action | — | **always unsafe** |
 | `ui.render(paths, caption)` | Show files to the user in chat | paths | safe |
 
 `ui.ask` is definitionally safe when a human is present — it *is* the approval

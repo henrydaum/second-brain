@@ -413,6 +413,10 @@ sdk.ui.ask(prompt, title="Question", type="string", choices=None,
                                      #       boolean | array | object
                                      # cancel raises sdk.Denied; no answer fails
 sdk.ui.approve(action, justification)
+                                     # the Request *is* the question: it is
+                                     # always unsafe, so the kernel's approver
+                                     # asks it. Returns True, or raises
+                                     # sdk.Denied when the answer was no.
 sdk.ui.render(paths, caption="")     # show files in the chat
 
 sdk.session.get(key="")              # defaults to this session

@@ -751,34 +751,19 @@ def _ask_prompt(prompt: str, answer_type, choices, default, required) -> str:
 
 
 def _ui_approve(ctx, args: dict) -> Result:
-    """Ask the user to approve a described action.
+    """Report that the user approved — which reaching here already means.
 
-    The trusted-list check happens *here* rather than being left to
-    ``approve_command``, because only this side holds the chain. That doorway
-    matches ``skip_permissions`` against ``current_tool_name`` alone, so
-    trusting a tool stopped applying the moment the tool asked through a
-    service it called — while the sandbox's own approver, reading the same
-    setting for the same user, matched the whole chain and allowed it. One
-    trusted list answering two ways is worse than either answer.
+    The Request *is* the question. ``ui.approve`` is classified unconditionally
+    unsafe (``policy.classify``), so the gate has already run the whole
+    approval pipeline — hooks, the trusted list, attendance, the dialog — and
+    a refusal never arrives here at all. There is no second question to ask
+    and nothing left to decide.
+
+    This used to call ``context.approve_command``, a parallel doorway with its
+    own hook call, its own narrower reading of ``skip_permissions``, and no
+    attendance check. It is gone; this is what replaced it.
     """
-    approve = getattr(ctx, "approve_command", None)
-    if (bad := _need(approve, "approval")) is not None:
-        return bad
-    from .. import provenance
-    from ..approval import _trusted
-
-    caller = provenance.current()
-    if caller is not None and _trusted(_runtime(ctx),
-                                       getattr(ctx, "session_key", None),
-                                       caller.chain):
-        return Result(data=True)
-    try:
-        allowed = approve(args.get("action") or "",
-                          args.get("justification") or "")
-        return Result(data=bool(allowed))
-    except Exception as exc:
-        logger.exception("ui_approve failed")
-        return Result.failure(f"could not ask: {exc}")
+    return Result(data=True)
 
 
 def _ui_render(ctx, args: dict) -> Result:

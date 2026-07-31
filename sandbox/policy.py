@@ -327,8 +327,8 @@ ALWAYS_SAFE = {
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
     R.SESSION_STATE_GET, R.SESSION_STATE_SET, R.SESSION_REMOVE_TOOL,
     R.SESSION_REMOVE_PROMPT,
-    # UI_APPROVE is *not* here. It asks a person a question, exactly as UI_ASK
-    # does, and is branched with it below.
+    # UI_APPROVE is *not* here. Asking permission is a policy decision, so it
+    # is always unsafe and the approver asks it — see the branch below.
     R.UI_RENDER,
     R.USER_READ,
     # PLUGIN_VALIDATE sits with the listings, not with REGISTER and friends,
@@ -774,10 +774,66 @@ def _owns_setting(chain: Chain, key: str) -> bool:
     return bool(_setting_owners(key) & _callers(chain))
 
 
+# ──────────────────────────────────────────────────────────────────────
+# The eight mechanisms.
+# ──────────────────────────────────────────────────────────────────────
+#
+# Of the ~109 Request types, the great majority are a flat lookup: a set
+# membership in ALWAYS_SAFE or ALWAYS_UNSAFE. Only a handful are decided from
+# their arguments, and every one of those uses one of **eight** mechanisms.
+# They are the working vocabulary of this file, and writing them down is the
+# difference between adding a ninth deliberately and growing an ad-hoc branch.
+#
+#   1. DESTINATION  — where is this aimed?
+#      ``fs.write``, ``fs.write_bytes``, ``fs.move``, ``fs.delete`` against
+#      ``_scratch_roots()``. The path decides; the content never does.
+#
+#   2. ALLOWLIST    — is this on a list a *person* maintains?
+#      ``net.http`` against ``net_allowed_hosts``, matched on a dot boundary.
+#      Deliberately config and not a plugin declaration — see the egress
+#      section for why that distinction is the whole of it.
+#
+#   3. OWNERSHIP    — did the asker declare this thing?
+#      ``secret.reveal`` and ``config.write``, resolved through the setting
+#      registry (``_owns_setting``) so it is a fact the caller cannot assert
+#      about itself.
+#
+#   4. SHAPE        — what does the payload actually say?
+#      ``db.write`` via ``is_kernel_delete``. Sound here only because
+#      ``conn.execute`` runs exactly one statement; see ``sandbox/users.py``
+#      for why the same trick was wrong for the shell.
+#
+#   5. POLARITY     — does this widen or narrow?
+#      ``task.pause``: pausing is safe, unpausing is not. The rule the module
+#      docstring states, applied where a family had no other obvious answer.
+#
+#   6. ATTENDANCE   — is a person there?
+#      ``ui.ask`` via ``attended_now``. About the chain's *root*, never about
+#      which plugin family is asking.
+#
+#   7. PROVENANCE   — who caused this, exactly?
+#      ``config.write`` via ``chain.typed_command``, and the ``chain.approved``
+#      grant short-circuit at the top of ``classify``.
+#
+#   8. RECOGNIZER   — does a pluggable predicate vouch for it?
+#      ``_SHELL_RECOGNIZERS`` and ``_NET_RECOGNIZERS``. **Both ship empty.**
+#      This is the only one of the eight that is an extension point rather
+#      than a rule, and it is where a remembered or structural allowance
+#      belongs — see ``docs/PERMISSIONS_MAP.md``.
+#
+# Three of these (1, 2, 8) can only ever widen, and abstain by failing closed.
+# Three (3, 6, 7) read facts the kernel owns and guest code cannot state about
+# itself. That split is not decoration: a mechanism a plugin could influence
+# would be authorization by declaration, which is the bug ``isolation.py``
+# exists to prevent, one level up.
+
+
 def classify(request: Request, chain: Chain) -> Decision:
     """Decide whether a Request may execute without asking the user.
 
-    This is the complete authorization surface for sandboxed code.
+    This is the complete authorization surface for sandboxed code. The
+    argument-conditional branches below use one of eight mechanisms, catalogued
+    in the section comment above.
     """
     # Runaway nesting is stupidity, not malice, and it is caught here rather
     # than by exhausting the machine. Both checks read the chain, which is the
@@ -899,16 +955,7 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"run the command /{args.get('name', '')}")
 
     # ── asking a human is only possible when one is there ─────────
-    #
-    # Both spellings of it. ``ui.approve`` asks a person a yes/no question and
-    # blocks on the answer, which is ``ui.ask`` with a fixed answer type — but
-    # it sat in ALWAYS_SAFE, so the attendance test that governs one of them
-    # governed neither in practice. Its handler reaches the *other* approval
-    # doorway (``context.approve_command``), which has no attendance check of
-    # its own, so an unattended session would block for the full 300s dialog
-    # timeout on a question nobody could see. Same act, same question, same
-    # branch.
-    if kind in (UI_ASK, R.UI_APPROVE):
+    if kind == UI_ASK:
         # ``attended_now`` and not ``chain.attended``: a tool the agent called
         # mid-turn roots at the session key, so the bare property reads False
         # with the person sitting right there — which made asking a question
@@ -917,6 +964,27 @@ def classify(request: Request, chain: Chain) -> Decision:
             return Decision(UNSAFE,
                             "nobody is present to answer this question")
         return Decision(SAFE, "asking the user")
+
+    # ── seeking authorization is not gathering information ────────
+    #
+    # ``ui.ask`` collects a value the plugin needs; ``ui.approve`` asks for
+    # permission. Only the second is a policy decision, and it is *this*
+    # layer's decision — so it is unconditionally unsafe and the approver
+    # handles it like every other one. That is the whole of the consolidation:
+    # the Request is the question, so the gate is the asker, and the handler
+    # has nothing left to do but report that the answer was yes.
+    #
+    # It used to be ALWAYS_SAFE, executing a handler that reached a second
+    # approval doorway (``context.approve_command``) with its own hook call,
+    # its own reading of ``skip_permissions`` — by tool name rather than by
+    # chain — and no attendance check at all. Routing it here retires that
+    # doorway entirely rather than teaching it to agree.
+    #
+    # The justification becomes the reason, which is exactly the slot it
+    # wants: the dialog renders it under "Why it needs asking".
+    if kind == R.UI_APPROVE:
+        return Decision(UNSAFE, str(args.get("justification") or "")
+                        or "sandboxed code asks before acting")
 
     # ── unattended work gets less benefit of the doubt ────────────
     if kind in (SESSION_ADD_TOOL, SESSION_ADD_PROMPT, AGENT_SCHEDULE,
