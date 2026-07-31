@@ -12,6 +12,14 @@ Reaching ``api.search.brave.com`` at all depends on the user having put that
 host in ``net_allowed_hosts``; without it every search raises an approval
 dialog naming the host. That is the intended shape — a person decides what the
 app may talk to, and this file cannot widen it.
+
+What it *can* do is ask once instead of forever. ``allow_hosts`` merges the
+hosts this service actually uses into that setting, which is an ordinary
+``config.write`` and therefore an ordinary approval dialog — one naming the
+hosts, because the kernel renders the value. Nothing about the authority moves:
+the plugin proposes, the person decides, and a refusal simply leaves the
+per-request dialogs in place. It is deliberately *not* a declaration the kernel
+reads, which would make contained code the authority on its own reach.
 """
 
 dependencies_files = []
@@ -33,7 +41,7 @@ class WebSearchProvider(BaseService):
     name = "web_search_provider"
     description = "Search the public web and fetch pages as cleaned text."
     shared = True
-    requests = ["net.http", "config.read"]
+    requests = ["net.http", "config.read", "config.write"]
     exports = [
         "search",
         "answers",
@@ -41,6 +49,7 @@ class WebSearchProvider(BaseService):
         "duckduckgo_search",
         "has_search_key",
         "has_answers_key",
+        "allow_hosts",
     ]
     config_settings = [
         ("Brave Search API Key", "secret_brave_search_api_key",
@@ -62,7 +71,14 @@ class WebSearchProvider(BaseService):
     DDG_URL = "https://html.duckduckgo.com/html/"
 
     def start(self, sdk):
-        """Nothing to open — every call reads its key and asks the kernel."""
+        """Nothing to open — every call reads its key and asks the kernel.
+
+        The allowlist is deliberately *not* proposed here. Boot is the one
+        moment there may be no frontend up to draw a dialog, and a question
+        nobody can answer at every startup is how approval fatigue begins.
+        The first search asks instead, when somebody is plainly present.
+        """
+        self._asked_about_hosts = False
         return True
 
     def stop(self, sdk):
@@ -94,6 +110,65 @@ class WebSearchProvider(BaseService):
     def has_answers_key(self, sdk) -> bool:
         """Whether a Brave Answers key is configured."""
         return bool(self._answers_key(sdk))
+
+    # ── egress ──────────────────────────────────────────────────────
+
+    #: The only hosts this service ever reaches. Kept beside the URLs they come
+    #: from so the two cannot drift; a URL added without its host listed here
+    #: simply goes on raising a dialog per request, which is the safe direction.
+    HOSTS = ("api.search.brave.com", "html.duckduckgo.com")
+
+    def _hosts_allowed(self, sdk) -> bool:
+        """Whether every host we use is already permitted.
+
+        Reading the allowlist is a plain ``config.read`` and costs nothing, so
+        this is checked before proposing rather than after being refused.
+        """
+        return not set(self.HOSTS) - set(self._allowlist(sdk))
+
+    def _allowlist(self, sdk) -> list:
+        """The user's current allowlist, normalized the way the kernel reads it."""
+        raw = sdk.config.read("net_allowed_hosts") or []
+        if isinstance(raw, str):
+            raw = raw.split(",")
+        return [str(host).strip().lower().lstrip(".") for host in raw
+                if str(host).strip()]
+
+    def allow_hosts(self, sdk) -> bool:
+        """Propose adding this service's hosts to ``net_allowed_hosts``.
+
+        **Merge, never overwrite.** A blind write would silently drop every
+        host the user had added for anything else, and they would only find out
+        the next time some unrelated plugin was refused.
+
+        Returns True when the hosts are permitted afterwards — including when
+        they already were, so a caller can treat this as "make it so". A
+        declined dialog raises ``sdk.Denied``, which is not an error worth
+        propagating: the per-request dialogs still work, so it is reported as
+        False and the search goes ahead the slow way.
+        """
+        current = self._allowlist(sdk)
+        missing = [host for host in self.HOSTS if host not in current]
+        if not missing:
+            return True
+        try:
+            sdk.config.write("net_allowed_hosts", current + missing)
+        except sdk.Failed as exc:
+            sdk.log(f"web search kept the per-request dialogs: {exc}")
+            return False
+        return True
+
+    def _ensure_hosts(self, sdk) -> None:
+        """Offer the allowlist once per load, then stop offering.
+
+        Asking again after a refusal would be worse than never asking: the
+        per-request dialog the user was trying to get rid of would arrive with
+        a second dialog stapled to it, every search, forever.
+        """
+        if self._asked_about_hosts or self._hosts_allowed(sdk):
+            return
+        self._asked_about_hosts = True
+        self.allow_hosts(sdk)
 
     # ── HTTP ────────────────────────────────────────────────────────
 
@@ -157,6 +232,7 @@ class WebSearchProvider(BaseService):
     def search(self, sdk, query, count=5, country="", search_lang="en",
                safesearch="moderate", freshness=""):
         """Brave Web Search. Returns {query, count, results, raw}."""
+        self._ensure_hosts(sdk)
         key = self._search_key(sdk)
         if not key:
             raise ValueError("No Brave Search API key configured.")
@@ -201,6 +277,7 @@ class WebSearchProvider(BaseService):
 
     def answers(self, sdk, query, country="", search_lang="en"):
         """Brave Answers. Returns {query, answer, sources, raw}."""
+        self._ensure_hosts(sdk)
         key = self._answers_key(sdk)
         if not key:
             raise ValueError("No Brave Answers API key configured.")
@@ -327,6 +404,7 @@ class WebSearchProvider(BaseService):
 
     def duckduckgo_search(self, sdk, query, count=5, search_lang="en"):
         """Keyless fallback. Returns {query, count, results}."""
+        self._ensure_hosts(sdk)
         payload = urllib.parse.urlencode(
             {"q": query, "kl": search_lang or "en"})
         answer = sdk.net.http(
