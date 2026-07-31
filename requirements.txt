@@ -11,8 +11,5 @@ watchdog
 cron-descriptor
 croniter
 
-# --- Stall watchdog process-tree walk (degrades to no-op if absent) ---
-psutil
-
 # --- Pytest ---
 pytest

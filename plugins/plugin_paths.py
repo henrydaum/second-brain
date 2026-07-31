@@ -128,16 +128,6 @@ def plugin_dirs(plugin_type: str) -> tuple[PluginDir, ...]:
     return PLUGIN_CONFIG[plugin_type]
 
 
-def family_helper_dirs():
-    """Yield every ``<tree>/<family>/helpers/`` directory.
-
-    The one nested folder the layout allows. Not watched — observers are
-    scheduled non-recursively, so editing one of these still needs a restart.
-    """
-    for _plugin_type, directory in iter_plugin_dirs():
-        yield directory / HELPERS_DIRNAME
-
-
 def _infer_type(file_name: str) -> str | None:
     """Internal helper to handle infer type."""
     for plugin_type, (_family, prefix) in PLUGIN_FAMILIES.items():

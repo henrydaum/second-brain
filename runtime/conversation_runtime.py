@@ -593,10 +593,6 @@ class ConversationRuntime:
         """Close one live session and persist its final marker state."""
         return _persist.close_session(self, session_key)
 
-    def unload_conversation(self, session_key: str) -> bool:
-        """Alias for plugin code that reads in conversation lifecycle terms."""
-        return self.close_session(session_key)
-
     def delete_conversation(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
         """Delete a conversation the session's effective user owns. Returns False
         (refused) on a cross-user attempt; raw deletes go through ``db`` directly.
@@ -814,15 +810,6 @@ class ConversationRuntime:
         cfg = self.user_config(session_key)
         return cfg[key] if key in cfg else (self.config or {}).get(key, default)
 
-    def set_user_setting(self, session_key: str, key: str, value) -> None:
-        """Persist one setting in the current user's config blob."""
-        if self.db is None:
-            return
-        user_id = self.session_user_id(session_key)
-        cfg = self.db.get_user_config(user_id)
-        cfg[key] = value
-        self.db.set_user_config(user_id, cfg)
-
     def assert_conversation_access(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
         """Whether ``session_key``'s effective user may load/mutate the
         conversation. ``override=True`` (system/background callers) skips the
@@ -1009,19 +996,6 @@ class ConversationRuntime:
         _persist.persist_marker(self, session)
         return True
 
-    def clear_session_plugin_state(self, session_key: str, plugin: str, *keys: str) -> bool:
-        """Clear one plugin state bag, or selected keys in it."""
-        session = self.sessions.get(session_key)
-        if session is None:
-            return False
-        if keys:
-            for key in keys:
-                (session.plugin_state.get(plugin) or {}).pop(key, None)
-        else:
-            session.plugin_state.pop(plugin, None)
-        _persist.persist_marker(self, session)
-        return True
-
     def push_message(self, session_key: str, text: str, *, title: str | None = None,
                      source: str | None = None, source_id: str | None = None) -> None:
         """Surface a message in a session (typically the foreground one)."""
@@ -1065,13 +1039,6 @@ class ConversationRuntime:
     def remove_system_prompt_extra(self, session_key: str, key: str) -> bool:
         """Remove system prompt extra."""
         return self.add_system_prompt_extra(session_key, key, None)
-
-    def add_turn_attachment(self, session_key: str, attachment) -> bool:
-        """Attach media to the next model call in this live session."""
-        session = self.sessions.get(session_key)
-        if session is None:
-            return False
-        return self.hooks.stage_attachment(session, attachment)
 
     def add_session_tool(self, session_key: str, tool_instance) -> bool:
         """Expose an extra tool instance to one live session."""

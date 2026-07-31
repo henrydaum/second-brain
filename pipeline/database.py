@@ -80,18 +80,6 @@ def set_thread_priority_low():
 	_priority_tls.priority = _LOW_PRIORITY
 
 
-@contextmanager
-def low_priority_section():
-	"""Scope a region of the current thread to background DB priority, restoring
-	the prior priority on exit (for threads that also do interactive work)."""
-	prev = getattr(_priority_tls, "priority", _HIGH_PRIORITY)
-	_priority_tls.priority = _LOW_PRIORITY
-	try:
-		yield
-	finally:
-		_priority_tls.priority = prev
-
-
 class _PriorityLock:
 	"""Mutex that always prefers high-priority acquirers. Non-reentrant, matching
 	the threading.Lock it replaces."""
@@ -569,29 +557,6 @@ class Database:
 				)
 			self.conn.commit()
 
-	def invalidate_tasks_bulk(self, task_names: list[str]):
-		"""Reset ALL entries for given task names to PENDING.
-		Used to cascade invalidation when an upstream task is fully reset."""
-		if not task_names:
-			return
-		with self.lock:
-			for task_name in task_names:
-				self.conn.execute(
-					"""UPDATE task_queue
-					   SET status = 'PENDING', started_at = NULL, completed_at = NULL, error = NULL
-					   WHERE task_name = ? AND status != 'PENDING'""",
-					(task_name,)
-				)
-			self.conn.commit()
-
-	def get_paths_for_task_status(self, task_name: str, status: str) -> list[str]:
-		"""Get all paths for a task with a given status."""
-		with self.lock:
-			cur = self.conn.execute(
-				"SELECT path FROM task_queue WHERE task_name = ? AND status = ?",
-				(task_name, status))
-			return [row["path"] for row in cur.fetchall()]
-
 	# =================================================================
 	# TASK RUNS (event-triggered tasks)
 	# =================================================================
@@ -667,22 +632,6 @@ class Database:
 			""", (task_name, cutoff))
 			self.conn.commit()
 			return cur.rowcount
-
-	def get_runs(self, task_name=None, limit=50):
-		"""List recent runs, newest first, optionally filtered by task."""
-		with self.lock:
-			if task_name:
-				cur = self.conn.execute("""
-					SELECT * FROM task_runs
-					WHERE task_name = ?
-					ORDER BY created_at DESC LIMIT ?
-				""", (task_name, limit))
-			else:
-				cur = self.conn.execute("""
-					SELECT * FROM task_runs
-					ORDER BY created_at DESC LIMIT ?
-				""", (limit,))
-			return [dict(row) for row in cur.fetchall()]
 
 	def get_run_stats(self):
 		"""Return per-event-task status counts from task_runs."""
@@ -852,16 +801,6 @@ class Database:
 			except sqlite3.OperationalError:
 				return []
 
-	def drop_task_data(self, table_name):
-		"""Nuclear option — drop an entire output table."""
-		self._validate_identifier(table_name)
-		with self.lock:
-			try:
-				self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-				self.conn.commit()
-			except sqlite3.Error as e:
-				logger.error(f"Failed to drop {table_name}: {e}")
-
 	# =================================================================
 	# TASK REGISTRATION
 	# =================================================================
@@ -880,12 +819,6 @@ class Database:
 				  trigger or "path",
 				  ",".join(trigger_channels) if trigger_channels else ""))
 			self.conn.commit()
-
-	def get_registered_tasks(self):
-		"""Get registered tasks."""
-		with self.lock:
-			cur = self.conn.execute("SELECT * FROM registered_tasks")
-			return [dict(row) for row in cur.fetchall()]
 
 	# =================================================================
 	# STATS
@@ -1113,13 +1046,6 @@ class Database:
 			cur = self.conn.execute(
 				"SELECT * FROM users ORDER BY created_at DESC LIMIT ?", (limit,))
 			return [self._user_row(row) for row in cur.fetchall()]
-
-	def delete_user(self, user_id) -> None:
-		"""Delete a user row. Conversation rows are left intact (orphaned to the
-		former owner id); callers that need cascade should handle it explicitly."""
-		with self.lock:
-			self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-			self.conn.commit()
 
 	# =================================================================
 	# ACTION LEDGER
@@ -1473,13 +1399,6 @@ class Database:
 		with self.lock:
 			self.conn.execute(
 				f"DELETE FROM conversations WHERE id = ?{scope}", params)
-			self.conn.commit()
-
-	def delete_all_conversations(self):
-		"""Delete all conversations."""
-		with self.lock:
-			self.conn.execute("DELETE FROM conversation_messages")
-			self.conn.execute("DELETE FROM conversations")
 			self.conn.commit()
 
 	def conversation_message_count(self, conversation_id) -> int:
