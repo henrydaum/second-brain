@@ -159,9 +159,26 @@ def backend_names() -> list[str]:
 def backend_display_names() -> dict[str, str]:
     """Backend name to the label a person should see."""
     with _LOCK:
+        if not _BACKENDS:
+            discover()
         labels = {name: spec["display_name"]
                   for name, spec in _BACKENDS.items()}
     return labels
+
+
+def backend_aliases() -> dict[str, str]:
+    """Retired backend name to the one that replaced it.
+
+    A profile stores whatever backend name it was written with, and a migrated
+    backend claims its predecessor's (``replaces``), so a config still saying
+    ``LiteLLMService`` has to be resolved through here before it can be looked
+    up or displayed. ``Brain.spec`` already does this internally; anything
+    *showing* a configured backend to a person needs the same map.
+    """
+    with _LOCK:
+        if not _BACKENDS:
+            discover()
+        return dict(_ALIASES)
 
 
 # ──────────────────────────────────────────────────────────────────────

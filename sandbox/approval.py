@@ -434,16 +434,34 @@ def _command_text(request) -> str:
 
 
 def _attended(runtime, session_key, chain) -> bool:
-    """Whether a human is present to answer.
+    """Whether a human is present to answer *this* work.
 
-    Asks the kernel's single reader when it exists, so a frontend that owns
-    its own attendance policy is respected. Falls back to the chain's root,
-    which is the sandbox's own notion of what caused the work.
+    **The chain is a floor, and that ordering is the whole of it.** The chain
+    says what caused the work; the runtime's reader says whether somebody is
+    sitting at a session. Only the first can distinguish "the user asked for
+    this" from "a background agent did", so a chain that says unattended is
+    final — asking anyway does not find the right person, it interrupts an
+    unrelated one.
+
+    It was the other way round, and the consequence was ugly. ``is_attended``
+    won whenever a session key existed, and ``build_approver`` is wired with
+    none (``runtime/bootstrap.py``), so the key fell back to
+    ``active_session_key`` — trivially attended, by definition. An unsafe
+    Request from a scheduled subagent therefore raised a dialog on the
+    foreground session, pushing it into ``approving_request``, where the only
+    legal actions are answering or cancelling. Every ordinary keystroke came
+    back ``invalid_action``, once per firing, about work the person could not
+    see and had never started.
+
+    ``sandbox/policy.py`` states the invariant this restores: a subagent is
+    safe *because* it can approve nothing.
     """
+    if not chain.attended:
+        return False
     reader = getattr(runtime, "is_attended", None)
     if reader is not None and session_key:
         try:
             return bool(reader(session_key))
         except Exception:
             pass
-    return chain.attended
+    return True

@@ -802,3 +802,81 @@ def test_crossable_modalities_are_allowed(modality):
     assert result.ok
     assert result.data == payload
     assert calls == ["notes.probe"]
+
+
+def test_a_service_listing_redacts_like_every_other_listing():
+    """``/services`` printed a provider's API key in plaintext into the chat.
+
+    ``_service_list`` was the one ``details=True`` handler that did not
+    redact — frontends, tools, tasks and ``config.read`` all did. Masking has
+    to happen here rather than in the command, because a command-side mask
+    still puts the key on the wire and into the ledger.
+    """
+    from sandbox.handlers.kernel import _service_list
+
+    class Service:
+        """A service declaring one credential and one ordinary setting."""
+        loaded = True
+        model_name = ""
+        config_settings = [
+            ("Brave Key", "secret_brave_api_key", "the key", "", {}),
+            ("Result count", "search_count", "how many", 5, {}),
+        ]
+
+    class Ctx:
+        """Kernel context holding the plaintext, as the real one does."""
+        services = {"web_search_provider": Service()}
+        config = {"secret_brave_api_key": "sk-real-key",
+                  "search_count": 5}
+        user_id = 1
+        db = None
+
+    rows = _service_list(Ctx(), {"details": True}).data
+    settings = {s["key"]: s["current"] for s in rows[0]["config_settings"]}
+
+    assert settings["secret_brave_api_key"] == "<secret:secret_brave_api_key>"
+    assert "sk-real-key" not in str(rows)
+    # Ordinary settings are untouched; this is redaction, not blanking.
+    assert settings["search_count"] == 5
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What a config.write dialog actually asks.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_config_dialog_names_the_value_not_just_the_key():
+    """"Change setting net_allowed_hosts" is not a question anyone can answer.
+
+    The egress allowlist is the user's, deliberately — a plugin cannot declare
+    its own reach. But a plugin *proposing* a change is ordinary
+    ``config.write``, and the dialog is the whole of the consent. Naming only
+    the key hid the entire decision: which hosts.
+    """
+    from sandbox.policy import describe_setting_change
+
+    chain = Chain(root="service_web_search").push("web_search")
+    reason = classify(Request(R.CONFIG_WRITE, {
+        "key": "net_allowed_hosts",
+        "value": ["api.search.brave.com", "html.duckduckgo.com"]}), chain).reason
+
+    assert "api.search.brave.com" in reason
+    assert "html.duckduckgo.com" in reason
+
+    # Numbers read as numbers, absence reads as clearing.
+    assert describe_setting_change("data_retention_days", 30) == (
+        "set data_retention_days to 30")
+    assert describe_setting_change("anything", None) == "clear setting anything"
+    # A long list is summarised rather than cut mid-hostname.
+    many = describe_setting_change(
+        "net_allowed_hosts", [f"h{i}.example.com" for i in range(40)])
+    assert many == "set net_allowed_hosts to [40 entries]"
+
+
+def test_the_dialog_does_not_become_a_way_to_read_a_secret():
+    """Asking permission to *write* a credential must not print it."""
+    from sandbox.policy import describe_setting_change
+
+    shown = describe_setting_change("secret_brave_api_key", "sk-real-key")
+
+    assert "sk-real-key" not in shown
+    assert "<secret:secret_brave_api_key>" in shown

@@ -37,6 +37,15 @@ logger = logging.getLogger("Main")
 for _line in migrations.migrate():
 	logger.info("DATA_DIR migration: %s", _line)
 
+# And then make the layout real. A declared root that only appears once
+# something lands in it is not a claim about where things go — which is why
+# the three trees showed three different folder lists, and why ``scripts/``
+# (unwatched, so the watcher never made it) existed nowhere at all.
+import trees as _trees
+
+for _made in _trees.materialize():
+	logger.info("created tree root: %s", _made)
+
 
 # ── Crash-restart launcher ───────────────────────────────────────────
 #

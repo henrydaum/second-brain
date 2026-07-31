@@ -67,6 +67,22 @@ tree-root-named folder or a class subclassing one of the five bases.
 stdlib-only, and it refuses to guess: anything in an old `helpers/` that is not
 a parser or a backend is left in place and logged.
 
+**`trees.materialize()` then makes the layout real**, every root in every local
+tree, at boot right after the migration. The table is a *claim about where
+things go*, and a folder that only appears once something lands in it does not
+make that claim to anybody. The only code that had ever created a directory was
+the watcher, which iterates `watched_only=True` — so `scripts/`, the safe
+alternative to `proc.run` we most want reached for, existed in no tree at all;
+`bundled/` was skipped entirely on the reasoning that the source tree is the
+developer's; and `/locations` showed three trees with three different folder
+lists and no way to tell which difference meant anything. Uninstalling then
+deleted whatever was left empty, so which folders `installed/` had depended on
+what you happened to have installed and in what order you removed things.
+`package_manager._remove_empty_dirs` now stops at `trees.is_root_dir`, and
+`plugins.list(source="families")` derives the store's category menu from
+`ROOTS` plus `EXTRA_FAMILIES` rather than a hardcoded six that silently
+discarded `llm` and `parsers`.
+
 ## What ships in the app's tree (`bundled/`)
 
 Plugins are discovered purely by file presence (`plugins/plugin_discovery.py`).
@@ -299,6 +315,36 @@ plugin discovery never imports a native provider into the kernel.
 `/llm` gained explicit `load` / `unload` actions. Loading used to be a side
 effect of editing a profile; now a brain holds real processes, so opening one
 is something the user asks for. Only the default profile loads at boot.
+
+**And it reaches the registry through `llm.list` / `llm.load` / `llm.unload`,
+because nothing else could.** Deleting `service_llm.py` left `/llm` asking the
+*service* registry about profiles — which had never held one and now never
+would. Nothing raised: `ctx.services` simply had no key for any profile, so
+every lookup answered `{}` and the command reported each model "not installed"
+and "Unloaded" while conversations drove those same models perfectly well
+through `usable_brain`. Two registries, one question, and the UI was reading
+the wrong one; the tell was `load` reporting *"No backend is installed for
+minimax/MiniMax-M3"*, which named a profile where the missing thing would have
+been a backend. `llm.list` answers from `describe()`, which had existed since
+the migration with exactly the right row shape and zero callers.
+
+This is also where `display_name` finally gets read. Backends have declared it
+all along and `backend_display_names()` had no consumers outside its own test,
+so every picker in the app — `/llm`, `/setup` — offered raw class names, and
+the profile card printed the *configured* string verbatim: "LiteLLMService",
+the retired name, for a backend calling itself "LiteLLM (any provider)".
+Displaying one takes two hops, and the missing one was the first:
+`backend_aliases()` maps the stored name to the class that `replaces` it,
+*then* the display map applies.
+
+**When a capability is absorbed into the kernel, find the commands that
+managed it.** The settings half of this is already documented above
+(`llm_profiles` losing its owner); this is the same lesson one layer up, and it
+failed the same silent way — a registry lookup that returns empty rather than
+raising. `/packages update` had a third instance: it called `llm.refresh`
+without `force`, which short-circuits on an unchanged *profile dict*, so
+updating a backend's **source** left every open brain running the old code and
+reported success.
 
 **The store branch needs the matching migration**, five mechanical changes per
 parser:
@@ -897,6 +943,35 @@ rather than documented: **only services and frontends may subscribe** (a tool
 is a call that ends), and channel names are **not** validated against
 `events/event_channels.py` — that file is explicit that plugins own their own
 channels, so an allowlist would refuse one plugin listening to another.
+
+**And outbound, a guest never publishes on the thread that delivers**
+(`sandbox/events.publish`). `EventBus.emit` runs handlers on the caller's
+thread, and when the caller is a guest that thread is holding its box's single
+call lock — `poll` holds it for the tick's whole duration. So any subscriber
+that calls back into a service blocks on a lock the publisher cannot release
+until the emit is answered. That is not hypothetical: the timekeeper fired
+`subagent.spawn` from its tick, `SubagentRegistry` answered by asking the
+timekeeper to pin the job's conversation, and the box wedged until
+`HARD_CEILING` killed it permanently. Worse, each later `cron.*` call parked
+one of the sixteen sandbox workers on the dead lock *forever*, so the whole
+process went deaf in about sixteen slash commands — a frozen REPL and a
+frozen transport from one recurring job.
+
+A guest can never observe a subscriber, so answering immediately and
+delivering on a kernel-owned thread costs nothing anybody can see. One queue
+and one thread, because thread-per-emit reorders a burst. This is the outbound
+twin of `_drive`, and it is the *one place*, so a seventh subscriber cannot
+reintroduce the bug by forgetting to detach.
+
+Two backstops keep the same mistake from being fatal again, and both are the
+same rule: **nothing waits forever on a box.** `PersistentBox._acquire` bounds
+the lock wait by the ceiling the holder is already under and then fails
+`ERROR_TIMEOUT` instead of parking a worker for the life of the process. And
+`run_in_process` now measures *running* time through `watchdog.overdue`, the
+same helper the resident path uses and whose docstring already claimed the two
+could not drift — they had, so every ephemeral command was charged for time
+the kernel itself spent answering it, and a slow-but-honest command died at
+thirty seconds with the report blaming the plugin.
 
 `sdk.llm.proceed` is the sole Request whose handler is a **per-call closure**
 rather than a static table entry: an escort's `proceed` is parked host-side

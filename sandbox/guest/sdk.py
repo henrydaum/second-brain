@@ -78,7 +78,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        FS_SEARCH, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
-                       LLM_DELTA, LLM_PROCEED, PATH_GET,
+                       LLM_DELTA, LLM_LIST, LLM_LOAD, LLM_PROCEED,
+                       LLM_UNLOAD, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
                        PLUGIN_REGISTER, PLUGIN_RELOAD, PLUGIN_UNREGISTER,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PLUGIN_VALIDATE,
@@ -718,13 +719,43 @@ class _Agent(_Namespace):
 
 
 class _LLM(_Namespace):
-    """The call in flight.
+    """The model authority, and the call in flight.
 
-    Both members are scoped to a call the kernel already decided to place, and
-    neither means "make a model call". ``proceed`` is for an escort standing at
-    the ``llm_call`` doorway; ``delta`` is for the backend actually placing
-    it. Outside those, there is no call and the Request is refused.
+    Two groups that share a namespace because they share a subject.
+
+    ``proceed`` and ``delta`` are scoped to a call the kernel already decided
+    to place, and neither means "make a model call". ``proceed`` is for an
+    escort standing at the ``llm_call`` doorway; ``delta`` is for the backend
+    actually placing it. Outside those, there is no call and the Request is
+    refused.
+
+    ``list``/``load``/``unload`` are about the *registry* rather than any one
+    call: which profiles are configured, which backends could serve them, and
+    which are open. Profiles stopped being services when ``service_llm.py``
+    was deleted, so asking ``sdk.services`` about them — which is what ``/llm``
+    did — reports every profile missing and unloaded while conversations using
+    those same profiles work fine.
     """
+
+    def list(self) -> dict:
+        """Configured profiles, installed backends, and the default.
+
+        Answers ``{"profiles": [...], "backends": [...], "aliases": {...},
+        "default": str}``. A profile row carries ``model_name``, ``class``,
+        ``endpoint``, ``context_size``, ``loaded`` and ``sandboxed``; a backend
+        row carries ``name`` and ``display_name``. ``aliases`` maps a retired
+        backend name to the one that replaced it, which is what a stored
+        ``llm_service_class`` may still be.
+        """
+        return self._ask(LLM_LIST)
+
+    def load(self, name: str) -> bool:
+        """Open one profile's box pool."""
+        return self._ask(LLM_LOAD, name=name)
+
+    def unload(self, name: str) -> bool:
+        """Close one profile's box pool."""
+        return self._ask(LLM_UNLOAD, name=name)
 
     def delta(self, text: str) -> None:
         """Push one fragment of assistant text as it arrives.

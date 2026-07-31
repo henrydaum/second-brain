@@ -29,6 +29,13 @@ INSTALLED_PLUGINS = trees.tree("installed").path
 # kernel routes, so neither is in ``trees``, and both keep the bespoke handling
 # below.
 TREE_ROOTS = {root.name for root in trees.ROOTS}
+
+#: Families the store carries that are *not* tree roots. Named here rather
+#: than in ``trees`` for exactly the reason above — the kernel routes neither
+#: — but named somewhere, so a menu of "what can I install" can be derived
+#: instead of retyped.
+EXTRA_FAMILIES = ("skills", "bundles")
+
 DEPENDENCY_FIELDS = ("dependencies_files", "dependencies_pip")
 _PACKAGE_LOCK = threading.RLock()
 Progress = Callable[[str], None]
@@ -382,7 +389,7 @@ def _execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=N
         _progress(progress, "Resolving dependency plan")
         if context is not None:
             _set_enabled_frontends(context, add=[], remove=_frontends([PlannedFile(rel) for rel in plan.remove_files]), lines=lines)
-            _set_autoload_services(context, add=[], remove=_services_removed([PlannedFile(rel) for rel in plan.remove_files]), lines=lines)
+            _set_autoload_services(context, add=[], remove=_services([PlannedFile(rel) for rel in plan.remove_files]), lines=lines)
         _progress(progress, "Deleting package files")
         for rel in plan.remove_files:
             _target(rel).unlink(missing_ok=True)
@@ -806,19 +813,14 @@ def _frontends(files: list[PlannedFile]) -> list[str]:
 
 
 def _services(files: list[PlannedFile]) -> list[str]:
-    return _unique(
-        _plugin_name(file.path, "service")
-        for file in files
-        if _entry_type(file.path) == "service"
-    )
+    """Service autoload names these files carry.
 
-
-def _services_removed(files: list[PlannedFile]) -> list[str]:
-    """Service autoload names to drop on uninstall.
-
-    LLM backends map to the kernel-owned ``llm`` router (see
-    :func:`_service_autoload_name`), which must stay autoloaded regardless of
-    which backend is installed, so they contribute nothing to removal.
+    Install and uninstall used to call two functions here — ``_services`` and
+    ``_services_removed`` — whose bodies were character-for-character
+    identical. The second existed back when LLM backends were services and
+    mapped to a shared ``llm`` router that had to stay autoloaded whatever was
+    installed; its docstring still pointed at the helper that did the mapping,
+    which has been gone since backends stopped being services.
     """
     return _unique(
         _plugin_name(file.path, "service")
@@ -879,17 +881,34 @@ def _rescan_helpers(context, lines: list[str]) -> None:
         count = llm.discover()
         config = getattr(context, "config", None)
         if config is not None:
-            llm.refresh(config)
+            # ``force``, and it is not optional. ``refresh`` short-circuits a
+            # profile whose *dict* is unchanged, which is exactly the case
+            # here: installing or updating a backend rewrites its **source**
+            # and leaves every profile untouched. Without this an update left
+            # every open brain running the code it was already running, so
+            # `/packages update` reported success and changed nothing.
+            llm.refresh(config, force=True)
         lines.append(f"Rescanned LLM backends: {count} now available.")
     except Exception as e:
         lines.append(f"LLM backend rescan failed (restart to apply): {e}")
 
 
 def _remove_empty_dirs():
+    """Tidy up after an uninstall, without un-declaring the layout.
+
+    A declared root stays whether or not anything is installed in it — it is
+    the layout's claim about where things go, not a by-product of something
+    being there. This used to delete them, so an uninstall silently reverted
+    ``trees.materialize`` and ``installed/`` grew and shrank a different set
+    of folders depending on what you happened to have.
+    """
     root = INSTALLED_PLUGINS
     if not root.exists():
         return
-    for path in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+    for path in sorted((p for p in root.rglob("*") if p.is_dir()),
+                       key=lambda p: len(p.parts), reverse=True):
+        if trees.is_root_dir(path):
+            continue
         try:
             path.rmdir()
         except OSError:

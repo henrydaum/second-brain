@@ -478,6 +478,33 @@ Everything that creates recurring unattended work is unsafe, for the same reason
 | `event.request(channel, payload, timeout)` | Blocking request/response | channel | safe |
 | `llm.proceed(request)` | Place the call an escort is holding | token | safe |
 | `llm.delta(text)` | Push streamed assistant text out of a backend | token | safe |
+| `llm.list()` | Configured profiles, installed backends, the default | — | safe |
+| `llm.load(name)` | Open one profile's box pool | name | **unsafe** |
+| `llm.unload(name)` | Close it | name | **unsafe** |
+
+`event.emit` is answered *before* delivery. `EventBus.emit` runs handlers on
+the caller's thread, and a guest calling it may be holding its box's single
+call lock — a service emitting from `poll` always is. So a subscriber that
+called back into a service blocked on a lock the publisher could not release
+until the emit was answered, which deadlocked the box permanently and then ate
+one sandbox worker per later call into it. The kernel now queues the payload to
+its own dispatcher thread and answers immediately. Nothing observable changes:
+a guest never sees a subscriber, and `project()` already strips the round-trip
+keys so a sandboxed subscriber cannot satisfy one.
+
+**The last three are the model *authority*, not a call to a model.** They exist
+because profiles stopped being services when `service_llm.py` was deleted, and
+`/llm` went on asking the service registry about them — reporting every profile
+uninstalled and unloaded while conversations resolved those same profiles
+without trouble. `cron.*` fronting the timekeeper is the same shape: a kernel
+subsystem a command needs to reach.
+
+`llm.list` is safe for the reason `service.list` is — names, endpoints and
+context sizes. The API key is a `secret_*` setting and comes back as a handle
+like every other one. `llm.load`/`llm.unload` sit with `service.load`/
+`service.unload` and for the same argument: opening a brain starts a pool of
+real processes, each holding a provider SDK and a credential, and closing one
+ends calls that may be in flight.
 
 **Receiving is not a Request, and neither is standing at a doorway.** Both were
 once going to be (`event.subscribe`, `hook.register`) and both became

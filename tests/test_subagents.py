@@ -779,6 +779,57 @@ def test_a_recurring_job_pins_its_conversation_so_one_transcript_accumulates():
     assert patched["nightly"]["payload"]["prompt"] == "brief"
 
 
+def test_pinning_the_conversation_never_holds_the_publisher_s_thread():
+    """The freeze, from the subscriber's side.
+
+    ``bus.emit`` runs handlers on the publisher's thread, and the publisher
+    here is the timekeeper — mid-``poll``, holding its box's one call lock.
+    Pinning the conversation calls straight back into that same service, so
+    doing it inline blocked on the lock the publisher could not release until
+    this handler returned. The box wedged until the hard ceiling killed it, and
+    every later ``cron.*`` call parked another sandbox worker on it forever.
+
+    A real box would deadlock rather than fail, so this asserts the property
+    that prevents it: ``_on_event`` returns without waiting on the keeper.
+    Note the registry's own ``except`` cannot cover the real case — a deadlock
+    is a block, not a raise.
+    """
+    from events.event_bus import bus
+    from events.event_channels import SUBAGENT_SPAWN
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    class SlowKeeper:
+        """Stands in for a box whose lock is held by whoever published."""
+
+        def get_job(self, name):
+            """Block, exactly as waiting on a held box lock would."""
+            entered.set()
+            release.wait(timeout=10.0)
+            return {"payload": {}}
+
+        def update_job(self, name, patch):
+            """Never reached while blocked."""
+
+    registry, runtime = registry_for()
+    runtime.services["timekeeper"] = SlowKeeper()
+    registry.start()
+    try:
+        started = time.monotonic()
+        bus.emit(SUBAGENT_SPAWN, {
+            "prompt": "brief",
+            "_timekeeper": {"job_name": "nightly", "one_time": False},
+        })
+        elapsed = time.monotonic() - started
+
+        assert entered.wait(timeout=5.0), "the pin never ran at all"
+        assert elapsed < 2.0, f"the publisher was held for {elapsed:.1f}s"
+    finally:
+        release.set()
+        registry.stop()
+
+
 def test_a_scheduled_spawn_that_cannot_start_tells_the_user():
     """Nobody is collecting, so a refusal that is not pushed is one nobody
     ever learns about."""

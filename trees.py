@@ -40,11 +40,14 @@ exactly this kind of knowledge; this is its companion.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
 from paths import DATA_DIR, ROOT_DIR
+
+logger = logging.getLogger("Trees")
 
 # ──────────────────────────────────────────────────────────────────────
 # Trees
@@ -240,6 +243,51 @@ def iter_root_dirs(watched_only: bool = False):
             if watched_only and not root.watched:
                 continue
             yield tree, root, tree.path / root.name
+
+
+def materialize() -> tuple[Path, ...]:
+    """Create every declared root in every local tree. Returns what was made.
+
+    The layout is a *claim about where things go*, and a folder that only
+    appears once something lands in it does not make that claim to anybody.
+    Three consequences, all of which were live: ``/locations`` showed three
+    trees with three different folder lists and no way to tell which
+    difference was meaningful; an agent writing its first tool had to know to
+    create ``workspace/tools/`` first; and ``scripts/`` — the safe alternative
+    to ``proc.run`` — existed in no tree at all, because the only code that
+    ever made a directory was the watcher, which skips unwatched roots.
+
+    The built-in tree is included. It was excluded on the reasoning that the
+    source tree is the developer's, but a root missing from ``bundled/`` reads
+    as "the kernel cannot hold one of these", which is false and is the whole
+    thing this fixes.
+
+    Idempotent, and never destructive: an existing directory is left exactly
+    as it is. Anything that cannot be created is reported rather than raised —
+    a read-only install should still boot.
+    """
+    made = []
+    for _tree, _root, directory in iter_root_dirs():
+        if directory.is_dir():
+            continue
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            made.append(directory)
+        except OSError:
+            logger.warning("could not create %s", directory)
+    return tuple(made)
+
+
+def is_root_dir(path) -> bool:
+    """Whether this directory *is* a declared root of a local tree.
+
+    Asked by anything that prunes empty directories: a root is empty on
+    purpose most of the time, and deleting it un-does ``materialize`` on the
+    next uninstall.
+    """
+    candidate = Path(path)
+    return any(candidate == directory
+               for _tree, _root, directory in iter_root_dirs())
 
 
 def module_name(tree: Tree, rel: Path | str) -> str:

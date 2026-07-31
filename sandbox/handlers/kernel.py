@@ -25,7 +25,8 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               AGENT_SPAWN, AGENT_STOP,
                               APP_STOP, COMMAND_CALL,
                               COMMAND_LIST,
-                              LLM_DELTA, LLM_PROCEED,
+                              LLM_DELTA, LLM_LIST, LLM_LOAD, LLM_PROCEED,
+                              LLM_UNLOAD,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
                               CONV_LOAD, CONV_SET_CATEGORY,
@@ -60,6 +61,7 @@ from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
                           ERROR_UNAVAILABLE)
 from .args import float_arg, int_arg
 from ..credentials import lookup_from, redact, redact_nested, resolve
+from ..events import publish as _publish_event
 from ..users import ScopeError, scope_sql, scope_write
 
 # Two ``except`` paths here already logged and neither could: the name was
@@ -502,6 +504,22 @@ def _conv_delete(ctx, args: dict) -> Result:
 # Sessions.
 # ──────────────────────────────────────────────────────────────────────
 
+def _session_profile(runtime, session) -> str:
+    """The agent profile this session resolves to, override and all.
+
+    ``runtime_config.profile_for`` is the one place that knows the precedence
+    (session override, then frontend pin, then user setting, then global), so
+    this asks it rather than reimplementing three quarters of it.
+    """
+    try:
+        from runtime.runtime_config import profile_for
+
+        return profile_for(runtime, session) or ""
+    except Exception:
+        logger.exception("could not resolve the session's agent profile")
+        return ""
+
+
 def _session_get(ctx, args: dict) -> Result:
     """Describe one live session."""
     runtime = _runtime(ctx)
@@ -523,6 +541,14 @@ def _session_get(ctx, args: dict) -> Result:
         "busy": bool(getattr(session, "busy", False)),
         "attended": bool(runtime.is_attended(key))
         if hasattr(runtime, "is_attended") else None,
+        # Which agent profile is actually driving *this* session, and which
+        # frontend it belongs to. Both were reachable only through
+        # ``list_sessions``, whose rows the guest receives stringified — so
+        # anything wanting to report the live profile had to fall back to the
+        # global default and be wrong for any session that overrode it.
+        "agent_profile": _session_profile(runtime, session),
+        "frontend": getattr(session, "frontend_name", None),
+        "user_id": getattr(session, "user_id", None),
     }
     if args.get("details"):
         if machine is None:
@@ -1031,6 +1057,18 @@ def _user_write(ctx, args: dict) -> Result:
 def _plugin_list(ctx, args: dict) -> Result:
     """Everything currently registered, by family."""
     source = args.get("source") or "registered"
+    if source == "families":
+        # Which categories the store can hold, derived from the layout rather
+        # than restated. ``/packages`` hardcoded six and zipped its labels
+        # against them, which silently discarded the ``llm`` and ``parsers``
+        # counts it had already computed — so two whole categories of package
+        # were invisible in a menu built from the correct data.
+        import trees
+
+        from bundled.commands.helpers.package_manager import EXTRA_FAMILIES
+
+        return Result(data=[root.name for root in trees.ROOTS]
+                      + list(EXTRA_FAMILIES))
     if source != "registered":
         try:
             from paths import ROOT_DIR
@@ -1124,15 +1162,15 @@ def _plugin_list(ctx, args: dict) -> Result:
         if role != "llm_backend":
             return Result.failure(f"unknown plugin role {role!r}",
                               code=ERROR_INVALID_ARGUMENT)
-        if args.get("category") not in (None, "", "services"):
+        if args.get("category") not in (None, "", "services", "llm"):
             return Result(data=[])
-        try:
-            import llm
+        import llm
 
-            return Result(data=llm.backend_names())
-        except Exception as exc:
-            logger.exception("plugin_list failed")
-            return Result.failure(str(exc))
+        # Names, not display names: this answers "what may a profile's
+        # ``llm_service_class`` be set to", and the stored value has to be the
+        # class name. What a *person* reads is ``llm.list``'s ``backends``,
+        # which carries both.
+        return Result(data=llm.backend_names())
 
     registry = getattr(ctx, "tool_registry", None)
     orchestrator = getattr(ctx, "orchestrator", None)
@@ -1386,7 +1424,15 @@ def _service_list(ctx, args: dict) -> Result:
                     "description": entry[2],
                     "default": entry[3],
                     "info": entry[4] if isinstance(entry[4], dict) else {},
-                    "current": _config_value(ctx, entry[1], entry),
+                    # Redacted like every other ``details=True`` listing —
+                    # frontends, tools and tasks all do this, and services
+                    # were the one that did not, so ``/services`` printed a
+                    # provider's API key in plaintext into the chat. Masking
+                    # here rather than in the command is the point: a
+                    # command-side mask still puts the key on the wire.
+                    "current": redact(entry[1],
+                                      _config_value(ctx, entry[1], entry),
+                                      guess=True),
                 }
                 for entry in (getattr(service, "config_settings", None) or [])
                 if isinstance(entry, (list, tuple))
@@ -1465,6 +1511,75 @@ def _service_unload(ctx, args: dict) -> Result:
     except Exception as exc:
         logger.exception("service_unload failed")
         return Result.failure(f"service unload failed: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The model authority. Profiles are not services and have not been since
+# ``service_llm.py`` was deleted — but ``/llm`` went on asking the service
+# registry about them, so it answered "not installed" and "Unloaded" for every
+# profile while conversations resolved those same profiles perfectly well
+# through ``llm.registry``. Two registries, one question, and the command was
+# reading the wrong one. These are the doorway to the right one; ``cron.*``
+# fronting the timekeeper is the same shape.
+# ──────────────────────────────────────────────────────────────────────
+
+def _llm_list(ctx, args: dict) -> Result:
+    """Every configured profile, and every backend one could name.
+
+    ``describe()`` has existed since the migration with exactly this row shape
+    and no callers at all — it was written for this command and never wired.
+
+    Backends carry their *display* name. A person picking one should read
+    "LiteLLM (any provider)", which is what the file declares; the raw class
+    name is an implementation detail that leaked all the way into the profile
+    card. ``aliases`` comes along because a profile stores whatever backend
+    name it was written with, and a migrated backend claims its predecessor's
+    name — so a config saying ``LiteLLMService`` has to be resolvable to the
+    class that replaced it before it can be displayed.
+    """
+    import llm
+
+    return Result(data={
+        "profiles": llm.describe(),
+        "backends": [
+            {"name": name, "display_name": display}
+            for name, display in sorted(llm.backend_display_names().items())
+        ],
+        "aliases": llm.backend_aliases(),
+        "default": llm.default_name(getattr(ctx, "config", None) or {}),
+    })
+
+
+def _llm_load(ctx, args: dict) -> Result:
+    """Open one profile's box pool."""
+    import llm
+
+    name = args.get("name") or ""
+    target = llm.brain(name)
+    if target is None:
+        return Result.failure(f"no LLM profile named {name!r}",
+                              code=ERROR_NOT_FOUND)
+    if not target.available:
+        # The honest version of the message ``/llm`` used to invent. It said
+        # "No backend is installed for <profile>" whenever the *service*
+        # registry had no such key, which it never did and never will.
+        return Result.failure(
+            f"no backend installed for {name!r} (it names "
+            f"{target.backend_name!r})", code=ERROR_NOT_FOUND)
+    return Result(data=bool(target.load()))
+
+
+def _llm_unload(ctx, args: dict) -> Result:
+    """Close one profile's box pool."""
+    import llm
+
+    name = args.get("name") or ""
+    target = llm.brain(name)
+    if target is None:
+        return Result.failure(f"no LLM profile named {name!r}",
+                              code=ERROR_NOT_FOUND)
+    target.unload()
+    return Result(data=True)
 
 
 def _service_call(ctx, args: dict) -> Result:
@@ -1987,14 +2102,17 @@ def _cron_enable(ctx, args: dict) -> Result:
 
 
 def _event_emit(ctx, args: dict) -> Result:
-    """Publish on a bus channel."""
-    try:
-        from events.event_bus import bus
-        bus.emit(args.get("channel"), args.get("payload"))
-        return Result(data=True)
-    except Exception as exc:
-        logger.exception("event_emit failed")
-        return Result.failure(f"emit failed: {exc}")
+    """Publish on a bus channel, without lending the bus this guest's thread.
+
+    ``EventBus.emit`` runs handlers on the caller's thread, and the caller here
+    is a guest that may be holding its box's single call lock — a service
+    emitting from ``poll`` is exactly that. Any subscriber calling back into a
+    service then blocks on a lock the publisher will not release until this
+    Request answers. ``sandbox/events.publish`` is the one place that breaks
+    the cycle; see its module docstring for the outage it was written for.
+    """
+    return Result(data=_publish_event(args.get("channel"),
+                                      args.get("payload")))
 
 
 def _event_request(ctx, args: dict) -> Result:
@@ -2791,6 +2909,7 @@ HANDLERS = {
     AGENT_SPAWN: _agent_spawn, AGENT_COLLECT: _agent_collect,
     AGENT_STOP: _agent_stop, AGENT_SCHEDULE: _agent_schedule,
     LLM_PROCEED: _model_proceed, LLM_DELTA: _model_delta,
+    LLM_LIST: _llm_list, LLM_LOAD: _llm_load, LLM_UNLOAD: _llm_unload,
     CRON_LIST: _cron_list, CRON_GET: _cron_get, CRON_CREATE: _cron_create,
     CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,
     CRON_ENABLE: _cron_enable,

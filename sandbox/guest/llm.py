@@ -279,8 +279,8 @@ class BaseLLMBackend:
     """What a sandboxed LLM backend subclasses.
 
     Not a plugin: no family, no entry point, nothing discovery registers —
-    exactly like a parser. It lives in the ``helpers/`` tree root and the LLM
-    registry finds it by declaration.
+    exactly like a parser. It lives in the ``llm/`` tree root as
+    ``llm_*.py``, and the LLM registry finds it by declaration.
 
     Declare capabilities at *module* level, so the kernel can read them
     without importing the file::

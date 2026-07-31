@@ -38,7 +38,7 @@ import threading
 import time
 
 from .guest import protocol
-from .guest.codes import ERROR_GUEST_FAULT
+from .guest.codes import ERROR_GUEST_FAULT, ERROR_TIMEOUT
 from .guest.faults import guest_traceback
 from .guest.loader import (install_parsers, load_entries, load_entry,
                            unload_box)
@@ -48,7 +48,7 @@ from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
 from .runner_subprocess import (GUEST_ROOT, fault_result, send, service_until,
                                 subprocess_for)
-from .watchdog import WATCHDOG
+from .watchdog import HARD_CEILING, TICK, WATCHDOG, overdue as is_overdue
 
 logger = logging.getLogger("Sandbox")
 
@@ -106,7 +106,13 @@ class PersistentBox:
             return Result.failure(f"box {self.name!r} is not running")
         from . import provenance
 
-        with self._lock:
+        if not self._acquire():
+            if not self._alive:
+                return Result.failure(f"box {self.name!r} is not running")
+            return Result.failure(
+                f"box {self.name!r} is busy and did not free up",
+                code=ERROR_TIMEOUT, retryable=True)
+        try:
             if not self._alive:
                 return Result.failure(f"box {self.name!r} is not running")
             caller = provenance.current()
@@ -122,6 +128,41 @@ class PersistentBox:
             finally:
                 self.execution.chain = base_chain
                 self.execution.context = base_context
+        finally:
+            self._lock.release()
+
+    def _acquire(self) -> bool:
+        """Take this box's call lock, or give up. Returns whether we have it.
+
+        **A caller must never wait here forever**, and that is not a general
+        principle so much as a bill already paid. Callers of a box are usually
+        sandbox pool workers, of which there are sixteen; a worker blocked on a
+        lock that will never free is gone for the life of the process, not
+        merely delayed. Sixteen such calls and every Request in the process
+        queues behind nothing — the REPL and the transport poll loops included,
+        so the app goes deaf while looking idle.
+
+        The bound is the ceiling the *holder* is already under: whoever holds
+        this lock is bounded by ``overdue`` — ``deadline`` of running time, or
+        ``HARD_CEILING`` of wall clock, whichever lands first. So a wait longer
+        than that ceiling does not mean "busy", it means the box is wedged and
+        the watchdog has not managed to say so. Below the ceiling nothing is
+        refused, which matters: serialization is how a box is *supposed* to
+        behave, and a brain queued behind a ninety-second model call is working
+        exactly as designed.
+
+        Waiting in slices rather than one long block is what makes a box that
+        dies mid-wait fail its callers immediately instead of holding them for
+        ten minutes on an answer that is never coming.
+        """
+        started = time.monotonic()
+        while time.monotonic() - started < HARD_CEILING:
+            if self._lock.acquire(timeout=TICK):
+                return True
+            if not self._alive:
+                return False
+        logger.error("box %r never freed its call lock; giving up", self.name)
+        return False
 
     def stop(self, timeout: float = 10.0) -> Result:
         """Shut down: ask, then starve, then kill."""
@@ -190,8 +231,6 @@ class InProcessBox(PersistentBox):
         """Run one callable on a worker thread under a deadline."""
         from .guest.channel import Terminated
         from .guest.requests import RequestFailed
-
-        from .watchdog import TICK, overdue as is_overdue
 
         box: dict = {}
         done = threading.Event()

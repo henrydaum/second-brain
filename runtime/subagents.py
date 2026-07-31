@@ -672,7 +672,12 @@ class SubagentRegistry:
             logger.error("scheduled subagent did not start: %s", exc)
             self._push(f"Scheduled agent did not start: {exc}")
             return
-        self._remember_conversation(payload, handle.conversation_id)
+        # Off this thread, always. See ``_remember_conversation``.
+        threading.Thread(
+            target=self._remember_conversation,
+            args=(payload, handle.conversation_id),
+            daemon=True, name="subagent-pin-conversation",
+        ).start()
 
     @staticmethod
     def _scheduled_category(payload) -> str:
@@ -685,6 +690,21 @@ class SubagentRegistry:
 
         Without this every firing opens a new conversation and the job's
         history is scattered across dozens of them.
+
+        **Runs on its own thread, and must.** This calls back into the
+        timekeeper — the very service whose ``poll`` published the event that
+        got us here — and that service is a resident box serializing under one
+        lock which ``poll`` holds for its whole duration. Called inline it
+        blocked on that lock forever, wedging the box until the hard ceiling
+        killed it and taking the process's sandbox worker pool with it one
+        stalled ``cron.*`` call at a time. ``sandbox/events.publish`` now keeps
+        bus delivery off the publisher's thread, which fixes it at the other
+        end too; this stays detached because a caller re-entering the box it
+        was called from is unsafe on its own terms, whoever called it.
+
+        Note the ``except`` below cannot cover that case: a deadlock is a
+        block, not a raise. Nothing here has a return value anyone reads, so
+        detaching costs the caller nothing.
         """
         job_name = (payload.get("_timekeeper") or {}).get("job_name")
         keeper = (getattr(self.runtime, "services", None) or {}).get(

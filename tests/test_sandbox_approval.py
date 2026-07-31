@@ -231,6 +231,44 @@ def test_nobody_present_means_refused_not_blocked():
     assert runtime.asked == []
 
 
+def test_a_background_chain_is_unattended_even_where_somebody_is_sitting():
+    """The chain is a floor, and this is the case that made it one.
+
+    ``build_approver`` is wired with no session key, so the key fell back to
+    ``active_session_key`` — which ``is_attended`` calls attended by
+    definition. An unsafe Request from a scheduled subagent therefore raised a
+    dialog on the *foreground* session, parking it in ``approving_request``
+    where ordinary input comes back ``invalid_action``, once per firing,
+    about work the person could not see and never started.
+
+    ``sandbox/policy.py`` rests the safety of ``agent.spawn`` on exactly this:
+    a subagent is safe because it can approve nothing.
+    """
+    # Attended in the runtime's sense — somebody really is at the REPL.
+    runtime = FakeRuntime(attended=True)
+    request, decision = _egress()
+
+    allowed = build_approver(runtime)(
+        Chain(root="spawn_subagent:41").push("tool"), request, decision)
+
+    assert allowed is False
+    assert runtime.asked == [], "interrupted a session that asked for nothing"
+
+
+def test_a_user_chain_still_defers_to_the_frontend_on_attendance():
+    """The floor tightens; it must not take over.
+
+    A frontend owning its own attendance policy (a socket that disconnected,
+    say) still gets to say nobody is there for work the *user* started.
+    """
+    runtime = FakeRuntime(attended=False)
+    request, decision = _egress()
+
+    assert build_approver(runtime)(Chain(root="user").push("tool"), request,
+                                   decision) is False
+    assert runtime.asked == []
+
+
 def test_no_runtime_means_refuse():
     """The same default the kernel uses when every gate abstains."""
     request, decision = _egress()

@@ -23,11 +23,37 @@ would be logged and ignored, but a listener that *blocked* would stall whoever
 published. Delivery is best-effort at every layer, which is the same failure
 policy the ledger has and for the same reason: an observer must never break
 the thing it observes.
+
+**And a guest never publishes on the thread that delivers** (``publish``). That
+last sentence used to be advice; it is now structural, because the failure it
+warns about was not hypothetical. A resident box serializes under one lock, and
+``poll`` holds that lock for its whole duration — so a service emitting from
+``poll`` parks its guest thread on the answer with the lock still held. The
+kernel then runs ``bus.emit`` on a pool worker, on the *publisher's* thread by
+``EventBus``'s own contract, and any subscriber that calls back into a service
+blocks on the lock the publisher is holding. Neither side moves again.
+
+That is precisely what the timekeeper did: fire ``subagent.spawn`` from
+``poll``, and ``SubagentRegistry`` answered by asking the timekeeper to pin the
+job's conversation. The deadlock wedged the box until the 600s hard ceiling
+killed it permanently, and every later ``cron.*`` call parked another sandbox
+worker on the same lock forever until the pool was gone and the whole process
+went deaf.
+
+A guest can never observe a subscriber — ``sdk.events.emit`` answers ``True``
+and nothing else, and ``project`` already strips the round-trip keys so a
+sandboxed subscriber cannot satisfy one. So answering immediately and
+delivering on a kernel thread costs nothing anybody can see, and it is the
+*one place* the fix belongs: a seventh subscriber cannot reintroduce this by
+forgetting to detach, because detaching is no longer the subscriber's job.
+This is the outbound twin of ``sandbox/handlers/kernel.py``'s ``_drive``.
 """
 
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 
 logger = logging.getLogger("Sandbox")
 
@@ -73,6 +99,98 @@ def project(payload, _depth: int = 0):
         reduced = [project(item, _depth + 1) for item in payload]
         return [item for item in reduced if item is not None]
     return None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Outbound: a guest publishing, without lending the bus its thread.
+# ──────────────────────────────────────────────────────────────────────
+
+#: How many guest emits may wait for delivery. Bounded on purpose: an
+#: unbounded queue turns a runaway emitter into an out-of-memory, and a dropped
+#: event with a warning beside it is the recoverable version of that.
+QUEUE_CAP = 1024
+
+#: How long a guest emit waits for room in the queue. Short, because waiting
+#: here is the very coupling this indirection exists to remove — but not zero,
+#: so an ordinary burst is absorbed rather than dropped.
+ENQUEUE_TIMEOUT = 0.5
+
+#: One queue, one thread, so deliveries stay in the order they were published.
+#: Thread-per-emit would be simpler and would let a burst of events arrive out
+#: of order — cheap to write and very expensive to debug.
+_outbound: queue.Queue | None = None
+_dispatcher: threading.Thread | None = None
+_start_lock = threading.Lock()
+
+
+def _dispatch_forever(work: queue.Queue) -> None:
+    """Deliver queued events, one at a time, forever.
+
+    Runs every subscriber for a channel before taking the next event, so a slow
+    subscriber delays delivery rather than reordering it. Nothing escapes:
+    ``bus.emit`` already swallows what handlers raise, and this catches what it
+    does not so the thread cannot die and leave the queue filling.
+    """
+    from events.event_bus import bus
+
+    while True:
+        channel, payload = work.get()
+        try:
+            bus.emit(channel, payload)
+        except Exception:
+            logger.exception("dispatching %s failed", channel)
+        finally:
+            work.task_done()
+
+
+def _queue() -> queue.Queue:
+    """The outbound queue, starting the dispatcher on first use."""
+    global _outbound, _dispatcher
+    with _start_lock:
+        if _outbound is None:
+            _outbound = queue.Queue(maxsize=QUEUE_CAP)
+        if _dispatcher is None or not _dispatcher.is_alive():
+            _dispatcher = threading.Thread(
+                target=_dispatch_forever, args=(_outbound,),
+                daemon=True, name="bus-dispatch")
+            _dispatcher.start()
+        return _outbound
+
+
+def publish(channel: str, payload) -> bool:
+    """Hand one guest emit to the dispatcher. Returns whether it was queued.
+
+    The caller gets its answer without waiting for a single subscriber, which
+    is the whole point — see this module's docstring for the deadlock that
+    makes it mandatory rather than merely tidy.
+    """
+    if not isinstance(channel, str) or not channel.strip():
+        return False
+    try:
+        _queue().put((channel, payload), timeout=ENQUEUE_TIMEOUT)
+        return True
+    except queue.Full:
+        # Dropping is the lesser failure, but it is still a failure, so it is
+        # loud: a full queue means subscribers are not keeping up with a guest.
+        logger.warning("bus dispatch queue is full; dropped an emit on %s",
+                       channel)
+        return False
+
+
+def drain(timeout: float = 5.0) -> bool:
+    """Wait for queued events to be delivered. Returns whether it emptied.
+
+    For shutdown and for tests, which need a point at which "it was published"
+    and "it was delivered" are the same statement again.
+    """
+    work = _outbound
+    if work is None:
+        return True
+    deadline = threading.Event()
+    waiter = threading.Thread(target=lambda: (work.join(), deadline.set()),
+                              daemon=True, name="bus-drain")
+    waiter.start()
+    return deadline.wait(timeout=timeout)
 
 
 def build_listener(plugin, channel: str, deliver):

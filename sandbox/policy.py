@@ -30,7 +30,7 @@ from .guest.requests import (AGENT_SCHEDULE, CONFIG_READ, CONV_DELETE,
                              ENV_READ, FS_DELETE, FS_MOVE, FS_TEMP, FS_WRITE,
                              NET_HTTP, PROC_RUN, SESSION_ADD_PROMPT,
                              SESSION_ADD_TOOL, UI_ASK, Request)
-from .credentials import is_secret
+from .credentials import is_secret, redact
 
 SAFE = "safe"
 UNSAFE = "unsafe"
@@ -234,6 +234,11 @@ ALWAYS_UNSAFE = {
     R.PLUGIN_REGISTER, R.PLUGIN_UNREGISTER, R.PLUGIN_RELOAD,
     R.PLUGIN_INSTALL, R.PLUGIN_UNINSTALL, R.PLUGIN_UPDATE,
     R.SERVICE_LOAD, R.SERVICE_UNLOAD,
+    # Opening a brain is the same act one subsystem over: a pool of real
+    # processes starts, each holding a provider SDK and an API key. Closing one
+    # ends calls that may be in flight. Reading the list is safe and lives
+    # below with the other listings.
+    R.LLM_LOAD, R.LLM_UNLOAD,
     # Recurring unattended work.
     R.CRON_CREATE, R.CRON_UPDATE, R.CRON_REMOVE,
     R.AGENT_SCHEDULE,
@@ -266,6 +271,10 @@ ALWAYS_SAFE = {
     # agent to skip the check.
     R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.PLUGIN_VALIDATE,
     R.SERVICE_LIST, R.SERVICE_CALL,
+    # Which model profiles exist and whether each is open. Names, endpoints and
+    # context sizes — never the key, which is a ``secret_*`` setting and comes
+    # back as a handle like every other one.
+    R.LLM_LIST,
     R.PATH_GET,
     # TOOL_CALL is safe for the reason SERVICE_CALL is: the callee's own
     # Requests are classified with the caller still in the chain, so routing
@@ -526,6 +535,46 @@ def render_command(args: dict) -> str:
     return f"{rendered} [{shell}]" if shell and shell != "default" else rendered
 
 
+#: How much of a value the dialog will show before giving up on it. A person
+#: skimming a question does not read a hundred-entry list, and a dialog that
+#: scrolls is one that gets answered without being read.
+_VALUE_CHARS = 160
+
+
+def describe_setting_change(key: str, value) -> str:
+    """What a ``config.write`` is actually asking for, as a person reads it.
+
+    The key alone is not a question anybody can answer. "Change setting
+    net_allowed_hosts" tells you a plugin wants to touch the egress allowlist
+    and nothing about *what it wants added* — which is the entire decision.
+    Same for a model endpoint, a data directory, a retention period.
+
+    Values are redacted first. A setting named ``secret_*`` must not become
+    readable by asking permission to write it, and the dialog is the one place
+    that would otherwise print it in full.
+
+    Long values are summarised rather than truncated mid-token, because half a
+    hostname is worse than a count.
+    """
+    if value is None:
+        return f"clear setting {key}"
+    shown = redact(key, value, guess=True)
+    if isinstance(shown, (list, tuple, set)):
+        items = [str(item) for item in shown]
+        joined = ", ".join(items)
+        if len(joined) > _VALUE_CHARS:
+            joined = f"{len(items)} entries"
+        return f"set {key} to [{joined}]"
+    if isinstance(shown, dict):
+        return f"set {key} ({len(shown)} entries)"
+    if isinstance(shown, bool) or isinstance(shown, (int, float)):
+        return f"set {key} to {shown}"
+    text = str(shown)
+    if len(text) > _VALUE_CHARS:
+        text = text[:_VALUE_CHARS] + "…"
+    return f"set {key} to {text!r}"
+
+
 def _classify_shell(kind: str, args: dict) -> Decision:
     """Decide about one shell Request. See the section comment above."""
     shown = render_command(args)
@@ -769,7 +818,7 @@ def classify(request: Request, chain: Chain) -> Decision:
         if args.get("scope") == "plugin" and _owns_setting(chain, key):
             owner = sorted(_setting_owners(key) & _callers(chain))[0]
             return Decision(SAFE, f"{owner} persists its own {key}")
-        return Decision(UNSAFE, f"config.write: change setting {key}")
+        return Decision(UNSAFE, f"config.write: {describe_setting_change(key, args.get('value'))}")
 
     # ── a slash command is the user's own surface ─────────────────
     # Unlike a tool, a command is not scoped by the agent's tool catalogue and

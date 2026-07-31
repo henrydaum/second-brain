@@ -120,6 +120,17 @@ AGENT_STOP = "agent.stop"
 LLM_PROCEED = "llm.proceed"
 LLM_DELTA = "llm.delta"
 
+# The model *authority*, as opposed to one call to it. Profiles stopped being
+# services when ``service_llm.py`` was deleted, and ``/llm`` kept asking the
+# service registry about them — so it reported every profile uninstalled and
+# unloaded while conversations resolved the same profiles perfectly well
+# through ``llm.registry``. These are how a command reaches the registry the
+# rest of the kernel already uses. ``cron.*`` fronting the timekeeper is the
+# precedent.
+LLM_LIST = "llm.list"
+LLM_LOAD = "llm.load"
+LLM_UNLOAD = "llm.unload"
+
 # ── scheduling ────────────────────────────────────────────────────────
 CRON_LIST = "cron.list"
 CRON_GET = "cron.get"
@@ -230,7 +241,7 @@ ALL_TYPES = {
     SERVICE_LIST, SERVICE_CALL, SERVICE_LOAD, SERVICE_UNLOAD,
     TOOL_LIST, TOOL_CALL, COMMAND_LIST, COMMAND_CALL,
     AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, AGENT_COLLECT, AGENT_STOP,
-    LLM_PROCEED, LLM_DELTA,
+    LLM_PROCEED, LLM_DELTA, LLM_LIST, LLM_LOAD, LLM_UNLOAD,
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
@@ -251,7 +262,7 @@ READ_ONLY = {
     DB_QUERY, CONV_READ, CONV_LIST, SESSION_GET,
     SESSION_LIST, SESSION_STATE_GET, CONFIG_READ, PATH_GET, USER_READ, USER_LIST,
     PLUGIN_LIST, PLUGIN_DESCRIBE, PLUGIN_VALIDATE,
-    SERVICE_LIST, TOOL_LIST, COMMAND_LIST,
+    SERVICE_LIST, TOOL_LIST, COMMAND_LIST, LLM_LIST,
     CRON_LIST, CRON_GET, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     FILE_LIST, PARSE_FILE,
     PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ, FRONTEND_PENDING,

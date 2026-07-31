@@ -31,6 +31,7 @@ from .guest.requests import RequestFailed, Result
 from .guest.sdk import SDK
 from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
+from .watchdog import TICK, overdue
 
 logger = logging.getLogger("Sandbox")
 
@@ -83,7 +84,22 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
                               name=f"sandbox-{name}")
     started = time.perf_counter()
     worker.start()
-    completed = execution.finished.wait(timeout=deadline)
+
+    # Wait on the guest, not on the clock — the same measure a resident box
+    # uses, through the same helper, which exists precisely "so the in-process
+    # loop and the watchdog thread cannot drift" (``watchdog.overdue``). They
+    # had drifted: this was a bare ``wait(timeout=deadline)``, so an ephemeral
+    # command was charged for time the *kernel* spent answering it. A command
+    # that asked something slow — or waited on a service the kernel was busy
+    # with — died at thirty seconds having done nothing wrong, and the report
+    # blamed the plugin. ``HARD_CEILING`` still backs it up, so a runaway
+    # hiding inside long Requests is not immortal.
+    monotonic_start = time.monotonic()
+    completed = True
+    while not execution.finished.wait(timeout=TICK):
+        if overdue(execution, monotonic_start, deadline):
+            completed = False
+            break
 
     for level, message in execution.logs:
         logger.log(getattr(logging, level.upper(), logging.INFO),

@@ -375,3 +375,119 @@ def test_a_sandboxed_backend_is_the_profile_brain(tree):
     llm.refresh(_config(tree))
 
     assert type(llm.brain("gpt-test")) is Brain
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The doorway a command reaches the registry through.
+#
+# ``/llm`` asked the *service* registry about profiles, and had done since
+# before ``service_llm.py`` was deleted and profiles stopped being services.
+# Nothing raised: ``ctx.services`` simply had no key for any profile, so every
+# lookup answered ``{}`` and the command reported each model "not installed"
+# and "Unloaded" while conversations drove those same models perfectly well.
+# Two registries, one question, and the UI was reading the wrong one.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_llm_list_answers_from_the_registry_not_the_service_table(tree):
+    """The whole bug in one assertion: no services anywhere, full answer."""
+    from sandbox.handlers.kernel import _llm_list
+
+    _write(tree, BACKEND)
+    config = _config(tree)
+    llm.refresh(config)
+
+    class Ctx:
+        """A kernel context with an empty service registry, as in real life."""
+        services = {}
+        config = None
+
+    ctx = Ctx()
+    ctx.config = config
+    answer = _llm_list(ctx, {}).data
+
+    assert [row["model_name"] for row in answer["profiles"]] == ["gpt-test"]
+    assert answer["default"] == "gpt-test"
+    assert answer["profiles"][0]["loaded"] is False
+
+
+def test_llm_list_carries_the_declared_display_name(tree):
+    """``display_name`` was declared, read into the registry, and shown to
+    nobody — so every picker in the app offered raw class names and the
+    profile card said "LiteLLMService" for a backend calling itself
+    "LiteLLM (any provider)"."""
+    from sandbox.handlers.kernel import _llm_list
+
+    _write(tree, BACKEND)
+    config = _config(tree)
+    llm.refresh(config)
+
+    class Ctx:
+        """Minimal context."""
+        services = {}
+        config = None
+
+    ctx = Ctx()
+    ctx.config = config
+    answer = _llm_list(ctx, {}).data
+
+    assert answer["backends"] == [
+        {"name": "EchoBackend", "display_name": "Echo"}]
+
+
+def test_a_retired_backend_name_still_resolves_for_display(tree):
+    """A profile stores the name it was written with, and a migrated backend
+    claims its predecessor's. Displaying one therefore needs the alias hop
+    first, which is exactly the hop that was missing."""
+    _write(tree, BACKEND.replace(
+        'display_name = "Echo"', 'display_name = "Echo"\nreplaces = ["OldEcho"]'))
+
+    assert llm.backend_aliases() == {"OldEcho": "EchoBackend"}
+    assert llm.backend_display_names()["EchoBackend"] == "Echo"
+
+
+def test_llm_load_and_unload_open_and_close_a_real_pool(tree):
+    """"Loaded" means live processes, so the handlers must move that and not
+    a flag."""
+    from sandbox.handlers.kernel import _llm_load, _llm_unload
+
+    _write(tree, BACKEND)
+    config = _config(tree)
+    llm.refresh(config)
+
+    class Ctx:
+        """Minimal context."""
+        services = {}
+        config = None
+
+    ctx = Ctx()
+    ctx.config = config
+
+    assert _llm_load(ctx, {"name": "gpt-test"}).data is True
+    assert llm.brain("gpt-test").loaded
+
+    assert _llm_unload(ctx, {"name": "gpt-test"}).data is True
+    assert not llm.brain("gpt-test").loaded
+
+
+def test_loading_an_uninstallable_profile_names_the_missing_backend(tree):
+    """The message ``/llm`` used to invent was "No backend is installed for
+    <profile>", which reported service-registry absence as backend absence and
+    named the wrong thing entirely. The person has to go install a *backend*,
+    so the failure has to say which one."""
+    from sandbox.handlers.kernel import _llm_load
+
+    _write(tree, BACKEND)
+    config = _config(tree, backend="NoSuchBackend")
+    llm.refresh(config)
+
+    class Ctx:
+        """Minimal context."""
+        services = {}
+        config = None
+
+    ctx = Ctx()
+    ctx.config = config
+    result = _llm_load(ctx, {"name": "gpt-test"})
+
+    assert not result.ok
+    assert "NoSuchBackend" in result.error
