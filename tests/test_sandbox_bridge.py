@@ -1,8 +1,15 @@
-"""The dual-mode loader: migrated and unmigrated plugins side by side.
+"""The bridge: SDK code wearing a native face.
 
-The claim under test is the one the whole migration plan rests on — that a
-migrated plugin is indistinguishable from a native one to everything
-downstream, so the app keeps working with any mix of the two.
+The claim under test is that a sandboxed plugin is indistinguishable from a
+native one to everything downstream — discovery registers it, the registries
+type-check it, the state machine calls it, and none of them learn where the
+code actually runs.
+
+This used to be a claim about *coexistence*, because the loader would fall
+through to an ordinary import for a file that had not been migrated. That is
+gone: the migration is over, and a plugin the bridge will not carry is a
+plugin that does not load. ``NATIVE_TOOL`` survives here as the fixture for
+what refusal looks like.
 """
 
 from pathlib import Path
@@ -128,8 +135,8 @@ def test_a_migrated_plugin_is_recognised(tmp_path):
     assert is_sandboxed(_write(tmp_path, "tool_word_count.py", MIGRATED_TOOL))
 
 
-def test_a_native_plugin_is_left_alone(tmp_path):
-    """An unmigrated plugin must route the ordinary way."""
+def test_a_native_plugin_is_declined(tmp_path):
+    """The bridge answers None, and the loader turns that into a refusal."""
     path = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
     assert not is_sandboxed(path)
     assert adapt(path) is None
@@ -732,33 +739,69 @@ def test_unloading_closes_the_box(tmp_path, box):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Both kinds coexist in one registry.
+# The loader carries sandboxed code and nothing else.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_migrated_and_native_tools_register_together(tmp_path, box):
-    """The claim the migration plan rests on."""
+def test_a_sandboxed_tool_registers_through_the_loader(tmp_path, box):
+    """The one way in: adapt, then register the adapter like any tool."""
     from agent.tool_registry import ToolRegistry
     from plugins.BaseTool import BaseTool
     from plugins.plugin_discovery import _load_plugin_module
 
-    migrated = _write(tmp_path, "tool_word_count.py", MIGRATED_TOOL)
-    native = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
+    path = _write(tmp_path, "tool_word_count.py", MIGRATED_TOOL)
+    module = _load_plugin_module("sandboxed_tool_word_count", path,
+                                 False, False)
+    assert module is not None
 
     registry = ToolRegistry(None, {}, {})
-    for path, module_name in ((migrated, "sandboxed_tool_word_count"),
-                              (native, "native_tool_shout")):
-        module = _load_plugin_module(module_name, path, False, False)
-        assert module is not None, path.name
-        for value in vars(module).values():
-            if (isinstance(value, type) and issubclass(value, BaseTool)
-                    and value is not BaseTool):
-                registry.register(value())
+    for value in vars(module).values():
+        if (isinstance(value, type) and issubclass(value, BaseTool)
+                and value is not BaseTool):
+            registry.register(value())
 
-    assert sorted(registry.list_tools()) == ["shout", "word_count"]
-
-    # And both are callable through the one registry, indistinguishably.
-    assert registry.call("shout", text="hey").data == "HEY"
+    assert registry.list_tools() == ["word_count"]
     assert registry.call("word_count", text="a b c").data == {"words": 3}
+
+
+def test_a_native_plugin_does_not_load_at_all(tmp_path, box, caplog):
+    """The dual-mode loader is gone, and this is what replaced it.
+
+    A file written against the old contract used to be imported the ordinary
+    way and registered beside migrated ones — that coexistence is what made
+    the migration survivable one file at a time. Keeping it past the end of
+    the migration would only mean unmediated code running in the kernel's own
+    process, so it is refused now.
+
+    Refused *and reported*: a plugin that vanishes with no line in the log is
+    indistinguishable from one that was never installed, and the whole cost of
+    this change lands on somebody wondering where their tool went.
+    """
+    from plugins.plugin_discovery import _load_plugin_module
+
+    path = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
+    with caplog.at_level("WARNING"):
+        module = _load_plugin_module("native_tool_shout", path, False, False)
+    assert module is None
+    assert "tool_shout.py" in caplog.text
+    assert "SDK" in caplog.text
+
+
+def test_refusing_one_plugin_does_not_abort_the_rest(tmp_path, box):
+    """Reported, never raised.
+
+    Discovery loops read ``None`` as "skip this file" with no ``try`` around
+    them, so a raise here would let one unmigrated plugin take every other
+    plugin's discovery down with it.
+    """
+    from plugins.plugin_discovery import _load_plugin_module
+
+    native = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
+    migrated = _write(tmp_path, "tool_word_count.py", MIGRATED_TOOL)
+
+    assert _load_plugin_module("native_tool_shout", native, False,
+                               False) is None
+    assert _load_plugin_module("sandboxed_tool_word_count", migrated, False,
+                               False) is not None
 
 
 def test_a_command_form_is_bridged_too(tmp_path, box):

@@ -619,73 +619,95 @@ def _source_path(path) -> str:
 
 # ── Internal helpers ─────────────────────────────────────────────────
 
-def _load_baked_in(module_name: str, reload: bool):
-    """Load a baked-in module via importlib.import_module."""
-    try:
-        if reload and module_name in sys.modules:
-            return importlib.reload(sys.modules[module_name])
-        return importlib.import_module(module_name)
-    except ImportError as e:
-        logger.warning(f"Could not import {module_name}: {e}")
-    except Exception as e:
-        logger.error(f"Failed to load {module_name}: {e}", exc_info=True)
-    return None
-
-
 def _load_plugin_module(module_name: str, file_path: Path, built_in: bool, reload: bool):
-    """Load a plugin module from a built-in or DATA_DIR plugin tree.
+    """Load a plugin from a tree. Sandboxed code only — there is no other way.
 
-    A plugin migrated to the sandbox is written against the SDK, so importing
-    it here would give a class whose ``run`` wants an ``sdk`` while the
-    registry is about to hand it a context. The bridge spots those by reading
-    the file and returns a synthetic module holding a native-looking adapter
-    instead, which everything downstream registers and calls unchanged.
+    A plugin is written against the SDK and reaches the kernel through
+    ``sandbox.bridge.adapt``, which reads the file and answers with a
+    synthetic module holding a native-looking adapter. Everything downstream
+    registers and calls that adapter unchanged, so discovery, the registries
+    and the state machine never learn the difference.
 
-    Migrated and unmigrated plugins therefore coexist, and this is the only
-    place that knows the difference.
-    """
-    adapted = _adapt_sandboxed(file_path)
-    if adapted is not None:
-        return adapted
-    return _load_baked_in(module_name, reload) if built_in else _load_external(module_name, file_path, reload)
+    **The native path is gone.** This function used to fall through to an
+    ordinary import when ``adapt`` declined, which is what let migrated and
+    unmigrated plugins coexist for the length of the migration. Coexistence
+    was the *point* — one file, one commit, ``git checkout`` to revert — and
+    it stops being a feature the moment it is only a way for unmediated code
+    to keep running in the kernel's own process. A plugin that will not
+    sandbox is now a plugin that does not load.
 
+    Refusing is *reported*, never raised. Every discovery loop reads ``None``
+    as "skip this file" with no ``try`` around it, so raising here would let
+    one bad plugin abort the discovery of every other one — a worse failure
+    than the one being reported, and the reason this shape predates the
+    change.
 
-def _adapt_sandboxed(file_path: Path):
-    """Return a bridged module for a migrated plugin, or None.
-
-    ``None`` means "not a migrated plugin", and the caller acts on it by
-    importing the file the ordinary way. That is right when the file really
-    is native and wrong in every other case: a *migrated* file imported
-    natively yields guest classes the kernel cannot use and, for a service,
-    no ``build_services`` at all — so a bridge failure surfaced three steps
-    later as "build_services() returned nothing", naming neither the failure
-    nor the file that caused it.
-
-    It still answers ``None`` rather than raising, and that is deliberate:
-    every bulk discovery loop treats ``None`` as "skip this file", with no
-    ``try`` around it, so raising here would let one unadaptable plugin abort
-    the discovery of every other one — a worse failure than the one being
-    reported. What changed is that the traceback is now logged. It was a bare
-    ``logger.error`` with the exception's ``str()``, which for the errors that
-    actually occur here (an ``AttributeError`` deep in adapter construction)
-    says almost nothing about where.
+    Note ``module_name``, ``built_in`` and ``reload`` are now unused: the
+    bridge works from the path alone, because a box is loaded by file rather
+    than imported into this process. They are kept because the watcher and
+    five discovery loops pass them, and because a *parser* still needs the
+    real importer — see :func:`import_tree_module`, which is where the
+    machinery below now belongs.
     """
     try:
         from sandbox.bridge import adapt
     except Exception:
+        logger.exception("the sandbox bridge is unavailable; no plugin can "
+                         "load without it")
         return None
     try:
-        return adapt(file_path)
+        adapted = adapt(file_path)
     except Exception:
-        logger.exception(
-            "failed to bridge sandboxed plugin %s; it will be imported "
-            "natively, which for a service means no build_services",
-            file_path.name)
+        logger.exception("failed to bridge %s", file_path.name)
         return None
+    if adapted is None:
+        # ``adapt`` answers None for a file it will not carry: one that is
+        # not SDK code, one the validator rejected, one declaring no plugin
+        # class. It has already logged the specific reason where it knows
+        # one; this line is what makes the *consequence* visible, since a
+        # silently skipped plugin presents as a capability that vanished.
+        logger.warning(
+            "%s did not load: plugins must be written against the SDK "
+            "(from guest.bases import Base...). Run "
+            "sandbox.validator.validate_file on it to see what is missing.",
+            file_path.name)
+    return adapted
+
+
+def import_tree_module(module_name: str, file_path: Path, built_in: bool,
+                       reload: bool):
+    """Import a file from a plugin tree as an ordinary module.
+
+    What is left of the old loader, kept for the one caller that is not a
+    plugin: ``parsing.discover`` imports ``parsers/parse_*.py`` to fire their
+    module-level ``register(...)`` calls.
+
+    That is not the native shim coming back in through a side door. A parser
+    belongs to no family and nothing bridges it; it is guest code *by
+    construction* — the same file the kernel loads here in-process and hands
+    ``parsing.kernel_sdk.KERNEL_SDK``, a subprocess box loads through
+    ``guest.loader.install_parsers``. Importing it is how the kernel-side half
+    of that dual callability works, and always was.
+
+    The tree namespace machinery lives here rather than in ``parsing``
+    because ``PLUGIN_ROOTS`` and the module naming are this module's, and a
+    second copy of them is exactly the drift worth avoiding.
+    """
+    if built_in:
+        try:
+            if reload and module_name in sys.modules:
+                return importlib.reload(sys.modules[module_name])
+            return importlib.import_module(module_name)
+        except ImportError as e:
+            logger.warning(f"Could not import {module_name}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to load {module_name}: {e}", exc_info=True)
+        return None
+    return _load_external(module_name, file_path, reload)
 
 
 def _load_external(module_name: str, file_path: Path, reload: bool):
-    """Load a DATA_DIR plugin module via spec_from_file_location.
+    """Load a DATA_DIR module via spec_from_file_location.
 
     Always uses spec_from_file_location (never importlib.reload) because
     reload() can't re-find specs for modules loaded this way.

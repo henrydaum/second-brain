@@ -246,7 +246,7 @@ def discover() -> int:
     function rather than a service because nothing about it needs to persist.
     """
     import trees
-    from plugins.plugin_discovery import _load_plugin_module
+    from plugins.plugin_discovery import import_tree_module
 
     clear()
     seen: set[str] = set()
@@ -259,8 +259,8 @@ def discover() -> int:
                 continue          # an earlier, higher-precedence root won
             module_name = f"{root.module}.parsers.{py_file.stem}"
             drain_registrations()          # discard anything left by a failure
-            module = _load_plugin_module(module_name, py_file, root.builtin,
-                                         reload=True)
+            module = import_tree_module(module_name, py_file, root.builtin,
+                                        reload=True)
             if module is None:
                 continue
             # The parser declared itself into the guest-side collector on

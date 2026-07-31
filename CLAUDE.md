@@ -904,13 +904,46 @@ under a one-shot token for exactly the duration of one doorway visit. Code
 holding no token reaches no call, which is why the Request is refused outside
 an `llm_call` hook rather than being ambient authority.
 
-**The dual-mode loader is how migration works.** `plugins/plugin_discovery.py`
-→ `_load_plugin_module` asks `sandbox.bridge.adapt()` first. A file importing
-`guest.bases` gets wrapped in a *native-looking adapter* subclassing the real
-`BaseTool`/`BaseTask`/`BaseCommand`; everything downstream registers and calls
-it unchanged. Unmigrated plugins load exactly as before. **Migrated and native
-plugins coexist, so the app works at every point in the migration** — one file,
-one commit, `git checkout` to revert. Detection is by AST, never by importing.
+**The bridge is the only way in.** `plugins/plugin_discovery.py` →
+`_load_plugin_module` calls `sandbox.bridge.adapt()`, which reads the file and
+answers with a *native-looking adapter* subclassing the real
+`BaseTool`/`BaseTask`/`BaseCommand`/`BaseService`/`BaseFrontend`; everything
+downstream registers and calls it unchanged. Detection is by AST, never by
+importing.
+
+**The native fallthrough is gone.** `_load_plugin_module` used to fall back to
+an ordinary import when `adapt` declined, so migrated and unmigrated plugins
+coexisted and the app worked at every point in the migration — one file, one
+commit, `git checkout` to revert. That was the whole value of it, and it
+expired with the migration: past that point coexistence is only a way for
+unmediated code to keep running in the kernel's own process. A plugin the
+bridge will not carry now does not load.
+
+Refusal is **reported, never raised**. Every discovery loop reads `None` as
+"skip this file" with no `try` around it, so raising would let one unmigrated
+plugin abort the discovery of every other one. The warning names the file and
+points at the validator, because a plugin that vanishes silently is
+indistinguishable from one that was never installed.
+
+**The five `plugins/Base*.py` classes are not the shim and did not go with
+it.** They are what the adapter *is* — `bridge.NATIVE_BASES` maps each family
+to one, `_find_subclasses` uses them as discovery's predicate, `ToolResult`
+and `TaskResult` are the kernel's own result types, and `BaseFrontend`'s 940
+lines are the host-side routing the guest half deliberately does not own (see
+**Frontends are resident boxes the kernel *drives***). Deleting them deletes
+the frontend layer, not a compatibility path. What *is* now vestigial is the
+native per-call-client contract — `BaseService.get_client` and the
+`shared = False` that selects it — which no bridged service can use, since a
+live client is precisely what cannot cross. It stays until the last store
+plugin written against it is migrated, then goes.
+
+**One caller still imports plainly, and it is not a plugin.**
+`parsing.discover` reaches `plugin_discovery.import_tree_module` to import
+`parsers/parse_*.py` and fire their module-level `register(...)` calls. A
+parser belongs to no family and nothing bridges it; it is guest code *by
+construction*, and this is the kernel-side half of the dual callability
+described under **Parsers** — the same file a box loads through
+`guest.loader.install_parsers`.
 
 **The kernel boundary is unchanged.** Core hard-imports no plugin module at
 all. `sandbox/` is reached only from `plugin_discovery`, and nothing
@@ -1348,17 +1381,14 @@ conversation title on a persistent surface; fed by the
 
 ## Where to plug in
 
-- **Add a slash command**: write a `BaseCommand` subclass as `command_*.py` in
-  the workspace, installed package tree, or deliberately in [bundled/commands/](bundled/commands/)
-  when it is true kernel behavior. Commands receive `SecondBrainContext` in both
-  `form(args, context)` and `run(args, context)`.
-- **Add a *sandboxed* tool** (the direction of travel): write a `BaseTool`
-  subclass from `guest.bases` as `tool_*.py`. It receives `sdk`, not
-  `context`, and the bridge registers it like any other tool. See `docs/SDK.md`.
-- **Add a tool** (the pre-migration contract): write a `BaseTool` subclass as `tool_*.py` in the sandbox,
-  installed package tree, or deliberately in [plugins/tools/](plugins/tools/)
-  when it is true kernel behavior. Tools receive `SecondBrainContext` from
-  [runtime/context.py](runtime/context.py).
+- **Add a slash command**: write a `BaseCommand` subclass from `guest.bases`
+  as `command_*.py` in the workspace, installed package tree, or deliberately
+  in [bundled/commands/](bundled/commands/) when it is true kernel behavior.
+  Commands receive `sdk` in both `form(args, sdk)` and `run(args, sdk)`.
+- **Add a tool**: write a `BaseTool` subclass from `guest.bases` as
+  `tool_*.py`. It receives `sdk`, not `context`, and the bridge registers it
+  like any other tool. See `docs/SDK.md`. There is no second way — a file
+  written against `plugins.BaseTool` no longer loads at all.
 - **Bend a per-turn kernel decision**: register a hook from a service's
   `bind_runtime`/`_load` via `runtime.hooks.add(moment, fn)`
   ([runtime/hooks.py](runtime/hooks.py), worked examples in
@@ -1468,8 +1498,8 @@ move between built-in, sandbox, and installed trees.
 - [sandbox/facade.py](sandbox/facade.py) — `Sandbox`: the one API.
   `run()` blocks, `start()` returns a `Run` to wait on or cancel, `open()`
   loads a resident box.
-- [sandbox/bridge.py](sandbox/bridge.py) — the dual-mode loader that lets
-  migrated and unmigrated plugins coexist.
+- [sandbox/bridge.py](sandbox/bridge.py) — the only doorway a plugin enters
+  by: SDK code in, a native-looking adapter out.
 - [sandbox/guest/sdk.py](sandbox/guest/sdk.py) — what plugin authors actually
   type. Each namespace is exactly one Request family.
 - [sandbox/hooks.py](sandbox/hooks.py) — the two-way translation between the

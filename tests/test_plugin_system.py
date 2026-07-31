@@ -391,22 +391,30 @@ def test_plugin_watcher_stop_cancels_pending_timers():
     assert handler.cancelled
 
 
-def test_discovery_loads_sandbox_tree_relative_helpers(tmp_path, monkeypatch):
-    """Verify sandbox_plugins tools can import family-local helpers relatively."""
+def test_discovery_loads_a_tool_declaring_a_family_local_helper(tmp_path, monkeypatch):
+    """A declared helper must not stop a tool being discovered.
+
+    Whether the *import* resolves is the box's business — ``dependencies_files``
+    is what puts the helper on the box's path, and the sandbox suite tests
+    that. What is asserted here is the discovery half: the declaration is read
+    off the file and carried onto the adapter, so a tool that has one still
+    registers.
+    """
     root = tmp_path / "sandbox_plugins"
     tools = root / "tools"
     helpers = tools / "helpers"
     helpers.mkdir(parents=True)
     (helpers / "answer.py").write_text('VALUE = "relative ok"\n', encoding="utf-8")
     (tools / "tool_relative.py").write_text(
-        "from plugins.BaseTool import BaseTool, ToolResult\n"
-        "from .helpers.answer import VALUE\n\n"
+        "dependencies_files = ['tools/helpers/answer.py']\n\n"
+        "from guest.bases import BaseTool\n\n"
         "class RelativeTool(BaseTool):\n"
         "    name = 'relative_tool'\n"
         "    description = 'test'\n"
         "    parameters = {}\n"
-        "    def run(self, context, **kwargs):\n"
-        "        return ToolResult(llm_summary=VALUE)\n",
+        "    def run(self, sdk, **kwargs):\n"
+        "        from .helpers.answer import VALUE\n"
+        "        return sdk.ok(VALUE)\n",
         encoding="utf-8",
     )
     _patch_tool_discovery(monkeypatch, (("sandbox", root, "sandbox_plugins", False),))
@@ -414,7 +422,8 @@ def test_discovery_loads_sandbox_tree_relative_helpers(tmp_path, monkeypatch):
 
     plugin_discovery.discover_tools(tmp_path, registry, {}, reload=True)
 
-    assert registry.tools["relative_tool"].run(None).llm_summary == "relative ok"
+    assert registry.tools["relative_tool"].dependencies_files == [
+        "tools/helpers/answer.py"]
 
 
 def test_discovery_precedence_prefers_sandbox_over_installed(tmp_path, monkeypatch):
@@ -425,11 +434,13 @@ def test_discovery_precedence_prefers_sandbox_over_installed(tmp_path, monkeypat
         tools = root / "tools"
         tools.mkdir(parents=True)
         (tools / "tool_same.py").write_text(
-            "from plugins.BaseTool import BaseTool\n\n"
+            "from guest.bases import BaseTool\n\n"
             "class SameTool(BaseTool):\n"
             "    name = 'same_tool'\n"
             f"    description = '{label}'\n"
-            "    parameters = {}\n",
+            "    parameters = {}\n"
+            "    def run(self, sdk, **kwargs):\n"
+            "        return sdk.ok(None)\n",
             encoding="utf-8",
         )
     _patch_tool_discovery(
@@ -451,14 +462,14 @@ def test_load_single_tool_accepts_auto_register_false(tmp_path, monkeypatch):
     tools = sandbox / "tools"
     tools.mkdir(parents=True)
     (tools / "tool_deferred.py").write_text(
-        "from plugins.BaseTool import BaseTool, ToolResult\n\n"
+        "from guest.bases import BaseTool\n\n"
         "class Deferred(BaseTool):\n"
         "    name = 'deferred'\n"
         "    description = 'test'\n"
         "    parameters = {}\n"
         "    auto_register = False\n"
-        "    def run(self, context, **kwargs):\n"
-        "        return ToolResult(data={})\n",
+        "    def run(self, sdk, **kwargs):\n"
+        "        return sdk.ok({})\n",
         encoding="utf-8",
     )
     _patch_tool_discovery(monkeypatch, (("sandbox", sandbox, "sandbox_plugins", False),))
@@ -471,8 +482,14 @@ def test_load_single_tool_accepts_auto_register_false(tmp_path, monkeypatch):
     assert registry.tools == {}  # opted out of the global registry
 
 
-def test_load_single_tool_rejects_file_without_tool(tmp_path, monkeypatch):
-    """A file with no BaseTool subclass at all is still a real failure."""
+def test_load_single_tool_rejects_a_file_that_is_not_sdk_code(tmp_path, monkeypatch):
+    """A tool the sandbox will not carry is a tool that does not install.
+
+    This used to reach the subclass scan and fail there, because the loader
+    would import anything and only the absence of a ``BaseTool`` gave it away.
+    The refusal is earlier now — the file never runs at all — which is the
+    whole point of dropping the native path.
+    """
     sandbox = tmp_path / "sandbox_plugins"
     tools = sandbox / "tools"
     tools.mkdir(parents=True)
@@ -483,7 +500,31 @@ def test_load_single_tool_rejects_file_without_tool(tmp_path, monkeypatch):
     name, error = plugin_discovery._load_single_tool(tools / "tool_empty.py", registry)
 
     assert name is None
-    assert "No BaseTool subclass found" in error
+    assert "tool_empty.py" in error
+
+
+def test_load_single_tool_rejects_sdk_code_declaring_no_tool(tmp_path, monkeypatch):
+    """Importing the SDK is not the same as being a tool.
+
+    The bridge needs a plugin class to build an adapter around, so a file that
+    imports ``guest.bases`` and then declares nothing is refused as surely as
+    one that never mentioned it — a distinction worth pinning, since the two
+    failures now share a message.
+    """
+    sandbox = tmp_path / "sandbox_plugins"
+    tools = sandbox / "tools"
+    tools.mkdir(parents=True)
+    (tools / "tool_classless.py").write_text(
+        "from guest.bases import BaseTool\n\nVALUE = 1\n", encoding="utf-8")
+    _patch_tool_discovery(monkeypatch, (("sandbox", sandbox, "sandbox_plugins", False),))
+    registry = _ToolRegistry()
+
+    name, error = plugin_discovery._load_single_tool(
+        tools / "tool_classless.py", registry)
+
+    assert name is None
+    assert "tool_classless.py" in error
+    assert registry.tools == {}
 
 
 class _FakeHandler:
