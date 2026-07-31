@@ -139,6 +139,17 @@ def clean_text(text: str, preserve_indent: bool = False) -> str:
 
 _DECLARED: list = []
 
+# What *this box* can parse: the declarations of the parser modules it was
+# provisioned with, keyed (extension, modality) exactly as the kernel keys its
+# own registry.
+#
+# A box gets one of these because the alternative is nothing at all. Image,
+# audio, video and tabular parses produce live objects that cannot cross a
+# boundary, so the only place their result is usable is the process that
+# produced it — which means the parser has to be *here*, and something here
+# has to route to it.
+_LOCAL: dict = {}
+
 
 def register(extensions, modality: str, func) -> None:
     """Declare that ``func`` parses these extensions as ``modality``.
@@ -150,12 +161,45 @@ def register(extensions, modality: str, func) -> None:
 
 
 def drain_registrations() -> list:
-    """Take everything declared since the last drain. Kernel-side only."""
+    """Take everything declared since the last drain.
+
+    Called by whoever provisioned the parser: the kernel after importing one
+    into its registry, or :func:`adopt_registrations` after importing one into
+    a box. Draining rather than reading keeps a failed import from leaving
+    half its declarations behind for the next module to inherit.
+    """
     global _DECLARED
     declared, _DECLARED = _DECLARED, []
     return declared
 
 
+def adopt_registrations() -> int:
+    """Fold what was just declared into this box's own table.
+
+    Returns how many (extension, modality) routes it gained.
+    """
+    gained = 0
+    for extensions, modality, func in drain_registrations():
+        names = [extensions] if isinstance(extensions, str) else extensions
+        for extension in names:
+            ext = (extension or "").lower()
+            _LOCAL[(ext if ext.startswith(".") else f".{ext}", modality)] = func
+            gained += 1
+    return gained
+
+
+def local_parser(extension: str, modality: str):
+    """The parser this box holds for one (extension, modality), or None."""
+    ext = (extension or "").lower()
+    return _LOCAL.get((ext if ext.startswith(".") else f".{ext}", modality))
+
+
+def local_modalities() -> list:
+    """Every modality this box was provisioned for. For error messages."""
+    return sorted({modality for _ext, modality in _LOCAL})
+
+
 __all__ = ["ParseResult", "CROSSABLE", "DEFAULT_MAX_CHARS", "basename",
-           "clean_text", "suffix",
-           "max_chars", "register", "drain_registrations"]
+           "clean_text", "suffix", "max_chars", "register",
+           "drain_registrations", "adopt_registrations", "local_parser",
+           "local_modalities"]

@@ -210,10 +210,65 @@ def test_a_task_gets_its_paths_not_its_context(tmp_path, box):
     module = adapt(_write(tmp_path, "task_extract.py", MIGRATED_TASK))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
 
-    outcome = instance.run(["/a.txt", "/b.txt"], SimpleNamespace(config={}))
-    assert outcome.success
-    assert outcome.data == [{"path": "/a.txt"}, {"path": "/b.txt"}]
-    assert outcome.discovered_paths == ["/found/extra.txt"]
+    outcomes = instance.run(["/a.txt", "/b.txt"], SimpleNamespace(config={}))
+    assert all(o.success for o in outcomes)
+    assert outcomes[0].data == [{"path": "/a.txt"}, {"path": "/b.txt"}]
+    assert outcomes[0].discovered_paths == ["/found/extra.txt"]
+
+
+def test_a_batch_task_answers_once_per_path(tmp_path, box):
+    """The orchestrator zips paths against results, so it needs one each.
+
+    A guest task returns a single Result. Handing that straight over made
+    ``zip`` stop after the first path: the rest were neither completed nor
+    failed, so they stayed claimed and were never retried — a folder that
+    silently stopped indexing, with nothing in the log.
+    """
+    module = adapt(_write(tmp_path, "task_extract.py", MIGRATED_TASK))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+
+    paths = ["/a.txt", "/b.txt", "/c.txt", "/d.txt"]
+    outcomes = instance.run(paths, SimpleNamespace(config={}))
+
+    assert len(outcomes) == len(paths)
+    # Rows ride on the first alone. ``_handle_success`` writes the whole of a
+    # result's data for whichever path it is handling, so copying them onto
+    # every outcome would write the same rows once per path in the batch.
+    assert outcomes[0].data
+    assert all(o.data == [] for o in outcomes[1:])
+
+
+def test_a_task_may_report_each_path_separately(tmp_path, box):
+    """per_path is how one bad file fails without taking the batch with it."""
+    source = '''
+"""A task that judges each file."""
+
+from guest.bases import BaseTask
+
+
+class Extract(BaseTask):
+    """Fail the middle one."""
+
+    name = "extract"
+    writes = ["text_docs"]
+
+    def run(self, sdk, paths):
+        """One entry per path, in order."""
+        return sdk.ok(per_path=[
+            {"ok": True, "data": [{"path": paths[0]}],
+             "also_contains": ["image"]},
+            {"ok": False, "error": "unreadable"},
+            {"ok": True, "data": [{"path": paths[2]}]},
+        ])
+'''
+    module = adapt(_write(tmp_path, "task_judge.py", source))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+
+    a, b, c = instance.run(["/a", "/b", "/c"], SimpleNamespace(config={}))
+    assert a.success and a.data == [{"path": "/a"}]
+    assert a.also_contains == ["image"]
+    assert not b.success and b.error == "unreadable"
+    assert c.success and c.data == [{"path": "/c"}]
 
 
 def test_a_command_returns_markdown(tmp_path, box):
@@ -995,7 +1050,9 @@ def test_a_path_task_does_not_grow_the_doorway(tmp_path):
     task = _instance(module)
 
     assert "run_event" not in vars(type(task))
-    assert task.run(["a", "b"], SimpleNamespace()).data == {"count": 2}
+    # A path task answers with one outcome per path; the batch's data rides
+    # on the first. See ``test_a_batch_task_answers_once_per_path``.
+    assert task.run(["a", "b"], SimpleNamespace())[0].data == {"count": 2}
 
 
 def test_the_channel_declaration_survives_being_read(tmp_path):

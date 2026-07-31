@@ -112,6 +112,7 @@ def _populated_result() -> Result:
               "llm_summary": "a summary",
               "attachment_paths": ["/tmp/a.png"], "also_contains": ["x"],
               "discovered_paths": ["/tmp/b"],
+              "per_path": [{"ok": False, "error": "path two"}],
               "traceback": 'File "p.py", line 1, in run\n'}
     missing = {f.name for f in dataclasses.fields(Result)} - set(values)
     assert not missing, (

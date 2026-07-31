@@ -406,6 +406,16 @@ class Result:
                                                           # found while parsing
     discovered_paths: list = field(default_factory=list)  # new files to
                                                           # register
+    #: One entry per path a batched task was handed, in the order it got them.
+    #: Each is ``{"ok", "error", "data", "also_contains", "discovered_paths"}``
+    #: — the per-path half of the four fields above.
+    #:
+    #: A batch task has *one* return value and the orchestrator wants one
+    #: outcome per path, so without this the two disagree and the disagreement
+    #: is silent: paths past the first are neither completed nor failed, and
+    #: sit claimed forever. Empty means the batch genuinely succeeded or failed
+    #: as a unit, which the bridge fans out rather than truncating.
+    per_path: list = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return self.ok
@@ -469,7 +479,8 @@ class Result:
                 "llm_summary": self.llm_summary,
                 "attachment_paths": list(self.attachment_paths),
                 "also_contains": list(self.also_contains),
-                "discovered_paths": list(self.discovered_paths)}
+                "discovered_paths": list(self.discovered_paths),
+                "per_path": protocol.pack(list(self.per_path))}
 
     @staticmethod
     def from_dict(raw: dict) -> "Result":
@@ -482,4 +493,5 @@ class Result:
                       llm_summary=raw.get("llm_summary", ""),
                       attachment_paths=list(raw.get("attachment_paths") or []),
                       also_contains=list(raw.get("also_contains") or []),
-                      discovered_paths=list(raw.get("discovered_paths") or []))
+                      discovered_paths=list(raw.get("discovered_paths") or []),
+                      per_path=protocol.unpack(raw.get("per_path") or []))

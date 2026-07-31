@@ -930,7 +930,7 @@ sdk.tasks.pause(name, paused=True) / reset(name, failed_only=False)
 sdk.tasks.trigger(name, payload=None)
 sdk.files.register(path, **meta) / list(modality="")
 
-sdk.parse.file(path, modality="text")
+sdk.parse.file(path, modality="text")   # local parser if declared, else kernel
 sdk.parse.modality(extension)
 
 sdk.ledger.record(action, ok=True, data=None)
@@ -1104,10 +1104,50 @@ Import the contract from **`guest.parsing`**, never from the kernel's
 in-process and fails in a subprocess, which is exactly where a heavy parser
 wants to run. Avoid `pathlib` too; match suffixes with `str.endswith`.
 
+### Parsing a heavy modality: declare it
+
 Modalities whose result is a live object — image, audio, video, tabular — can
-only be used *inside* the box that imports the parser, because a PIL image or
-an open container cannot cross a boundary. Text and extracted paths can, so
-`sdk.parse.file` handles those and refuses the rest, pointing you here.
+only be used *inside* the box that holds the parser, because a PIL image or an
+open container cannot cross a boundary. Text and extracted paths can.
+
+So you do not move the result, you move the parser. Declare what you need and
+the kernel resolves it against whichever parser packages are installed, loads
+those files into **your** box before anything runs, and `sdk.parse.file` calls
+one directly:
+
+```python
+parse_modalities = ["image"]
+
+class OCRImages(BaseTask):
+    name = "ocr_images"
+    modalities = ["image"]
+
+    def run(self, sdk, paths):
+        for path in paths:
+            for image in sdk.parse.file(path, "image"):   # live, and local
+                scratch = sdk.fs.temp(suffix=".png")
+                image.save(scratch, format="PNG")
+                sdk.services.call("ocr", "process_image", image_path=scratch)
+                sdk.fs.delete(scratch)
+        return sdk.ok()
+```
+
+Three things follow, and they are the whole contract:
+
+- **Declare nothing and `sdk.parse.file` stays a Request.** The kernel routes
+  to the parser and answers with what fits on a wire. This is the cheaper path
+  and the right default for text — the parser's dependencies stay out of your
+  box. Asking for a heavy modality you did not declare is refused, and the
+  refusal names the declaration that fixes it.
+- **The kernel resolves, you do not.** Which files provide `"image"` depends on
+  what is installed, which your box has no way to know. Naming a modality
+  nothing provides is not an error; you find out when you parse a file and are
+  told there is no route for that extension.
+- **Declaring puts you in a subprocess.** Provisioned parsers are foreign code
+  by construction, so the declaration tightens your isolation. That is the
+  point of declaring rather than importing the parser file yourself: a relative
+  import is invisible to the isolation decision, and would run a C library
+  inside the kernel's own process.
 
 **Helper files** need no class. Give them the same `box` as the plugin that
 imports them and use relative imports:

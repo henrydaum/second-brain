@@ -49,6 +49,15 @@ logger = logging.getLogger("Parsing")
 _REGISTRY: dict[tuple[str, str], callable] = {}
 _MODALITY_MAP: dict[str, str] = {}
 
+# Which file each registration came from, keyed the same way as _REGISTRY.
+#
+# The function alone is enough to *call* a parser in this process, and for a
+# long time that was all anyone wanted. It is not enough to put one inside
+# somebody else's box: a box loads files, so provisioning a modality means
+# naming the files that provide it. Recorded by discover(), which is the only
+# place that knows both halves.
+_SOURCES: dict[tuple[str, str], Path] = {}
+
 
 # Native modalities the LLM may ingest directly even when no parser is
 # installed for the extension. The kernel's standing knowledge of "what kind
@@ -84,21 +93,51 @@ def clear():
     """
     _REGISTRY.clear()
     _MODALITY_MAP.clear()
+    _SOURCES.clear()
 
 
-def register(extensions: str | list[str], modality: str, func: callable):
+def register(extensions: str | list[str], modality: str, func: callable,
+             source=None):
     """Register a parser for one or more extensions under a modality.
 
     Called at import time by each ``parse_*.py`` helper. The first modality
     registered for an extension becomes its default.
+
+    ``source`` is the file the registration came from. Supplied by
+    :func:`discover`, which is the only caller that knows it; it is what
+    :func:`sources_for` later hands to a box that asked for a modality.
     """
     if isinstance(extensions, str):
         extensions = [extensions]
     for extension in extensions:
         ext = _normalize(extension)
         _REGISTRY[(ext, modality)] = func
+        if source is not None:
+            _SOURCES[(ext, modality)] = Path(source)
         if ext not in _MODALITY_MAP:
             _MODALITY_MAP[ext] = modality
+
+
+def sources_for(modalities) -> list[Path]:
+    """The parser files providing these modalities, deduplicated.
+
+    What a box is provisioned with when a plugin declares
+    ``parse_modalities``. Files rather than functions, because a box loads
+    files — and because the function objects in this registry belong to *this*
+    process and would mean nothing in another one.
+
+    Silent about modalities nothing provides. A plugin declaring ``"video"``
+    with no video parser installed gets no files, and finds out when it parses
+    a video and is told there is no route for that extension — which is the
+    same answer it would get for an extension the installed parsers do not
+    cover, and is a better one than refusing to load.
+    """
+    wanted = {modalities} if isinstance(modalities, str) else set(modalities or ())
+    found: list[Path] = []
+    for (_ext, modality), path in _SOURCES.items():
+        if modality in wanted and path not in found:
+            found.append(path)
+    return found
 
 
 def bind_services(services: dict) -> None:
@@ -229,7 +268,7 @@ def discover() -> int:
             # registry. Draining per module keeps one broken parser from
             # stealing another's registrations.
             for extensions, modality, func in drain_registrations():
-                register(extensions, modality, func)
+                register(extensions, modality, func, source=py_file)
             seen.add(py_file.stem)
             count += 1
 

@@ -2578,10 +2578,17 @@ def _parse_file(ctx, args: dict) -> Result:
 
     modality = args.get("modality") or "text"
     if modality not in CROSSABLE_MODALITIES:
+        # Reaching here means the caller did *not* declare this modality — a
+        # declared one is provisioned into its box and never becomes a
+        # Request. So the answer is the declaration, not a lecture about
+        # object lifetimes: the result cannot cross, but it does not have to,
+        # because the parser can come to the caller instead.
         return Result.failure(
             f"{modality!r} parsing produces live objects that cannot cross the "
-            f"sandbox boundary; import the parser into your own box, or ask "
-            f"for {sorted(CROSSABLE_MODALITIES)}")
+            f"sandbox boundary. Declare parse_modalities = [{modality!r}] on "
+            f"your plugin and the kernel loads that parser into your own box, "
+            f"where the result is usable. Modalities that cross as they are: "
+            f"{sorted(CROSSABLE_MODALITIES)}")
 
     try:
         parsed = parsing.parse(args.get("path"), modality)

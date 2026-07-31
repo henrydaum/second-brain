@@ -24,7 +24,7 @@ from . import protocol
 from .channel import PipeChannel, Terminated
 from .codes import ERROR_GUEST_FAULT
 from .faults import guest_traceback
-from .loader import load_entries, load_entry
+from .loader import install_parsers, load_entries, load_entry
 from .requests import RequestFailed, Result
 from .sdk import SDK
 
@@ -355,6 +355,12 @@ def main() -> int:
     sdk = SDK(PipeChannel(wire_in, wire_out))
 
     try:
+        # Parsers first: the plugin declared modalities, the host resolved them
+        # to files, and a module-scope route lookup in the plugin itself has to
+        # find them already there.
+        install_parsers(start.get("parsers") or (),
+                        box_name=start.get("box") or "",
+                        root=start.get("root") or None)
         # ``entries`` names several plugin classes sharing this box — the
         # multi-service case. One module import serves all of them, which is
         # the whole reason they were put in one file.

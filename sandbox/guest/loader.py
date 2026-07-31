@@ -127,6 +127,40 @@ def load_member(module_path, box_name: str = "", root=None, extra_roots=(),
     return module
 
 
+def install_parsers(paths, box_name: str = "", root=None) -> int:
+    """Import the parser modules a box was provisioned with.
+
+    A plugin declares ``parse_modalities`` and the host resolves that against
+    the live parser registry; this is where the resolved files actually arrive.
+    Each is imported as an ordinary box member, so its module-level
+    ``register(...)`` calls fire and :func:`guest.parsing.adopt_registrations`
+    collects them into the box's own routing table.
+
+    The declaration is what makes this different from the plugin importing the
+    file itself. A relative import is invisible to the isolation decision —
+    the entry file's AST shows a sibling, not the foreign library behind it —
+    whereas a declaration is read before anything runs, so the kernel knows
+    foreign code is being provisioned and contains the box accordingly.
+
+    One broken parser does not sink the others: it is logged past and the rest
+    still load, which matches how the kernel's own discovery treats them.
+    Returns the number of routes gained.
+    """
+    from . import parsing as guest_parsing
+
+    gained = 0
+    for module_path in paths or ():
+        try:
+            load_member(module_path, box_name=box_name, root=root)
+        except BaseException as exc:      # noqa: BLE001 - one bad parser only
+            print(f"[guest] parser {module_path} did not load: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            guest_parsing.drain_registrations()   # drop a partial declaration
+            continue
+        gained += guest_parsing.adopt_registrations()
+    return gained
+
+
 def load_entry(module_path, func_name: str = "", box_name: str = "",
                root=None, bound: bool = True, method: str = "run",
                extra_roots=(), digest: str = ""):

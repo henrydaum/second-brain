@@ -180,6 +180,58 @@ def _result_to_native(family: str, result, native_module):
                        traceback=trace)
 
 
+def _task_results(result, native_module, count: int) -> list:
+    """One ``TaskResult`` per path, which is what the orchestrator zips.
+
+    A guest task returns a single ``Result`` — one call, one answer — while
+    ``Orchestrator._execute`` does ``zip(paths, results)`` and expects one
+    outcome per path. Handing it a lone result made ``zip`` stop after the
+    first: every other path in the batch was neither completed nor failed, so
+    it stayed claimed and was never retried. Silent, and invisible until
+    somebody wondered why a folder had stopped indexing.
+
+    Two shapes come back from a guest, and the difference is real:
+
+    - ``per_path`` given — the task judged each file, so each entry becomes its
+      own result and ``data`` lands on the path that produced it.
+    - ``per_path`` empty — the task succeeded or failed *as a batch*, so the
+      one outcome applies to all of them. ``data`` rides on the first entry
+      alone, because ``_handle_success`` writes the whole of ``result.data``
+      for whichever path it is handling; repeating it would write every row
+      once per path in the batch.
+    """
+    task_result = getattr(native_module, "TaskResult", None)
+    if task_result is None:
+        return [result] * max(count, 1)
+
+    trace = result.traceback
+
+    def _one(ok, error, data, also_contains, discovered):
+        return task_result(
+            success=ok,
+            error=f"{error}\n{trace}" if trace and error else error,
+            data=data or [],
+            also_contains=list(also_contains or []),
+            discovered_paths=list(discovered or []))
+
+    if result.per_path:
+        # Trusted as the task's own account of its batch. A length mismatch is
+        # left alone rather than padded: zip truncates to the shorter side, and
+        # inventing outcomes for paths the task did not mention would be worse
+        # than the paths simply staying pending for the next sweep.
+        return [_one(entry.get("ok", True), entry.get("error", ""),
+                     entry.get("data"), entry.get("also_contains"),
+                     entry.get("discovered_paths"))
+                for entry in result.per_path
+                if isinstance(entry, dict)]
+
+    first = _one(result.ok, result.error, result.data,
+                 result.also_contains, result.discovered_paths)
+    rest = [_one(result.ok, result.error, None, None, None)
+            for _ in range(max(count - 1, 0))]
+    return [first, *rest]
+
+
 def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     """Build a synthetic module holding a native-looking adapter.
 
@@ -236,11 +288,17 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         return _adapt_frontend(path, entry, base, declarations, box_name,
                                report.source)
 
-    def _forward(self, context, payload, method: str = "run"):
+    def _forward(self, context, payload, method: str = "run", paths=None):
         """Run the migrated plugin and translate the answer back.
 
         The context is passed *per call* rather than held, because two calls
         can be in flight with different sessions and users behind them.
+
+        ``paths`` is passed only by a path task, and only so the translation
+        knows how many outcomes the orchestrator is about to zip against. It
+        is deliberately not read from ``payload``: a guest may return fewer
+        entries than it was given, and the count that matters is what the
+        kernel handed over.
         """
         # Only the root is set here. ``Sandbox.start`` pushes the execution's
         # own name, and pushing it here too would put the plugin in the chain
@@ -274,6 +332,11 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # successful sweep is indistinguishable from a crashed one.
         if method not in ("run", "run_event"):
             return result.data if result.ok else None
+        # A path task is the one entry point whose caller wants a *list*: the
+        # orchestrator zips one outcome per path. ``run_event`` reads a single
+        # result, so the two cannot share a translation.
+        if family == "task" and method == "run" and paths is not None:
+            return _task_results(result, native_module, len(paths))
         return _result_to_native(family, result, native_module)
 
     # The families disagree about argument order, and the adapter is the one
@@ -284,8 +347,9 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         return _forward(self, context, dict(kwargs))
 
     def run_task(self, paths, context):
-        """Native task contract."""
-        return _forward(self, context, {"paths": list(paths or [])})
+        """Native task contract: a list of outcomes, one per path."""
+        batch = list(paths or [])
+        return _forward(self, context, {"paths": batch}, paths=batch)
 
     def run_task_event(self, run_id, payload, context):
         """Native event-task contract.

@@ -38,7 +38,7 @@ from .approval import build_approver
 from .boxes import DEFAULT_START_TIMEOUT, BoxError, PersistentBox, open_box
 from .guest.box import PERSISTENT, SUBPROCESS, Membership, resolve
 from .isolation import required_isolation
-from .guest.loader import load_entry, unload_box
+from .guest.loader import install_parsers, load_entry, unload_box
 from .guest.requests import Result
 from .interpreter import Execution, Interpreter
 from .policy import Chain
@@ -265,11 +265,34 @@ class Sandbox:
             "memory_mb": spec.memory_mb or None,
             "extra_roots": self.dependency_roots(
                 source, report.declarations.get("dependencies_files")),
+            "parsers": self.parser_modules(
+                report.declarations.get("parse_modalities")),
             # Carried to the loader so the bytes that ran are the bytes that
             # passed. Validation reads a path and execution opens it again;
             # without this the two could disagree and nothing would notice.
             "digest": report.digest,
         }
+
+    @staticmethod
+    def parser_modules(declared) -> list:
+        """The parser files backing a plugin's declared ``parse_modalities``.
+
+        Resolution is the kernel's, deliberately. A modality is a fact about
+        which parser packages are installed right now, and the box has no way
+        to know that — so the plugin names *what it needs* and the kernel
+        answers with *which files provide it*. That is also what makes the
+        declaration safe to act on: naming a capability cannot reach a file
+        the kernel would not have offered anyway.
+
+        Importing :mod:`parsing` lazily keeps the sandbox's import graph free
+        of the kernel; this is a host-side module and may, but the module-level
+        edge would be one more thing to explain in the boundary test.
+        """
+        if not declared:
+            return []
+        import parsing
+
+        return [str(path) for path in parsing.sources_for(declared)]
 
     def dependency_roots(self, source, declared) -> list:
         """Where a plugin's declared ``dependencies_files`` actually live.
@@ -375,8 +398,14 @@ class Sandbox:
                         memory_mb=opts["memory_mb"], box=spec.name,
                         box_root=str(Path(source).parent),
                         extra_roots=[str(p) for p in opts["extra_roots"]],
+                        parsers=opts["parsers"],
                         execution=execution, on_proc=run._attach_proc,
                         method=method, digest=opts["digest"])
+                # In-process the box is this process, so the parsers are
+                # imported here — before the entry, so a module-scope route
+                # lookup in the plugin finds them.
+                install_parsers(opts["parsers"], box_name=spec.name,
+                                root=str(Path(source).parent))
                 target = load_entry(source, entry, box_name=spec.name,
                                     method=method,
                                     extra_roots=opts["extra_roots"],
@@ -464,6 +493,7 @@ class Sandbox:
                        start_timeout=start_timeout,
                        box_root=str(Path(source).parent),
                        extra_roots=[str(p) for p in opts["extra_roots"]],
+                       parsers=opts["parsers"],
                        memory_mb=opts["memory_mb"],
                        manage_lifecycle=manage_lifecycle,
                        digest=opts["digest"], entries=entries)

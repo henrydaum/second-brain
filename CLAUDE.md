@@ -136,10 +136,34 @@ The split that fixes it: **text and `container` (child paths) are parse
 *results*; image/audio/video/tabular are *intermediates*.** Every intermediate
 is on the way to text or to a file, consumed by exactly one specialist that
 immediately transforms it. So `ParseResult.crossable` is the line, and code
-needing a heavy modality calls `parsing.parser_for(ext, modality)` to pull the
-parser into *its own box* alongside the thing that consumes it — the waveform
-never crosses anything, the transcript does. `sdk.parse.file` refuses
-non-crossable modalities with a message pointing at that route.
+needing a heavy modality pulls the parser into *its own box* alongside the
+thing that consumes it — the waveform never crosses anything, the transcript
+does.
+
+**Getting it there is a declaration, not an import** (`parse_modalities`).
+Kernel-side that route is `parsing.parser_for(ext, modality)`; a *box* cannot
+use it, because the child runs with `sandbox/` as its cwd and `import parsing`
+is a `ModuleNotFoundError` — so for a long while sandboxed code had no route to
+a heavy modality at all. A plugin now declares `parse_modalities = ["image"]`,
+`parsing.sources_for` resolves that against the live registry, and the resolved
+*files* are imported into the plugin's box ahead of its entry
+(`guest.loader.install_parsers` → `guest.parsing.adopt_registrations`).
+`sdk.parse.file` then finds a local route and calls it; finding none it falls
+through to the Request, which still refuses a non-crossable modality — but now
+names the declaration that fixes it.
+
+Three properties are load-bearing. **The kernel resolves**, because which files
+provide `"image"` is a fact about what is installed and a box cannot know it —
+so naming a capability can never reach a file the kernel would not have
+offered. **Declaring tightens isolation**: provisioned parsers are foreign by
+construction, so `required_isolation` reads the declaration and subprocesses
+the plugin. And **that is why it is a declaration rather than the plugin
+importing the parser itself** — a relative import of a declared helper is
+invisible to the isolation decision (the entry file's AST shows a sibling, not
+the C library behind it), which had installed plugins resolving IN_PROCESS
+while PyMuPDF loaded into the kernel's own process. `_imports_foreign_code`
+closes both halves: the declared modality, and the declared helper's own
+imports.
 
 **A parser is `parse_x(sdk, path, config) -> ParseResult`** — one signature,
 two callers. Inside a box it gets the real SDK and every effect is a Request;
@@ -538,6 +562,33 @@ Box grouping cannot be used to escape it: isolation is resolved per file before
 grouping, and tightest-wins only ever tightens. A user-facing override
 (config allowlist) is planned and is a different thing — a person may decide
 what the code may not.
+
+**`report.unmediated` is the entry file's AST, and two things got past it**
+(`_imports_foreign_code`). An *imported helper* reads as an ordinary sibling —
+`from . import parse_pdf` shows nothing foreign — so an installed plugin whose
+own source was pure stdlib resolved IN_PROCESS while PyMuPDF loaded into the
+kernel's own process, precisely what the parser migration existed to prevent.
+A *declared modality* is the same shape one level up: the kernel loads parser
+files into the box and the plugin's source says nothing about them at all.
+Both are **declarations**, which is why they can be answered before anything
+runs — and the check can only ever tighten. Note this is not a file asserting
+its own containment: it asks for a *capability* and pays for it in isolation,
+whereas the retired `isolation = "subprocess"` let a file assert the
+containment itself and leaving it out was the escape.
+
+The helper half follows the **import**, not the declaration, and that
+distinction is the whole of whether the rule is usable.
+`dependencies_files` does two jobs: it tells the package manager what else to
+install, and it puts a file on the box's import path. Only the second loads
+code, and the loader is explicit that it is merely permission — *"Declaring is
+what makes a file importable; the plugin still writes the import."* Reading the
+declaration alone subprocesses about fifteen store plugins for a packaging
+relationship (`tool_web_search` declares `service_web_search`, every email tool
+declares `service_gmail`, `task_embed_text` declares `service_embed`) — none of
+which ever imports the file, so none of which ever loads its torch. So
+`_relative_imports` walks the AST for `from . import x` / `from .x import y`,
+intersects that with what was declared, and follows the chain transitively;
+an imported-but-unresolvable helper fails closed.
 
 **That boundary is what buys free authorship.** The agent reads, writes, edits
 and deletes anywhere under `workspace/` with no approval, because

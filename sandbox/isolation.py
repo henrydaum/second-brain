@@ -168,8 +168,118 @@ def required_isolation(source, report=None) -> str:
     if tree == INSTALLED:
         if report is None or getattr(report, "unmediated", None) is None:
             return SUBPROCESS
-        return SUBPROCESS if report.unmediated else IN_PROCESS
+        if report.unmediated or _imports_foreign_code(source, report):
+            return SUBPROCESS
+        return IN_PROCESS
     return SUBPROCESS
+
+
+def _imports_foreign_code(source, report) -> bool:
+    """Whether this file pulls foreign libraries in behind its own AST.
+
+    ``report.unmediated`` is built from the entry file's imports alone, and
+    two things get past that:
+
+    - a **declared helper** reached by relative import. ``from . import
+      parse_pdf`` reads as an ordinary sibling, so a task whose own source is
+      pure stdlib resolved IN_PROCESS while PyMuPDF loaded into the kernel's
+      process. The file it names is right there in ``dependencies_files``, so
+      the imports behind it are askable rather than unknowable.
+    - a **declared modality**. ``parse_modalities = ["image"]`` asks the
+      kernel to load parser files into this box; the parsers behind it are
+      foreign by construction, and the plugin's own source says nothing about
+      them at all.
+
+    Both are declarations, which is exactly why they can be checked before
+    anything runs — and why this direction is safe. It can only ever *tighten*
+    a file's isolation, never loosen it, the same property the note below
+    relies on for box grouping.
+    """
+    declarations = getattr(report, "declarations", None) or {}
+    if declarations.get("parse_modalities"):
+        return True
+
+    declared = list(declarations.get("dependencies_files") or ())
+    if not declared:
+        return False
+
+    # ``dependencies_files`` carries two jobs at once, and only one of them
+    # puts code in this box. It tells the package manager what else to install
+    # — which is why a tool declares the *service* it calls over the wire —
+    # and it puts the file on the box's import path. The loader is explicit
+    # that the second is only permission: "Declaring is what makes a file
+    # importable; the plugin still writes the import."
+    #
+    # So a declared file nobody imports is never loaded, and its foreign
+    # libraries never run here. Counting it anyway would subprocess most of
+    # the store's tools for a packaging relationship, which is a real cost for
+    # no containment. What is followed is the *import*, transitively, because
+    # a helper may reach another declared helper of its own.
+    from .validator import validate_file
+
+    try:
+        import trees
+        roots = [tree.path for tree in trees.TREES if tree.local]
+    except Exception:
+        return True
+    roots.insert(0, Path(source).parent.parent)   # <tree>/<family>/plugin.py
+
+    def _resolve(relative):
+        for root in roots:
+            candidate = Path(root) / str(relative)
+            if candidate.is_file():
+                return candidate
+        return None
+
+    by_stem = {Path(str(rel)).stem: rel for rel in declared}
+    pending = _relative_imports(report.source) & set(by_stem)
+    seen = set()
+    while pending:
+        stem = pending.pop()
+        if stem in seen:
+            continue
+        seen.add(stem)
+
+        resolved = _resolve(by_stem[stem])
+        if resolved is None:
+            # Imported, declared, and not on disk. The import will fail at
+            # load; until then, a file the kernel cannot find is one it cannot
+            # vouch for, so the answer is the contained one.
+            return True
+        try:
+            helper = validate_file(resolved)
+        except Exception:
+            return True
+        if helper.unmediated:
+            return True
+        pending |= (_relative_imports(helper.source) & set(by_stem)) - seen
+
+    return False
+
+
+def _relative_imports(source_text: str) -> set:
+    """Module names this source reaches for as box siblings.
+
+    ``from . import x`` and ``from .x import y`` are the two spellings a box
+    member uses, since a box is a flat synthetic package. Anything else is
+    either absolute — and therefore already counted by ``unmediated`` — or not
+    an import at all.
+    """
+    import ast
+
+    names = set()
+    try:
+        tree = ast.parse(source_text or "")
+    except SyntaxError:
+        return names
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level != 1:
+            continue
+        if node.module:
+            names.add(node.module.split(".")[0])     # from .x import y
+        else:
+            names.update(alias.name for alias in node.names)   # from . import x
+    return names
 
 
 # ──────────────────────────────────────────────────────────────────────

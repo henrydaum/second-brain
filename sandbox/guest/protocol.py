@@ -26,6 +26,13 @@ import; ``call`` may then name a ``target`` saying which of them the call is
 for. A ``call`` with no ``target`` resolves to the sole occupant, so the wire
 a single-service box speaks is byte-identical to what it always was.
 
+``start`` may also carry ``parsers``: files to import into the box before its
+entry, resolved by the host from the plugin's declared ``parse_modalities``.
+They are sent as *paths* rather than named by modality because the child has
+no registry to resolve a modality against — deciding which files provide
+"image" is the kernel's standing knowledge, and this is the answer, not the
+question.
+
 Child to parent:
 
 - ``request`` — I want an effect; classify it

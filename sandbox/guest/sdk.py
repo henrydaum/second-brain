@@ -984,11 +984,72 @@ class _Files(_Namespace):
 
 
 class _Parse(_Namespace):
-    """The parser registry."""
+    """Parsing a file, from whichever side can actually hold the answer.
 
-    def file(self, path, modality: str = "text"):
-        """Parse a file to text."""
-        return self._ask(PARSE_FILE, path=str(path), modality=modality)
+    Two mechanisms behind one method, and which one runs is decided by what
+    the plugin *declared* rather than by what it calls.
+
+    Declare ``parse_modalities = ["image"]`` and the kernel resolves that
+    against its registry, imports those parser files into **this box** before
+    anything runs, and :meth:`file` calls one directly. The result never
+    crosses a boundary because it never had to — which is the only way to get
+    a PIL image, a DataFrame or an open container, all of which are live
+    objects a wire cannot carry.
+
+    Declare nothing and :meth:`file` is an ordinary Request: the kernel routes
+    to the parser, runs it wherever that parser belongs, and answers with what
+    fits on a wire — text, or the child paths a container yielded. This is the
+    cheaper path and the right default, because the parser's dependencies stay
+    out of your box.
+
+    So an undeclared heavy modality is refused, and the refusal names the
+    declaration that would fix it. That is the rule the boundary always had;
+    what changed is that there is now something to do about it.
+    """
+
+    def file(self, path, modality: str = "text", detail: bool = False):
+        """Parse a file. Local parser if one was provisioned, else the kernel.
+
+        Answers the parser's ``output``: a string for text, a list of child
+        paths for a container, and for a provisioned heavy modality whatever
+        that parser produces — live objects that are only valid in this box.
+
+        ``detail=True`` answers ``{"output", "also_contains"}`` instead. That
+        second key is how one parse tells the pipeline there is another route
+        out of the same file — a PDF reporting ``["image"]`` is what gets it
+        re-enqueued into the OCR and image-embedding tasks. It is an argument
+        rather than a second Request because the kernel already puts it on the
+        Result; the plain call simply unwraps to the payload, which is what
+        almost every caller wants.
+        """
+        from . import parsing as guest_parsing
+
+        parser = guest_parsing.local_parser(guest_parsing.suffix(str(path)),
+                                            modality)
+        if parser is None:
+            if not detail:
+                return self._ask(PARSE_FILE, path=str(path), modality=modality)
+            answer = self._sdk._send(Request(
+                PARSE_FILE, {"path": str(path), "modality": modality}))
+            if not answer.ok:
+                raise (Denied if answer.denied else RequestFailed)(
+                    answer, PARSE_FILE)
+            return {"output": answer.data,
+                    "also_contains": list(answer.also_contains)}
+
+        # Called with this sdk, exactly as the kernel calls it with its own
+        # stand-in. The parser cannot tell which it has, which is what lets one
+        # file serve both callers.
+        parsed = parser(self._sdk, str(path), None)
+        if not getattr(parsed, "success", True):
+            raise RequestFailed(Result.failure(
+                str(getattr(parsed, "error", "") or "parse failed")))
+        output = getattr(parsed, "output", None)
+        if not detail:
+            return output
+        return {"output": output,
+                "also_contains": list(getattr(parsed, "also_contains", None)
+                                      or [])}
 
     def modality(self, extension: str):
         """Resolve an extension's modality."""
@@ -1727,18 +1788,26 @@ class SDK:
     # ── returning ──────────────────────────────────────────────────
 
     def ok(self, data=None, *, llm_summary: str = "", attachments=None,
-           also_contains=None, discovered_paths=None):
+           also_contains=None, discovered_paths=None, per_path=None):
         """Succeed with a value.
 
         ``llm_summary`` is what the model is told when the raw data is the
         wrong thing to show it; ``attachments`` are files to put in front of
-        the user. The last two are for tasks: nested content found while
-        parsing, and new files the pipeline should register.
+        the user. The last three are for tasks: nested content found while
+        parsing, new files the pipeline should register, and — for a task
+        handed a *batch* — one outcome per path.
+
+        ``per_path`` is how a batch task says that file three failed and the
+        rest are fine. Each entry is a dict of the same shape as the whole
+        result: ``{"ok", "error", "data", "also_contains", "discovered_paths"}``,
+        in the order the paths arrived. Give it and the outer ``data`` is
+        ignored; omit it and the one outcome applies to every path.
         """
         return Result(data=data, llm_summary=llm_summary,
                       attachment_paths=list(attachments or []),
                       also_contains=list(also_contains or []),
-                      discovered_paths=list(discovered_paths or []))
+                      discovered_paths=list(discovered_paths or []),
+                      per_path=list(per_path or []))
 
     def fail(self, error: str, retryable: bool = False):
         """Fail with a reason."""

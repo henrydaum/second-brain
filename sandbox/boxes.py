@@ -40,7 +40,8 @@ import time
 from .guest import protocol
 from .guest.codes import ERROR_GUEST_FAULT
 from .guest.faults import guest_traceback
-from .guest.loader import load_entries, load_entry, unload_box
+from .guest.loader import (install_parsers, load_entries, load_entry,
+                           unload_box)
 from .guest.requests import Result
 from .guest.sdk import SDK
 from .interpreter import Execution, Interpreter, clamp_timeout
@@ -290,7 +291,7 @@ class SubprocessBox(PersistentBox):
                  chain=None, call_timeout=None, box_root=None,
                  memory_mb: int | None = None, extra_roots=(),
                  manage_lifecycle: bool = True, digest: str = "",
-                 entries=()):
+                 entries=(), parsers=()):
         super().__init__(name, chain, call_timeout)
         self.module_path = str(module_path)
         self.entry = entry
@@ -300,6 +301,9 @@ class SubprocessBox(PersistentBox):
         self.entries = list(entries or [])
         self.box_root = box_root
         self.extra_roots = list(extra_roots or [])
+        # Parser files the host resolved from this plugin's declared
+        # ``parse_modalities``, imported into the box ahead of the entry.
+        self.parsers = list(parsers or [])
         self.memory_mb = memory_mb
         self.manage_lifecycle = manage_lifecycle
         self.digest = digest
@@ -327,6 +331,7 @@ class SubprocessBox(PersistentBox):
                 "box": self.name,
                 "root": self.box_root,
                 "extra_roots": self.extra_roots,
+                "parsers": self.parsers,
                 "memory_mb": self.memory_mb,
                 "cpu_seconds": None,
                 "manage_lifecycle": self.manage_lifecycle,
@@ -464,7 +469,7 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
              start_timeout: float = DEFAULT_START_TIMEOUT,
              box_root=None, memory_mb: int | None = None,
              extra_roots=(), manage_lifecycle: bool = True,
-             digest: str = "", entries=()) -> PersistentBox:
+             digest: str = "", entries=(), parsers=()) -> PersistentBox:
     """Load a resident box and return a handle to call into.
 
     ``entry`` names a plugin class, or is empty for a bare script — in which
@@ -484,8 +489,12 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
                             call_timeout=call_timeout, box_root=box_root,
                             memory_mb=memory_mb, extra_roots=extra_roots,
                             manage_lifecycle=manage_lifecycle, digest=digest,
-                            entries=entries)
+                            entries=entries, parsers=parsers)
     else:
+        # In-process the box is this process, so the declared parsers are
+        # imported here — before the entry, so a module-scope route lookup in
+        # the plugin finds them already collected.
+        install_parsers(parsers, box_name=name, root=box_root)
         if entries:
             target = load_entries(module_path, entries, box_name=name,
                                   root=box_root, extra_roots=extra_roots,
