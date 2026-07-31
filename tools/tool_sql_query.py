@@ -76,7 +76,7 @@ class SQLQuery(BaseTool):
     max_calls = 6  # Failed queries are common, so allow a few extra calls.
     background_safe = True
 
-    def agent_prompt_for(self, sdk) -> str:
+    def agent_prompt(self, sdk) -> str:
         """Point the agent at the live table list and the two scoping rules."""
         return (
             f"""## Querying the database
