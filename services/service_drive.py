@@ -1,225 +1,213 @@
-"""
-Google Drive Service.
+"""Google Drive: OAuth once, then export Docs and Sheets as text.
 
-Handles OAuth 2.0 authentication and provides the Google Drive API
-service object. Follows the standard service interface (load/unload/loaded)
-so it integrates with the services dict.
+Two parsers delegate here — ``parse_gdoc`` for ``.gdoc`` shortcuts and
+``parse_tabular`` for ``.gsheet`` — so this service is what makes a Drive
+shortcut on disk behave like the document it points at.
 
-Usage:
-    drive = GoogleDriveService()
-    services["drive"] = drive
+**What crosses and what does not.** The native version's central object was
+``get_client()``, handing each caller a fresh ``googleapiclient`` transport
+because ``build()`` is cheap and the credentials are thread-safe. None of that
+survives a box: a live API client is exactly the kind of thing that cannot
+cross the boundary, so it can never be an export. The client is private now,
+built per call for the same reason it always was, and the exports answer with
+bytes and strings. The service is ``shared`` for the same reason it was not
+before, read the other way round — a box serializes its calls, so per-caller
+instances buy nothing, and a second instance would mean a second OAuth dance.
 
-    # Load when ready (opens browser for OAuth if needed)
-    drive.load()
+**Where the boundary genuinely stops.** ``run_local_server`` binds a port and
+opens a browser; the API client makes its own HTTPS calls. Both are foreign
+libraries doing their own I/O, past the kernel's reach and documented as the
+limit of what the contract covers. What is *not* given away: the two credential
+files are read through ``sdk.fs.read`` and handed to the library's
+``from_client_config`` / ``from_authorized_user_info`` constructors rather than
+its ``*_file`` variants, so the paths are the kernel's and the reads are
+mediated even though what happens next is not.
 
-    text = drive.download_text(doc_id)
+The connectivity probe is gone — it opened a socket to google.com to decide
+whether authenticating was worth attempting, and a machine with DNS but no
+route to Google passed it and failed anyway. Attempting the thing and reporting
+the failure is both simpler and more accurate. Same call as ``service_embed``.
 
-    # Unload to release
-    drive.unload()
-
-Credentials:
-    - credentials.json: OAuth client secret (from Google Cloud Console)
-      Stored in DATA_DIR (immutable, user provides once)
-    - token.json: OAuth refresh token (auto-generated after first login)
-      Stored in DATA_DIR (mutable, auto-refreshed)
-
-Store the authenticated credentials (lightweight, thread-safe).
-Hand out a fresh build() client per call via get_client().
-build() is cheap (~1ms) — the OAuth dance only happens in load().
+Credentials, both at the root of DATA_DIR:
+    - ``credentials.json`` — the OAuth client secret from Google Cloud Console.
+      You provide this once; nothing here writes it.
+    - ``token.json`` — the refresh token, written after the first login and
+      refreshed in place.
 """
 
 
 dependencies_files = []
 dependencies_pip = ['google-api-python-client', 'google-auth-oauthlib', 'requests']
 
-import os
-import time
-from pathlib import Path
-import logging
+import json
 
-from plugins.BaseService import BaseService
-from paths import DATA_DIR
+from guest.bases import BaseService
 
-logger = logging.getLogger("service_drive")
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+CLIENT_SECRET_FILE = "credentials.json"
+TOKEN_FILE = "token.json"
+
+
+def _exists(sdk, path) -> bool:
+    """Whether a path is there.
+
+    ``sdk.fs.list`` *fails* on a missing path rather than answering with an
+    empty list, and the SDK turns a failed Request into a raise — so
+    ``if sdk.fs.list(p)`` does not test existence, it throws.
+    """
+    try:
+        return bool(sdk.fs.list(path))
+    except sdk.Failed:
+        return False
+
 
 class GoogleDriveService(BaseService):
-    """Google drive service."""
+    """Authenticated read-only access to Google Drive."""
+
+    name = "google_drive"
+    description = "Export Google Docs and Sheets as text."
+    shared = True
+    timeout = 300           # the OAuth dance waits on a human in a browser
+    requests = ["paths.get", "fs.read", "fs.write", "fs.list"]
+    exports = ["download_as", "download_text", "download_csv", "describe"]
+
     def __init__(self):
-        """Initialize the google drive service."""
-        super().__init__()
-        self.model_name = "google_drive"
-        self.shared = False  # Each client is a separate instance (build() is cheap)
-        self._creds = None       # Authenticated credentials (thread-safe, reusable)
-
-    @staticmethod
-    def _is_connected() -> bool:
-        """Check for internet connectivity."""
-        try:
-            import requests
-            requests.head("https://www.google.com", timeout=3)
-            return True
-        except Exception as e:
-            logger.debug(f"Connectivity check failed: {e}")
-            return False
-
-    def _load(self) -> bool:
-        """
-        Authenticate with Google Drive and store credentials.
-        Opens a browser for OAuth consent if no valid token exists.
-        Returns True if successful.
-        """
-        if not self._is_connected():
-            logger.warning("[Drive] No internet — cannot authenticate.")
-            return False
-
-        try:
-            from google.auth.transport.requests import Request
-            from google.oauth2.credentials import Credentials
-            from google_auth_oauthlib.flow import InstalledAppFlow
-        except ImportError:
-            logger.error("[Drive] Google client libraries not installed. "
-                         "pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib")
-            return False
-
-        cred_path = DATA_DIR / "credentials.json"
-        if not cred_path.exists():
-            logger.error(f"[Drive] No credentials.json found at {cred_path}")
-            return False
-
-        SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-        token_path = DATA_DIR / "token.json"
-        creds = None
-
-        if token_path.exists():
-            try:
-                creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-            except Exception as e:
-                logger.debug(f"Token load failed, will re-auth: {e}")
-
-        try:
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    logger.info("[Drive] Opening browser for authentication...")
-                    flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), SCOPES)
-                    creds = flow.run_local_server(port=0)
-
-                with open(token_path, "w") as f:
-                    f.write(creds.to_json())
-
-            # Store creds — the important part
-            self._creds = creds
-
-            self.loaded = True
-            return True
-
-        except Exception as e:
-            logger.error(f"[Drive] Authentication failed: {e}")
-            return False
-
-    def get_client(self):
-        """
-        Return a fresh Drive API client for the caller's exclusive use.
-
-        Each call to build() creates an independent httplib2 transport,
-        so concurrent threads won't block each other. The credentials
-        object is thread-safe and shared — only the HTTP client is new.
-
-        Returns None if the service isn't loaded.
-        """
-        if not self.loaded or not self._creds:
-            logger.error("[Drive] Not loaded — call load() first.")
-            return None
-
-        try:
-            from google.auth.transport.requests import Request
-            from googleapiclient.discovery import build
-
-            # Refresh token if expired (thread-safe operation on creds)
-            if self._creds.expired and self._creds.refresh_token:
-                logger.info("[Drive] Refreshing expired token...")
-                self._creds.refresh(Request())
-
-            return build("drive", "v3", credentials=self._creds, cache_discovery=False)
-
-        except Exception as e:
-            logger.error(f"[Drive] Failed to create client: {e}")
-            return None
-
-    def unload(self):
-        """Release the Drive API service and credentials."""
+        """Nothing is acquired until start()."""
         self._creds = None
-        self.loaded = False
-        logger.info("[Drive] Service unloaded.")
-    
-    def download_as(self, doc_id: str, mime_type: str) -> bytes | None:
+
+    # ── lifecycle ───────────────────────────────────────────────────
+
+    def start(self, sdk):
+        """Authenticate, reusing a stored token when one is still good.
+
+        Returns False rather than raising for every *expected* absence — no
+        client secret, a token that will not load — because a service that
+        cannot start is a capability the user has not set up yet, not a fault.
+        An unexpected failure is left to raise, where it arrives with a
+        traceback.
         """
-        Download a Google Drive file exported as the given MIME type.
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
 
-        Uses get_client() internally for thread safety — each call gets
-        its own HTTP transport.
+        data = sdk.paths.get("data")
+        secret_path = sdk.path.join(data, CLIENT_SECRET_FILE)
+        token_path = sdk.path.join(data, TOKEN_FILE)
 
-        Args:
-            doc_id:    Google Drive file ID.
-            mime_type: Export MIME type (e.g. "text/plain", "text/csv",
-                    "application/pdf").
+        if not _exists(sdk, secret_path):
+            sdk.log(f"no {CLIENT_SECRET_FILE} at {secret_path}; get one from "
+                    "the Google Cloud Console and place it there",
+                    level="error")
+            return False
 
-        Returns raw bytes, or None on failure.
+        creds = None
+        if _exists(sdk, token_path):
+            try:
+                creds = Credentials.from_authorized_user_info(
+                    json.loads(sdk.fs.read(token_path)), SCOPES)
+            except (ValueError, KeyError) as exc:
+                # A token written by an older scope set, or half-written. Not
+                # an error worth failing on — the flow below replaces it.
+                sdk.log(f"stored token unusable, re-authenticating: {exc}",
+                        level="debug")
+
+        if creds and creds.valid:
+            self._creds = creds
+            return True
+
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            sdk.log("opening a browser to authenticate with Google Drive")
+            flow = InstalledAppFlow.from_client_config(
+                json.loads(sdk.fs.read(secret_path)), SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        sdk.fs.write(token_path, creds.to_json())
+        self._creds = creds
+        sdk.log("google drive authenticated")
+        return True
+
+    def stop(self, sdk):
+        """Drop the credentials. The box closing is what releases the rest."""
+        self._creds = None
+        return None
+
+    # ── exports ─────────────────────────────────────────────────────
+
+    def describe(self, sdk):
+        """Whether this service can currently answer."""
+        return {"loaded": self._creds is not None,
+                "scopes": list(SCOPES)}
+
+    def download_as(self, sdk, doc_id: str, mime_type: str):
+        """Export one Drive file as ``mime_type``, answering with raw bytes.
+
+        Bytes cross the boundary natively, so this is exportable as it stands
+        — a caller wanting a PDF of a Doc gets the file, not a description of
+        one. The text and CSV helpers below are the two decodes the parsers
+        actually want.
         """
-        client = self.get_client()
-        if client is None:
-            return None
+        import io
 
-        try:
-            import io
-            from googleapiclient.http import MediaIoBaseDownload
+        from googleapiclient.http import MediaIoBaseDownload
 
-            logger.debug(f"[Drive] Downloading {doc_id} as {mime_type}...")
-            t0 = time.time()
-            request = client.files().export_media(fileId=doc_id, mimeType=mime_type)
-            buffer = io.BytesIO()
-            downloader = MediaIoBaseDownload(buffer, request)
+        client = self._client(sdk)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(
+            buffer, client.files().export_media(fileId=doc_id,
+                                                mimeType=mime_type))
+        done = False
+        while not done:
+            _status, done = downloader.next_chunk()
 
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
+        data = buffer.getvalue()
+        sdk.log(f"downloaded {len(data)} bytes for {doc_id} as {mime_type}",
+                level="debug")
+        return data
 
-            buffer.seek(0)
-            data = buffer.read()
-            logger.info(
-                f"[Drive] Downloaded {len(data)} bytes for {doc_id} "
-                f"as {mime_type} in {time.time() - t0:.2f}s"
-            )
-            return data
+    def download_text(self, sdk, doc_id: str):
+        """A Google Doc as plain text, or None if it does not decode."""
+        return self._decode(sdk, doc_id, "text/plain")
 
-        except Exception as e:
-            logger.error(f"[Drive] Download failed for {doc_id}: {e}")
-            return None
+    def download_csv(self, sdk, doc_id: str):
+        """A Google Sheet as CSV, or None if it does not decode."""
+        return self._decode(sdk, doc_id, "text/csv")
 
-    def download_text(self, doc_id: str) -> str | None:
-        """Download a Google Doc as plain text. Returns string or None."""
-        data = self.download_as(doc_id, "text/plain")
-        if data is None:
-            return None
+    # ── internals ───────────────────────────────────────────────────
+
+    def _decode(self, sdk, doc_id: str, mime_type: str):
+        """Download and decode as UTF-8.
+
+        None for a decode failure only. A download failure raises, because the
+        caller can tell those apart and should: one means the export is not
+        text, the other means Drive said no.
+        """
+        data = self.download_as(sdk, doc_id, mime_type)
         try:
             return data.decode("utf-8")
-        except UnicodeDecodeError as e:
-            logger.error(f"[Drive] UTF-8 decode failed for {doc_id}: {e}")
+        except UnicodeDecodeError as exc:
+            sdk.log(f"utf-8 decode failed for {doc_id}: {exc}", level="error")
             return None
 
-    def download_csv(self, doc_id: str) -> str | None:
-        """Download a Google Sheet as CSV. Returns string or None."""
-        data = self.download_as(doc_id, "text/csv")
-        if data is None:
-            return None
-        try:
-            return data.decode("utf-8")
-        except UnicodeDecodeError as e:
-            logger.error(f"[Drive] UTF-8 decode failed for {doc_id}: {e}")
-            return None
+    def _client(self, sdk):
+        """A Drive API client, refreshing the token if it has expired.
 
+        Private, and it has to be: this returns a live ``googleapiclient``
+        object, which is the one thing a service may never hand across the
+        boundary. Built per call because ``build()`` is ~1ms and each one
+        carries its own transport.
+        """
+        if self._creds is None:
+            raise RuntimeError("google drive is not authenticated")
 
-def build_services(config: dict) -> dict:
-    """Build services."""
-    return {"google_drive": GoogleDriveService()}
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+
+        if self._creds.expired and self._creds.refresh_token:
+            sdk.log("refreshing an expired Drive token", level="debug")
+            self._creds.refresh(Request())
+
+        return build("drive", "v3", credentials=self._creds,
+                     cache_discovery=False)

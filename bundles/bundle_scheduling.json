@@ -1,8 +1,0 @@
-{
-  "description": "Background agents: spawn one now, or schedule one for later. Spawning itself and the /schedule command ship in the kernel; these are the agent-facing tools.",
-  "files": [
-    "tools/tool_spawn_subagent.py",
-    "tools/tool_schedule_subagent.py"
-  ],
-  "name": "Scheduling"
-}
