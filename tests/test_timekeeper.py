@@ -165,7 +165,7 @@ def test_unload_stops_future_polls(timekeeper):
 # ────────────────────────────────────────────────────────────────────
 
 from pipeline.orchestrator import Orchestrator
-from plugins.BaseTask import BaseTask
+from plugins.native.task import BaseTask
 from runtime.runtime_approvals import _sane_enum
 
 

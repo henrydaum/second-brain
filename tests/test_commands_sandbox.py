@@ -35,13 +35,13 @@ def test_the_kernel_still_ships_its_commands():
 
 
 @pytest.mark.parametrize("path", _KERNEL_COMMANDS, ids=_ids(_KERNEL_COMMANDS))
-def test_kernel_command_is_migrated_and_conforms(path):
-    """Kernel commands are all migrated; each must validate clean."""
-    assert bridge.is_sandboxed(path), (
-        f"{path.name} is not a migrated command — the kernel tree is migrated "
-        "in full, so this is either a regression or a new command that still "
-        "needs porting to the SDK"
-    )
+def test_kernel_command_conforms(path):
+    """Every kernel command must validate clean.
+
+    One assertion covers what used to take two: a command written against the
+    retired native base fails here now, because ``plugins.BaseCommand`` is no
+    longer a contract module and the validator answers it by name.
+    """
     report = validate_file(path)
     assert report.ok, f"{path.name} will not load in a box:\n{report.render()}"
 

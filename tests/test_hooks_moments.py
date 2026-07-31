@@ -15,7 +15,7 @@ from types import SimpleNamespace
 # package-init circular import (state_machine/__init__ pulls in the runtime).
 import state_machine  # noqa: F401
 
-from plugins.BaseTool import ToolResult
+from plugins.native.tool import ToolResult
 from state_machine.conversation import CallableSpec, ConversationState, Participant
 from state_machine.conversation_phases import BASE_PHASE
 from runtime.conversation_loop import ConversationLoop

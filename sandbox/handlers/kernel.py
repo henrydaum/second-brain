@@ -1410,7 +1410,7 @@ def _service_list(ctx, args: dict) -> Result:
     """Loaded services and whether each is ready."""
     services = getattr(ctx, "services", None) or {}
     if args.get("details"):
-        from plugins.BaseService import service_lifecycle
+        from plugins.native.service import service_lifecycle
 
         return Result(data=[{
             "name": name,
@@ -1477,7 +1477,7 @@ def _service_load(ctx, args: dict) -> Result:
     if service is None:
         return Result.failure(f"service {name!r} is not registered",
                               code=ERROR_NOT_FOUND)
-    from plugins.BaseService import is_user_managed_service
+    from plugins.native.service import is_user_managed_service
 
     if not is_user_managed_service(service):
         return Result.refusal(
@@ -1499,7 +1499,7 @@ def _service_unload(ctx, args: dict) -> Result:
     if service is None:
         return Result.failure(f"service {name!r} is not registered",
                               code=ERROR_NOT_FOUND)
-    from plugins.BaseService import is_user_managed_service
+    from plugins.native.service import is_user_managed_service
 
     if not is_user_managed_service(service):
         return Result.refusal(
@@ -1829,7 +1829,7 @@ def _agent_complete(ctx, args: dict) -> Result:
     driving that session". Neither means the default profile.
     """
     from llm import default_brain
-    from llm.registry import as_brain, usable_brain
+    from llm.registry import usable_brain
 
     config = getattr(ctx, "config", None) or {}
     brain = None
@@ -1853,11 +1853,7 @@ def _agent_complete(ctx, args: dict) -> Result:
             logger.exception(
                 "could not resolve the active LLM for %s", session_key
             )
-    # ``as_brain`` is the seam: a Brain passes through, a directly injected
-    # ``chat_with_tools`` object (a test double, an unmigrated router) is
-    # wrapped. Without it this handler spoke a language only the doubles knew
-    # — every real brain exposes ``chat``, not ``chat_with_tools``.
-    brain = as_brain(brain or default_brain(config), config=config)
+    brain = brain or default_brain(config)
     if (bad := _need(brain, "an LLM")) is not None:
         return bad
     messages = args.get("messages")

@@ -41,6 +41,13 @@ def response(content="", tool_calls=None, **extra):
 class FakeLLM:
     """Answers from a queued list, and records what it was asked.
 
+    Brain-shaped: one ``chat(request, on_delta=None)`` taking an
+    :class:`LLMRequest` and returning an :class:`LLMResponse`, exactly like the
+    real thing. It used to expose ``chat_with_tools`` and be adapted by
+    ``llm.registry.as_brain`` on the way into the loop; that adapter existed
+    for unmigrated in-process backends and went with them, so a double now
+    speaks the only language there is.
+
     Runs out gracefully: once the queue empties it keeps answering ``"done."``.
     A turn that loops one more time than the test expected should fail on the
     transcript it produced, not on an ``IndexError`` from the fake — the second
@@ -51,11 +58,15 @@ class FakeLLM:
     # the compaction tests set it explicitly.
     context_size = 0
     model_name = "fake"
+    name = "fake"
     loaded = True
+    supports_streaming = False
+    supports_tool_choice = False
     # Attachment routing is the kernel's job and it asks the model what it can
     # read. A fake declaring nothing gets the text fallback for everything —
     # correct, but it would make a vision test assert nothing.
     capabilities = {"image": True, "audio": True, "video": True}
+    native_modalities = {"image", "audio", "video"}
 
     def __init__(self, responses=None):
         """Queue zero or more responses."""
@@ -65,14 +76,24 @@ class FakeLLM:
         # The same calls with everything else that came along, for the tests
         # that assert on tools or provider kwargs.
         self.records = []
+        # One entry per call: the routed ``{path, modality, file_name}`` dicts
+        # the kernel decided this model should send natively. These used to be
+        # rebuilt ``Attachment`` objects, because the adapter handed the old
+        # contract a live ``AttachmentBundle``; nothing rebuilds them now.
         self.attachments = []
 
-    def chat_with_tools(self, messages, tools=None, attachments=None, **kwargs):
+    def load(self):
+        """Already loaded."""
+        return True
+
+    def chat(self, request, on_delta=None):
         """Record the call and answer with the next queued response."""
-        self.calls.append(list(messages))
-        self.records.append({"messages": list(messages), "tools": tools,
-                             "attachments": attachments, "kwargs": kwargs})
-        self.attachments.append(attachments)
+        self.calls.append(list(request.messages))
+        self.records.append({"messages": list(request.messages),
+                             "tools": request.tools,
+                             "attachments": request.attachments,
+                             "kwargs": dict(request.params or {})})
+        self.attachments.append(request.attachments)
         if self._responses:
             return self._responses.pop(0)
         return response(content="done.")

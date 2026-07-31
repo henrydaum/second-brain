@@ -49,11 +49,6 @@ def get_plugin_settings() -> list:
     return list(_plugin_settings)
 
 
-def get_setting_service_map() -> dict[str, set[str]]:
-    """Return a copy of the setting_key -> {service_names} map."""
-    return {k: set(v) for k, v in _setting_to_services.items()}
-
-
 def get_setting_plugin_names(setting_key: str) -> list[str]:
     """Sorted plugin names (any kind) declaring a setting key."""
     return sorted(_setting_to_plugins.get(setting_key, ()))
@@ -164,7 +159,7 @@ def discover_all(root_dir: Path, tool_registry, orchestrator, config: dict) -> d
 
 def discover_commands(root_dir: Path, command_registry, config: dict | None = None, reload: bool = False):
     """Discover and register all slash commands."""
-    from plugins.BaseCommand import BaseCommand
+    from plugins.native.command import BaseCommand
     cfg = _COMMAND_CONFIG
     t0 = time.time()
     count = 0
@@ -178,7 +173,7 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
+            module = _load_plugin_module(py_file)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseCommand, module_name):
@@ -204,7 +199,7 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
     rather than at discovery time, so this returns classes — unlike the
     other discoverers which return instances.
     """
-    from plugins.BaseFrontend import BaseFrontend
+    from plugins.native.frontend import BaseFrontend
     cfg = _FRONTEND_CONFIG
     t0 = time.time()
     found: dict[str, type] = {}
@@ -218,7 +213,7 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
+            module = _load_plugin_module(py_file)
             if module is None:
                 continue
             for cls in _find_subclasses(module, BaseFrontend, module_name):
@@ -239,7 +234,7 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
 
 def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = False):
     """Discover and register all tools."""
-    from plugins.BaseTool import BaseTool
+    from plugins.native.tool import BaseTool
     cfg = _TOOL_CONFIG
     t0 = time.time()
     count = 0
@@ -253,7 +248,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
+            module = _load_plugin_module(py_file)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseTool, module_name):
@@ -271,7 +266,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
 
 def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = False):
     """Discover and register all tasks."""
-    from plugins.BaseTask import BaseTask
+    from plugins.native.task import BaseTask
     cfg = _TASK_CONFIG
     t0 = time.time()
     count = 0
@@ -285,7 +280,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
             continue
         for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload)
+            module = _load_plugin_module(py_file)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseTask, module_name):
@@ -317,7 +312,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
             if py_file.stem.startswith("_"):
                 continue
             module_name = plugin_dir.module_name(py_file.stem)
-            module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload=False)
+            module = _load_plugin_module(py_file)
             if module is None:
                 continue
             built, why_not = _call_build_services(module, module_name, config)
@@ -334,16 +329,8 @@ def discover_services(root_dir: Path, config: dict) -> dict:
                 services[svc_name] = svc
                 seen_names.add(svc_name)
 
-    wire_peer_services(services)
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
     return services
-
-
-def wire_peer_services(services: dict):
-    """Inject the live service registry into every service."""
-    for svc in list(services.values()):
-        if hasattr(svc, "set_peer_services"):
-            svc.set_peer_services(services)
 
 
 # ── Single-plugin load/unload (watcher/package manager path) ─────────
@@ -447,13 +434,13 @@ def _unload_service_by_name(services: dict, plugin_name: str):
 
 def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str | None]:
     """Internal helper to load single tool."""
-    from plugins.BaseTool import BaseTool
+    from plugins.native.tool import BaseTool
     info, err = plugin_info(file_path)
     if err:
         return None, err
     module_name = info.module_name
 
-    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
+    module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -482,7 +469,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
 
 def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None, str | None]:
     """Internal helper to load single frontend."""
-    from plugins.BaseFrontend import BaseFrontend
+    from plugins.native.frontend import BaseFrontend
     info, err = plugin_info(file_path)
     if err:
         return None, err
@@ -490,7 +477,7 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
     if frontend_manager is None:
         return None, "No frontend manager available"
 
-    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
+    module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -510,7 +497,7 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
 
 def _load_single_command(file_path: Path, command_registry) -> tuple[str | None, str | None]:
     """Internal helper to load single command."""
-    from plugins.BaseCommand import BaseCommand
+    from plugins.native.command import BaseCommand
     info, err = plugin_info(file_path)
     if err:
         return None, err
@@ -518,7 +505,7 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
     if command_registry is None:
         return None, "No command registry available"
 
-    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
+    module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -535,13 +522,13 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
 
 def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str | None, str | None]:
     """Internal helper to load single task."""
-    from plugins.BaseTask import BaseTask
+    from plugins.native.task import BaseTask
     info, err = plugin_info(file_path)
     if err:
         return None, err
     module_name = info.module_name
 
-    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
+    module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -558,7 +545,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
 
 def _should_autoload(svc_name: str, svc, config: dict | None) -> bool:
     """Whether a freshly registered service should be loaded immediately."""
-    from plugins.BaseService import should_autoload_service
+    from plugins.native.service import should_autoload_service
     return should_autoload_service(svc_name, svc, config or {})
 
 
@@ -582,11 +569,12 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
     # It used to read ``svc._runtime``, and the only writer of that attribute
     # is the bridge — which stores the live ``ConversationRuntime`` there,
     # because ``_sync_hooks`` needs ``runtime.hooks``. So one name meant two
-    # things: a bindings dict here, a runtime object there. While services
-    # were native nothing ever set it and this silently produced ``{}``; once
-    # every service is bridged it finds a runtime, and ``dict()`` of one
-    # raises "'ConversationRuntime' object is not iterable" — which surfaced
-    # as *every reinstall of any service* failing at registration.
+    # things: a bindings dict here, a runtime object there. Nothing set it
+    # back when services were loaded natively, so this silently produced
+    # ``{}``; once every service was bridged it found a runtime, and
+    # ``dict()`` of one raises "'ConversationRuntime' object is not iterable"
+    # — which surfaced as *every reinstall of any service* failing at
+    # registration.
     old_bindings = {
         name: dict(getattr(svc, "_runtime_bindings", None) or {})
         for name, svc in services.items()
@@ -594,7 +582,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
     }
     _unload_services_by_source(services, _source_path(file_path))
 
-    module = _load_plugin_module(module_name, file_path, info.builtin, reload=True)
+    module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -623,7 +611,6 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
             except Exception as e:
                 return None, f"Service '{svc_name}' failed to load: {e}"
 
-    wire_peer_services(services)
     return ", ".join(names), None
 
 
@@ -634,7 +621,7 @@ def _source_path(path) -> str:
 
 # ── Internal helpers ─────────────────────────────────────────────────
 
-def _load_plugin_module(module_name: str, file_path: Path, built_in: bool, reload: bool):
+def _load_plugin_module(file_path: Path):
     """Load a plugin from a tree. Sandboxed code only — there is no other way.
 
     A plugin is written against the SDK and reaches the kernel through
@@ -643,26 +630,18 @@ def _load_plugin_module(module_name: str, file_path: Path, built_in: bool, reloa
     registers and calls that adapter unchanged, so discovery, the registries
     and the state machine never learn the difference.
 
-    **The native path is gone.** This function used to fall through to an
-    ordinary import when ``adapt`` declined, which is what let migrated and
-    unmigrated plugins coexist for the length of the migration. Coexistence
-    was the *point* — one file, one commit, ``git checkout`` to revert — and
-    it stops being a feature the moment it is only a way for unmediated code
-    to keep running in the kernel's own process. A plugin that will not
-    sandbox is now a plugin that does not load.
+    The path is the whole input. A box is *loaded by file* rather than
+    imported into this process, so the module name, which tree it came from
+    and whether this is a reload — all of which the five discovery loops and
+    the watcher used to pass — say nothing the bridge can use. A *parser*
+    still needs the real importer; see :func:`import_tree_module`, which is
+    where that machinery now lives.
 
     Refusing is *reported*, never raised. Every discovery loop reads ``None``
     as "skip this file" with no ``try`` around it, so raising here would let
     one bad plugin abort the discovery of every other one — a worse failure
     than the one being reported, and the reason this shape predates the
     change.
-
-    Note ``module_name``, ``built_in`` and ``reload`` are now unused: the
-    bridge works from the path alone, because a box is loaded by file rather
-    than imported into this process. They are kept because the watcher and
-    five discovery loops pass them, and because a *parser* still needs the
-    real importer — see :func:`import_tree_module`, which is where the
-    machinery below now belongs.
     """
     try:
         from sandbox.bridge import adapt
@@ -831,19 +810,18 @@ def _call_build_services(module, module_name: str, config: dict):
     told to look for, so a service that failed to build reported a symptom
     three steps downstream of its cause.
 
-    A missing function is worth naming precisely too, because for a *migrated*
-    plugin it is never the plugin's fault: the bridge synthesizes
-    ``build_services``, so its absence means the file was imported natively —
-    which means the bridge declined it, and the reason for *that* is the
-    thing to go and read.
+    A missing function is worth naming precisely too, because it is never the
+    plugin author's fault: the bridge synthesizes ``build_services`` for every
+    service it carries, and a service that reached this point without one is a
+    bridge failure, not a plugin one.
     """
     build_fn = getattr(module, "build_services", None)
     if build_fn is None:
         return {}, (
-            f"{module_name} defines no build_services(). A migrated service "
-            f"gets one from the bridge, so this usually means the bridge "
-            f"declined the file and it was imported natively — check the log "
-            f"for 'Failed to bridge' or 'will not load'.")
+            f"{module_name} defines no build_services(), which the bridge "
+            f"synthesizes for every service it carries — so this is a bridge "
+            f"failure rather than a missing function. Check the log for "
+            f"'Failed to bridge' or 'will not load'.")
     try:
         built = build_fn(config)
     except Exception as exc:

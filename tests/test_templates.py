@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from sandbox.bridge import imports_sdk
 from sandbox.validator import ERROR, validate_file
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
@@ -70,10 +69,26 @@ def test_sandboxed_template_validates(filename):
 # Templates that legitimately import no plugin base class. A script has no
 # base class at all; an LLM backend has one, but it is not a *plugin* base —
 # it lives in ``guest.llm`` beside the parser contract, because a backend
-# belongs to no family and discovery never registers it. ``imports_sdk`` asks
-# specifically "is this a migrated plugin?", which is the question the loader
-# needs and the wrong one here.
+# belongs to no family and discovery never registers it.
 NO_PLUGIN_BASE = {"script_template.py", "llm_backend_template.py"}
+
+# The base classes a plugin template has to subclass one of. ``guest.llm`` and
+# ``guest.parsing`` are contract modules too, but neither carries a *plugin*
+# base, which is what the families below are checked for.
+PLUGIN_BASE_MODULES = {"guest", "guest.bases", "sandbox.guest",
+                       "sandbox.guest.bases"}
+
+
+def _imports_a_plugin_base(tree) -> bool:
+    """Whether a parsed template imports the guest plugin contract."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name in PLUGIN_BASE_MODULES for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            if (node.module or "") in PLUGIN_BASE_MODULES:
+                return True
+    return False
 
 
 @pytest.mark.parametrize("filename", SANDBOXED)
@@ -82,7 +97,8 @@ def test_sandboxed_template_uses_the_sdk(filename):
     source = (TEMPLATES / filename).read_text(encoding="utf-8")
     tree = ast.parse(source)
     if filename not in NO_PLUGIN_BASE:
-        assert imports_sdk(tree), f"{filename} does not import the SDK contract"
+        assert _imports_a_plugin_base(tree), (
+            f"{filename} does not import the SDK plugin contract")
     if filename == "llm_backend_template.py":
         assert "from guest.llm import" in source, (
             "a backend template must teach the guest LLM contract")

@@ -11,7 +11,7 @@ import threading
 import time
 
 from runtime.context import build_context
-from plugins.BaseTool import BaseTool, ToolResult
+from plugins.native.tool import BaseTool, ToolResult
 from events.event_bus import bus
 from events.event_channels import TOOLS_CHANGED
 

@@ -1,13 +1,17 @@
-"""
-Service interface.
+"""The native face of a service adapter.
 
-Services are long-lived capabilities shared across tools and tasks.
-They wrap models, schedulers, external APIs, runtime extensions, or other
-reusable state and give the rest of the system a consistent lifecycle.
+Nothing subclasses this by hand. A service is sandboxed code, and
+``sandbox.bridge`` builds a subclass of this class at load whose ``_load``
+opens a persistent box and whose ``unload`` closes it. What lives here is the
+half the *kernel* needs to see: the lifecycle it drives, and the declarations
+it reads. The behaviour is on the other side of the boundary, in the box.
+
+Services are long-lived capabilities shared across tools and tasks. They wrap
+models, schedulers, external APIs, runtime extensions, or other reusable state
+and give the rest of the system a consistent lifecycle.
 """
 
 import logging
-import threading
 import time
 from abc import ABC
 
@@ -19,14 +23,11 @@ EXTENSION = "extension"
 
 class BaseService(ABC):
     """
-    The contract every service implements.
+    What the kernel sees of a service.
 
     Class attributes:
         model_name:
             Human-readable name shown in frontends and service listings.
-        shared:
-            If True, one instance is shared across threads.
-            If False, callers should use get_client() for thread-safe access.
         lifecycle:
             "managed" services are user-loadable backends. "extension" services
             are runtime hook carriers that auto-load whenever installed.
@@ -39,22 +40,10 @@ class BaseService(ABC):
             Release resources. Must be safe to call repeatedly.
         loaded:
             Property indicating whether the service is ready for use.
-
-    Per-call services (shared = False):
-        Override get_client() to return a fresh client for each caller. The
-        base implementation raises NotImplementedError to make misuse obvious.
     """
 
     model_name: str = ""
-    shared: bool = True
     lifecycle: str = MANAGED
-
-    # Wall-clock seconds before load() abandons a hung _load() and reports
-    # failure. Generous by default because heavy services download models on
-    # first run — a timeout short enough to catch a real deadlock would wrongly
-    # kill a legitimate slow load. Set to 0 to disable, or raise it for a
-    # known-slow service.
-    load_timeout: float = 600.0
 
     # --- Config settings this plugin needs ---
     # Each entry is a tuple:
@@ -82,7 +71,6 @@ class BaseService(ABC):
     def __init__(self):
         """Initialize the base service."""
         self._loaded = False
-        self.services = {}
 
     @property
     def loaded(self) -> bool:
@@ -95,36 +83,17 @@ class BaseService(ABC):
         self._loaded = value
 
     def load(self) -> bool:
-        """Wraps _load() with automatic timing and a wall-clock timeout.
+        """Wraps _load() with timing and logging. Subclasses override _load().
 
-        Subclasses override _load(). A hung _load() is abandoned after
-        ``load_timeout`` seconds (the daemon worker can't be killed, but it
-        stops blocking whatever serialized loader called us) and reported as a
-        failed load. ``load_timeout = 0`` runs inline with no timeout."""
+        There is no wall-clock timeout here. This used to run ``_load`` on a
+        daemon worker and abandon it after ``load_timeout`` seconds, which
+        mattered while a service could be arbitrary in-process code that hung.
+        A service is a box now, and the box owns its own start deadline — two
+        timers racing over one load is a worse answer than one.
+        """
         name = self.model_name or self.__class__.__name__
         logger.info(f"Loading service: {name}...")
         t0 = time.time()
-        if not self.load_timeout or self.load_timeout <= 0:
-            return self._load_timed(name, t0)
-
-        box: dict = {}
-        def _run():
-            try:
-                box["result"] = self._load_timed(name, t0)
-            except Exception as e:
-                box["error"] = e
-        worker = threading.Thread(target=_run, daemon=True, name=f"load-{name}")
-        worker.start()
-        worker.join(self.load_timeout)
-        if worker.is_alive():
-            logger.error(f"Service load timed out after {self.load_timeout:.0f}s and was abandoned: {name}")
-            return False
-        if "error" in box:
-            raise box["error"]
-        return box.get("result", False)
-
-    def _load_timed(self, name: str, t0: float) -> bool:
-        """Run _load() with timing + logging. Exceptions propagate to load()."""
         try:
             result = self._load()
             elapsed = time.time() - t0
@@ -145,30 +114,6 @@ class BaseService(ABC):
     def unload(self):
         """Release all resources. Must be safe to call even if not loaded."""
         self.loaded = False
-
-    def get_client(self):
-        """
-        Return a fresh client instance for thread-safe per-call usage.
-
-        This only makes sense for services where shared = False. Shared services
-        should be accessed directly (e.g. service.encode(), service.invoke()).
-
-        Raises NotImplementedError when a shared service is used incorrectly,
-        or when a per-call service forgets to implement get_client().
-        """
-        if self.shared:
-            raise NotImplementedError(
-                f"Service '{self.model_name}' is shared — access it directly, "
-                f"don't call get_client()."
-            )
-        raise NotImplementedError(
-            f"Service '{self.model_name}' is per-call (shared=False) but "
-            f"doesn't implement get_client()."
-        )
-
-    def set_peer_services(self, services: dict):
-        """Receive the live runtime service registry."""
-        self.services = services
 
 
 def service_lifecycle(svc) -> str:

@@ -1,27 +1,30 @@
-"""The dual-mode loader — migrated and unmigrated plugins side by side.
+"""The only doorway a plugin enters by.
 
-A migration that made every unmigrated plugin inert would stop the app working
-until the last one was done, which is the way rewrites die. They do not have to
-coexist awkwardly: which contract a file uses is *readable from the file*, so
-the loader can simply route.
-
-**Detection is by import, read without importing.** A file that imports
-``guest.bases`` is sandboxed; one that imports ``plugins.BaseTool`` is native.
-No manifest, no naming convention, no registry of who has been migrated — the
-same AST pass that already reads declarations answers this too.
-
-**The adapter is the whole trick.** A sandboxed plugin cannot be registered
+Every plugin is sandboxed code, and sandboxed code cannot be registered
 directly: its ``run`` wants an ``sdk``, and the registry will hand it a
-context. So the bridge builds a *native* subclass whose ``run`` forwards into
-the sandbox and translates the answer back. To the tool registry, the agent
-loop, and the frontends, it is an ordinary plugin. Nothing downstream changes.
+context. So the bridge reads the file, validates it, and answers with a
+*native* subclass whose ``run`` forwards into the sandbox and translates the
+answer back. To the tool registry, the agent loop, and the frontends, it is an
+ordinary plugin. Nothing downstream changes.
 
-That is what makes migration reversible: one file, one commit, and
-``git checkout`` puts it back.
+**Nothing is imported to find this out.** The same AST pass that reads a
+plugin's declarations is what decides whether it can load, so asking costs
+nothing and can never run the file being asked about.
+
+**Refusal is reported, never raised.** Every discovery loop reads ``None`` as
+"skip this file" with no ``try`` around it, so raising would let one bad
+plugin abort the discovery of every other one.
+
+This used to route between two loaders — a file importing ``guest.bases`` came
+here, one importing ``plugins.BaseTool`` was imported natively — which let the
+two contracts coexist for the length of the migration. Coexistence was the
+point, and it stopped being a feature the moment it was only a way for
+unmediated code to run in the kernel's own process. A plugin this module will
+not carry is now a plugin that does not load.
 
 Store plugins come along for free — discovery already scans the built-in,
-sandbox, and installed roots through the same code path, so an installed
-package migrates exactly like a kernel one.
+workspace, and installed roots through the same code path, so an installed
+package loads exactly like a kernel one.
 """
 
 from __future__ import annotations
@@ -40,21 +43,14 @@ from .validator import FAMILIES, validate_file
 
 logger = logging.getLogger("Sandbox")
 
-# Modules whose import means "this file is written against the SDK".
-SANDBOX_MODULES = {"guest", "guest.bases", "guest.box", "guest.sdk",
-                   "guest.forms",
-                   "sandbox.guest", "sandbox.guest.bases",
-                   "sandbox.guest.forms",
-                   "sandbox.guest.box"}
-
 # The native base class each family's adapter must subclass, so the kernel
 # keeps seeing what it expects.
 NATIVE_BASES = {
-    "tool": ("plugins.BaseTool", "BaseTool"),
-    "task": ("plugins.BaseTask", "BaseTask"),
-    "command": ("plugins.BaseCommand", "BaseCommand"),
-    "service": ("plugins.BaseService", "BaseService"),
-    "frontend": ("plugins.BaseFrontend", "BaseFrontend"),
+    "tool": ("plugins.native.tool", "BaseTool"),
+    "task": ("plugins.native.task", "BaseTask"),
+    "command": ("plugins.native.command", "BaseCommand"),
+    "service": ("plugins.native.service", "BaseService"),
+    "frontend": ("plugins.native.frontend", "BaseFrontend"),
 }
 
 # Declarations are copied onto the adapter wholesale, minus the few that mean
@@ -73,7 +69,7 @@ _SANDBOX: Sandbox | None = None
 
 
 def configure(sandbox: Sandbox | None):
-    """Give the bridge the sandbox migrated plugins should run in.
+    """Give the bridge the sandbox plugins should run in.
 
     Called once at bootstrap. Without it the bridge builds one on demand,
     which works but shares no boxes with the rest of the kernel.
@@ -94,7 +90,7 @@ def configure(sandbox: Sandbox | None):
 
 
 def get_sandbox() -> Sandbox:
-    """The sandbox migrated plugins run in."""
+    """The sandbox plugins run in."""
     global _SANDBOX
     if _SANDBOX is None:
         # Through ``configure`` rather than assigned directly: that is what
@@ -102,34 +98,6 @@ def get_sandbox() -> Sandbox:
         # ``dependencies_files`` only inside the plugin's own tree.
         configure(Sandbox())
     return _SANDBOX
-
-
-def is_sandboxed(path) -> bool:
-    """Whether a plugin file is written against the SDK.
-
-    Parses rather than imports, so asking costs nothing and cannot run
-    anything — and parses rather than greps, because a docstring mentioning
-    ``guest.bases`` would otherwise route a perfectly ordinary plugin into the
-    bridge and break it at load.
-    """
-    try:
-        source = Path(path).read_text(encoding="utf-8", errors="replace")
-        tree = ast.parse(source)
-    except (OSError, SyntaxError):
-        return False
-    return imports_sdk(tree)
-
-
-def imports_sdk(tree) -> bool:
-    """Whether a parsed module imports the SDK contract."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(a.name in SANDBOX_MODULES for a in node.names):
-                return True
-        elif isinstance(node, ast.ImportFrom) and not node.level:
-            if (node.module or "") in SANDBOX_MODULES:
-                return True
-    return False
 
 
 def family_of(path) -> str:
@@ -235,26 +203,26 @@ def _task_results(result, native_module, count: int) -> list:
 def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     """Build a synthetic module holding a native-looking adapter.
 
-    Returns None when the file is not a migrated plugin, so callers can fall
-    through to loading it the ordinary way.
+    Returns None for a file this module will not carry — one whose name gives
+    no family, one the validator rejected, one declaring no plugin class — and
+    logs the specific reason. The caller reports the consequence; there is no
+    other way to load a plugin, so None means the capability is absent.
     """
     path = Path(path)
     family = family or family_of(path)
     if not family or family not in NATIVE_BASES:
         return None
-    if not is_sandboxed(path):
-        return None
 
     report = validate_file(path)
     if not report.ok:
-        logger.error("migrated plugin %s will not load:\n%s",
+        logger.error("plugin %s will not load:\n%s",
                      path.name, report.render())
         return None
 
     declarations = report.declarations
     entry = entry or _entry_from(report.source)
     if not entry:
-        logger.error("migrated plugin %s declares no plugin class", path.name)
+        logger.error("plugin %s declares no plugin class", path.name)
         return None
 
     base = _native_base(family)
@@ -289,7 +257,7 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
                                report.source)
 
     def _forward(self, context, payload, method: str = "run", paths=None):
-        """Run the migrated plugin and translate the answer back.
+        """Run the plugin and translate the answer back.
 
         The context is passed *per call* rather than held, because two calls
         can be in flight with different sessions and users behind them.
@@ -401,7 +369,7 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
 
         Bridged for the same reason ``form`` and ``run_event`` are: a doorway
         the kernel calls and the adapter does not forward is answered by the
-        native base's empty default, so every migrated plugin's point-of-use
+        native base's empty default, so every plugin's point-of-use
         guidance vanished silently while the plugin went on working. The
         failure had no symptom beyond an agent that no longer knew things it
         used to.
@@ -470,7 +438,7 @@ def _build(entry: str, base, attributes: dict, path, source_path: str,
     One place because of ``__module__``. Discovery only accepts classes that
     belong to the module it just loaded, and a class built with ``type()``
     claims the module ``type()`` was *called* from — ``sandbox.bridge``. Every
-    adapter therefore looked foreign to discovery and no migrated plugin could
+    adapter therefore looked foreign to discovery and no plugin could
     be found at all. Setting it here, once, is what makes a bridged plugin
     discoverable like any other.
 
@@ -943,11 +911,6 @@ def _service_adapter(
         # Native services are named by model_name; the guest calls it name.
         "model_name": name,
         "name": name,
-        # The box owns the start deadline (boxes.DEFAULT_START_TIMEOUT). Left
-        # at its default, BaseService.load() would wrap _load in a *second*
-        # timer racing the first, and whichever fired first would report a
-        # failure the other could not see.
-        "load_timeout": 0,
         "__init__": __init__,
         "_load": _load,
         "unload": unload,
@@ -1265,7 +1228,7 @@ def _capabilities(declared):
     capability this kernel has never heard of should lose that claim, not fail
     to load.
     """
-    from plugins.BaseFrontend import FrontendCapabilities
+    from plugins.native.frontend import FrontendCapabilities
 
     if not isinstance(declared, dict):
         return FrontendCapabilities()
@@ -1321,7 +1284,7 @@ def _root_for(context, family: str = "") -> str:
 
 
 def _entry_from(source: str) -> str:
-    """The migrated plugin class's name, read out of the source."""
+    """The plugin class's name, read out of the source."""
     import ast
 
     try:
@@ -1356,7 +1319,7 @@ def _box_prompt(plugin, name: str, method: str = "agent_prompt") -> str:
 
 
 def _cached_prompt(plugin, produce) -> str:
-    """A migrated plugin's system-prompt contribution, computed once.
+    """A plugin's system-prompt contribution, computed once.
 
     ``_collect`` in ``agent/system_prompt.py`` runs per turn for every in-scope
     plugin, and for an ephemeral family every call into the guest is a *fresh
@@ -1384,20 +1347,16 @@ def _cached_prompt(plugin, produce) -> str:
 
 
 def _prompt_method(source: str, class_name: str) -> str:
-    """Which spelling of the prompt doorway this class defines, if any.
+    """``"agent_prompt"`` if this class defines it as a method, else "".
 
-    ``agent_prompt_for`` was the old name for the dynamic half; the static
-    half was a separate ``agent_prompt`` string. They are one name now, but an
-    unmigrated store plugin still writes the old one, and an adapter that
-    forwarded neither would drop its guidance in silence. Returns the method
-    name to call inside the box, or "" when the file defines no method at all
-    — in which case a literal declaration (if any) was already copied across
-    and nothing needs forwarding.
+    One name, two shapes: a plugin with nothing conditional to say declares a
+    plain string, which the validator reads and the adapter carries for free.
+    One whose text depends on live state defines a method, which costs a real
+    call into the box — so the two have to be told apart before anything runs,
+    and "" here means the literal (if any) was already copied across and
+    nothing needs forwarding.
     """
-    for name in ("agent_prompt", "agent_prompt_for"):
-        if _defines(source, class_name, name):
-            return name
-    return ""
+    return "agent_prompt" if _defines(source, class_name, "agent_prompt") else ""
 
 
 def _defines(source: str, class_name: str, method: str) -> bool:

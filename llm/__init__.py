@@ -17,7 +17,7 @@ callers reach it from here so they need not care where it physically lives —
 the same arrangement :mod:`parsing` has with :mod:`sandbox.guest.parsing`.
 """
 
-from .registry import (DEFAULT_BACKEND, Brain, NativeBrain, backend_aliases,
+from .registry import (DEFAULT_BACKEND, Brain, backend_aliases,
                        backend_display_names, backend_names, brain, brains,
                        default_brain, default_name, describe, discover,
                        load_default, refresh, resolve, unload_all, usable_brain)
@@ -27,7 +27,7 @@ from sandbox.guest.llm import (BaseLLMBackend, LLMProviderError, LLMRequest,
 
 __all__ = [
     "BaseLLMBackend", "Brain", "DEFAULT_BACKEND", "LLMProviderError",
-    "LLMRequest", "LLMResponse", "NativeBrain", "backend_aliases",
+    "LLMRequest", "LLMResponse", "backend_aliases",
     "backend_display_names", "backend_names", "brain", "brains",
     "default_brain", "default_name", "describe", "discover",
     "extract_llm_error_text", "is_context_limit_error", "load_default",

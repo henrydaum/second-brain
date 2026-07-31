@@ -140,16 +140,6 @@ def _collect(plugins, ctx: PromptContext) -> str:
         try:
             raw = getattr(plugin, "agent_prompt", "")
             text = ((raw(ctx) if callable(raw) else raw) or "").strip()
-            if not text:
-                # ``agent_prompt_for`` was the old spelling of the dynamic
-                # half. Unmigrated store plugins still write it, and dropping
-                # them silently is the exact failure this doorway exists to
-                # prevent — an agent that quietly stops knowing things. Costs
-                # one getattr per plugin per turn and disappears when the last
-                # store plugin is migrated.
-                legacy = getattr(plugin, "agent_prompt_for", None)
-                if callable(legacy):
-                    text = (legacy(ctx) or "").strip()
         except Exception:
             text = ""
         if text:

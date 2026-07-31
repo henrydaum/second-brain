@@ -12,9 +12,8 @@ attribute a task can declare. This file covers what is specific to tasks.
   Filename:       must start with "task_"
   Entry point:    run(self, sdk, paths)
 
-WATCH THE ARGUMENT ORDER. The native contract was run(self, paths, context);
-the sandboxed one is run(self, sdk, paths). Getting this backwards binds your
-paths to the sdk and fails in a confusing way.
+WATCH THE ARGUMENT ORDER: run(self, sdk, paths), sdk first. Getting this
+backwards binds your paths to the sdk and fails in a confusing way.
 
 
 TRIGGER KINDS

@@ -17,7 +17,7 @@ import state_machine  # noqa: F401
 from state_machine import ConversationRuntime
 from tests.support import plain_runtime
 from pipeline.database import Database, DEFAULT_USER_ID
-from plugins.BaseFrontend import BaseFrontend
+from plugins.native.frontend import BaseFrontend
 from sandbox import Sandbox
 from sandbox.handlers.kernel import _config_write
 

@@ -87,7 +87,7 @@ def _write(root: Path, rel: str, text: str):
 
 def _tool(deps=(), pip=()):
     return (
-        "from plugins.BaseTool import BaseTool\n"
+        "from guest.bases import BaseTool\n"
         "class T(BaseTool):\n"
         "    name = 't'\n"
         f"    dependencies_files = {list(deps)!r}\n"
@@ -123,7 +123,7 @@ def test_install_telegram_shape_copies_frontend_helper_and_pip(tmp_path, monkeyp
     calls = []
     files = {
         "frontends/frontend_telegram.py": (
-            "from plugins.BaseFrontend import BaseFrontend\n"
+            "from guest.bases import BaseFrontend\n"
             "class Telegram(BaseFrontend):\n"
             "    dependencies_files = ['frontends/helpers/telegram_renderers.py']\n"
             "    dependencies_pip = ['python-telegram-bot']\n"
@@ -143,7 +143,7 @@ def test_install_telegram_shape_copies_frontend_helper_and_pip(tmp_path, monkeyp
 
 def test_install_frontend_preserves_existing_saved_frontends(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
-    files = {"frontends/frontend_telegram.py": b"from plugins.BaseFrontend import BaseFrontend\nclass Telegram(BaseFrontend): pass\n"}
+    files = {"frontends/frontend_telegram.py": b"from guest.bases import BaseFrontend\nclass Telegram(BaseFrontend): pass\n"}
     saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm"]}
     monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
     monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
@@ -158,7 +158,7 @@ def test_install_frontend_preserves_existing_saved_frontends(tmp_path, monkeypat
 
 def test_install_service_preserves_existing_saved_autoload_services(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
-    files = {"services/service_mcp.py": b"from plugins.BaseService import BaseService\nclass MCP(BaseService): pass\n"}
+    files = {"services/service_mcp.py": b"from guest.bases import BaseService\nclass MCP(BaseService): pass\n"}
     saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm", "parser"]}
     monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
     monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
@@ -173,7 +173,7 @@ def test_install_service_preserves_existing_saved_autoload_services(tmp_path, mo
 
 def test_install_loads_service_registered_before_autoload_update(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
-    files = {"services/service_mcp.py": b"from plugins.BaseService import BaseService\nclass MCP(BaseService): pass\n"}
+    files = {"services/service_mcp.py": b"from guest.bases import BaseService\nclass MCP(BaseService): pass\n"}
     saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm"]}
     context = _Context(tmp_path)
     context.services["mcp"] = _ColdService()
@@ -360,7 +360,7 @@ _SKILL_FILES = {
     "skills/demo/reference/extra.md": b"support\n",
     "skills/other/SKILL.md": _skill_md("other"),
     "tools/tool_use_skill.py": _tool(deps=["services/service_skills.py"]),
-    "services/service_skills.py": b"from plugins.BaseService import BaseService\nclass S(BaseService): pass\n",
+    "services/service_skills.py": b"from guest.bases import BaseService\nclass S(BaseService): pass\n",
 }
 
 

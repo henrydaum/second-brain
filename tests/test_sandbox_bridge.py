@@ -20,7 +20,8 @@ import pytest
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
 from guest.loader import unload_box
 from sandbox import Sandbox
-from sandbox.bridge import adapt, configure, family_of, is_sandboxed
+from sandbox.bridge import adapt, configure, family_of
+from sandbox.validator import ERROR, validate_file
 
 MIGRATED_TOOL = '''
 """A migrated tool."""
@@ -127,27 +128,40 @@ def _write(tmp_path, filename, source):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Telling them apart, without importing either.
+# What loads, and what does not — decided without importing either.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_a_migrated_plugin_is_recognised(tmp_path):
-    """Detection is by which contract the file imports."""
-    assert is_sandboxed(_write(tmp_path, "tool_word_count.py", MIGRATED_TOOL))
+def test_a_sandboxed_plugin_adapts(tmp_path):
+    """SDK code is what the bridge carries."""
+    assert adapt(_write(tmp_path, "tool_word_count.py", MIGRATED_TOOL)) is not None
 
 
 def test_a_native_plugin_is_declined(tmp_path):
-    """The bridge answers None, and the loader turns that into a refusal."""
+    """The bridge answers None, and the loader turns that into a refusal.
+
+    The refusal now comes from the validator rather than from a separate
+    detection pass, which is what lets it say something useful: the native
+    base class is no longer a contract module, so importing one is reported
+    by name with the import that replaces it.
+    """
     path = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
-    assert not is_sandboxed(path)
     assert adapt(path) is None
 
+    report = validate_file(path)
+    assert not report.ok
+    findings = "\n".join(f.render() for f in report.of(ERROR))
+    assert "plugins.BaseTool" in findings
+    assert "guest.bases" in findings, (
+        "refusing a native plugin has to name the one-line fix; the generic "
+        "kernel-module error prescribes 'a Request', which is useless here")
 
-def test_detection_never_imports_the_file(tmp_path):
+
+def test_deciding_never_imports_the_file(tmp_path):
     """Asking the question must not run anything."""
     marker = tmp_path / "ran.txt"
     path = _write(tmp_path, "tool_evil.py",
                   f"open({str(marker)!r}, 'w').write('x')\n")
-    is_sandboxed(path)
+    adapt(path)
     assert not marker.exists()
 
 
@@ -164,7 +178,7 @@ def test_family_comes_from_the_filename(tmp_path):
 
 def test_the_adapter_subclasses_the_native_base(tmp_path, box):
     """The registry type-checks against BaseTool; the adapter must pass."""
-    from plugins.BaseTool import BaseTool
+    from plugins.native.tool import BaseTool
 
     module = adapt(_write(tmp_path, "tool_word_count.py", MIGRATED_TOOL))
     adapter = next(v for v in vars(module).values()
@@ -442,13 +456,11 @@ def test_a_migrated_service_keeps_state_between_calls(tmp_path, box, isolation):
 def test_a_migrated_service_looks_native(tmp_path, box):
     """Native callers reach services by attribute access, not .call()."""
     service = _service(tmp_path)
-    from plugins.BaseService import BaseService
+    from plugins.native.service import BaseService
 
     assert isinstance(service, BaseService)
     # Named the way the native side names services.
     assert service.model_name == "counter"
-    # The box owns the start deadline; a second timer would race it.
-    assert service.load_timeout == 0
 
 
 PROMPTING_SERVICE = '''
@@ -745,12 +757,11 @@ def test_unloading_closes_the_box(tmp_path, box):
 def test_a_sandboxed_tool_registers_through_the_loader(tmp_path, box):
     """The one way in: adapt, then register the adapter like any tool."""
     from agent.tool_registry import ToolRegistry
-    from plugins.BaseTool import BaseTool
+    from plugins.native.tool import BaseTool
     from plugins.plugin_discovery import _load_plugin_module
 
     path = _write(tmp_path, "tool_word_count.py", MIGRATED_TOOL)
-    module = _load_plugin_module("sandboxed_tool_word_count", path,
-                                 False, False)
+    module = _load_plugin_module(path)
     assert module is not None
 
     registry = ToolRegistry(None, {}, {})
@@ -780,7 +791,7 @@ def test_a_native_plugin_does_not_load_at_all(tmp_path, box, caplog):
 
     path = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
     with caplog.at_level("WARNING"):
-        module = _load_plugin_module("native_tool_shout", path, False, False)
+        module = _load_plugin_module(path)
     assert module is None
     assert "tool_shout.py" in caplog.text
     assert "SDK" in caplog.text
@@ -798,10 +809,8 @@ def test_refusing_one_plugin_does_not_abort_the_rest(tmp_path, box):
     native = _write(tmp_path, "tool_shout.py", NATIVE_TOOL)
     migrated = _write(tmp_path, "tool_word_count.py", MIGRATED_TOOL)
 
-    assert _load_plugin_module("native_tool_shout", native, False,
-                               False) is None
-    assert _load_plugin_module("sandboxed_tool_word_count", migrated, False,
-                               False) is not None
+    assert _load_plugin_module(native) is None
+    assert _load_plugin_module(migrated) is not None
 
 
 def test_a_command_form_is_bridged_too(tmp_path, box):
@@ -918,14 +927,17 @@ def test_a_plugin_that_contributes_nothing_keeps_the_base_default(tmp_path,
     assert _collect([instance], SimpleNamespace(config={})) == ""
 
 
-def test_the_old_prompt_spelling_still_reaches_the_system_prompt(tmp_path, box):
-    """``agent_prompt_for`` was the old name, and store plugins still use it.
+def test_the_old_prompt_spelling_contributes_nothing(tmp_path, box):
+    """``agent_prompt_for`` was the old name for the dynamic half, and is gone.
 
-    The two spellings became one name, but the store is only half migrated —
-    so an adapter that forwarded only the new name would drop the guidance of
-    every plugin that had not been touched yet, silently, which is the failure
-    the whole doorway exists to prevent. Caught in practice: two installed
-    tools went from 3.6kB of prompt text to nothing with every test passing.
+    It was carried for as long as the store had plugins still writing it,
+    because dropping guidance silently is the exact failure this doorway
+    exists to prevent — caught in practice once, when two installed tools went
+    from 3.6kB of prompt text to nothing with every test passing.
+
+    Pinned as a *negative* rather than deleted, because the failure it guards
+    against is silence either way: nothing about a plugin whose prompt never
+    arrives looks wrong, so the rename has to be a thing the suite states.
     """
     from agent.system_prompt import _collect
 
@@ -934,8 +946,7 @@ def test_the_old_prompt_spelling_still_reaches_the_system_prompt(tmp_path, box):
     module = adapt(_write(tmp_path, "tool_advisor.py", source))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
     try:
-        assert _collect([instance], SimpleNamespace(config={}, scope=None)
-                        ).startswith("## Scripts")
+        assert _collect([instance], SimpleNamespace(config={}, scope=None)) == ""
     finally:
         unload_box("tool_advisor")
 
@@ -965,9 +976,9 @@ def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
 
 
 @pytest.mark.parametrize("filename, source, base_module, base_name", [
-    ("tool_word_count.py", MIGRATED_TOOL, "plugins.BaseTool", "BaseTool"),
+    ("tool_word_count.py", MIGRATED_TOOL, "plugins.native.tool", "BaseTool"),
     ("service_counter.py", MIGRATED_SERVICE.replace("ISOLATION", ""),
-     "plugins.BaseService", "BaseService"),
+     "plugins.native.service", "BaseService"),
 ])
 def test_a_bridged_plugin_is_visible_to_discovery(tmp_path, box, filename,
                                                   source, base_module,

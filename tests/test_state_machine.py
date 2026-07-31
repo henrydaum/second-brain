@@ -8,7 +8,7 @@ only kernel frontend, so frontend assertions here use it directly.
 
 from types import SimpleNamespace
 
-from plugins.BaseFrontend import BaseFrontend
+from plugins.native.frontend import BaseFrontend
 from bundled.frontends.helpers.formatters import render_plain
 from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
 from state_machine.form_display import form_step_display

@@ -13,7 +13,7 @@ dependencies_pip = []
 import json
 import re
 
-from plugins.BaseTool import BaseTool
+from guest.bases import BaseTool
 
 
 class ReadNotes(BaseTool):
@@ -83,7 +83,7 @@ def test_polling_is_only_available_to_resident_plugins():
 
 def test_enabled_resident_polling_requires_a_poll_method():
     source = GOOD_TOOL.replace(
-        "from plugins.BaseTool import BaseTool",
+        "from guest.bases import BaseTool",
         "from guest.bases import BaseService",
     ).replace(
         "class ReadNotes(BaseTool):",
@@ -262,7 +262,7 @@ def test_two_services_cannot_claim_the_same_name():
 def test_a_service_and_a_tool_cannot_share_a_file():
     """Discovery has no coherent answer for what to register it as."""
     report = _validate(
-        TWO_SERVICES + "\n\nfrom plugins.BaseTool import BaseTool\n\n"
+        TWO_SERVICES + "\n\nfrom guest.bases import BaseTool\n\n"
         "class Odd(BaseTool):\n"
         '    """Odd."""\n    name = "odd"\n',
         filename="service_embed.py")

@@ -10,7 +10,7 @@ CHAT_MESSAGE_PUSHED (mid-turn narration). Frontends without
 # package-init circular import (state_machine/__init__ pulls in the runtime).
 import state_machine  # noqa: F401
 
-from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.native.frontend import BaseFrontend, FrontendCapabilities
 from runtime.session import RuntimeResult
 
 

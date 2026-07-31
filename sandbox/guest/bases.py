@@ -213,7 +213,6 @@ class BaseService(BasePlugin):
     family = SERVICE
     lifetime = PERSISTENT
 
-    shared: bool = True
     poll_interval: float = 0.0
     max_poll_failures: int = 5
 
@@ -284,10 +283,6 @@ class BaseCommand(BasePlugin):
 
     def form(self, sdk, args: dict) -> list:
         """Steps to collect missing arguments, or [] to run immediately."""
-        return []
-
-    def arg_completions(self, sdk) -> list:
-        """Completion candidates for the first argument."""
         return []
 
     def run(self, sdk, args: dict):

@@ -32,7 +32,7 @@ class _ToolRegistry:
 
 def test_plugin_watcher_is_kernel_infrastructure():
     """The watcher must not drift back into the service registry."""
-    from plugins.BaseService import BaseService
+    from plugins.native.service import BaseService
     import plugins.plugin_watcher as watcher_module
 
     assert not issubclass(PluginWatcher, BaseService)
@@ -557,7 +557,7 @@ def test_orchestrator_stop_unsubscribes_service_loaded_handler():
 # Service lifecycle (was test_service_lifecycle.py)
 # ────────────────────────────────────────────────────────────────────
 
-from plugins.BaseService import EXTENSION, BaseService, is_user_managed_service, should_autoload_service
+from plugins.native.service import BaseService, EXTENSION, is_user_managed_service, should_autoload_service
 from bundled.frontends.helpers.formatters import format_services
 
 

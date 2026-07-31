@@ -1,17 +1,25 @@
-"""
-Frontend interface.
+"""The native face of a frontend adapter — and the host-side routing itself.
+
+Nothing subclasses this by hand. A frontend is sandboxed code, and
+``sandbox.bridge`` builds a subclass of this class at load. Unlike the other
+four bases this one is not a thin contract: it *is* the routing, and that is
+deliberate. The base owns **when** — fourteen bus subscriptions funnelling
+into nine ``render_*`` methods, and ``submit_*`` funnelling into
+``runtime.handle_action`` — while the guest owns **how**. So the bridge
+overrides the nine renderers with one ``render(kind, payload)`` box call and
+inherits everything else.
 
 Frontends are the user-facing transports of Second Brain (REPL, installed
-Telegram, HTTP, future presentation layers). They are first-class plugins, like tools/tasks/services: each
-subclass declares its identity and capabilities, and implements two halves of
-the contract:
+Telegram, HTTP, future presentation layers). Each declares its identity and
+capabilities, and implements two halves of the contract:
 
     1. Turn user input into an Action and submit it to ConversationRuntime.
     2. Render the resulting RuntimeResult (and bus-borne events from other
        sessions) back to the user.
 
 Everything else — slash-command parsing, form-step prompting, state-machine
-request rendering, session bookkeeping — lives in the base.
+request rendering, session bookkeeping — lives here. See
+``templates/frontend_template.py`` for what an author actually writes.
 """
 
 from __future__ import annotations
@@ -125,7 +133,7 @@ class BaseFrontend:
         capabilities:
             FrontendCapabilities describing the transport.
         config_settings:
-            Same tuple format as SETTINGS_DATA. See plugins.BaseTool.
+            Same tuple format as SETTINGS_DATA. See plugins.native.tool.
         user_binding / default_user_id:
             How sessions map to users — "single" (default; all sessions act as
             default_user_id) or "per_user" (each identity its own user). See the

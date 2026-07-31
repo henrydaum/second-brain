@@ -9,7 +9,7 @@ import state_machine  # noqa: F401  (import-order: break the runtime import cycl
 from events.event_bus import bus
 from events.event_channels import SESSION_CONVERSATION_CHANGED
 from pipeline.database import Database
-from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.native.frontend import BaseFrontend, FrontendCapabilities
 from runtime.conversation_runtime import ConversationRuntime
 
 

@@ -1,9 +1,13 @@
-"""
-Tool interface.
+"""The native face of a tool adapter.
 
-Tools are the on-demand capability layer of Second Brain.
-A tool accepts structured input, inspects local state or external systems,
-and returns a ToolResult that is useful both to frontends and to the LLM.
+Nothing subclasses this by hand. A tool is sandboxed code, and
+``sandbox.bridge`` builds a subclass of this class at load whose ``run``
+forwards into a box. What lives here is the half the *tool registry* needs to
+see: ``ToolResult``, ``to_schema``, and the declarations both read.
+
+Tools are the on-demand capability layer of Second Brain. A tool accepts
+structured input, inspects local state or external systems, and returns a
+ToolResult that is useful both to frontends and to the LLM.
 
 Unlike tasks, tools do not run automatically over every file. They are
 called explicitly by the agent, the UI, or other tools and return
@@ -15,7 +19,8 @@ Tool schemas map directly into LLM function calling:
     - parameters  -> JSON schema for arguments
 
 The same tool contract is used everywhere: REPL, installed frontends, package
-commands, and agent turns.
+commands, and agent turns. See ``templates/tool_template.py`` for what an
+author actually writes.
 """
 
 import logging

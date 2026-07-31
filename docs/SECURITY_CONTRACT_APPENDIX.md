@@ -974,4 +974,4 @@ dotted name, which is a question nobody can answer. Read-only members of
 write-shaped families (`plugin.list`, `conv.read`) carry their own phrases,
 because overstating a grant erodes trust in the dialog as fast as
 understating it erodes safety. A command declaring nothing falls back to the
-bare `Approve /x?`, which is every unmigrated native command.
+bare `Approve /x?` — a command that performs no consequential effect.

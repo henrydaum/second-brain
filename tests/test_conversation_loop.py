@@ -15,7 +15,7 @@ from state_machine.conversation import CallableSpec
 from state_machine.conversation_phases import BASE_PHASE
 
 from attachments.attachment import Attachment
-from plugins.BaseTool import ToolResult
+from plugins.native.tool import ToolResult
 from runtime.conversation_loop import ConversationLoop
 from runtime.hooks import HookRegistry
 
@@ -316,15 +316,23 @@ def test_persistently_empty_response_still_ends_the_turn():
 
 class _StreamingLLM(_FakeLLM):
     """Streams each queued response's content in 4-char fragments, then
-    returns the same LLMResponse shape as the blocking call."""
+    returns the same LLMResponse shape as the blocking call.
+
+    One method for both paths, like a real backend: ``request.stream`` says
+    whether the caller wants deltas. There were two (``chat_with_tools`` and
+    ``chat_with_tools_streaming``) while a backend could be an in-process
+    service, and the adapter chose between them.
+    """
 
     supports_streaming = True
 
-    def chat_with_tools_streaming(self, messages, tools, attachments=None, on_delta=None):
-        response = self.chat_with_tools(messages, tools, attachments)
+    def chat(self, request, on_delta=None):
+        response = super().chat(request)
+        if not (request.stream and on_delta):
+            return response
         content = response.content or ""
         for i in range(0, len(content), 4):
-            if on_delta and not on_delta(content[i:i + 4]):
+            if not on_delta(content[i:i + 4]):
                 break
         return response
 
@@ -383,8 +391,8 @@ def test_cancel_mid_stream_stops_backend_and_skips_send_text():
     wrapper_returns = []
 
     class _CancellingLLM(_StreamingLLM):
-        def chat_with_tools_streaming(self, messages, tools, attachments=None, on_delta=None):
-            response = self.chat_with_tools(messages, tools, attachments)
+        def chat(self, request, on_delta=None):
+            response = _FakeLLM.chat(self, request)
             wrapper_returns.append(on_delta("partial "))
             cancel.set()
             wrapper_returns.append(on_delta("text"))
@@ -409,12 +417,13 @@ def test_stream_error_emits_aborted_done_then_non_streaming_retry():
     class _OverflowLLM:
         context_size = 0
         supports_streaming = True
+        loaded = True
+        name = "overflow"
 
-        def chat_with_tools_streaming(self, messages, tools, attachments=None, on_delta=None):
-            on_delta("par")
-            raise RuntimeError("prompt tokens exceed model token limit")
-
-        def chat_with_tools(self, messages, tools, attachments=None):
+        def chat(self, request, on_delta=None):
+            if request.stream and on_delta:
+                on_delta("par")
+                raise RuntimeError("prompt tokens exceed model token limit")
             return _response(content="Recovered.")
 
     cs = _agent_state()
@@ -437,8 +446,10 @@ def test_stream_error_emits_aborted_done_then_non_streaming_retry():
 
 def test_no_on_delta_means_blocking_call_even_with_streaming_backend():
     class _NeverStream(_StreamingLLM):
-        def chat_with_tools_streaming(self, *a, **k):
-            raise AssertionError("streaming path must not be used")
+        def chat(self, request, on_delta=None):
+            if request.stream and on_delta:
+                raise AssertionError("streaming path must not be used")
+            return _FakeLLM.chat(self, request)
 
     cs = _agent_state()
     llm = _NeverStream([_response(content="Plain.")])
@@ -459,10 +470,10 @@ def test_queued_message_is_absorbed_mid_turn():
     runtime = SimpleNamespace(sessions={"chat": session})
 
     class _QueueingLLM(_FakeLLM):
-        def chat_with_tools(self, messages, tools, attachments=None):
+        def chat(self, request, on_delta=None):
             if not self.calls:  # first call: simulate a mid-turn user message
                 session.pending_user_messages.append("wait, also do X")
-            return super().chat_with_tools(messages, tools, attachments)
+            return super().chat(request, on_delta)
 
     cs = _agent_state()
     llm = _QueueingLLM([_response(content="First answer."), _response(content="Second answer.")])
@@ -525,7 +536,11 @@ def test_tool_can_stage_attachment_for_followup_llm_call():
 
     assert reply == "I can see it now."
     assert not llm.attachments[0]
-    assert [a.file_name for a in llm.attachments[1]] == ["photo.png"]
+    # Plain ``{path, modality, file_name}`` dicts, which is what an
+    # ``LLMRequest`` carries. They used to arrive as ``Attachment`` objects,
+    # because the adapter rebuilt an ``AttachmentBundle`` for the old
+    # in-process contract; nothing rebuilds them and no backend wants them to.
+    assert [a["file_name"] for a in llm.attachments[1]] == ["photo.png"]
 
 
 def test_compaction_uses_compactor_service_directly():
@@ -587,12 +602,12 @@ class _OverflowLLM(_FakeLLM):
         super().__init__(responses)
         self.overflows = overflows
 
-    def chat_with_tools(self, messages, tools, attachments=None):
+    def chat(self, request, on_delta=None):
         if self.overflows > 0:
             self.overflows -= 1
-            self.calls.append(messages)
+            self.calls.append(list(request.messages))
             raise RuntimeError(_OVERFLOW_ERROR)
-        return super().chat_with_tools(messages, tools, attachments=attachments)
+        return super().chat(request, on_delta)
 
 
 class _CountingCompactor:
@@ -852,13 +867,11 @@ def test_agent_complete_selects_the_session_llm(monkeypatch):
     seen = []
 
     class Brain:
-        # The native backend contract, in full: ``as_brain`` wraps anything
-        # exposing this in a ``NativeBrain``, which calls it with tools and an
-        # attachment bundle. A double taking ``messages`` alone passed only
-        # because the handler used to call it directly — which meant the
-        # handler spoke a language no real brain answered to.
-        def chat_with_tools(self, messages, tools=None, attachments=None):
-            seen.append(messages)
+        # The backend contract, in full. A double taking ``messages`` alone
+        # passed only because the handler used to call it directly — which
+        # meant the handler spoke a language no real brain answered to.
+        def chat(self, request, on_delta=None):
+            seen.append(list(request.messages))
             return SimpleNamespace(
                 is_error=False,
                 content="summary",

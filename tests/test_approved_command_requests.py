@@ -3,7 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from plugins.BaseCommand import BaseCommand
+from plugins.native.command import BaseCommand
 from plugins.command_registry import CommandRegistry
 from sandbox.approval import describe_grant, phrase_for
 from sandbox.bridge import adapt
@@ -164,7 +164,7 @@ def test_the_dialog_names_the_scope_rather_than_just_the_command():
 
 
 def test_a_command_declaring_nothing_falls_back_to_the_bare_question():
-    """Every unmigrated native command lands here, and must still render."""
+    """A command with no consequential effect still has to render a dialog."""
     assert describe_grant("legacy", []) == "Approve /legacy?"
 
 

@@ -668,7 +668,7 @@ def test_the_validator_flags_an_unmarked_credential(tmp_path):
     plugin = tmp_path / "tool_search.py"
     plugin.write_text('''"""A tool."""
 
-from plugins.BaseTool import BaseTool
+from guest.bases import BaseTool
 
 
 class Search(BaseTool):
@@ -696,7 +696,7 @@ def test_an_already_marked_setting_is_not_flagged(tmp_path):
     plugin = tmp_path / "tool_search.py"
     plugin.write_text('''"""A tool."""
 
-from plugins.BaseTool import BaseTool
+from guest.bases import BaseTool
 
 
 class Search(BaseTool):

@@ -408,7 +408,7 @@ def _drain(made, recorded, timeout=3.0):
 
 def test_a_migrated_frontend_looks_native(frontend):
     """Everything downstream must keep seeing an ordinary frontend."""
-    from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+    from plugins.native.frontend import BaseFrontend, FrontendCapabilities
 
     assert isinstance(frontend, BaseFrontend)
     assert frontend.name == "web"

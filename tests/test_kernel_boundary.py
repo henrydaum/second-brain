@@ -76,7 +76,7 @@ def _plugin_imports(tree):
                 for alias in node.names:
                     full = f"{mod}.{alias.name}"
                     # ``from plugins.services import service_llm`` imports a
-                    # module; ``from plugins.BaseTool import BaseTool`` a name.
+                    # module; ``from plugins.native import BaseTool`` a name.
                     yield full if _is_module(full) else mod
 
 
@@ -192,4 +192,4 @@ def test_scanner_still_sees_known_edges():
     every test above would pass vacuously. Pin one known edge per group."""
     edges = _collect_edges()
     assert "plugins.plugin_discovery" in edges            # substrate
-    assert "plugins.BaseService" in edges                 # base class
+    assert "plugins.native.tool" in edges                  # base class

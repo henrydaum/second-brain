@@ -1,4 +1,12 @@
-"""Slash-command plugin contract."""
+"""The native face of a slash-command adapter.
+
+Nothing subclasses this by hand. A command is sandboxed code, and
+``sandbox.bridge`` builds a subclass of this class at load whose ``run``
+forwards into a box. What lives here is the half the *command registry* needs
+to see: the declarations it reads and the approval question it asks.
+
+See ``templates/command_template.py`` for what an author actually writes.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +14,7 @@ from state_machine.conversation import FormStep
 
 
 class BaseCommand:
-    """Base command."""
+    """What the kernel sees of a slash command."""
     name: str = ""
     description: str = ""
     category: str = "Other"
@@ -49,10 +57,6 @@ class BaseCommand:
 
     def form(self, args: dict, context) -> list[FormStep]:
         """Handle form."""
-        return []
-
-    def arg_completions(self, context) -> list[str]:
-        """Handle arg completions."""
         return []
 
     def run(self, args: dict, context) -> str | None:

@@ -49,9 +49,11 @@ logger = logging.getLogger("LLMClass")
 BACKEND_PREFIX = "llm_"
 BACKEND_BASE = "BaseLLMBackend"
 
-# Fallback when a profile names no backend. Kept as the historical class name
-# so existing configs keep resolving while the store still ships the native
-# LiteLLM service.
+# Fallback when a profile names no backend. Deliberately the *historical*
+# class name: the store's backend calls itself ``LiteLLMBackend`` and claims
+# this one with ``replaces = ["LiteLLMService"]``, so every config a user
+# already has keeps resolving through ``backend_aliases``. Not a migration
+# shim — a stored value nobody rewrites, and the alias is how it stays valid.
 DEFAULT_BACKEND = "LiteLLMService"
 
 
@@ -483,179 +485,6 @@ class Brain:
         return response
 
 
-class NativeBrain(Brain):
-    """A :class:`Brain` over an unmigrated ``BaseLLM`` service instance.
-
-    Same interface, none of the isolation: the backend runs in the kernel's
-    own process, holding its own provider library and its own connection. This
-    is the contract being migrated away from, kept working so that migrating
-    is a choice per backend rather than a flag day.
-    """
-
-    def __init__(self, name: str, profile: dict, config: dict | None = None,
-                 service=None):
-        super().__init__(name, profile, config)
-        self._service = service
-
-    @property
-    def supports_streaming(self) -> bool:
-        """Asked of the instance, since a native backend declares nothing."""
-        return bool(getattr(self._service, "supports_streaming", False))
-
-    @property
-    def supports_tool_choice(self) -> bool:
-        """Asked of the instance."""
-        return bool(getattr(self._service, "supports_tool_choice", False))
-
-    @property
-    def loaded(self) -> bool:
-        """The instance's own flag; there is no process to point at.
-
-        Absent means *ready*, matching the kernel's long-standing
-        ``getattr(llm, "loaded", True)`` convention: an object that does not
-        track loadedness has nothing to load, and treating it as unloaded
-        would make it permanently unusable.
-        """
-        if self._service is None:
-            return False
-        return bool(getattr(self._service, "loaded", True))
-
-    def load(self) -> bool:
-        """Load the service, if it is the sort of thing that loads."""
-        if self._service is None:
-            return False
-        if self.loaded:
-            return True
-        loader = getattr(self._service, "load", None)
-        if not callable(loader):
-            return True
-        try:
-            return bool(loader())
-        except Exception:
-            logger.exception("native LLM %r failed to load", self.name)
-            return False
-
-    @property
-    def available(self) -> bool:
-        """Whether there is an instance behind this at all."""
-        return self._service is not None
-
-    @property
-    def native_modalities(self) -> set:
-        """Asked of the instance, which declares it as an attribute."""
-        declared = getattr(self._service, "native_attachment_modalities", None)
-        return set(declared) if declared else {"image", "audio", "video"}
-
-    def unload(self) -> None:
-        """Unload the service, if it is the sort of thing that unloads."""
-        unloader = getattr(self._service, "unload", None)
-        if self._service is None or not self.loaded or not callable(unloader):
-            return
-        try:
-            unloader()
-        except Exception:
-            logger.exception("native LLM %r failed to unload", self.name)
-
-    def chat(self, request: LLMRequest, on_delta=None) -> LLMResponse:
-        """Call the native instance, translating both directions.
-
-        The native contract still wants a live ``AttachmentBundle`` and an
-        ``on_delta`` returning a bool, so this is where the old shapes are
-        rebuilt — in one place, on its way out, rather than spread through the
-        kernel.
-        """
-        if not self.loaded and not self.load():
-            return LLMResponse.failure("no LLM loaded", "not_loaded")
-
-        kwargs = dict(request.params or {})
-        bundle = _native_bundle(request.attachments)
-        streaming = bool(request.stream and on_delta is not None
-                         and self.supports_streaming)
-        try:
-            if streaming:
-                def sink(fragment):
-                    """The old contract, preserved where it still works.
-
-                    A native backend runs in this process, so it *can* be told
-                    to stop consuming — the falsy return the kernel's
-                    ``_emit_delta`` produces on cancellation still reaches it.
-                    A sandboxed backend cannot be told anything mid-call; it
-                    is cancelled instead, which is the stronger mechanism.
-                    """
-                    return bool(on_delta(fragment))
-                native = self._service.chat_with_tools_streaming(
-                    request.messages, request.tools, on_delta=sink,
-                    attachments=bundle, **kwargs)
-            else:
-                native = self._service.chat_with_tools(
-                    request.messages, request.tools, attachments=bundle,
-                    **kwargs)
-        except Exception as exc:
-            from sandbox.guest.llm import is_context_limit_error
-            message = extract_llm_error_text(exc)
-            if is_context_limit_error(exc) or getattr(exc, "code", "") == "context_limit":
-                raise LLMProviderError(message, code="context_limit") from exc
-            return LLMResponse.failure(message)
-
-        response = LLMResponse(
-            content=getattr(native, "content", "") or "",
-            tool_calls=list(getattr(native, "tool_calls", []) or []),
-            prompt_tokens=getattr(native, "prompt_tokens", None),
-            cached_prompt_tokens=getattr(native, "cached_prompt_tokens", None),
-            error=getattr(native, "error", None),
-            error_code=getattr(native, "error_code", None),
-        )
-        if response.error_code == "context_limit":
-            raise LLMProviderError(response.error or "context limit exceeded",
-                                   code="context_limit")
-        return response
-
-
-def as_brain(target, name: str = "", config: dict | None = None):
-    """Whatever a caller is holding, as something with ``.chat``.
-
-    A :class:`Brain` passes through. Anything else exposing the old
-    ``chat_with_tools`` interface — an unmigrated backend, a stress harness's
-    fake, a test double — is wrapped in a :class:`NativeBrain`, which is what
-    that class was for.
-
-    This is the seam that lets the kernel speak exactly one language while the
-    old contract is still out there. Without it, every caller that injects its
-    own model object would have to be migrated in the same commit as the
-    kernel, which is the flag day dual mode exists to avoid.
-    """
-    if target is None or isinstance(target, Brain):
-        return target
-    if not hasattr(target, "chat_with_tools"):
-        return target
-    wrapped = NativeBrain(
-        name or getattr(target, "model_name", "") or "llm",
-        {"llm_context_size": getattr(target, "context_size", 0) or 0,
-         "llm_capabilities": dict(getattr(target, "capabilities", {}) or {})},
-        config or {}, service=target)
-    return wrapped
-
-
-def _native_bundle(attachments):
-    """Rebuild an ``AttachmentBundle`` for a backend still expecting one."""
-    if not attachments:
-        return None
-    try:
-        from attachments.attachment import Attachment, AttachmentBundle
-    except Exception:
-        return None
-    rebuilt = []
-    for item in attachments:
-        if not isinstance(item, dict):
-            rebuilt.append(item)
-            continue
-        try:
-            rebuilt.append(Attachment.from_dict(item))
-        except Exception:
-            logger.warning("could not rebuild an attachment for a native "
-                           "backend: %r", item)
-    return AttachmentBundle.from_iterable(rebuilt) if rebuilt else None
-
 
 # ──────────────────────────────────────────────────────────────────────
 # The registry proper: profiles in, brains out.
@@ -738,10 +567,9 @@ def default_name(config: dict) -> str:
 def default_brain(config: dict) -> Brain | None:
     """The brain the default profile names, if it can actually run.
 
-    Returning an unusable brain here would shadow a working model registered
-    elsewhere — during the migration that is the unmigrated router, and a turn
-    that fails because a *configured but uninstalled* profile won resolution
-    is a confusing way to lose.
+    Returning an unusable brain here would shadow a working model injected
+    elsewhere, and a turn that fails because a *configured but uninstalled*
+    profile won resolution is a confusing way to lose.
     """
     return usable_brain(default_name(config))
 
@@ -784,12 +612,19 @@ def unload_all() -> None:
 
 
 def describe() -> list[dict]:
-    """One row per profile, for ``/llm`` and ``/services``."""
+    """One row per profile, for ``/llm`` and ``/services``.
+
+    ``sandboxed`` is a constant. It distinguished a ``Brain`` from the
+    ``NativeBrain`` that wrapped an unmigrated in-process backend; there is no
+    such thing now, every backend runs in a box. The key stays because it is
+    part of what the ``llm.list`` Request answers with, and a plugin reading a
+    field that quietly disappears is worse than one reading a true constant.
+    """
     return [{
         "model_name": name,
         "class": target.backend_name,
         "endpoint": target.base_url,
         "context_size": target.context_size,
         "loaded": target.loaded,
-        "sandboxed": not isinstance(target, NativeBrain),
+        "sandboxed": True,
     } for name, target in sorted(brains().items())]

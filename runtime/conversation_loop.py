@@ -147,8 +147,8 @@ class ConversationLoop:
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
         # Sink for streamed text-delta payloads (see AGENT_TEXT_DELTA in
-        # events/event_channels.py). None = streaming off; the loop then
-        # calls the blocking chat_with_tools exactly as before.
+        # events/event_channels.py). None = streaming off, which the loop
+        # spells by leaving ``LLMRequest.stream`` false.
         self.on_delta = on_delta
         self.cancel_event = cancel_event
         self.runtime = runtime
@@ -185,11 +185,6 @@ class ConversationLoop:
         # The brain that actually took the most recent call (escorts may swap
         # request.llm per call); the ledger records this, not the default.
         self._last_llm_used = None
-        # ``self.llm`` may be a Brain or an object speaking the old contract;
-        # it is adapted once and remembered, keyed on the object itself so a
-        # caller swapping it mid-life is noticed.
-        self._adapted_llm = None
-        self._adapted_source = None
         # End-turn doorman state (reset per drive). The once-flags shape the
         # NEXT model call only: ephemeral notes are shown to the model without
         # entering history; the overrides narrow/force the toolbox for a
@@ -792,33 +787,25 @@ class ConversationLoop:
         return getattr(self.llm, "name", "") or ""
 
     def _brain(self, ref):
-        """The brain a request names, falling back to the loop's default.
-
-        Everything is put through ``as_brain`` on the way out, so a model
-        object injected directly — a test double, an unmigrated backend —
-        is adapted rather than refused. The loop then
-        only ever knows one interface.
-        """
+        """The brain a request names, falling back to the loop's default."""
         from llm import resolve
-        from llm.registry import as_brain
 
         config = (getattr(self.runtime, "config", None) if self.runtime
                   else None) or {}
         if ref is None or ref == "":
             return self._default_brain()
-        resolved = resolve(ref, config)
-        if resolved is None:
-            return self._default_brain()
-        return as_brain(resolved, config=config) or self._default_brain()
+        return resolve(ref, config) or self._default_brain()
 
     def _default_brain(self):
-        """This loop's own brain, adapted once and remembered."""
-        from llm.registry import as_brain
+        """This loop's own brain.
 
-        if self._adapted_llm is None or self._adapted_source is not self.llm:
-            self._adapted_source = self.llm
-            self._adapted_llm = as_brain(self.llm)
-        return self._adapted_llm
+        Nothing adapts it any more. A directly injected model object used to
+        be wrapped in a ``NativeBrain`` on the way past, because a backend
+        could still be an in-process service exposing ``chat_with_tools``.
+        Every backend runs in a box now, so whatever is injected here has to
+        speak ``chat`` like a real one.
+        """
+        return self.llm
 
     def _call_backend(self, request):
         """The innermost step of the escort onion: the actual backend call,

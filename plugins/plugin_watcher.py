@@ -11,7 +11,7 @@ from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
 import trees
 from plugins.plugin_paths import plugin_info
-from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
+from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin
 
 logger = logging.getLogger("PluginWatcher")
 
@@ -188,8 +188,6 @@ class PluginWatcher:
             logger.warning(f"Plugin watcher failed to load {path.name}: {error}")
             self._notify(f"✕ Plugin registration failed: {name or path.name}\n{error}")
             return {"ok": False, "error": error}
-        if info.plugin_type == "service":
-            wire_peer_services(self.services)
         if info.plugin_type == "command":
             self._refresh_commands()
         self._reconcile_plugin_config()
@@ -330,11 +328,13 @@ class PluginWatcher:
             runtime.refresh_session_specs()
 
     def _refresh_llm_backends(self):
-        """Rescan backends after a file changed, both worlds.
+        """Rescan backends after a file changed.
 
-        Sandboxed backends are found by scanning declarations, so discovery is
-        the whole update; native ones still need the legacy resync while the
-        old contract exists.
+        A backend is found by scanning declarations, so ``discover`` is the
+        whole update. ``refresh(force=True)`` is what makes it take effect:
+        the unforced path short-circuits on an unchanged *profile dict*, so a
+        backend whose source changed would leave every open brain running the
+        old code and report success.
         """
         try:
             import llm

@@ -1,4 +1,4 @@
-from plugins.BaseFrontend import BaseFrontend
+from plugins.native.frontend import BaseFrontend
 from events.event_bus import bus
 from pipeline.database import Database
 from tests.support import plain_runtime

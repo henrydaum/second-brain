@@ -48,6 +48,13 @@ def frontend_cls(tmp_path_factory):
     source = _store_module_source()
     if source is None:
         pytest.skip(f"{_STORE_REL} not present on a local store ref")
+    # This frontend is not migrated: it subclasses the native base and the
+    # bridge will not carry it, so the real app cannot load it at all. These
+    # tests import it directly to keep its behaviour pinned until somebody
+    # ports it, which means following the base class when it moves. Delete
+    # this substitution the moment the store file says ``guest.bases``.
+    source = source.replace("from plugins.BaseFrontend import",
+                            "from plugins.native.frontend import")
     path = tmp_path_factory.mktemp("mcp_frontend") / "frontend_mcp_server.py"
     path.write_text(source, encoding="utf-8")
     spec = importlib.util.spec_from_file_location("frontend_mcp_server_under_test", path)

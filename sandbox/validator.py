@@ -43,18 +43,28 @@ FAMILIES = {"tool": "BaseTool", "task": "BaseTask", "service": "BaseService",
 
 # The contract itself. A plugin has to import its base class to subclass it,
 # and these carry declarations rather than behaviour. The guest package is the
-# new home; the legacy ``plugins.Base*`` modules stay allowed while the two
-# trees coexist.
+# only home: ``plugins.Base*`` was allowed while the two trees coexisted, and
+# admitting it now would let a native file pass the import check and reach the
+# bridge, which would build an adapter over a ``run`` that wants a context.
 BASE_TO_FAMILY = {base: family for family, base in FAMILIES.items()}
 
-CONTRACT_MODULES = (
-    {f"plugins.{base}" for base in FAMILIES.values()}
-    | {"guest", "guest.bases", "guest.box", "guest.sdk", "guest.forms", "guest.hooks",
-       "guest.parsing", "guest.llm",
-       "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box",
-       "sandbox.guest.forms",
-       "sandbox.guest.hooks", "sandbox.guest.parsing", "sandbox.guest.llm"}
-)
+CONTRACT_MODULES = {
+    "guest", "guest.bases", "guest.box", "guest.sdk", "guest.forms", "guest.hooks",
+    "guest.parsing", "guest.llm",
+    "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box",
+    "sandbox.guest.forms",
+    "sandbox.guest.hooks", "sandbox.guest.parsing", "sandbox.guest.llm",
+}
+
+# The retired native base classes, mapped to the guest class that replaces
+# each — so importing one is answered with the line that fixes it rather than
+# the generic kernel-module error, which prescribes "a Request" and is useless
+# here. Both spellings are listed: the classes moved to ``plugins/native/``,
+# and a plugin written against either path needs the same one-line change.
+RETIRED_BASES = {f"plugins.{base}": base for base in FAMILIES.values()}
+RETIRED_BASES.update({f"plugins.native.{family}": base
+                      for family, base in FAMILIES.items()})
+RETIRED_BASES["plugins.native"] = ""
 
 # Pure stdlib: computation only, no way to reach the environment.
 #
@@ -245,7 +255,7 @@ EFFECT_METHODS = {
 
 # Ceilings mirrored from the interpreter. Exceeding one is not an error —
 # the plugin declares intent, the kernel clamps.
-CEILINGS = {"load_timeout": 600.0, "timeout": 600.0, "max_calls": 25,
+CEILINGS = {"timeout": 600.0, "max_calls": 25,
             "memory_mb": 4096, "batch_size": 1000,
             "poll_interval": 3600.0, "max_poll_failures": 100}
 
@@ -396,6 +406,17 @@ class _Walker(ast.NodeVisitor):
     def _check_module(self, name: str, node):
         """Classify one imported module."""
         if name in CONTRACT_MODULES:
+            return
+        if name in RETIRED_BASES:
+            # Answered before the KERNEL_MODULES branch below, which would
+            # otherwise say "reaches the kernel side" and prescribe a Request
+            # — true, and useless. What this file needs is one changed import.
+            base = RETIRED_BASES[name] or "Base..."
+            self.add(ERROR, node,
+                     f"imports {name!r}, a native base class. Every plugin is "
+                     f"loaded through the sandbox bridge, and a plugin written "
+                     f"against the native contract no longer loads at all",
+                     f"from guest.bases import {base}")
             return
         key = _module_root(name)
         if key in PURE_MODULES or name in PURE_MODULES:
@@ -901,9 +922,9 @@ def _check_class(walker: _Walker, family: str, base: str, cls, known_names):
 # ``sandbox/isolation.py``. The kernel derives it from the file's tree now, so
 # reading it off the file would at best be ignored and at worst be believed.
 #
-# There is no allowlist of collectable keys, on purpose: the dual-mode loader
-# copies whatever a base class grows onto its adapter, so a list that drifts
-# silently drops a plugin's schema.
+# There is no allowlist of collectable keys, on purpose: the bridge copies
+# whatever a base class grows onto its adapter, so a list that drifts silently
+# drops a plugin's schema.
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the
@@ -952,9 +973,8 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
         if class_node is not None:
             scopes.append(_assignments(class_node.body))
         # Every literal class attribute, not just the documented ones: the
-        # dual-mode loader has to copy ``parameters``, ``description`` and the
-        # rest onto its adapter, or the registry advertises a plugin with no
-        # schema.
+        # bridge has to copy ``parameters``, ``description`` and the rest onto
+        # its adapter, or the registry advertises a plugin with no schema.
         for scope in scopes:
             for key, node in scope.items():
                 if key.startswith("_"):

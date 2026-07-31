@@ -181,7 +181,7 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from runtime.bootstrap import start_frontends
-from plugins.BaseService import should_autoload_service
+from plugins.native.service import should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 from plugins.plugin_watcher import PluginWatcher
 

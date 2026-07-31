@@ -570,11 +570,12 @@ never trap the agent: past `DOORMAN_FIRE_LIMIT` interventions in one turn the
 kernel lets it out regardless.
 
 `turn_start` is the mirror image — it runs before the agent begins, and it
-adjusts rather than judges. Note one real limit: the kernel-side way to slip an
-attachment into the coming turn is `runtime.add_turn_attachment`, and **no
-`session.*` Request exposes it yet**. So a sandboxed `turn_start` hook can read
-and reshape, but staging an attachment from inside a box is not currently
-reachable. Say so if you need it; it is the obvious next Request.
+adjusts rather than judges. Note one real limit: **staging an attachment into
+the coming turn is not reachable from inside a box.** No `session.*` Request
+exposes it, and the kernel-side method that used to be pointed at here had no
+callers either, so it went with the rest of the dead surface. A sandboxed
+`turn_start` hook can read and reshape; say so if you need to stage, and it
+becomes a Request with a handler behind it rather than a name in a doc.
 
 The `llm_call` escort holds the phone as well as the request:
 
@@ -1089,8 +1090,9 @@ Write markdown with an `##` heading, and write it for the weakest model you
 expect to run — it is competing for attention with everything else in the
 prompt.
 
-> Older plugins spell the method `agent_prompt_for`. That still works and is
-> still collected, but it is going away; use `agent_prompt` in anything new.
+> Older plugins spell the method `agent_prompt_for`. That name is gone — a
+> plugin still using it contributes nothing to the prompt, silently. Rename it
+> to `agent_prompt`; the signature is unchanged.
 
 **Declaring a file makes it importable.** `dependencies_files` names files
 from other folders; they join your box's namespace, so you reach them as

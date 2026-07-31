@@ -556,7 +556,7 @@ def _turn_harness(tmp_path, responses, turn=None):
     """A real runtime whose agent gets scripted responses."""
     from agent.tool_registry import ToolRegistry
     from pipeline.database import Database
-    from plugins.BaseTool import BaseTool, ToolResult
+    from plugins.native.tool import BaseTool, ToolResult
     from runtime.conversation_runtime import ConversationRuntime
 
     def _resp(content="", tool_calls=None):
@@ -569,10 +569,13 @@ def _turn_harness(tmp_path, responses, turn=None):
     class LLM:
         context_size = 0
         model_name = "fake"
+        name = "fake"
         loaded = True
+        supports_streaming = False
 
-        def chat_with_tools(self, messages, tools=None, attachments=None):
-            text = "\n".join(str(m.get("content") or "") for m in messages)
+        def chat(self, request, on_delta=None):
+            text = "\n".join(str(m.get("content") or "")
+                             for m in request.messages)
             if "[Note: you are a background agent" in text:
                 return _resp(content="CHILD REPORT")
             seen.append(text)

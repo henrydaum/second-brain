@@ -1,12 +1,17 @@
 # Migrating a plugin to the sandbox
 
-One plugin at a time. The app keeps working throughout — unmigrated plugins
-run exactly as they do now, and a migrated one is a single file you can revert
-with `git checkout`.
+For plugins on the **store branch**. Everything in the kernel tree is done.
 
-There is no second copy of anything. You rewrite the file in place, and the
-harness compares your working tree against the version git still has. The old
-version is never registered, so it never collides on `name`.
+> **An unmigrated plugin does not load.** It used to: the loader fell through
+> to an ordinary import for a file written against `plugins.BaseTool`, which
+> is what let the two contracts coexist while the migration ran. That is gone
+> — `sandbox.bridge.adapt` is the only way in, and a file it will not carry is
+> a capability that silently is not there. Check the log for
+> *"did not load: plugins must be written against the SDK"*.
+
+One plugin at a time, rewritten in place. There is no second copy of anything,
+and no version of the file is registered but the one you are editing, so it
+never collides on `name`.
 
 ---
 
@@ -46,6 +51,10 @@ Four mechanical changes, then the effects:
 | Returning | `ToolResult(data=x)` | `return x` |
 | Returning with extras | `ToolResult(data=x, llm_summary=s)` | `sdk.ok(x, llm_summary=s)` |
 | Failing | `ToolResult.failed(msg)` | `sdk.fail(msg)`, or just let it raise |
+| Prompt method | `agent_prompt_for(self, ctx)` | `agent_prompt(self, sdk)` |
+
+The last one is silent if you miss it: the old name is not collected any more,
+so the plugin loads fine and contributes nothing to the system prompt.
 
 The signature differs by family, and the **argument order changes** for two of
 them:

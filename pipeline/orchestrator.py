@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from runtime.context import build_context
 from pipeline.database import set_thread_priority_low
 from parsing import get_modality
-from plugins.BaseTask import BaseTask
+from plugins.native.task import BaseTask
 from events.event_bus import bus
 from events.event_channels import TASK_STARTED, TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
 

@@ -8,7 +8,7 @@ import shlex
 import uuid
 from typing import Callable
 
-from plugins.BaseCommand import BaseCommand
+from plugins.native.command import BaseCommand
 from bundled.frontends.helpers.formatters import md_table
 from state_machine.conversation import CallableSpec, FormStep
 
@@ -76,11 +76,6 @@ class CommandRegistry:
             except Exception:
                 pass
         return ctx
-
-    def get_completions(self, prefix: str) -> list[BaseCommand]:
-        """Get completions."""
-        prefix = prefix.lower()
-        return sorted([c for c in self._commands.values() if c.name.startswith(prefix)], key=lambda c: c.name)
 
     def dispatch_dict(
         self,
@@ -223,17 +218,6 @@ def parse_command_line(raw: str, form_factory: Callable[[dict, object], list[For
         if step.name not in args and not step.required:
             args[step.name] = step.default
     return args
-
-
-def format_command_call(name: str, args: dict | None = None) -> str:
-    """Format command call."""
-    parts = ["/" + str(name or "").strip().lstrip("/")]
-    for value in (args or {}).values():
-        if value is None:
-            continue
-        text = json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value)
-        parts.append(shlex.quote(text))
-    return " ".join(parts)
 
 
 def _peel(rest: str, *, last: bool, field_type: str) -> tuple[object, str]:

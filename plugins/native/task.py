@@ -1,51 +1,36 @@
-"""
-Task interface.
+"""The native face of a task adapter.
 
-Tasks are the background processing layer of Second Brain. The
-orchestrator does not need to know what a task means semantically; it
-only relies on the interface defined here.
+Nothing subclasses this by hand. A task is sandboxed code, and
+``sandbox.bridge`` builds a subclass of this class at load whose ``run``
+forwards into a box. What lives here is the half the *orchestrator* needs to
+see: ``TaskResult``, the declarations it schedules from, and the no-op
+``setup``/``teardown`` it calls at registration.
+
+Tasks are the background processing layer of Second Brain. The orchestrator
+does not need to know what a task means semantically; it only relies on the
+interface defined here.
 
 There are two trigger kinds:
 - trigger="path":
   keyed by file path, dispatched from file discovery and the path
-  dependency graph. Implement run(paths, context).
+  dependency graph. The guest implements ``run(sdk, paths)``.
 - trigger="event":
   keyed by run_id, dispatched from EventTrigger whenever a subscribed
-  bus channel fires. Implement run_event(run_id, payload, context).
+  bus channel fires. The guest implements ``run_event(sdk, run_id, payload)``.
 
-	A task declares:
-	- its trigger kind and, for event tasks, trigger_channels
-	- optional event_payload_schema metadata for guided manual triggering
-	- the file modalities it roots on, for root path tasks
-	- the tables it reads and writes
-	- whether readiness is AND or OR across declared inputs
-	- which shared services must be loaded first
+A task declares:
+- its trigger kind and, for event tasks, trigger_channels
+- optional event_payload_schema metadata for guided manual triggering
+- the file modalities it roots on, for root path tasks
+- the tables it reads and writes
+- whether readiness is AND or OR across declared inputs
+- which shared services must be loaded first
 
 Dependencies are derived automatically from reads and writes within the
 same trigger kind. Cross-kind reads are ambient database reads at run
 time, not graph edges. Tasks never reference each other by name.
 
-Example concrete task:
-
-	class EmbedText(BaseTask):
-		name = "embed_text"
-		modalities = ["text"]
-		reads = ["text_chunks"]
-		writes = ["text_embeddings"]
-		requires_services = ["text_embedder"]
-		output_schema = \"""
-			CREATE TABLE IF NOT EXISTS text_embeddings (
-				path TEXT,
-				chunk_index INTEGER,
-				embedding BLOB,
-				PRIMARY KEY (path, chunk_index)
-			)
-		\"""
-		batch_size = 16
-
-		def run(self, paths, context):
-			embedder = context.services.get("text_embedder")
-			...
+See ``templates/task_template.py`` for what an author actually writes.
 """
 
 import logging

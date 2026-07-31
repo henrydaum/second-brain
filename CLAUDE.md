@@ -56,12 +56,14 @@ kernel registries were scanning. A helper shared by *two* families now has no
 home: promote it to a service, or let the owning family hold it. Do not
 resurrect the root.
 
-`plugins/` is **exclusively substrate** — base classes, discovery, the watcher,
-`plugin_paths`, `memory_paths`, `command_registry`. It is not a tree. That is
-what lets `tests/test_kernel_boundary.py` treat any `plugins.*` import as
-allowed instead of maintaining a nine-entry allowlist by hand; what keeps it
-honest is `test_the_plugins_package_holds_no_implementations`, which fails on a
-tree-root-named folder or a class subclassing one of the five bases.
+`plugins/` is **exclusively substrate** — `native/` (the five adapter base
+classes), discovery, the watcher, `plugin_paths`, `memory_paths`,
+`command_registry`. It is not a tree. That is what lets
+`tests/test_kernel_boundary.py` treat any `plugins.*` import as allowed
+instead of maintaining a nine-entry allowlist by hand; what keeps it honest is
+`test_the_plugins_package_holds_no_implementations`, which fails on a
+tree-root-named folder or a class subclassing one of the five bases. `native/`
+passes both — it is not a root name, and the bases do not subclass each other.
 
 `migrations.py` moves an older DATA_DIR to this layout at boot — idempotent,
 stdlib-only, and it refuses to guess: anything in an old `helpers/` that is not
@@ -305,12 +307,27 @@ The loop now splits the bundle against the model's capabilities and the
 backend's `native_modalities`, appends the text fallback itself, and the box
 receives plain dicts whose bytes the backend reads with `sdk.fs.read_bytes`.
 
-**Backend discovery is sandbox-only.** Every installed provider is a
-`llm/llm_*.py` backend and runs through a `Brain` pool. The deprecated
-`service_llm.py` compatibility shim is gone.
-`llm.registry.as_brain` still adapts directly injected objects exposing
-`chat_with_tools` — test doubles use that seam — but
-plugin discovery never imports a native provider into the kernel.
+**Backend discovery is sandbox-only, and there is now no other kind.** Every
+installed provider is a `llm/llm_*.py` backend running through a `Brain` pool;
+plugin discovery never imports a provider into the kernel. `service_llm.py`
+went first, then `NativeBrain`/`as_brain` — the ~180-line adapter that let an
+object exposing the old `chat_with_tools` be driven as a brain. Its last
+holdouts were test doubles, so `tests/support.FakeLLM` is Brain-shaped now
+(`chat(request, on_delta=None) -> LLMResponse`), and `as_brain` went with it
+rather than surviving as an identity function.
+
+One consequence worth knowing when reading an older test: a double's recorded
+`attachments` are the routed `{path, modality, file_name}` **dicts** an
+`LLMRequest` carries. They used to be `Attachment` objects, because
+`NativeBrain` rebuilt an `AttachmentBundle` for the old contract.
+`describe()`'s `sandboxed` key survives as a literal `True` — it is part of
+what the `llm.list` Request answers with, and a field that quietly disappears
+is worse for a plugin than a true constant.
+
+`DEFAULT_BACKEND = "LiteLLMService"` is **not** a leftover: the store's
+backend calls itself `LiteLLMBackend` and claims the old name with
+`replaces = ["LiteLLMService"]`, so stored configs keep resolving through
+`backend_aliases`.
 
 `/llm` gained explicit `load` / `unload` actions. Loading used to be a side
 effect of editing a profile; now a brain holds real processes, so opening one
@@ -410,10 +427,16 @@ into the guest (cached until the plugin reloads — see `_cached_prompt`). So
 tidy: a string shadowing a method raises `TypeError` into `_collect`'s
 `except`, and the guidance would vanish with **no symptom at all**.
 
-For the same reason `_collect` and `bridge._prompt_method` still answer to the
-old `agent_prompt_for`: the store is half migrated, and dropping the unmigrated
-half silently is precisely the failure this doorway exists to prevent. Delete
-that fallback when the last store plugin is renamed, not before.
+`_collect` and `bridge._prompt_method` answered to the old `agent_prompt_for`
+for as long as any *loadable* plugin still wrote it. That is now nothing — the
+kernel tree never did, and the one migrated store file that did
+(`tool_sql_query`) was renamed in the same commit — so the fallback is gone.
+It is pinned as a **negative** in `test_the_old_prompt_spelling_contributes_
+nothing` rather than simply deleted, because the failure it guarded against is
+silence in either direction: a plugin whose prompt never arrives looks
+entirely healthy, so the rename has to be something the suite states out loud.
+Unmigrated store plugins still spelling it (`service_location`,
+`service_skills`) do not load at all, so they cannot be the silent case.
 
 ## Hardening applied for kernel reliability
 
@@ -774,8 +797,9 @@ one whose `_load()` opens a persistent box and whose `unload()` closes it.
 Methods named in `exports` become real attributes on the adapter, because
 native callers reach a service by attribute access (`services.get("x").m()`),
 not through `service.call`. The synthetic module supplies `build_services`,
-since that is how discovery finds services. The box owns the start deadline,
-so the adapter sets `load_timeout = 0` rather than race two timers.
+since that is how discovery finds services. The box owns the start deadline —
+`BaseService.load` used to wrap `_load` in a second wall-clock timer, and the
+adapter had to set `load_timeout = 0` to stop the two racing; both are gone.
 
 **Services are also the one family that may share a file, and they share a
 box when they do.** Every other family is registered *as* its file — discovery
@@ -983,34 +1007,60 @@ an `llm_call` hook rather than being ambient authority.
 `_load_plugin_module` calls `sandbox.bridge.adapt()`, which reads the file and
 answers with a *native-looking adapter* subclassing the real
 `BaseTool`/`BaseTask`/`BaseCommand`/`BaseService`/`BaseFrontend`; everything
-downstream registers and calls it unchanged. Detection is by AST, never by
-importing.
+downstream registers and calls it unchanged. Nothing is imported to decide
+this — the AST pass that reads declarations is the same one that answers
+whether the file can load. `_load_plugin_module` takes **only a path**: a box
+is loaded by file rather than imported, so the module name, tree and reload
+flag that five discovery loops used to pass said nothing the bridge could use.
 
-**The native fallthrough is gone.** `_load_plugin_module` used to fall back to
-an ordinary import when `adapt` declined, so migrated and unmigrated plugins
-coexisted and the app worked at every point in the migration — one file, one
-commit, `git checkout` to revert. That was the whole value of it, and it
-expired with the migration: past that point coexistence is only a way for
-unmediated code to keep running in the kernel's own process. A plugin the
-bridge will not carry now does not load.
+**The native fallthrough is gone**, and with it the detection half that chose
+between two loaders (`is_sandboxed`, `imports_sdk`, `SANDBOX_MODULES`). The
+loader used to fall back to an ordinary import when `adapt` declined, so the
+two contracts coexisted and the app worked at every point in the migration —
+one file, one commit, `git checkout` to revert. That was the whole value of
+it, and it expired with the migration: past that point coexistence is only a
+way for unmediated code to keep running in the kernel's own process.
+
+Deleting the detection pass **improved the error**, which is the tell that it
+was the right thing to remove. A non-SDK file now reaches `validate_file` like
+any other, and `plugins.Base*` is no longer in `CONTRACT_MODULES` — so instead
+of a generic "did not load", the author is told which line imports a native
+base class and given `from guest.bases import BaseTool` as the fix
+(`validator.RETIRED_BASES`). Keeping `plugins.Base*` admissible there would
+have been the real hazard: the file would pass the import check and the bridge
+would build an adapter over a `run` that wants a context.
 
 Refusal is **reported, never raised**. Every discovery loop reads `None` as
-"skip this file" with no `try` around it, so raising would let one unmigrated
-plugin abort the discovery of every other one. The warning names the file and
-points at the validator, because a plugin that vanishes silently is
-indistinguishable from one that was never installed.
+"skip this file" with no `try` around it, so raising would let one bad plugin
+abort the discovery of every other one. The warning names the file and points
+at the validator, because a plugin that vanishes silently is indistinguishable
+from one that was never installed.
 
-**The five `plugins/Base*.py` classes are not the shim and did not go with
-it.** They are what the adapter *is* — `bridge.NATIVE_BASES` maps each family
-to one, `_find_subclasses` uses them as discovery's predicate, `ToolResult`
-and `TaskResult` are the kernel's own result types, and `BaseFrontend`'s 940
-lines are the host-side routing the guest half deliberately does not own (see
+**`plugins/native/` is not the shim and did not go with it.** The five classes
+are what the adapter *is* — `bridge.NATIVE_BASES` maps each family to one,
+`_find_subclasses` uses them as discovery's predicate, `ToolResult` and
+`TaskResult` are the kernel's own result types, and `frontend.py`'s 940 lines
+are the host-side routing the guest half deliberately does not own (see
 **Frontends are resident boxes the kernel *drives***). Deleting them deletes
-the frontend layer, not a compatibility path. What *is* now vestigial is the
-native per-call-client contract — `BaseService.get_client` and the
-`shared = False` that selects it — which no bridged service can use, since a
-live client is precisely what cannot cross. It stays until the last store
-plugin written against it is migrated, then goes.
+the frontend layer, not a compatibility path.
+
+They were `plugins/BaseTool.py` and friends, and the filename went on saying
+"this is how you write a tool" long after that stopped being possible — so
+they moved, and lost every member only a hand-written native plugin could
+use: `BaseService.get_client`/`shared` (a live client is precisely what cannot
+cross a boundary), `set_peer_services` and the whole `wire_peer_services`
+chain (it handed a service a dict of native adapters no guest can see; peers
+are reached with `sdk.services.call`), `BaseService.load`'s timeout thread
+(the box owns the start deadline), and `BaseCommand.arg_completions`.
+
+**Import the submodule, never the package.** `plugins/native/__init__.py`
+re-exports nothing on purpose. The five differ enormously in what they drag
+in — `tool` and `task` are standalone, `command` needs
+`state_machine.conversation` for `FormStep`, `frontend` reaches the bus and
+the runtime — so a convenience re-export is not merely wasteful, it is a
+cycle: `agent.tool_registry` wants `BaseTool`, and pulling `command` alongside
+it routes back through `state_machine` into `agent.tool_registry` before it
+has finished defining `ToolRegistry`.
 
 **One caller still imports plainly, and it is not a plugin.**
 `parsing.discover` reaches `plugin_discovery.import_tree_module` to import
@@ -1425,7 +1475,7 @@ and FINISHED match up. See
 [state_machine/action.py](state_machine/action.py)
 `_CallableAction.execute` and `_run`.
 
-`BaseFrontend` ([plugins/BaseFrontend.py](plugins/BaseFrontend.py)) subscribes
+`BaseFrontend` ([plugins/native/frontend.py](plugins/native/frontend.py)) subscribes
 both events and routes them through `render_tool_status(session_key,
 payload)`. Rich frontends such as installed Telegram can edit a single status
 message in place; the REPL prints the same shapes to stdout.

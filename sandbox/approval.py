@@ -239,8 +239,10 @@ def describe_grant(name: str, requests) -> str:
     the capability is worth thinking about, not alphabetically — a person
     skimming should meet the shell and the network first.
 
-    Falls back to the bare question when a command declares nothing, which
-    is every unmigrated native command.
+    Falls back to the bare question when a command declares nothing — which
+    is a command that performs no consequential effect, or one whose author
+    forgot to list them. ``tests/test_command_approval_declarations.py``
+    catches the second.
     """
     seen, phrases = set(), []
     for kind in sorted(set(requests or ()), key=_grant_rank):

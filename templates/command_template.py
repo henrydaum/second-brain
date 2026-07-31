@@ -11,8 +11,7 @@ attribute a command can declare. This file covers what is specific to commands.
   Filename:       must start with "command_"
   Entry points:   run(self, sdk, args) and optionally form(self, sdk, args)
 
-WATCH THE ARGUMENT ORDER. The native contract was run(self, args, context);
-the sandboxed one is run(self, sdk, args).
+WATCH THE ARGUMENT ORDER: run(self, sdk, args), sdk first.
 
 Commands are for interactive UI and workflow control. If the agent should be
 able to call it, write a tool instead.

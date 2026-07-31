@@ -114,9 +114,10 @@ def resolve_agent_llm(profile_name: str, config: dict, services: dict = None):
     """Resolve the brain an agent profile should drive with.
 
     The registry answers first. ``services`` is the fallback and not a
-    vestige: while the native contract exists, a model may be registered as a
-    service the registry knows nothing about — the unmigrated router, a
-    harness's fake — and those are still legitimate brains.
+    vestige: a brain may be injected directly rather than configured as a
+    profile — a harness's fake, a caller wiring its own — and the registry
+    knows nothing about those. Whatever comes back has to speak ``chat``;
+    there is no adapter for anything else any more.
     """
     from llm import default_brain
     from llm.registry import usable_brain

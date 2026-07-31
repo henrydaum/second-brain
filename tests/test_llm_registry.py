@@ -2,10 +2,8 @@
 
 The claims worth pinning are the ones that used to be the router's job and
 are now nobody's: that a profile resolves without a service registry, that
-"loaded" means a live box rather than a flag, that the pool grows under
-concurrency and closes completely on unload, and that an unmigrated backend
-still answers — because until every backend migrates, dual mode *is* the
-contract.
+"loaded" means a live box rather than a flag, and that the pool grows under
+concurrency and closes completely on unload.
 """
 
 import threading
