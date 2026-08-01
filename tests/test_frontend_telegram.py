@@ -216,6 +216,48 @@ def test_typed_approvals_parse(module, text, expected):
     assert module._parse_approval(text) is expected
 
 
+def _frontend(module, remembered=None):
+    """The frontend without running ``__init__``, for the pure decisions."""
+    made = module.TelegramFrontend.__new__(module.TelegramFrontend)
+    made._approvals = dict(remembered or {})
+    return made
+
+
+def test_an_enum_approval_is_answered_with_its_own_value(module):
+    """A tapped button must answer in the shape that frame accepts.
+
+    Every sandbox Request dialog is typed ``string`` with an enum, and the
+    button carries one of its values. Coercing that to ``True`` — right for
+    the boolean gate a command declares, wrong here — meant the state machine
+    validated ``True`` against ``["allow", "deny"]``, refused it, and left the
+    frame up. The plugin on the other side waited out its dialog timeout and
+    was denied, while the person saw a dialog they had already answered.
+    """
+    sandboxed = _frontend(module, {"s1": {
+        "type": "string",
+        "enum": ["allow", "always:api.example.com", "deny"],
+        "enum_labels": ["Allow once", "Always allow api.example.com", "Deny"],
+    }})
+
+    assert sandboxed._approval_value("s1", "allow") == "allow"
+    assert sandboxed._approval_value("s1", "deny") == "deny"
+    # A remembering option's value carries colons of its own; the callback
+    # split keeps them, and nothing downstream may reinterpret them.
+    assert sandboxed._approval_value(
+        "s1", "always:api.example.com") == "always:api.example.com"
+
+
+def test_a_boolean_approval_still_answers_with_a_boolean(module):
+    """The command gate declares ``type="boolean"``, whose lenient parser
+    wants a bool — so the historical mapping has to survive for it."""
+    gate = _frontend(module, {"s1": {"type": "boolean"}})
+
+    assert gate._approval_value("s1", "allow") is True
+    assert gate._approval_value("s1", "deny") is False
+    # Nothing remembered — a restart, or a dialog this box never rendered.
+    assert _frontend(module)._approval_value("s1", "allow") is True
+
+
 def test_the_command_banner_quotes_arguments_with_spaces(module):
     assert module._command_call("packages", {"action": "install"}) == (
         "/packages install")
