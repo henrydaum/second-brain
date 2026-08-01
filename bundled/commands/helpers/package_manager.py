@@ -703,7 +703,9 @@ def _config_list(value) -> list:
 
 
 def _frontends(files: list[PlannedFile]) -> list[str]:
-    return _unique(_plugin_name(file.path, "frontend") for file in files if _entry_type(file.path) == "frontend")
+    return _unique(name for file in files
+                   if _entry_type(file.path) == "frontend"
+                   for name in _registered_names(file, "frontend"))
 
 
 def _services(files: list[PlannedFile]) -> list[str]:
@@ -716,11 +718,67 @@ def _services(files: list[PlannedFile]) -> list[str]:
     installed; its docstring still pointed at the helper that did the mapping,
     which has been gone since backends stopped being services.
     """
-    return _unique(
-        _plugin_name(file.path, "service")
-        for file in files
-        if _entry_type(file.path) == "service"
-    )
+    return _unique(name for file in files
+                   if _entry_type(file.path) == "service"
+                   for name in _registered_names(file, "service"))
+
+
+def _registered_names(file: PlannedFile, plugin_type: str) -> list[str]:
+    """What the registry will call the plugins in this file.
+
+    The filename is a *guess* at that and was being written into config as if
+    it were the answer: ``services/service_drive.py`` became ``drive`` while
+    the class registers as ``google_drive``, so installing it enabled a
+    service that does not exist and left the real one off. Every boot then
+    warned "unknown service 'drive', skipping" — the class of warning a person
+    learns to scroll past, over a config line only a reinstall would rewrite.
+
+    ``service_embed.py`` shows the other half: one file, two services. The
+    filename cannot express that at all, so *neither* embedder was enabled.
+
+    Read rather than imported, like every other declaration this module needs
+    — and the fallback is the old guess, because an unmigrated plugin declares
+    no ``name`` and its filename is the best answer available.
+    """
+    declared = _declared_names(_source_of(file))
+    return declared or [_plugin_name(file.path, plugin_type)]
+
+
+def _source_of(file: PlannedFile) -> str:
+    """A planned file's text: the store copy on install, the installed one on
+    uninstall — where the plan carries paths and the files are still there."""
+    if file.content is not None:
+        return file.content.decode("utf-8", "replace")
+    path = _target(file.path)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _declared_names(source: str) -> list[str]:
+    """Every ``name = "..."`` a class in this source declares, in file order."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    found = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for item in node.body:
+            if not isinstance(item, ast.Assign):
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == "name"
+                       for target in item.targets):
+                continue
+            if (isinstance(item.value, ast.Constant)
+                    and isinstance(item.value.value, str)
+                    and item.value.value):
+                found.append(item.value.value)
+    return _unique(found)
 
 
 def _entry_type(rel: str) -> str | None:

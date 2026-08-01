@@ -181,7 +181,7 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from runtime.bootstrap import start_frontends
-from plugins.native.service import should_autoload_service
+from plugins.native.service import forget_stale_autoloads, should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 from plugins.plugin_watcher import PluginWatcher
 
@@ -293,9 +293,12 @@ def main():
 			logger.info(f"Auto-loaded service: {svc_name}")
 		except Exception as e:
 			logger.error(f"Auto-load failed for '{svc_name}': {e}")
-	for svc_name in config.get("autoload_services", []):
-		if svc_name not in services:
-			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
+	# A name discovery cannot resolve is a service that is no longer installed
+	# (or never was — the package manager used to write the *filename* here).
+	# Warning about it on every boot forever is what teaches a person to
+	# ignore boot warnings, so it is dropped instead, exactly as bootstrap
+	# already does for enabled_frontends.
+	forget_stale_autoloads(config, services)
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)

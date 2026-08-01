@@ -131,3 +131,32 @@ def is_user_managed_service(svc) -> bool:
 def should_autoload_service(name: str, svc, config: dict) -> bool:
     """Whether startup should load a service."""
     return is_extension_service(svc) or name in (config.get("autoload_services") or [])
+
+
+def forget_stale_autoloads(config: dict, services: dict) -> list[str]:
+    """Drop autoload entries discovery could not resolve. Returns what went.
+
+    A name no live service answers to is one that is no longer installed — or
+    never was, since the package manager wrote the *filename* here until it
+    learned to read the declared name. Either way it can only be skipped, and
+    a warning repeated on every boot forever is how a person learns to scroll
+    past boot warnings.
+
+    Best-effort, like ``bootstrap._forget_frontends`` it mirrors: failing to
+    tidy the config is not a reason to fail a boot.
+    """
+    names = [str(item) for item in (config.get("autoload_services") or [])]
+    stale = [name for name in names if name not in services]
+    if not stale:
+        return []
+    config["autoload_services"] = [n for n in names if n not in set(stale)]
+    try:
+        from config import config_manager
+
+        config_manager.save(config)
+    except Exception:
+        logger.exception("could not persist autoload_services")
+        return stale
+    logger.info("Removed %s from autoload_services - not installed.",
+                ", ".join(sorted(stale)))
+    return stale

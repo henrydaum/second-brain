@@ -190,6 +190,80 @@ def test_install_loads_service_registered_before_autoload_update(tmp_path, monke
     assert "Loaded service: mcp" in result.text()
 
 
+def test_autoload_records_the_name_the_service_registers_under(tmp_path, monkeypatch):
+    """The filename is a guess at the registry key, and often a wrong one.
+
+    ``services/service_drive.py`` registers as ``google_drive``, so installing
+    it enabled a service that does not exist and left the real one off. Every
+    boot then warned "unknown service 'drive', skipping" over a config line
+    only a reinstall would ever rewrite.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_drive.py": (
+        b"from guest.bases import BaseService\n"
+        b"class GoogleDriveService(BaseService):\n"
+        b"    name = 'google_drive'\n")}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": []}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    assert package_manager.install_package(tmp_path, "service_drive", _Context(tmp_path)).ok
+    assert saved["autoload_services"] == ["google_drive"]
+
+
+def test_a_file_holding_two_services_enables_both(tmp_path, monkeypatch):
+    """One file, two services — which a filename cannot express at all, so
+    ``service_embed.py`` enabled neither embedder."""
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_embed.py": (
+        b"from guest.bases import BaseService\n"
+        b"class TextEmbedder(BaseService):\n"
+        b"    name = 'text_embedder'\n"
+        b"class ImageEmbedder(BaseService):\n"
+        b"    name = 'image_embedder'\n")}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": []}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    assert package_manager.install_package(tmp_path, "service_embed", _Context(tmp_path)).ok
+    assert saved["autoload_services"] == ["text_embedder", "image_embedder"]
+
+
+def test_uninstall_disables_the_same_names_install_enabled(tmp_path, monkeypatch):
+    """Read off the installed file on the way out, so the two halves agree —
+    otherwise the entry install wrote could never be taken back."""
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_drive.py": (
+        b"from guest.bases import BaseService\n"
+        b"class GoogleDriveService(BaseService):\n"
+        b"    name = 'google_drive'\n")}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": []}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+    package_manager.install_package(tmp_path, "service_drive", _Context(tmp_path))
+
+    assert package_manager.uninstall_package("service_drive", _Context(tmp_path)).ok
+    assert saved["autoload_services"] == []
+
+
+def test_an_unmigrated_service_still_falls_back_to_its_filename(tmp_path, monkeypatch):
+    """A plugin that declares no name has nothing better to offer."""
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_legacy.py": (
+        b"from guest.bases import BaseService\n"
+        b"class Legacy(BaseService): pass\n")}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": []}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    assert package_manager.install_package(tmp_path, "service_legacy", _Context(tmp_path)).ok
+    assert saved["autoload_services"] == ["legacy"]
+
+
 def test_install_replaces_existing_file_with_store_copy(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
     files = {"tools/tool_a.py": b"STORE = True\n"}

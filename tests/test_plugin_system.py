@@ -557,7 +557,7 @@ def test_orchestrator_stop_unsubscribes_service_loaded_handler():
 # Service lifecycle (was test_service_lifecycle.py)
 # ────────────────────────────────────────────────────────────────────
 
-from plugins.native.service import BaseService, EXTENSION, is_user_managed_service, should_autoload_service
+from plugins.native.service import BaseService, EXTENSION, forget_stale_autoloads, is_user_managed_service, should_autoload_service
 from bundled.frontends.helpers.formatters import format_services
 
 
@@ -588,6 +588,36 @@ def test_extension_services_autoload_without_config_entry():
     assert should_autoload_service("extension", extension, {"autoload_services": []})
     assert is_user_managed_service(managed)
     assert not is_user_managed_service(extension)
+
+
+def test_a_stale_autoload_entry_is_dropped_rather_than_warned_about(monkeypatch):
+    """A name no live service answers to can only ever be skipped.
+
+    Warning about it on every boot forever is how a person learns to scroll
+    past boot warnings — and until the package manager learned to read a
+    service's declared name it wrote the *filename* here, so the entries were
+    ones no amount of reinstalling would fix. Same answer bootstrap already
+    gives for enabled_frontends.
+    """
+    saved = {}
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+    config = {"autoload_services": ["timekeeper", "drive", "embed"]}
+
+    gone = forget_stale_autoloads(config, {"timekeeper": object()})
+
+    assert sorted(gone) == ["drive", "embed"]
+    assert config["autoload_services"] == ["timekeeper"]
+    assert saved["autoload_services"] == ["timekeeper"]
+
+
+def test_nothing_is_saved_when_every_autoload_entry_resolves(monkeypatch):
+    """A boot that changes nothing must not rewrite the config file."""
+    writes = []
+    monkeypatch.setattr("config.config_manager.save", lambda config: writes.append(config))
+    config = {"autoload_services": ["timekeeper"]}
+
+    assert forget_stale_autoloads(config, {"timekeeper": object()}) == []
+    assert writes == []
 
 
 def test_format_services_labels_lifecycles():
