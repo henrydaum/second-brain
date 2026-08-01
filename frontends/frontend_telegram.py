@@ -453,8 +453,7 @@ class TelegramFrontend(BaseFrontend):
         text = item.get("text") or ""
         if item["kind"] == "callback" and item.get("approval"):
             request_id, answer = item["approval"]
-            value = (True if answer == "allow"
-                     else False if answer == "deny" else answer)
+            value = self._approval_value(key, answer)
             if sdk.frontend.resolve(key, value, request_id):
                 self._approvals.pop(key, None)
                 return None
@@ -468,6 +467,27 @@ class TelegramFrontend(BaseFrontend):
         if self._absorb_approval(sdk, key, text):
             return None
         return sdk.frontend.submit_text(key, text)
+
+    def _approval_value(self, key: str, answer: str):
+        """What a tapped button answers with, in the shape that frame accepts.
+
+        Decided the same way ``_approval_markup`` chose the buttons, because
+        the two have to agree: an ``enum`` request's buttons carry its own
+        values and must go back **verbatim**, and only the boolean fallback
+        spells them "allow"/"deny" — a frame whose lenient parser wants a bool.
+
+        Coercing unconditionally is what made every sandbox Request dialog
+        unanswerable by button. Those are typed ``string`` with an enum, so the
+        state machine validated ``True`` against ``["allow", "deny"]``, refused
+        it, and left the frame up; the plugin waiting on the other side sat
+        there until its dialog timed out and was denied. Nothing in the chat
+        said so — the person saw a dialog they had already answered, and a
+        session that took input and did nothing with it.
+        """
+        if (self._approvals.get(key) or {}).get("enum"):
+            return answer
+        return (True if answer == "allow"
+                else False if answer == "deny" else answer)
 
     def _absorb_approval(self, sdk, key: str, text: str) -> bool:
         """Answer a pending approval by typed reply. True if it was consumed.
