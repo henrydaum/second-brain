@@ -86,6 +86,9 @@ def project_approval(request) -> dict:
         "body": getattr(request, "body", ""),
         "type": getattr(request, "type", "boolean"),
         "enum": list(getattr(request, "enum", None) or []) or None,
+        # Paired with ``enum`` by index. The value is what ``resolve`` answers
+        # with; the label is the only part meant to be read.
+        "enum_labels": list(getattr(request, "enum_labels", None) or []) or None,
         "default": getattr(request, "default", None),
     }
 

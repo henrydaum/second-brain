@@ -935,6 +935,7 @@ class ConversationRuntime:
         *,
         type: str = "boolean",
         enum: list | None = None,
+        enum_labels: list | None = None,
         default: Any = None,
         required: bool = True,
         pending_action: dict[str, Any] | None = None,
@@ -942,7 +943,7 @@ class ConversationRuntime:
         """Suspend a session on a typed-input request."""
         return _approvals.request_input(
             self, session_key, title, prompt,
-            type=type, enum=enum, default=default,
+            type=type, enum=enum, enum_labels=enum_labels, default=default,
             required=required, pending_action=pending_action,
         )
 

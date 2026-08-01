@@ -18,6 +18,11 @@ class StateMachineApprovalRequest:
 
     For boolean ("approve / deny") flows, `approved` is a convenience
     accessor that mirrors `value`.
+
+    `enum_labels` pairs with `enum` **by index**: the value is what crosses the
+    wire and comes back, the label is what a person reads. Anything filtering
+    one has to filter the other in step or every button gets its neighbour's
+    text — see ``runtime_approvals._sane_enum``.
     """
 
     title: str
@@ -26,6 +31,7 @@ class StateMachineApprovalRequest:
     id: str = field(default_factory=lambda: f"approve_{uuid.uuid4().hex}")
     type: str = "boolean"
     enum: list[Any] | None = None
+    enum_labels: list[str] | None = None
     default: Any = None
     value: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -64,6 +70,7 @@ class StateMachineApprovalRequest:
             "body": self.body,
             "type": self.type,
             "enum": self.enum,
+            "enum_labels": self.enum_labels,
             "default": self.default,
             "pending_action": self.pending_action,
             "metadata": self.metadata,

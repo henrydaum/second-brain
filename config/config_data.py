@@ -144,6 +144,18 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list"}),
 
+    ("Allowed Command Prefixes", "shell_allowed_prefixes",
+     "Commands sandboxed code may run without asking you first, named by "
+     "program and subcommand — `git push`, say, or just `pytest`. Flags and "
+     "arguments after the prefix are not checked, so list only a verb you "
+     "would be happy to see run with any arguments; it is the same bargain as "
+     "the host list, which does not check the URL path either. Matched against "
+     "the exact argument list a plugin passes, so anything naming a shell, or "
+     "carrying a shell metacharacter anywhere, is still asked about as usual. "
+     "A plugin cannot add to it.",
+     [],
+     {"type": "json_list"}),
+
     ("Data Retention (Days)", "data_retention_days",
      "Delete data older than this many days: idle conversations (and their "
      "messages), action-ledger rows, and finished task-run records. Anything "

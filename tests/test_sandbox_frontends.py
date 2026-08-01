@@ -311,6 +311,31 @@ def test_an_approval_crosses_as_a_question_not_a_decision():
     json.loads(json.dumps(projected))
 
 
+def test_an_approvals_options_cross_with_their_labels():
+    """Values answer, labels read — and they pair by index.
+
+    A frontend that got ``enum`` without ``enum_labels`` would render an
+    approval's internal option values ("always:api.brave.com") as button text,
+    which is the whole reason this field exists.
+    """
+    import json
+
+    from state_machine.approval import StateMachineApprovalRequest
+
+    request = StateMachineApprovalRequest(
+        title="Reach the network?", body="",
+        type="string", enum=["allow", "always:brave.com", "deny"],
+        enum_labels=["Allow once", "Always allow brave.com", "Deny"])
+
+    projected = project_approval(request)
+
+    assert projected["enum"] == ["allow", "always:brave.com", "deny"]
+    assert projected["enum_labels"] == ["Allow once", "Always allow brave.com",
+                                        "Deny"]
+    assert len(projected["enum"]) == len(projected["enum_labels"])
+    json.loads(json.dumps(projected))
+
+
 def test_the_render_kinds_are_the_documented_ones():
     """The guest documents these and the adapter emits them; a typo on either
     side would silently show a person nothing."""

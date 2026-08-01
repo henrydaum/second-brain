@@ -333,6 +333,7 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
     default the kernel uses when every permission hook abstains.
     """
 
+    from .options import DENY, chosen, options_for
     from .policy import chain_session
 
     def approve(chain, request, decision) -> bool:
@@ -393,8 +394,16 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
         #    the dialog lands where the person who can answer it is looking.
         target = chain_session(chain) or key
         title, body = describe(chain, request, decision)
+        options = options_for(chain, request, decision)
         try:
-            pending = runtime.request_input(target, title, body, type="boolean")
+            # ``type="string"`` and not ``"boolean"``: ``AnswerApproval._coerce``
+            # short-circuits into a lenient yes/no parser before it ever looks
+            # at the enum, so a boolean request with choices silently ignores
+            # them. The options carry their own deny, so nothing is lost.
+            pending = runtime.request_input(
+                target, title, body, type="string",
+                enum=[option.value for option in options],
+                enum_labels=[option.label for option in options])
         except Exception:
             logger.exception("could not render an approval dialog")
             return False
@@ -402,13 +411,36 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
         if not pending.wait(timeout=timeout):
             pending.metadata["timed_out"] = True
             try:
-                runtime.answer_request(target, pending.id, False)
+                # Deny *by name*. ``False`` fails ``match_enum`` on a string
+                # request, and a failed coercion never reaches ``pop_phase`` —
+                # so the session would sit in ``approving_request`` forever,
+                # where every ordinary keystroke comes back ``invalid_action``,
+                # over a dialog that has already expired.
+                runtime.answer_request(target, pending.id, DENY.value)
             except Exception:
                 pass
             return False
         if pending.metadata.get("cancelled"):
             return False
-        return bool(pending.approved)
+
+        # ``.value``, never ``.approved`` — the latter is ``bool(self.value)``,
+        # which is True for the string "deny".
+        answer = chosen(options, getattr(pending, "value", None))
+        if answer is None:
+            logger.warning("unrecognised approval answer %r for %s",
+                           getattr(pending, "value", None), request.type)
+            return False
+        if answer.remember is not None:
+            try:
+                # Run it for a denying option too. Nothing declares one today,
+                # and that is exactly why: "Deny forever" has to be a registry
+                # entry later, not an edit to this function.
+                answer.remember()
+            except Exception:
+                # Failing to write the grant down must not turn the person's
+                # yes into a no. They answered about *this* Request.
+                logger.exception("could not remember %s", answer.value)
+        return answer.allow
 
     return approve
 

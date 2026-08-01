@@ -408,6 +408,7 @@ def restore_pending_requests(runtime, session: RuntimeSession) -> None:
             id=data["request_id"],
             type=data.get("type", "boolean"),
             enum=data.get("enum"),
+            enum_labels=data.get("enum_labels"),
             default=data.get("default"),
         )
         req.metadata.update({"session_key": session.key, "conversation_id": session.conversation_id})

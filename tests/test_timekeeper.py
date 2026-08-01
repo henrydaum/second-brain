@@ -256,8 +256,22 @@ def test_task_without_default_jobs_needs_no_timekeeper():
 def test_sane_enum_drops_unanswerable_choices():
     # A request whose every choice renders empty would wedge the session —
     # the kernel treats it as free-form input instead.
-    assert _sane_enum(["", "  ", ""]) is None
-    assert _sane_enum(["a", "", "b"]) == ["a", "b"]
-    assert _sane_enum(None) is None
-    assert _sane_enum([]) is None
-    assert _sane_enum([True, False]) == [True, False]
+    assert _sane_enum(["", "  ", ""]) == (None, None)
+    assert _sane_enum(["a", "", "b"]) == (["a", "b"], None)
+    assert _sane_enum(None) == (None, None)
+    assert _sane_enum([]) == (None, None)
+    assert _sane_enum([True, False]) == ([True, False], None)
+
+
+def test_sane_enum_filters_labels_in_step_with_values():
+    """Values and labels pair by index, so one cannot be filtered alone.
+
+    Dropping a value from the middle and leaving the labels put hands every
+    later choice its neighbour's text — a dialog that reads correctly and
+    answers wrongly, which is the worst available failure for an approval.
+    """
+    assert _sane_enum(["a", "", "b"], ["Apple", "Gone", "Banana"]) == (
+        ["a", "b"], ["Apple", "Banana"])
+    # A partly-labelled list is the same bug wearing a smaller hat.
+    assert _sane_enum(["a", "b"], ["only one"]) == (["a", "b"], None)
+    assert _sane_enum(["a", "b"], None) == (["a", "b"], None)

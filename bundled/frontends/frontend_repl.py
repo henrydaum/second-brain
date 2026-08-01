@@ -27,6 +27,7 @@ class ReplFrontend(BaseFrontend):
         """Initialize display state and announce readiness."""
         self._stream_wrote = False
         self._prompted = False
+        self._approval = {}
         sdk.console.write("Second Brain REPL ready. Type /quit to exit.")
         return True
 
@@ -47,18 +48,30 @@ class ReplFrontend(BaseFrontend):
         session = sdk.session.get(key) or {}
         pending = sdk.frontend.pending_approval(key)
         if pending and session.get("phase") != "approving_request":
-            approved = self._parse_approval(raw)
-            if approved is None:
-                self._error(sdk, "Approval needs yes or no.")
-                return True
             request_id = pending if isinstance(pending, str) else ""
-            ok = sdk.frontend.resolve(key, approved, request_id)
-            message = (
-                "Approval granted." if ok and approved
+            # A multi-choice dialog cannot be answered yes/no. Without this the
+            # y/n parser rejects every option name outright, and resolving with
+            # a bare True fails the enum on the far side — so the person is
+            # locked out of a question they can see.
+            shown = self._approval if self._approval.get("id") == request_id \
+                else {}
+            if shown.get("enum"):
+                answer = self._match_option(shown, raw)
+                if answer is None:
+                    self._error(sdk, "Answer with one of: "
+                                + ", ".join(self._option_labels(shown)))
+                    return True
+            else:
+                answer = self._parse_approval(raw)
+                if answer is None:
+                    self._error(sdk, "Approval needs yes or no.")
+                    return True
+            ok = sdk.frontend.resolve(key, answer, request_id)
+            self._messages(sdk, [
+                f"Answered: {answer}." if ok and shown.get("enum")
+                else "Approval granted." if ok and answer
                 else "Approval denied." if ok
-                else "No pending approvals."
-            )
-            self._messages(sdk, [message])
+                else "No pending approvals."])
             return True
 
         if raw.startswith("/attach"):
@@ -93,9 +106,13 @@ class ReplFrontend(BaseFrontend):
             )
         elif kind == "approval":
             request = payload or {}
+            # Kept so ``poll``'s out-of-phase branch knows whether the pending
+            # question has options; the id is what proves it is the same one.
+            self._approval = dict(request)
             hints = self._hints({
                 "type": request.get("type", "boolean"),
                 "enum": request.get("enum"),
+                "enum_labels": request.get("enum_labels"),
                 "default": request.get("default"),
             })
             body = (
@@ -185,6 +202,36 @@ class ReplFrontend(BaseFrontend):
         if field.get("default") is not None and not field.get("assist"):
             parts.append(f"default: {field['default']}")
         return f" ({'; '.join(parts)})" if parts else ""
+
+    @staticmethod
+    def _option_labels(payload):
+        """The choices as a person was shown them."""
+        values = payload.get("enum") or []
+        labels = payload.get("enum_labels") or []
+        return [str(labels[i]) if i < len(labels) else str(value)
+                for i, value in enumerate(values)]
+
+    @staticmethod
+    def _match_option(payload, text):
+        """Resolve typed text to an option *value*, or None.
+
+        A superset of ``FormStep.match_enum``: this also accepts a 1-based
+        index, because the REPL is the one surface where a person types instead
+        of clicking, and "Always allow C:\\some\\long\\path" is not something
+        anyone wants to retype.
+        """
+        values = payload.get("enum") or []
+        labels = ReplFrontend._option_labels(payload)
+        text = (text or "").strip()
+        if not text:
+            return None
+        if text.isdigit() and 1 <= int(text) <= len(values):
+            return values[int(text) - 1]
+        folded = text.casefold()
+        for index, value in enumerate(values):
+            if folded in (str(value).casefold(), labels[index].casefold()):
+                return value
+        return None
 
     @staticmethod
     def _parse_approval(text):

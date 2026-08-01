@@ -164,6 +164,81 @@ def test_a_raising_recognizer_abstains_rather_than_failing_the_gate():
         policy._SHELL_RECOGNIZERS = original
 
 
+# ── the remembered half ───────────────────────────────────────────────
+
+def _allow_prefixes(*prefixes):
+    """Set the user's remembered command list for one test."""
+    from runtime.context import set_kernel_parts
+
+    set_kernel_parts(config={"shell_allowed_prefixes": list(prefixes)})
+
+
+def test_a_remembered_prefix_allows_the_verb_with_any_arguments():
+    """The bargain the setting states: flags and arguments are not checked."""
+    try:
+        _allow_prefixes("git push")
+        assert _allowed(["git", "push"])
+        assert _allowed(["git", "push", "origin", "main"])
+        assert _allowed(["git", "push", "--force"])
+        assert not _allowed(["git", "pull"]), "a different verb is a different grant"
+    finally:
+        _allow_prefixes()
+
+
+def test_a_remembered_grant_is_still_structurally_checked():
+    """The soundness argument for storing a pair instead of a string.
+
+    A raw ``startswith`` on the rendered line would allow every one of these,
+    because "git push" prefixes all of them. The prefix is re-derived from the
+    structured argv instead, so a metacharacter or a shell abstains before any
+    matching happens.
+    """
+    try:
+        _allow_prefixes("git push")
+        assert not _allowed(["git", "push", "&&", "rm", "-rf", "/"])
+        assert not _allowed(["git", "push", "$(whoami)"])
+        assert not _allowed(["git", "push"], shell="cmd")
+        assert not _allowed(["git", "push"], shell="powershell")
+        assert not _allowed("git push && rm -rf /", shell="default")
+        assert not _allowed(["/tmp/evil/git", "push"])
+    finally:
+        _allow_prefixes()
+
+
+def test_the_prefix_written_down_is_the_prefix_matched():
+    """One vocabulary, or a grant nobody can reason about."""
+    from sandbox.policy import command_prefix
+
+    assert command_prefix(["git", "push", "--force"]) == "git push"
+    assert command_prefix(["GIT.exe", "Push"]) == "git push"
+    assert command_prefix(["pytest"]) == "pytest"
+    assert command_prefix(["rm", "-rf", "/"]) == "rm"
+    # No unit it can describe honestly.
+    assert command_prefix(["git", "push", "|", "tee"]) == ""
+    assert command_prefix(["/usr/bin/git", "push"]) == ""
+    assert command_prefix([]) == ""
+    assert command_prefix(None) == ""
+
+
+def test_a_second_word_naming_a_file_reduces_to_the_program():
+    """``python train.py`` must never be storable as itself.
+
+    Stored whole it reads like permission for one known script while granting
+    whatever that file says tomorrow. Reduced, it grants more and *says* so —
+    and the reduction happens in ``command_prefix``, so a hand-edited config
+    entry cannot resurrect the dishonest form either.
+    """
+    from sandbox.policy import command_prefix
+
+    assert command_prefix(["python", "train.py"]) == "python"
+    assert command_prefix(["python", "scripts/train.py"]) == "python"
+    try:
+        _allow_prefixes("python train.py")
+        assert not _allowed(["python", "train.py"]), "hand-edited entry matched"
+    finally:
+        _allow_prefixes()
+
+
 def test_proc_start_gets_the_same_recognizer_as_proc_run():
     """Keeping a long-running process is the same act as running one."""
     started = classify(

@@ -1154,12 +1154,20 @@ invisible direction — a wrong "unsafe" gets reported, a wrong "safe" does not
 — and it lived inside the plugin it authorized. So the whole family is
 `UNSAFE` and every command is asked about; the migrated tool contains no
 classifier and must not regrow one. Where it gets less onerous is
-`policy._SHELL_RECOGNIZERS`: a recognizer reads the rendered command line and
-returns a reason to allow it or `None` to abstain, ships empty, and is meant
-to hold a structural read-only check and — more usefully — a *remembered*
-approval scoped to something. `policy.render_command` is the one renderer the
-dialog, the ledger row and any recognizer share, so what a person approves is
-what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
+`policy._SHELL_RECOGNIZERS`: a recognizer returns a reason to allow a command
+or `None` to abstain, so it can only ever widen and a bug costs a dialog. Two
+ship. `_read_only_command` is the structural one, and it works only because it
+refuses to be complete — the dead classifier tried to decide *every* command,
+which is Rice's theorem, while deciding a few and abstaining on the rest is
+trivial. Its unit is `(program, subcommand)`, because `git` is not read-only
+and `git status` is; it abstains on any shell, any metacharacter, and any
+program named by path. `_remembered_prefix` is the other, reading
+`shell_allowed_prefixes` — what a person answered "always" to in an approval
+dialog. Both derive that pair through `policy.command_prefix`, so the grant is
+stored and matched in one vocabulary; a raw string prefix would be unsound,
+since `git push` also prefixes `git push && rm -rf /`.
+`policy.render_command` is the one renderer the dialog and the ledger row
+share, so what a person approves is what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
 processes already approved at `start`, and stopping narrows — a dev server the
 agent cannot kill without a dialog is one it will not start.
 

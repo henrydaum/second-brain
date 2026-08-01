@@ -154,6 +154,52 @@ def test_a_request_raised_during_an_agent_turn_hands_back_to_the_agent(tmp_path)
     assert session.cs.turn_priority == "agent"
 
 
+def test_option_labels_survive_a_restart(tmp_path):
+    """The frame is what a restored dialog is rebuilt from.
+
+    Losing the labels here would leave a person restarting mid-approval with
+    buttons reading "always:api.brave.com" — the site most likely to be missed,
+    because everything works right up until the process stops.
+    """
+    rt, session = _session(tmp_path)
+    rt.request_input("s", "Reach the network?", "net.http", type="string",
+                     enum=["allow", "always:brave.com", "deny"],
+                     enum_labels=["Allow once", "Always allow brave.com",
+                                  "Deny"])
+
+    frame = session.cs.frame
+    assert frame.data["enum_labels"] == ["Allow once", "Always allow brave.com",
+                                         "Deny"]
+
+    rebuilt = []
+    rt.emit_event = lambda name, req: rebuilt.append(req)
+    from runtime.persistence import restore_pending_requests
+    restore_pending_requests(rt, session)
+
+    assert rebuilt[-1].enum_labels == ["Allow once", "Always allow brave.com",
+                                       "Deny"]
+
+
+def test_a_typed_option_label_answers_the_dialog(tmp_path):
+    """A person answers with the words they were shown, not the value.
+
+    ``AnswerApproval._coerce`` builds the ``FormStep`` that resolves this; if
+    it stops passing ``enum_labels`` a multi-choice approval becomes answerable
+    only by typing an internal value nothing renders.
+    """
+    rt, session = _session(tmp_path)
+    req = rt.request_input("s", "Reach the network?", "net.http", type="string",
+                           enum=["allow", "always:brave.com", "deny"],
+                           enum_labels=["Allow once", "Always allow brave.com",
+                                        "Deny"])
+
+    rt.handle_action("s", "answer_approval",
+                     {"value": "always allow brave.com",
+                      "request_id": req.id})
+
+    assert req.value == "always:brave.com"
+
+
 def test_cancelling_a_request_also_restores_priority(tmp_path):
     rt, session = _session(tmp_path)
     session.cs.set_priority("user")

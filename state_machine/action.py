@@ -563,6 +563,7 @@ class AnswerApproval(Action):
         """Coerce raw content into the requested type using FormStep semantics."""
         type_ = frame.data.get("type", "boolean")
         enum = frame.data.get("enum")
+        enum_labels = frame.data.get("enum_labels")
         default = frame.data.get("default")
         required = frame.data.get("required", True)
         raw = self.content
@@ -583,7 +584,12 @@ class AnswerApproval(Action):
                 return False
             raise self.error(ERROR_INVALID_INPUT, "Approval needs yes or no.")
 
-        step = FormStep(name=frame.name or "input", required=required, type=type_, enum=enum, default=default)
+        # ``enum_labels`` is what lets a person answer with the words they were
+        # shown: ``match_enum`` resolves an exact value, then a label, then a
+        # case-folded value. Without it a multi-choice approval can only be
+        # answered by typing its internal value, which nothing renders.
+        step = FormStep(name=frame.name or "input", required=required, type=type_,
+                        enum=enum, enum_labels=enum_labels, default=default)
         ok, reason = step.validate(raw)
         if not ok:
             raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.")

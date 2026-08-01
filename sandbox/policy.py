@@ -567,8 +567,10 @@ def _classify_db_write(args: dict) -> Decision:
 #
 # Recognizers exist for the same reason the shell has them: somewhere for a
 # remembered or structural allowance to live later, visible in the policy
-# rather than inside the plugin it authorizes. The list ships empty and the
-# allowlist check is the one built-in rule.
+# rather than inside the plugin it authorizes. This one ships empty and the
+# allowlist check is the only built-in rule — a remembered host is written
+# straight into ``net_allowed_hosts`` by the dialog (``sandbox/options.py``),
+# so there is nothing for a recognizer here to do yet.
 _NET_RECOGNIZERS: list = []
 
 
@@ -836,7 +838,82 @@ def _read_only_command(shown: str, args: dict):
     return f"{named} only reads"
 
 
-_SHELL_RECOGNIZERS: list = [_read_only_command]
+def command_prefix(argv) -> str:
+    """The unit a shell grant is written down as, or "" for none.
+
+    **Shared by the recognizer that reads the list and the dialog option that
+    writes to it**, for the reason ``render_command`` is shared by the dialog
+    and the ledger: a grant stored in one vocabulary and matched in another is
+    a grant nobody can reason about.
+
+    ``(program, subcommand)``, and a raw string prefix deliberately not —
+    ``"git push"`` also prefixes ``"git push && rm -rf /"``. Everything the
+    read-only recognizer refuses to look at is refused here too: a named shell
+    (the caller passes :func:`_exact_argv`, which is already ``None`` there),
+    any metacharacter anywhere, a program that is not a bare name.
+
+    One rule of its own: **a second word that names a file is not a verb.**
+    ``python train.py`` reduces to ``python``, not to ``python train.py``,
+    because the latter reads like a grant for one known script while actually
+    granting whatever that file says tomorrow. Reducing keeps the label honest
+    about what is being handed over — a person shown "Always allow: python"
+    knows exactly how much that is, and can decline.
+    """
+    argv = list(argv or [])
+    if not argv:
+        return ""
+    if any(_SHELL_METACHARACTERS & set(part) for part in argv):
+        return ""
+    program = argv[0]
+    if "/" in program or "\\" in program:
+        return ""
+    program = program.lower().removesuffix(".exe")
+    if not program:
+        return ""
+    rest = argv[1:]
+    if rest and not rest[0].startswith("-"):
+        word = rest[0]
+        if "/" not in word and "\\" not in word and not Path(word).suffix:
+            return f"{program} {word.lower()}"
+    return program
+
+
+def _allowed_prefixes() -> set:
+    """Command prefixes the user has said may run without being asked.
+
+    Read live on every call, like :func:`_allowed_hosts` — revoking has to be
+    as immediate as granting, and the user revokes with ``/config``.
+    """
+    try:
+        from runtime.context import kernel_config
+
+        raw = (kernel_config() or {}).get("shell_allowed_prefixes") or []
+    except Exception:
+        return set()
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    return {" ".join(str(entry).split()).casefold()
+            for entry in raw if str(entry).strip()}
+
+
+def _remembered_prefix(shown: str, args: dict):
+    """Allow a command whose prefix the user already answered "always" to.
+
+    The *remembered* recognizer this section has been describing since it
+    shipped empty: a decision persisted where the policy can see it, rather
+    than inside the plugin it authorizes.
+
+    It re-derives the prefix from the structured argv instead of matching
+    ``shown``, which is the entire soundness argument — see
+    :func:`command_prefix`.
+    """
+    prefix = command_prefix(_exact_argv(args))
+    if prefix and prefix.casefold() in _allowed_prefixes():
+        return f"you allowed `{prefix}`"
+    return None
+
+
+_SHELL_RECOGNIZERS: list = [_read_only_command, _remembered_prefix]
 
 
 def render_command(args: dict) -> str:
@@ -1069,10 +1146,11 @@ def _owns_setting(chain: Chain, key: str) -> bool:
 #      grant short-circuit at the top of ``classify``.
 #
 #   8. RECOGNIZER   — does a pluggable predicate vouch for it?
-#      ``_SHELL_RECOGNIZERS`` and ``_NET_RECOGNIZERS``. **Both ship empty.**
-#      This is the only one of the eight that is an extension point rather
-#      than a rule, and it is where a remembered or structural allowance
-#      belongs — see ``docs/PERMISSIONS_MAP.md``.
+#      ``_SHELL_RECOGNIZERS`` holds two — a structural read-only check and a
+#      *remembered* one reading ``shell_allowed_prefixes``. ``_NET_RECOGNIZERS``
+#      is empty, since egress is served by its allowlist directly. This is the
+#      only one of the eight that is an extension point rather than a rule, and
+#      it can only ever widen — see ``docs/PERMISSIONS_MAP.md``.
 #
 # Three of these (1, 2, 8) can only ever widen, and abstain by failing closed.
 # Three (3, 6, 7) read facts the kernel owns and guest code cannot state about

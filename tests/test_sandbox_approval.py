@@ -16,13 +16,26 @@ from sandbox.guest.requests import SECRET_REVEAL
 
 
 class FakeRequest:
-    """Stands in for the kernel's pending-input object."""
+    """Stands in for the kernel's pending-input object.
 
-    def __init__(self, answer=True, cancelled=False, answers=True):
+    ``answer`` is a bool for readability at the call sites, but what the
+    approver actually reads is ``value`` — the *option value* a person chose.
+    The real object's ``approved`` is ``bool(self.value)``, so it is True for
+    the string ``"deny"``; carrying both here is what lets a test say that out
+    loud rather than passing by accident.
+    """
+
+    def __init__(self, answer=True, cancelled=False, answers=True, value=None):
         self.id = 1
-        self.approved = answer
+        self.value = value if value is not None else (
+            "allow" if answer else "deny")
         self.metadata = {"cancelled": cancelled}
         self._answers = answers
+
+    @property
+    def approved(self):
+        """Mirrors the real request: truthiness of the answer, nothing more."""
+        return bool(self.value)
 
     def wait(self, timeout=None):
         """Whether the user got back to us."""
@@ -44,6 +57,8 @@ class FakeRuntime:
         self._answers = answers
         self._cancelled = cancelled
         self.answered = []
+        #: Set to answer with a specific option value rather than allow/deny.
+        self._answer_value = None
 
     def is_attended(self, key):
         """Whether a human is present at ``key``, keyed like the real one.
@@ -64,7 +79,8 @@ class FakeRuntime:
         """Render the dialog."""
         self.asked.append({"key": key, "title": title, "prompt": prompt,
                            "kwargs": kwargs})
-        return FakeRequest(self._answer, self._cancelled, self._answers)
+        return FakeRequest(self._answer, self._cancelled, self._answers,
+                           value=self._answer_value)
 
     def answer_request(self, key, request_id, value):
         """Record a forced answer."""
@@ -220,13 +236,21 @@ def test_a_cancelled_dialog_is_a_refusal():
                                    decision) is False
 
 
-def test_a_timed_out_dialog_is_a_refusal_and_is_answered():
-    """The pending request must not be left hanging in the session."""
+def test_a_timed_out_dialog_is_a_refusal_and_is_answered_by_name():
+    """The pending request must not be left hanging in the session.
+
+    And it must be denied by the *option value*, not by ``False``. The dialog
+    is a string request, so ``False`` fails ``match_enum``; a failed coercion
+    never reaches ``pop_phase``, leaving the session parked in
+    ``approving_request`` where only answering or cancelling is legal — every
+    ordinary keystroke coming back ``invalid_action``, forever, about a dialog
+    that expired.
+    """
     runtime = FakeRuntime(answer=True, answers=False)
     request, decision = _egress()
     assert build_approver(runtime)(Chain().push("t"), request,
                                    decision) is False
-    assert runtime.answered == [False]
+    assert runtime.answered == ["deny"]
 
 
 def test_nobody_present_means_refused_not_blocked():
@@ -344,6 +368,74 @@ def test_asking_a_question_is_safe_from_the_agents_own_tool_call():
 
     assert foreground.level == policy.SAFE
     assert background.level == policy.UNSAFE
+
+
+def test_answering_deny_refuses_even_though_approved_reads_true():
+    """The trap this dialog's rewrite walks straight into.
+
+    ``StateMachineApprovalRequest.approved`` is ``bool(self.value)``, and the
+    deny *option value* is the non-empty string "deny" — so the old
+    ``return bool(pending.approved)`` would have turned every refusal into an
+    approval, silently, for every unsafe Request in the system. The approver
+    reads ``.value``; this asserts both halves so the reason is visible.
+    """
+    runtime = FakeRuntime(answer=False)
+    request, decision = _egress()
+
+    pending_shape = FakeRequest(answer=False)
+    assert pending_shape.value == "deny"
+    assert pending_shape.approved is True, "the trap is still live"
+
+    assert build_approver(runtime)(Chain().push("t"), request,
+                                   decision) is False
+
+
+def test_the_dialog_is_asked_as_a_string_with_matched_options():
+    """Boolean would short-circuit ``_coerce`` before the enum is consulted."""
+    runtime = FakeRuntime()
+    request, decision = _egress()
+    build_approver(runtime)(Chain().push("t"), request, decision)
+
+    asked = runtime.asked[0]["kwargs"]
+    assert asked["type"] == "string"
+    assert len(asked["enum"]) == len(asked["enum_labels"])
+    assert asked["enum"][0] == "allow" and asked["enum"][-1] == "deny"
+
+
+def test_choosing_a_remembering_option_grants_and_allows(monkeypatch):
+    """And a grant that cannot be written down is still an approval."""
+    from sandbox import options
+
+    calls = []
+    option = options.Option("always:x", "Always allow x",
+                            remember=lambda: calls.append("wrote") or True)
+    monkeypatch.setattr(options, "OPTION_BUILDERS",
+                        [lambda chain, request, decision: [option]])
+
+    runtime = FakeRuntime()
+    runtime._answer_value = "always:x"
+    request, decision = _egress()
+    assert build_approver(runtime)(Chain().push("t"), request,
+                                   decision) is True
+    assert calls == ["wrote"]
+
+    def boom():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(options, "OPTION_BUILDERS", [
+        lambda chain, request, decision: [
+            options.Option("always:x", "Always allow x", remember=boom)]])
+    assert build_approver(runtime)(Chain().push("t"), request,
+                                   decision) is True
+
+
+def test_an_unrecognised_answer_is_a_refusal():
+    """A restored session can answer a dialog an older build wrote."""
+    runtime = FakeRuntime()
+    runtime._answer_value = "always:something-this-build-never-offered"
+    request, decision = _egress()
+    assert build_approver(runtime)(Chain().push("t"), request,
+                                   decision) is False
 
 
 def test_no_runtime_means_refuse():
@@ -609,8 +701,12 @@ class _Pending:
 
     def __init__(self, approved: bool):
         self.id = "p1"
-        self.approved = approved
+        self.value = "allow" if approved else "deny"
         self.metadata: dict = {}
+
+    @property
+    def approved(self) -> bool:
+        return bool(self.value)
 
     def wait(self, timeout=None) -> bool:
         return True

@@ -286,7 +286,13 @@ class BaseFrontend:
         """Render a typed-input/approval request.
 
         ``req`` is a StateMachineApprovalRequest with at least:
-        ``id``, ``title``, ``body``, ``type``, ``enum``, ``default``.
+        ``id``, ``title``, ``body``, ``type``, ``enum``, ``enum_labels``,
+        ``default``.
+
+        ``enum`` and ``enum_labels`` pair **by index**: answer with the value,
+        show the label. A rich frontend renders one button per pair; a text one
+        lists the labels. ``enum_labels`` may be ``None`` even when ``enum`` is
+        not, in which case the values are the only text there is.
         """
         raise NotImplementedError
 
@@ -874,6 +880,7 @@ class BaseFrontend:
             id=data.get("request_id") or "pending",
             type=data.get("type", "boolean"),
             enum=data.get("enum"),
+            enum_labels=data.get("enum_labels"),
             default=data.get("default"),
             metadata={"session_key": session_key},
         )

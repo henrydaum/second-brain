@@ -39,6 +39,7 @@ def request_input(
     *,
     type: str = "boolean",
     enum: list | None = None,
+    enum_labels: list | None = None,
     default: Any = None,
     required: bool = True,
     pending_action: dict[str, Any] | None = None,
@@ -48,13 +49,16 @@ def request_input(
     The phase frame stores everything needed to rebuild the in-memory
     :class:`StateMachineApprovalRequest` after a restart (see
     ``restore_pending_requests`` in ``runtime_persistence``).
+
+    ``enum_labels`` pairs with ``enum`` by index — the value answers, the label
+    reads. Both are filtered together; see :func:`_sane_enum`.
     """
-    enum = _sane_enum(enum)
+    enum, enum_labels = _sane_enum(enum, enum_labels)
     session = get_or_create_session(runtime, session_key)
     with session.lock:
         req = StateMachineApprovalRequest(
             title=title, body=prompt, pending_action=pending_action,
-            type=type, enum=enum, default=default,
+            type=type, enum=enum, enum_labels=enum_labels, default=default,
         )
         req.metadata.update({"session_key": session_key, "conversation_id": session.conversation_id})
         runtime._approval_requests[req.id] = req
@@ -64,6 +68,7 @@ def request_input(
                 "request_id": req.id,
                 "type": type,
                 "enum": enum,
+                "enum_labels": enum_labels,
                 "default": default,
                 "required": required,
                 "title": title,
@@ -79,18 +84,34 @@ def request_input(
         return req
 
 
-def _sane_enum(enum: list | None) -> list | None:
+def _sane_enum(enum: list | None,
+               labels: list | None = None) -> tuple[list | None, list | None]:
     """Drop unanswerable choices from a caller-supplied enum.
 
     A choice whose string form is empty can't be rendered as a button or
     typed back, so a bad caller (an LLM tool call, typically) would wedge
     the session on a question with no valid answer. Filter those out; if
     nothing survives, treat the request as free-form input.
+
+    **Labels are filtered in the same pass, and that is the whole reason this
+    returns a pair.** ``FormStep.match_enum`` and ``form_display`` both pair
+    values with labels *by index*, so dropping one value from the middle of a
+    list and leaving the labels alone silently hands every later choice its
+    neighbour's text — a dialog that reads correctly and answers wrongly.
+    Mismatched lengths are treated as no labels at all rather than zipped
+    short, since a partly-labelled list is the same bug wearing a smaller hat.
     """
     if not isinstance(enum, list):
-        return None
-    kept = [v for v in enum if str(v).strip()]
-    return kept or None
+        return None, None
+    if not isinstance(labels, list) or len(labels) != len(enum):
+        labels = None
+    pairs = [(value, None if labels is None else labels[index])
+             for index, value in enumerate(enum) if str(value).strip()]
+    if not pairs:
+        return None, None
+    kept = [value for value, _ in pairs]
+    kept_labels = None if labels is None else [str(label) for _, label in pairs]
+    return kept, kept_labels
 
 
 def request_approval(

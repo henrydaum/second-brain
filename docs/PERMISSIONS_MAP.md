@@ -121,10 +121,10 @@ itself, above `classify` — this table is the summary of that comment:
 | 7 | **Provenance** | is this the command the user just typed? (`chain.typed_command`) | `config.write` |
 | 8 | **Recognizer** | does a pluggable predicate vouch for it? | `proc.run`/`proc.start`, `net.http` |
 
-**Both recognizer lists ship empty.** `_SHELL_RECOGNIZERS` and
-`_NET_RECOGNIZERS` are the designed extension point for exactly the wishlist
-below — "allow command prefix", "allow web domain", remembered approvals. They
-are the seam, and they are unoccupied.
+**`_SHELL_RECOGNIZERS` now holds two** — a structural read-only check and a
+*remembered* one reading `shell_allowed_prefixes`. `_NET_RECOGNIZERS` is still
+empty, because egress is served by its allowlist directly. Both remain the
+designed extension point, and a recognizer can only ever widen.
 
 ## 6. Layer 5 — The approver
 
@@ -188,26 +188,32 @@ exactly when whatever ran it was. That is the whole rule.
 | Allow once | **exists** — the dialog | — |
 | Deny once | **exists** — the dialog | — |
 | Allow always (per tool/plugin) | **exists** — `skip_permissions`, toggled from `/tools` | already chain-wide |
-| Allow web domain | **exists but manual** — `net_allowed_hosts` via `/config` | make it an answer *option*, writing the same setting |
-| Allow command prefix | **missing** | `_SHELL_RECOGNIZERS` — built for this |
-| Allow until end of turn | **missing** | needs turn-scoped storage; `Chain.approved` is the right shape, wrong lifetime |
-| Deny forever | **missing** | no negative list exists at any layer |
+| Allow web domain | **exists** — an answer option, writing `net_allowed_hosts` | — |
+| Allow writable folder | **exists** — an answer option, writing `fs_writable_dirs` | — |
+| Allow command prefix | **exists** — an answer option, writing `shell_allowed_prefixes` | matched as `(program, subcommand)`, never a string prefix |
+| Allow until end of turn | **missing** | an `OPTION_BUILDERS` entry whose `remember` writes a turn-scoped store |
+| Deny forever | **missing** | an `OPTION_BUILDERS` entry — `build_approver` already runs `remember` for denying options |
 | Auto accept all | **missing** | a `vet_permission` gate returning allow — same shape as plan mode |
 | Auto deny all | **partially** — plan mode is this, scoped | a `vet_permission` gate |
 | Default / manual | **exists** — the current behaviour | — |
 | Plan mode | **exists** — store `service_plan_mode`, a `vet_permission` gate | the proof the hook layer is the right seam |
 
-**The shape of the gap.** Every "allow once" answer is thrown away. There is no
-store for a decision — not per turn, per session, per chain root, per host, per
-prefix, or forever. `skip_permissions` is the only durable one and its unit is a
-*plugin name*, which is the coarsest possible grain: trusting `web_search` once
-trusts every host it will ever reach.
+**The shape of what is left.** The three *destination* grants exist now:
+`sandbox/options.py` turns one answer into an entry in a list the user keeps,
+and `/config` is the undo, which is the whole reason they live in config rather
+than the database. What has no home yet is a grant scoped to **time** rather
+than to a destination — per turn, per session — since that needs a store, and
+`skip_permissions` remains the only durable answer whose unit is a *plugin
+name*, the coarsest grain there is.
 
 Two things follow from what already exists:
 
-- **The recognizer lists are the designed home** for scoped, remembered
-  answers, and their comments say so. Adding one is a deliberate widening of
-  the authorization surface, which is why they are as visible as they are.
+- **`OPTION_BUILDERS` is the designed home** for a new kind of answer. An
+  `Option` is `(value, label, allow, remember)` where `remember` is an opaque
+  closure, so a turn-scoped grant writes to a turn store and a deny list writes
+  to a deny list without the dialog learning either. `build_approver` runs
+  `remember` for *denying* options too, precisely so "Deny forever" is later an
+  entry rather than an edit.
 - **Modes belong at `vet_permission`**, not as a new layer. Plan mode already
   proves the doorway carries a whole-system policy, and a gate that has an
   opinion wins over everything below it including `skip_permissions`.
