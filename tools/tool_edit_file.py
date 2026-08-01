@@ -46,25 +46,26 @@ LINE_PREFIX_HINT = (
 )
 
 
-def _roots(sdk) -> list:
-    """Where this tool will edit at all.
-
-    Not authorization — the kernel decides that, and would ask about a path
-    outside these anyway. This is *scope*: edit_file is for project and
-    application files, and narrowing what a tool will attempt is always safe.
-    """
-    return [sdk.paths.get("project"), sdk.paths.get("data")]
-
-
 def _resolve(sdk, raw: str):
-    """Absolutize a path and confine it to this tool's roots."""
+    """Absolutize a path against the project root. Nothing is out of bounds.
+
+    This used to confine edits to the project and data directories and refuse
+    anything else, on the reasoning that narrowing what a tool attempts is
+    always safe. It is not, when the narrowing is a *refusal in place of a
+    question*: a path elsewhere is unsafe, not forbidden, and the kernel is
+    what says so. Refusing here meant the dialog never appeared, so the person
+    was never asked and — since the approval dialog is now what adds a folder
+    to ``fs_writable_dirs`` — could never grant one either. The tool had made
+    itself the last word on a decision it does not own.
+
+    Which is the same lesson this file's docstring already tells about the
+    approval dialog it used to run, arriving a second time through a helper
+    that looked like mere tidiness.
+    """
     raw = (raw or "").strip()
     if not raw:
         return None, "path is required."
-    target = sdk.path.absolute(raw, base=sdk.paths.get("project"))
-    if not any(sdk.path.within(target, root) for root in _roots(sdk)):
-        return None, f"Path is outside allowed roots: {target}"
-    return target, None
+    return sdk.path.absolute(raw, base=sdk.paths.get("project")), None
 
 
 def _stat(sdk, path):

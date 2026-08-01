@@ -1281,13 +1281,23 @@ class TelegramFrontend(BaseFrontend):
         return self._markup(rows)
 
     def _approval_markup(self, key: str, request: dict):
-        """Build inline-keyboard controls for an approval request."""
+        """Build inline-keyboard controls for an approval request.
+
+        ``enum`` and ``enum_labels`` pair by index: the value is what the
+        callback answers with, the label is the only part meant to be read.
+        Rendering the value put "allow" and "always:api.search.brave.com" on
+        the buttons — the internal spelling, which is deliberately written for
+        a ledger row months later rather than for a person mid-decision.
+        """
         request_id = request.get("id") or "pending"
         is_boolean = (request.get("type") or "boolean") == "boolean"
         if request.get("enum"):
-            rows = [[self._button(str(value), key,
-                                  f"approval:{request_id}:{value}")]
-                    for value in request["enum"]]
+            values = request["enum"]
+            labels = request.get("enum_labels") or []
+            rows = [[self._button(
+                        str(labels[index]) if index < len(labels) else str(value),
+                        key, f"approval:{request_id}:{value}")]
+                    for index, value in enumerate(values)]
             if not is_boolean:
                 rows.append([self._button("✕ Cancel", key, "/cancel")])
             return self._markup(rows)
