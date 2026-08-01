@@ -16,3 +16,4 @@ database.db*
 .stress_driver/
 .hypothesis/
 desktop.ini
+.venv
