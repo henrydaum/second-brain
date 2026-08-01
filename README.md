@@ -1,77 +1,85 @@
 # Second Brain — Package Store
 
-This branch (`store`) is **not application code**. It's the package registry the
-Second Brain *lite* kernel installs optional plugins from. The app reads it
-directly over git (`git show origin/store:…`) — there is no server.
+This branch (`store`) is the tree-based registry used by the Second Brain
+kernel. It is not application code and has no server: the app reads files from
+`origin/store` with Git and installs selected entries under
+`DATA_DIR/installed`.
 
 ## Layout
 
+```text
+tools/                  tool_*.py
+tasks/                  task_*.py
+services/               service_*.py
+commands/               command_*.py
+frontends/              frontend_*.py
+parsers/                parse_*.py
+llm/                    llm_*.py
+scripts/                SDK code that is run rather than registered
+<family>/helpers/       code owned by that family
+bundles/                bundle_*.json lists of store-relative files
 ```
-packages/
-  index.json                 # catalog: [{id, name, description, tags}, …]
-  <package-id>/
-    manifest.json            # id, name, description, requires[], files[], entrypoints?
-    files/                   # plugin files, laid out exactly as they install
-      services/service_*.py
-      tools/tool_*.py
-      tasks/task_*.py
-      commands/command_*.py
-      <family>/helpers/*.py
+
+Each Python file is an installable entry identified by its stem. Files may
+declare dependencies directly in source:
+
+```python
+dependencies_files = ["services/service_example.py"]
+dependencies_pip = ["some-package>=1"]
 ```
 
-A **package** is the unit you install. Its `files/` land under
-`DATA_DIR/installed` (same layout) where the kernel auto-discovers them.
-`requires` lists other package ids, installed first. `entrypoints` (optional —
-auto-detected from `files` otherwise) are the top-level plugin files to load;
-helper files under `<family>/helpers/` are payload, not entrypoints.
+`dependencies_files` contains store-relative Python paths. The package manager
+installs those first and prunes them on uninstall only when nothing else still
+needs them. `dependencies_pip` is authoritative when present; omit it to let
+the installer detect third-party imports, or set it to `[]` to install none.
 
-## Two kinds of package
+A bundle is a JSON file whose `files` array names store-relative entries. It
+groups existing files; it does not contain or replace them.
 
-- **Atomic** — one capability: a service, tool, task, command, or helper
-  (e.g. `parser-pdf`, `tool-web-search`, `service-gmail`).
-- **Bundle (meta-package)** — *no files*, just a `requires` list that pulls in a
-  coherent group. Install one, get the set; uninstalling prunes the members
-  nothing else still needs. Current bundles:
-  - `all-parsers` — every file parser + Whisper + OCR
-  - `indexing-search` — full ingest + retrieval pipeline
-  - `plan-mode`, `scheduling`, `web-search`, `gmail`, `mcp`, `google-drive`
+## Installing
 
-## Installing (from the app)
+Use `/packages` in Second Brain:
 
-Use `/packages` in the REPL: browse, `install <id>`, `uninstall <id>`. Install
-copies files in, `pip install`s any missing third-party imports, loads
-entrypoints, and writes a receipt under `DATA_DIR/packages`. Parser packages
-activate immediately (the parser service reloads).
+```text
+/packages available tools
+/packages installed
+/packages install tool_web_search
+/packages uninstall tool_web_search
+```
+
+Installed files retain this tree shape under `DATA_DIR/installed`, where the
+kernel discovers them. Helper files are payload rather than entrypoints.
+
+## Authoring and validation
+
+New and migrated plugins use the sandbox SDK (`guest.*`). Validate a source
+file with the kernel's validator before publishing:
+
+```python
+from sandbox.validator import validate_file
+print(validate_file(r"Z:\path\to\tool_example.py").render())
+```
+
+From the `main` worktree, validate an entire checked-out store tree with:
+
+```text
+python dev/package_publisher.py validate --path "Z:\path\to\store"
+```
+
+The validator intentionally permits foreign libraries with a disclaimer;
+installed plugins that import them run in subprocess isolation.
 
 ## Publishing
 
-From the `lite` branch:
+The publisher lives on `main` at `dev/package_publisher.py`. It copies files
+into a temporary checkout of this branch, validates the complete store, and
+commits and pushes the result without modifying the current checkout:
 
+```text
+python dev/package_publisher.py publish tool_example --file source/tool_example.py=tools/tool_example.py --require services/service_example.py --pip "some-package>=1"
 ```
-python scripts/package_publisher.py publish <id> --name "…" --description "…" \
-    --file SRC=services/service_x.py --require other-id --tag foo
-```
 
-Omit `--file` and pass only `--require` to publish a bundle. The script runs in a
-throwaway worktree of this branch, validates the whole store, commits, and pushes
-— without touching your checkout. `package_publisher.py validate` checks integrity.
-
-## Python dependencies
-
-By default install **auto-detects** a package's third-party imports and
-`pip install`s the missing ones (mapping import names to PyPI names where they
-differ, e.g. `fitz`→PyMuPDF). **Most packages need to declare nothing.**
-
-Only override this when the scan can't read your real deps — typically
-optional, alternative, or platform-specific imports that are lazily imported and
-shouldn't all be force-installed:
-
-- `--pip <name>` (repeatable) — an **authoritative** dependency list that
-  replaces the scan entirely. Supports PEP 508 markers, e.g.
-  `--pip "pyobjc-framework-Vision; sys_platform=='darwin'"`.
-- `--no-pip` — declare an empty list: install nothing and skip the scan.
-
-Example: `service-ocr` declares `--pip pillow-heif` because its OCR engines
-(`torch`, `winrt`, the macOS `pyobjc` frameworks) are optional per-platform
-choices the user installs themselves — the scan would otherwise try to install
-all of them and fail.
+Use `--dry-run` to inspect the generated tree without committing, `--update`
+to replace a changed existing file, and `--no-pip` to write an explicit empty
+dependency list. Direct pull requests against `store` are also valid; keep the
+same layout and run whole-store validation before submitting them.
