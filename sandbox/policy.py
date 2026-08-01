@@ -250,18 +250,104 @@ def _authoring_root():
         return None
 
 
-def _write_reason(path, verb: str = "write") -> str:
-    """Why an allowed write was allowed — scratch, or code authoring.
+def _writable_dirs() -> list:
+    """Folders the *user* has opened to the agent, from kernel config.
 
-    Two different grants land in the same branch and the ledger should not
-    have to guess which: one is "somewhere to put a temporary file", the other
-    is "the agent is writing a plugin", and only the second is interesting
-    when reading back what happened overnight.
+    The filesystem counterpart to :func:`_allowed_hosts`, and config rather
+    than a plugin declaration for the same reason egress is: a person deciding
+    what code may reach is a different act from code claiming its own reach.
+
+    ``~`` is expanded because a person typing a path will write one. Absent
+    kernel means an empty list, which grants nothing.
+    """
+    try:
+        from runtime.context import kernel_config
+
+        raw = (kernel_config() or {}).get("fs_writable_dirs") or []
+    except Exception:
+        return []
+    if isinstance(raw, str):
+        raw = [part.strip() for part in raw.split(",")]
+    dirs = []
+    for entry in raw:
+        if (text := str(entry).strip()):
+            try:
+                dirs.append(Path(text).expanduser())
+            except (OSError, ValueError, RuntimeError):
+                continue
+    return dirs
+
+
+def _protected(path) -> bool:
+    """Whether ``path`` is code this app runs, which no user grant may open.
+
+    **The carve-out that makes the setting safe to have.** The natural thing
+    to put in ``fs_writable_dirs`` is the folder you keep projects in — and on
+    a developer's machine that folder plausibly *contains Second Brain's own
+    source*. Without this, listing it would make ``sandbox/policy.py`` freely
+    writable, and the agent could edit the classifier that decides what it is
+    allowed to do. The same reasoning covers ``DATA_DIR/installed``: a free
+    write there is a way around ``plugin.install``, which is ALWAYS_UNSAFE
+    precisely to gate what code gets to run.
+
+    So this is checked against the *target*, never against the listed folder.
+    A parent directory is the whole problem — filtering the list would miss
+    the case where somebody grants ``Z:\\My Code`` and the app lives inside it.
+
+    It removes the *free* grant and nothing else. These paths fall through to
+    the dialog exactly as they do today, so editing the app's own source is
+    still possible, one answered question at a time.
+
+    ``workspace`` is the deliberate hole in ``DATA_DIR``: it is the agent's own
+    tree and free authorship there is the point of the whole boundary. It does
+    not depend on this function being right, though — it is a scratch root in
+    its own right, and this is only consulted for the user's list.
+
+    Fails closed. Unable to locate the app means treating everything as
+    protected, which costs a dialog rather than a grant.
+    """
+    try:
+        from paths import DATA_DIR, ROOT_DIR
+    except Exception:
+        return True
+    if _within(path, [ROOT_DIR]):
+        return True
+    if not _within(path, [DATA_DIR]):
+        return False
+    authoring = _authoring_root()
+    return not (authoring is not None and _within(path, [authoring]))
+
+
+def _freely_writable(path) -> bool:
+    """Whether writing to ``path`` needs no dialog.
+
+    Two grants, and the carve-out applies to exactly one of them. The built-in
+    scratch roots are the kernel's own and are never second-guessed;
+    :func:`_writable_dirs` is the user's, and it stops at the app's code.
+    """
+    if _within(path, _scratch_roots()):
+        return True
+    return _within(path, _writable_dirs()) and not _protected(path)
+
+
+def _write_reason(path, verb: str = "write") -> str:
+    """Why an allowed write was allowed — scratch, authoring, or the user's.
+
+    Three different grants land in the same branch and the ledger should not
+    have to guess which: "somewhere to put a temporary file", "the agent is
+    writing a plugin", and "a folder the person opened to it". Only the last
+    two are interesting when reading back what happened overnight, and the
+    third is the one whose blast radius is somebody's actual work.
+
+    Ordered narrowest first — the authoring tree is itself a scratch root, and
+    a listed folder can contain either.
     """
     root = _authoring_root()
     if root is not None and _within(path, [root]):
         return f"{verb} in the agent's own tree"
-    return f"{verb} in scratch"
+    if _within(path, _scratch_roots()):
+        return f"{verb} in scratch"
+    return f"{verb} in a directory you allowed"
 
 
 def _within(path, roots) -> bool:
@@ -1041,19 +1127,22 @@ def classify(request: Request, chain: Chain) -> Decision:
     # the same answer — anything else would make the encoding a way around
     # the rule.
     if kind in (FS_WRITE, R.FS_WRITE_BYTES):
-        if _within(args.get("path"), _scratch_roots()):
+        if _freely_writable(args.get("path")):
             return Decision(SAFE, _write_reason(args.get("path")))
         return Decision(UNSAFE, f"write to {args.get('path')}")
 
     if kind == FS_MOVE:
-        roots = _scratch_roots()
-        if _within(args.get("src"), roots) and _within(args.get("dst"), roots):
-            return Decision(SAFE, "move within scratch")
+        # Both ends, because a move is a write to one place and a delete from
+        # the other. Dragging a file *out* of an allowed folder is exactly as
+        # much a change to somewhere unlisted as writing there would be.
+        if (_freely_writable(args.get("src"))
+                and _freely_writable(args.get("dst"))):
+            return Decision(SAFE, _write_reason(args.get("dst"), verb="move"))
         return Decision(UNSAFE,
                         f"move {args.get('src')} to {args.get('dst')}")
 
     if kind == FS_DELETE:
-        if _within(args.get("path"), _scratch_roots()):
+        if _freely_writable(args.get("path")):
             return Decision(SAFE, _write_reason(args.get("path"),
                                                 verb="delete"))
         return Decision(UNSAFE, f"delete {args.get('path')}")

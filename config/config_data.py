@@ -131,6 +131,19 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list"}),
 
+    ("Writable Directories", "fs_writable_dirs",
+     "Folders the agent may create, edit, move and delete files in without "
+     "asking you first — your own project directory, say, rather than only "
+     "its sandbox tree. Subfolders are covered. This is about writing: "
+     "reading is not restricted by it, and neither is anything else. "
+     "Deletes are included, so point it at somewhere you keep in version "
+     "control. Second Brain's own program files and installed packages are "
+     "never opened by this list, even if a folder here contains them — "
+     "otherwise the agent could edit the rules that decide what it may do. "
+     "A plugin cannot add to it.",
+     [],
+     {"type": "json_list"}),
+
     ("Data Retention (Days)", "data_retention_days",
      "Delete data older than this many days: idle conversations (and their "
      "messages), action-ledger rows, and finished task-run records. Anything "
