@@ -128,13 +128,17 @@ future store) — *not* by deleting them. What remains:
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
   wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
   `locations`, `commands`, `tools`, `services`, `tasks`, `packages`,
-  `schedule`, `quit`, `restart`. The last two used to be native `_HostCommand`
-  instances built in the composition root, holding `shutdown_fn` and the
-  scaffold directly; they are ordinary sandboxed commands over the `app.stop`
-  Request now, which is what parity with the other sixteen means.
+  `permissions`, `schedule`, `quit`, `restart`. The last two used to be native
+  `_HostCommand` instances built in the composition root, holding
+  `shutdown_fn` and the scaffold directly; they are ordinary sandboxed
+  commands over the `app.stop` Request now, which is what parity with the
+  other seventeen means.
   `schedule` is kernel because it manages *any* Timekeeper job and the
   Timekeeper is a kernel service — a store command was the only way to reach
-  two things the kernel already owned.
+  two things the kernel already owned. `permissions` is kernel for the same
+  shape of reason: it lists and revokes the three standing-grant settings the
+  policy reads, and a safety surface that stops working when a package is
+  uninstalled is worse than none.
   Profile/MCP/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 

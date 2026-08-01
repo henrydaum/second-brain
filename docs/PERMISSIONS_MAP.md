@@ -250,6 +250,12 @@ exactly the slot the dialog prints under "Why it needs asking".
 **~~`skip_permissions` is read two ways.~~ Fixed** — it collapsed with the
 doorway. One reader, `runtime.user_setting`, matching the whole chain.
 
+**Standing grants are now enumerable and withdrawable** — `/permissions`
+([bundled/commands/command_permissions.py](../bundled/commands/command_permissions.py))
+lists all three settings and revokes from any of them, with the two things the
+lists do not say: scratch and the workspace tree are free without any grant,
+and the app's own files are never grantable whatever is listed.
+
 **No layer records what it decided at the grain it decided it.** Still open,
 and it is the blocker for everything in §9. The ledger records the Request and
 whether it was refused, but a "yes" leaves no trace of *what was approved* —
