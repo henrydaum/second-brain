@@ -78,29 +78,35 @@ def test_the_dialog_and_the_ledger_read_the_same_line():
                                            "shell": "powershell"})
 
 
-def test_a_recognizer_can_widen_and_an_empty_list_cannot():
+def test_a_recognizer_can_widen_and_no_recognizer_can_narrow():
     """The seam future policy work goes through, pinned as a seam.
 
     Recognizers are how this gets less onerous — a structural read-only
-    check, or a remembered "yes". The list ships empty, so the default is
-    still "ask", and a recognizer that raises abstains rather than allowing.
+    check, or a remembered "yes". One ships (see
+    ``tests/test_shell_recognizer.py``); what is pinned here is the *shape*
+    rather than its contents: an unrecognised command is still asked about, a
+    recognizer that abstains changes nothing, and one that raises abstains
+    rather than allowing.
     """
     from sandbox import policy
 
-    assert policy._SHELL_RECOGNIZERS == []
-    request = Request(R.PROC_RUN, {"argv": "ls"})
+    # Deliberately not a command the shipped recognizer knows, so this tests
+    # the seam and not the whitelist.
+    request = Request(R.PROC_RUN, {"argv": "sortilege --now"})
+    original = list(policy._SHELL_RECOGNIZERS)
 
     policy._SHELL_RECOGNIZERS.append(lambda line, args: None)
     policy._SHELL_RECOGNIZERS.append(lambda line, args: 1 / 0)
     try:
         assert not classify(request, Chain()).safe
         policy._SHELL_RECOGNIZERS.append(
-            lambda line, args: "read-only" if line == "ls" else None)
+            lambda line, args: "vouched" if line.startswith("sortilege")
+            else None)
         assert classify(request, Chain()).safe
         assert not classify(Request(R.PROC_RUN, {"argv": "rm x"}),
                             Chain()).safe
     finally:
-        policy._SHELL_RECOGNIZERS.clear()
+        policy._SHELL_RECOGNIZERS[:] = original
 
 
 # ──────────────────────────────────────────────────────────────────────

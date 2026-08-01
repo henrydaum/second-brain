@@ -110,7 +110,10 @@ def test_command_registry_marks_only_the_approved_execution_context():
 
 
 def test_approved_chain_authorizes_its_nested_process_request():
-    request = Request(PROC_RUN, {"argv": ["git", "rev-parse", "HEAD"]})
+    # Deliberately a command with an effect: ``git rev-parse`` is recognised
+    # as read-only and would be SAFE without any grant at all, which would
+    # make this pass while testing nothing.
+    request = Request(PROC_RUN, {"argv": ["git", "pull"]})
 
     assert classify(request, Chain().push("update")).level == UNSAFE
     assert classify(

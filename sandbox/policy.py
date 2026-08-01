@@ -22,6 +22,7 @@ does. Where a family had no obvious answer, that rule gave one.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -581,9 +582,175 @@ def _classify_net(args: dict) -> Decision:
 #     for this chain root", which needs somewhere to persist a decision and a
 #     scope to persist it against, and is the more useful of the two
 #
-# The list is empty on purpose. Adding to it is a deliberate widening of the
-# authorization surface, so it should be as visible as this comment makes it.
-_SHELL_RECOGNIZERS: list = []
+# Adding to it is a deliberate widening of the authorization surface, so it
+# should be as visible as this comment makes it. One recognizer lives here; it
+# is the structural kind, and it is built below.
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The read-only recognizer.
+# ──────────────────────────────────────────────────────────────────────
+#
+# This is the classifier's second attempt, and the difference is entirely in
+# what it refuses to attempt. The one that died tried to decide *every*
+# command: split the line at unquoted ``&&``/``||``/``;``/``|``, match each
+# segment against a whitelist of program names, send redirection and
+# substitution to approval. Deciding an arbitrary command line is Rice's
+# theorem, and it failed in the invisible direction — a wrong "unsafe" gets
+# reported, a wrong "safe" does not.
+#
+# Deciding *a few* commands and abstaining on everything else is not the same
+# problem, and it is trivial. Three rules keep it that way:
+#
+#   1. **Abstain, never deny.** A recognizer returns a reason or ``None``; it
+#      has no authority to say "unsafe" because nothing needs it to. A bug
+#      here costs a dialog. That is the shape ``_SHELL_RECOGNIZERS`` already
+#      had, and it is what makes the rest of this safe to write at all.
+#
+#   2. **The unit is (program, subcommand).** ``git`` is not read-only;
+#      ``git status`` is. ``find`` is read-only right up until ``-exec``.
+#      A whitelist keyed on the program name is wrong at the root, which is
+#      most of why the first one could not be fixed.
+#
+#   3. **No parsing.** Any shell at all, any metacharacter anywhere, and this
+#      abstains without looking further. It reads the *structured* argv and
+#      not the rendered line, because the rendered line is precisely the thing
+#      that cannot be reasoned about — quoting, ``$(...)``, backticks, aliases
+#      and ``eval`` all beat a parser, so there is no parser.
+#
+# What it buys is the high-frequency, zero-information prompts: a person
+# clicking through ``git status`` forty times a day is being trained not to
+# read dialogs, and that training is what the one dialog that mattered will
+# run into. What it deliberately never covers is anything that runs arbitrary
+# code by design — ``npm install``, ``pip install``, ``pytest``, ``make``,
+# ``python script.py``. Those are the minority by count and the majority by
+# consequence, and they stay asked forever.
+#
+# **Sound against carelessness, not against a hostile repository.** Even
+# ``git diff`` can invoke an external diff driver named by a repo's
+# ``.gitattributes``. That is the documented threat model (see the security
+# contract), and it is the line this sits on.
+
+#: Argv elements containing any of these abstain. With ``shell=None`` the
+#: handler executes the list as given, so none of them can actually *do*
+#: anything — but an argv carrying one was written by somebody who expected a
+#: shell, and abstaining on that costs a dialog and settles it.
+_SHELL_METACHARACTERS = frozenset("|&;<>$`()\n\r")
+
+#: ``(program, subcommand) -> (allowed_flags, positionals_ok)``. A subcommand
+#: of ``""`` means the program takes none. An unknown flag abstains, which is
+#: what keeps this a whitelist rather than a deny list.
+#:
+#: ``positionals_ok`` exists because a bare word means opposite things to
+#: neighbouring verbs: to ``git log`` it is a ref or a path to read, to
+#: ``git branch`` it is a branch to *create*. Allowing free positionals
+#: everywhere would have let ``git remote add origin <url>`` through, which is
+#: the concrete bug that makes the pair the right unit.
+#:
+#: Deliberately absent, each for a reason worth keeping written down:
+#:   - ``pytest --collect-only`` — collection *imports* every test module, so
+#:     module-level code runs. It looks inert and is not.
+#:   - ``find`` — read-only until ``-exec``, and ``-exec`` is a flag.
+#:   - ``git config`` — sets exactly as readily as it gets.
+#:   - ``cat``/``ls`` — ``sdk.fs.read`` and ``sdk.fs.list`` do these mediated
+#:     and better. A dialog is the right nudge toward the SDK.
+_READ_ONLY_COMMANDS = {
+    ("git", ""): (frozenset({"--version"}), False),
+    ("git", "status"): (frozenset({"-s", "--short", "-b", "--branch",
+                                   "--porcelain", "--long"}), False),
+    ("git", "log"): (frozenset({"--oneline", "--graph", "--decorate", "--stat",
+                                "--pretty", "--format", "--author", "--since",
+                                "--until", "--max-count", "-n", "--no-merges",
+                                "--name-only", "--name-status", "--reverse"}),
+                     True),
+    ("git", "diff"): (frozenset({"--stat", "--cached", "--staged", "--numstat",
+                                 "--shortstat", "--name-only",
+                                 "--name-status"}), True),
+    ("git", "show"): (frozenset({"--stat", "--oneline", "--pretty", "--format",
+                                 "--name-only"}), True),
+    ("git", "branch"): (frozenset({"-a", "--all", "-v", "-vv", "--list",
+                                   "--show-current"}), False),
+    ("git", "remote"): (frozenset({"-v", "--verbose"}), False),
+    ("git", "rev-parse"): (frozenset({"--abbrev-ref", "--short",
+                                      "--show-toplevel", "--git-dir",
+                                      "--is-inside-work-tree"}), True),
+    # Version and identity queries: nothing to configure, nothing to write.
+    ("python", ""): (frozenset({"--version", "-V"}), False),
+    ("python3", ""): (frozenset({"--version", "-V"}), False),
+    ("node", ""): (frozenset({"--version", "-v"}), False),
+    ("npm", ""): (frozenset({"--version", "-v"}), False),
+    ("pip", ""): (frozenset({"--version", "-V"}), False),
+    ("pwd", ""): (frozenset(), False),
+    ("whoami", ""): (frozenset(), False),
+    ("hostname", ""): (frozenset(), False),
+}
+
+
+def _exact_argv(args: dict):
+    """The argv the handler will execute, or ``None`` if it cannot be known.
+
+    Mirrors ``handlers.fs_net._invocation`` deliberately: a recognizer that
+    reasons about a different command than the one that runs is worse than no
+    recognizer. ``shell=None`` is the only shell-free path there — ``default``,
+    ``cmd`` and ``powershell`` all hand the line to something that parses it,
+    and what a parser will make of a string is the question this whole module
+    refuses to answer.
+    """
+    if args.get("shell") is not None:
+        return None
+    argv = args.get("argv")
+    if isinstance(argv, str):
+        try:
+            argv = shlex.split(argv)
+        except ValueError:
+            return None
+    return [str(part) for part in (argv or [])]
+
+
+def _read_only_command(shown: str, args: dict):
+    """Allow a known read-only invocation, or abstain.
+
+    ``shown`` is ignored on purpose: the rendered line is for the person and
+    the ledger, and reading it back to make a decision is the mistake the
+    first classifier was built on.
+    """
+    argv = _exact_argv(args)
+    if not argv:
+        return None
+    if any(_SHELL_METACHARACTERS & set(part) for part in argv):
+        return None
+
+    program = argv[0]
+    # A bare name only. ``/tmp/somewhere/git`` is not the ``git`` this list is
+    # talking about, and resolving which one it is means trusting PATH.
+    if "/" in program or "\\" in program:
+        return None
+    program = program.lower().removesuffix(".exe")
+
+    rest = argv[1:]
+    subcommand = ""
+    if rest and not rest[0].startswith("-"):
+        subcommand, rest = rest[0].lower(), rest[1:]
+
+    entry = _READ_ONLY_COMMANDS.get((program, subcommand))
+    if entry is None:
+        return None
+    flags, positionals_ok = entry
+    for part in rest:
+        if part == "--" and positionals_ok:
+            continue                      # ends flag parsing; changes nothing
+        if part.startswith("-"):
+            # ``--flag=value`` is one token; the value cannot turn a read into
+            # a write, so only the name is checked.
+            if part.split("=", 1)[0] not in flags:
+                return None
+        elif not positionals_ok:
+            return None
+    named = f"{program} {subcommand}".strip()
+    return f"{named} only reads"
+
+
+_SHELL_RECOGNIZERS: list = [_read_only_command]
 
 
 def render_command(args: dict) -> str:
