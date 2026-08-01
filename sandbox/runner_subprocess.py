@@ -91,20 +91,26 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
     started = time.perf_counter()
 
     try:
-        return _pump(interpreter, execution, proc, killed, deadline, {
-            "kind": protocol.START,
-            "module": str(module_path),
-            "func": func_name,
-            "method": method,
-            "kwargs": protocol.pack(kwargs or {}),
-            "box": box,
-            "root": box_root,
-            "extra_roots": list(extra_roots or []),
-            "parsers": list(parsers or []),
-            "memory_mb": memory_mb,
-            "cpu_seconds": int(deadline) + 1,
-            "digest": digest,
-        })
+        try:
+            start = protocol.pack_simple({
+                "kind": protocol.START,
+                "module": str(module_path),
+                "func": func_name,
+                "method": method,
+                "kwargs": kwargs or {},
+                "box": box,
+                "root": box_root,
+                "extra_roots": list(extra_roots or []),
+                "parsers": list(parsers or []),
+                "memory_mb": memory_mb,
+                "cpu_seconds": int(deadline) + 1,
+                "digest": digest,
+            })
+            protocol.encode(start)
+        except protocol.ProtocolError as exc:
+            return Result.failure(f"unusable call arguments: {exc}",
+                                  code=ERROR_INVALID_ARGUMENT)
+        return _pump(interpreter, execution, proc, killed, deadline, start)
     finally:
         timer.cancel()
         _reap(proc)

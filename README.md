@@ -98,7 +98,7 @@ Second Brain is built from a few durable pieces:
 
 - `state_machine/` contains the pure conversation primitives: participants, turns, phases, actions, forms, approvals, and serializable phase frames.
 - `runtime/` owns sessions, persistence, approvals, state-machine dispatch, agent turns, and the context passed into plugins.
-- `plugins/` holds every extension family: tools, tasks, services, commands, and frontends.
+- `plugins/` is extension substrate: discovery, watching, registries, and the native adapters used by the sandbox bridge. Implementations live in the three plugin trees described below.
 - `pipeline/` watches files, manages the SQLite task queue, and runs path-driven and event-driven tasks.
 - `agent/` builds the dynamic system prompt, manages the tool registry, and drives LLM tool calls.
 - `events/` provides the pub/sub bus used by tasks, progress updates, notifications, and runtime signals.
@@ -150,16 +150,16 @@ the one place it may write without asking, because everything under it runs in a
 subprocess. Bundled plugins are source-controlled; the other two live in the
 Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; the kernel plugin watcher then syncs adds, edits, and deletes live.
 
-The agent can create new plugins on-the-fly. When you ask Second Brain to make a new plugin (and test_plugin is installed), it'll follow these instructions:
+The agent can create new plugins on-the-fly. When you ask Second Brain to make a new plugin (and the validate tool is installed), it'll follow these instructions:
 
 1. Read the relevant template in `templates/`.
-2. Read a similar built-in plugin.
+2. Read a similar installed store plugin when one exists.
 3. Create or edit the plugin file with `edit_file`.
-4. Let the kernel plugin watcher auto-load the file, and call `test_plugin(plugin_path=...)` for purpose-built diagnostics.
-5. If testing fails, fix the same file and call `test_plugin` again. Repeat until it is fixed and the plugin loads.
-6. To remove it durably and from the live runtime, delete the sandbox file; the kernel plugin watcher unloads it.
+4. Validate the file with the SDK validator and let the kernel plugin watcher auto-load it.
+5. If validation or loading fails, fix the same file and repeat until it conforms and loads.
+6. To remove it durably and from the live runtime, delete the workspace file; the kernel plugin watcher unloads it.
 
-These instructions are found within the test_plugin tool, inside its agent_prompt method. Yes: plugins can declare their own system prompt text. If the plugin isn't loaded, then this stuff won't take up precious context. One name, two shapes: write agent_prompt = "blah blah blah" when the text never changes, or def agent_prompt(self, sdk) when it should reflect current information. The system prompt is recalculated with every step of the conversation, making it always completely up-to-date. To maintain prompt caching (and reduce costs $) the most volatile system prompt text is inserted at the bottom of the conversation, with stable and semi-stable at the start.
+These instructions are supplied by the validate tool's `agent_prompt` method. Plugins can declare their own system prompt text too. If a plugin is not loaded, its text takes no context. One name has two shapes: write `agent_prompt = "..."` when the text never changes, or `def agent_prompt(self, sdk)` when it depends on live state. The system prompt is recalculated with every step of the conversation while preserving stable prompt blocks for caching.
 
 In other words, the system prompt has been fully engineered.
 
@@ -240,13 +240,13 @@ It is calendar-capable. Jobs can run silently or notify the active frontend, and
 
 ## Frontends
 
-The kernel ships one base frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_essentials` bundle or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present. Telegram is highly recommended for the ease of use, but it takes a hot second to set up (again, use /setup for this).
+The kernel ships the REPL (`bundled/frontends/frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_essentials` bundle or directly via `/packages install frontend_telegram`; once installed it lives under `DATA_DIR/installed/frontends/`. Telegram is highly recommended for the ease of use, but it takes a hot second to set up (again, use /setup for this).
 
 Telegram is useful because the local runtime can reach you anywhere: approvals, proactive reminders, file delivery, scheduled-agent results, and mobile command menus all become part of the same conversation system.
 
 `BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
 
-Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, tested with `test_plugin`, and live-loaded by the kernel plugin watcher.
+Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, checked with the validate tool, and live-loaded by the kernel plugin watcher.
 
 ## Setup
 
@@ -375,7 +375,7 @@ The kernel ships **no built-in tools** — a fresh install can converse but has 
 | `run_command` | Run scoped terminal commands, with approval for broad actions | starter |
 | `sql_query` | Query SQLite read-only | starter |
 | `ask_user_question` | Ask the user a structured question | starter |
-| `test_plugin` | Diagnose a plugin source file and summarize broad regression tests | starter |
+| `validate` | Validate sandbox source and explain contract violations | starter |
 | `hybrid_search` | Search local files with fused lexical and semantic ranking | full |
 | `lexical_search` | Search local files by exact terms and keywords | full |
 | `semantic_search` | Search local files by embedding similarity | full |
@@ -405,18 +405,15 @@ Second Brain/
 │   ├── runtime_config.py       # Active profile, tools, commands, prompt
 │   └── session.py              # RuntimeSession and RuntimeResult
 │
-├── plugins/
-│   ├── BaseCommand.py
-│   ├── BaseFrontend.py
-│   ├── BaseService.py
-│   ├── BaseTask.py
-│   ├── BaseTool.py
+├── plugins/                # Discovery, watcher, registries, native adapters
+│   ├── native/
 │   ├── plugin_discovery.py
+│   └── plugin_watcher.py
+├── bundled/                # Implementations shipped with the app
 │   ├── commands/
 │   ├── frontends/
-│   ├── services/
-│   ├── tasks/
-│   └── tools/
+│   ├── parsers/
+│   └── services/
 │
 ├── pipeline/
 │   ├── database.py
@@ -425,7 +422,6 @@ Second Brain/
 │   └── watcher.py
 │
 ├── agent/
-│   ├── agent.py
 │   ├── system_prompt.py
 │   └── tool_registry.py
 │
@@ -490,7 +486,7 @@ Authoring rules:
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
 - Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
 
-For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory, call `test_plugin`, and let the kernel plugin watcher load them.
+For source-controlled additions, place stable app-shipped plugins under the matching `bundled/` family. For live experimentation, keep them under `DATA_DIR/workspace`, run the validate tool, and let the kernel plugin watcher load them.
 
 ## Philosophy
 

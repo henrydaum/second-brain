@@ -38,7 +38,8 @@ import threading
 import time
 
 from .guest import protocol
-from .guest.codes import ERROR_GUEST_FAULT, ERROR_TIMEOUT
+from .guest.codes import (ERROR_GUEST_FAULT, ERROR_INVALID_ARGUMENT,
+                          ERROR_TIMEOUT)
 from .guest.faults import guest_traceback
 from .guest.loader import (install_parsers, load_entries, load_entry,
                            unload_box)
@@ -104,6 +105,20 @@ class PersistentBox:
         """
         if not self._alive:
             return Result.failure(f"box {self.name!r} is not running")
+        try:
+            canonical = protocol.normalize({
+                "method": method, "target": target,
+                "args": list(args), "kwargs": kwargs,
+            })
+            protocol.encode({"kind": protocol.CALL,
+                             **protocol.pack_simple(canonical)})
+        except protocol.ProtocolError as exc:
+            return Result.failure(f"unusable call arguments: {exc}",
+                                  code=ERROR_INVALID_ARGUMENT)
+        method = canonical["method"]
+        target = canonical["target"]
+        args = tuple(canonical["args"])
+        kwargs = canonical["kwargs"]
         from . import provenance
 
         if not self._acquire():
@@ -323,7 +338,12 @@ class InProcessBox(PersistentBox):
             self._alive = False
             return Result.failure(
                 f"timed out after {deadline:.1f}s of running")
-        return box.get("result", Result(data=None))
+        result = box.get("result", Result(data=None))
+        try:
+            return result.crossing()
+        except protocol.ProtocolError as exc:
+            return Result.failure(
+                f"unsendable result: {exc}", code=ERROR_GUEST_FAULT)
 
     def _call(self, method: str, args: tuple, kwargs: dict,
               target: str = "") -> Result:
@@ -454,8 +474,8 @@ class SubprocessBox(PersistentBox):
                 "kind": protocol.CALL,
                 "method": method,
                 "target": target,
-                "args": protocol.pack(list(args)),
-                "kwargs": protocol.pack(kwargs),
+                "args": protocol.pack_simple(list(args)),
+                "kwargs": protocol.pack_simple(kwargs),
             }):
                 self._alive = False
                 return Result.failure("box channel closed")

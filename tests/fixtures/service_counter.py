@@ -9,7 +9,7 @@ class Counter(BaseService):
     name = "counter"
     description = "Accumulates numbers across calls."
     box = "counter"
-    exports = ["add", "total", "read_file"]
+    exports = ["add", "total", "read_file", "canonical", "reserved", "live"]
 
     def start(self, sdk):
         """Acquire the state this service holds."""
@@ -35,6 +35,18 @@ class Counter(BaseService):
     def read_file(self, sdk, path):
         """A method that makes a Request mid-call."""
         return sdk.fs.read(path)
+
+    def canonical(self, sdk):
+        """Return values normalized by the transport."""
+        return {"pair": (1, 2), "blob": bytearray(b"ab")}
+
+    def reserved(self, sdk):
+        """Return a dictionary shaped like the old bytes envelope."""
+        return {"__bytes__": "AA=="}
+
+    def live(self, sdk):
+        """Return something no boundary may carry."""
+        return object()
 
     def explode(self, sdk):
         """Fail, to prove one bad call does not kill the service."""

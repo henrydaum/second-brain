@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import provenance
+from .guest import protocol
 from .handlers import HANDLERS
 from .policy import Chain, Decision, classify
 from .guest.channel import Terminated
@@ -496,7 +497,12 @@ class InterpreterChannel:
         result = self._interpreter.submit(self._execution, request)
         if self._execution.cancelled:
             raise Terminated(None)
-        return result
+        try:
+            return result.crossing()
+        except protocol.ProtocolError as exc:
+            return Result.failure(
+                f"handler returned an unsendable result: {exc}",
+                code=ERROR_HANDLER_ERROR)
 
     def notify(self, request: Request) -> None:
         """Send a Request without waiting for its answer.

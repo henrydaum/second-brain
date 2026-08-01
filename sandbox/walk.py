@@ -229,8 +229,11 @@ def run_ripgrep(rg, pattern, root, raw_glob, mode, case_insensitive,
     cmd = [rg, "--no-config", "--no-ignore", "--hidden", "--no-messages",
            "--sortr", "modified", "--max-filesize", str(MAX_FILE_BYTES)]
     for d in sorted(IGNORED_DIRS):
-        # The '**/' prefix is required: a slash-containing glob anchors to root.
-        cmd += ["-g", f"!**/{d}/**"]
+        # ripgrep's glob anchoring differs at the search root on Windows: the
+        # recursive form prunes nested matches but can leave ``root/d`` alive.
+        # Name both shapes, then filter results as a final backend-independent
+        # guard in fs_net.
+        cmd += ["-g", f"!/{d}/**", "-g", f"!**/{d}/**"]
     if raw_glob:
         g = raw_glob.replace("\\", "/").lstrip("/")
         # Our '*.py' means top level only; a bare rg glob matches basenames at

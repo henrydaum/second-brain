@@ -235,6 +235,9 @@ def test_searching_a_single_file_works(tree):
 @pytest.mark.parametrize("mode", ["files", "count", "content"])
 def test_ripgrep_and_python_agree(tree, mode):
     """Two backends, one answer. A fast path that disagrees is a bug generator."""
+    nested_junk = tree / "pkg" / "__pycache__"
+    nested_junk.mkdir()
+    (nested_junk / "d.py").write_text("alpha = 100\n", encoding="utf-8")
     walk.reset_rg_cache()
     fast = _fs_search(None, {"root": str(tree), "pattern": "alpha",
                              "mode": mode, "glob": "**/*.py"})
@@ -247,6 +250,7 @@ def test_ripgrep_and_python_agree(tree, mode):
         return sorted(tuple(r) if isinstance(r, list) else r for r in results)
 
     assert normalize(fast.data["results"]) == normalize(slow.data["results"])
+    assert "__pycache__" not in repr(fast.data["results"])
 
 
 def test_ripgrep_results_are_filtered_through_protected(tree, monkeypatch):

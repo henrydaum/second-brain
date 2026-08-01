@@ -210,6 +210,35 @@ def is_simple(value: Any) -> bool:
 #: when it has this key *and nothing else*, so plugin data that happens to
 #: contain the string is not mistaken for an encoding.
 BYTES_TAG = "__bytes__"
+#: Escape envelope for a user dictionary that would otherwise look like one
+#: of the codec's own envelopes.  Without it, ``{"__bytes__": "AA=="}``
+#: silently became ``b"\x00"`` in a subprocess while remaining a dictionary
+#: in-process.
+DICT_TAG = "__dict__"
+
+
+def pack_simple(value: Any) -> Any:
+    """Validate and pack one value that is allowed across the boundary.
+
+    Keeping this beside :func:`is_simple` makes the rule executable rather
+    than advisory.  Every Request and Result passes through here, including
+    the in-process transport, so a live object cannot become an accidental
+    back-reference into the kernel and runner choice cannot change behaviour.
+    """
+    if not is_simple(value):
+        raise ProtocolError(
+            "payload contains a live or non-serializable Python object")
+    return pack(value)
+
+
+def normalize(value: Any) -> Any:
+    """Return the canonical value the JSON transport would deliver.
+
+    Tuples become lists and bytes-like objects become ``bytes``.  Applying the
+    same normalization in-process is what makes handlers see the same types
+    under both runners.
+    """
+    return unpack(pack_simple(value))
 
 
 def pack(value: Any) -> Any:
@@ -225,7 +254,15 @@ def pack(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [pack(item) for item in value]
     if isinstance(value, dict):
-        return {key: pack(item) for key, item in value.items()}
+        packed = {key: pack(item) for key, item in value.items()}
+        # A bytes envelope is intentionally a lone reserved key.  Escape a
+        # user's dictionary with that shape (and the escape shape itself) so
+        # unpack can distinguish data from an envelope without changing the
+        # established encoding for real bytes.
+        if len(packed) == 1 and (
+                BYTES_TAG in packed or DICT_TAG in packed):
+            return {DICT_TAG: [[key, item] for key, item in packed.items()]}
+        return packed
     return value
 
 
@@ -237,6 +274,11 @@ def unpack(value: Any) -> Any:
     is to hand back the dict as it arrived.
     """
     if isinstance(value, dict):
+        if len(value) == 1 and isinstance(value.get(DICT_TAG), list):
+            pairs = value[DICT_TAG]
+            if all(isinstance(pair, list) and len(pair) == 2
+                   and isinstance(pair[0], str) for pair in pairs):
+                return {pair[0]: unpack(pair[1]) for pair in pairs}
         if len(value) == 1 and isinstance(value.get(BYTES_TAG), str):
             try:
                 return base64.b64decode(value[BYTES_TAG], validate=True)

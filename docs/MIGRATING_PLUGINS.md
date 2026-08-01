@@ -21,7 +21,7 @@ never collides on `name`.
 
 ```python
 from sandbox.validator import validate_file
-print(validate_file("plugins/tools/tool_read_file.py").render())
+print(validate_file("tools/tool_read_file.py").render())
 ```
 
 ```
@@ -134,7 +134,7 @@ most tools.
 
 ```python
 from sandbox.validator import validate_file
-print(validate_file("plugins/tools/tool_read_file.py").render())
+print(validate_file("tools/tool_read_file.py").render())
 ```
 
 `conforms.` means it will load. Anything else names the line and the fix.
@@ -188,7 +188,7 @@ anything behind.
 
 One family needs a moment's thought, not an exemption:
 
-- **LLM backends** live in `helpers/llm_*.py` and implement
+- **LLM backends** live in `llm/llm_*.py` and implement
   `guest.llm.BaseLLMBackend`. The kernel-owned `llm` registry discovers their
   declarations and runs them in boxes; there is no `service_llm` plugin or
   native-backend compatibility path.

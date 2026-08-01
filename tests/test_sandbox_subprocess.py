@@ -119,6 +119,35 @@ def test_missing_file_is_reported_the_same(both):
     assert not a.ok
 
 
+def test_canonical_values_are_identical_on_both(both):
+    a, b = both("returns_canonical_values")
+    _same(a, b)
+    assert a.data == {"pair": [1, 2], "blob": b"ab"}
+
+
+def test_reserved_byte_tag_is_data_on_both(both):
+    a, b = both("returns_reserved_tag_dict")
+    _same(a, b)
+    assert a.data == {"__bytes__": "AA=="}
+
+
+@pytest.mark.parametrize("function", ["returns_live_object", "sends_live_object"])
+def test_live_objects_fail_on_both_sides_of_the_boundary(both, function):
+    a, b = both(function)
+    assert not a.ok and not b.ok
+    assert "live or non-serializable" in a.error
+    assert "live or non-serializable" in b.error
+
+
+@pytest.mark.parametrize("function", ["returns_oversized_value",
+                                      "sends_oversized_request"])
+def test_oversized_payloads_fail_on_both(both, function):
+    a, b = both(function)
+    assert not a.ok and not b.ok
+    assert "exceeds" in a.error
+    assert "exceeds" in b.error
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Properties specific to the subprocess boundary.
 # ──────────────────────────────────────────────────────────────────────

@@ -57,6 +57,18 @@ def test_a_dict_carrying_the_tag_among_other_keys_is_not_decoded():
     assert protocol.unpack(payload) == payload
 
 
+def test_a_lone_reserved_tag_round_trips_as_user_data():
+    """A valid-looking marker is still data when the user supplied the dict."""
+    payload = {protocol.BYTES_TAG: "AA=="}
+    assert protocol.unpack(protocol.pack_simple(payload)) == payload
+
+
+def test_a_lone_escape_tag_round_trips_as_user_data():
+    """The escape envelope must escape its own shape too."""
+    payload = {protocol.DICT_TAG: [["mine", 1]]}
+    assert protocol.unpack(protocol.pack_simple(payload)) == payload
+
+
 def test_an_undecodable_tag_is_passed_through_not_raised():
     """A malformed tag is data somebody sent, not a protocol violation."""
     payload = {protocol.BYTES_TAG: "not valid base64!!"}
@@ -67,6 +79,12 @@ def test_is_simple_admits_bytes():
     """Bytes may cross — they are packed on the way out."""
     assert protocol.is_simple(b"\x00")
     assert protocol.is_simple({"v": [b"\x00", "s"]})
+
+
+def test_normalize_matches_json_types_without_losing_bytes():
+    assert protocol.normalize({"pair": (1, 2),
+                               "blob": bytearray(b"ab")}) == {
+        "pair": [1, 2], "blob": b"ab"}
 
 
 # ──────────────────────────────────────────────────────────────────────

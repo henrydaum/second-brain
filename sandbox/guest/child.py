@@ -201,12 +201,13 @@ def _fault(wire_out, exc) -> int:
 
 
 def _send_result(wire_out, kind: str, result: Result) -> bool:
-    """Send a Result, or fault if it will not fit down the wire.
+    """Send a Result, replacing an unsendable value with a small failure.
 
     A closed wire is not handled here: it propagates as ``StreamClosed`` to
     ``main``, which treats it as an ordinary end of life. The two failures look
     alike and are not — an unsendable result is this box's bug and is worth a
-    fault, while a closed wire means the kernel already moved on.
+    failed call. A closed wire instead means the kernel already moved on. The
+    fallback keeps a persistent box alive and makes both runners equivalent.
     """
     try:
         protocol.write_message(wire_out, {"kind": kind,
@@ -215,10 +216,12 @@ def _send_result(wire_out, kind: str, result: Result) -> bool:
     except protocol.StreamClosed:
         raise
     except protocol.ProtocolError as exc:
+        fallback = Result.failure(f"unsendable result: {exc}",
+                                  code=ERROR_GUEST_FAULT)
         protocol.write_message(wire_out, {
-            "kind": protocol.FAULT, "error": f"unsendable result: {exc}",
+            "kind": kind, "result": fallback.to_dict(),
         })
-        return False
+        return True
 
 
 def _run_ephemeral(wire_out, sdk, target, kwargs) -> int:

@@ -1,0 +1,51 @@
+"""Agent-facing authoring instructions agree with the executable tree table."""
+
+from pathlib import Path
+
+import trees
+
+
+ROOT = Path(__file__).resolve().parents[1]
+AUTHORING_SOURCES = (
+    ROOT / "README.md",
+    ROOT / "docs" / "SDK.md",
+    ROOT / "docs" / "MIGRATING_PLUGINS.md",
+    ROOT / "templates" / "tool_template.py",
+    ROOT / "templates" / "task_template.py",
+    ROOT / "templates" / "service_template.py",
+    ROOT / "templates" / "command_template.py",
+    ROOT / "templates" / "frontend_template.py",
+    ROOT / "templates" / "script_template.py",
+    ROOT / "templates" / "llm_backend_template.py",
+)
+
+
+def test_the_authoring_roots_come_from_the_kernel_table():
+    """The system prompt must teach every root the kernel actually routes."""
+    documented = (ROOT / "agent" / "system_prompt_static.md").read_text(
+        encoding="utf-8")
+    for root in trees.ROOTS:
+        assert f"{root.name}/" in documented, root.name
+
+
+def test_authoring_sources_do_not_restore_retired_layouts():
+    retired = ("plugins/tools/", "plugins/frontends/", "helpers/llm_",
+               "helpers/parse_image.py")
+    offenders = []
+    for path in AUTHORING_SOURCES:
+        text = path.read_text(encoding="utf-8")
+        for phrase in retired:
+            if phrase in text:
+                offenders.append(f"{path.relative_to(ROOT)}: {phrase}")
+    assert not offenders, "retired authoring paths:\n  " + "\n  ".join(offenders)
+
+
+def test_each_plugin_template_names_its_workspace_family():
+    for family in trees.FAMILIES:
+        template = ROOT / "templates" / f"{family.name[:-1]}_template.py"
+        text = template.read_text(encoding="utf-8")
+        assert f"workspace/{family.name}/" in text
+
+    llm = (ROOT / "templates" / "llm_backend_template.py").read_text(
+        encoding="utf-8")
+    assert "llm/llm_<provider>.py" in llm

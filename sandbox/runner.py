@@ -24,8 +24,9 @@ import logging
 import threading
 import time
 
+from .guest import protocol
 from .guest.channel import Terminated
-from .guest.codes import ERROR_GUEST_FAULT
+from .guest.codes import ERROR_GUEST_FAULT, ERROR_INVALID_ARGUMENT
 from .guest.faults import guest_traceback
 from .guest.requests import RequestFailed, Result
 from .guest.sdk import SDK
@@ -53,6 +54,13 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
     # that is still going.
     if execution is None:
         execution = Execution(name=name, chain=(chain or Chain()).push(name))
+    try:
+        call_kwargs = protocol.normalize(kwargs or {})
+        protocol.encode({"kind": protocol.CALL, "kwargs":
+                         protocol.pack_simple(call_kwargs)})
+    except protocol.ProtocolError as exc:
+        return Result.failure(f"unusable call arguments: {exc}",
+                              code=ERROR_INVALID_ARGUMENT)
     sdk = SDK(interpreter.channel(execution))
     deadline = clamp_timeout(timeout)
     box: dict = {}
@@ -60,7 +68,7 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
     def _worker():
         """Run the plugin body and capture whatever it produces."""
         try:
-            box["result"] = fn(sdk, **(kwargs or {}))
+            box["result"] = fn(sdk, **call_kwargs)
         except Terminated as stop:
             box["result"] = Result(data=stop.value)
         except RequestFailed as failed:
@@ -117,8 +125,13 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
     logger.debug("%s finished in %.1fms", name, elapsed * 1000)
 
     if execution.response is not None:
-        return execution.response
-    result = box.get("result")
-    if isinstance(result, Result):
-        return result
-    return Result(data=result)
+        result = execution.response
+    else:
+        result = box.get("result")
+        if not isinstance(result, Result):
+            result = Result(data=result)
+    try:
+        return result.crossing()
+    except protocol.ProtocolError as exc:
+        return Result.failure(
+            f"unsendable result: {exc}", code=ERROR_GUEST_FAULT)

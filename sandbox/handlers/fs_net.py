@@ -510,7 +510,7 @@ def _search_python(regex, root: Path, raw_glob, mode, multiline,
 
 
 def _drop_protected(results, root: Path, mode: str) -> list:
-    """Remove ripgrep results belonging to a protected file.
+    """Remove ripgrep results belonging to protected or ignored files.
 
     Each shape names its file differently: ``files`` is the path itself,
     ``count`` is a ``[path, n]`` pair, and a ``content`` group is one or more
@@ -531,6 +531,9 @@ def _drop_protected(results, root: Path, mode: str) -> list:
             if match is None:
                 continue
             rel = match.group(1)
+        parts = Path(str(rel).replace("\\", "/")).parts
+        if any(part in walk.IGNORED_DIRS for part in parts):
+            continue
         if not is_protected(root / rel):
             kept.append(item)
     return kept

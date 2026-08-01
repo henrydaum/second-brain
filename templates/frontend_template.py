@@ -8,7 +8,8 @@ Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute and method BaseFrontend defines. What follows is only what is
 specific to frontends, and most of it is not guessable.
 
-  Lives in:       frontends/frontend_<name>.py  (sandbox or installed tree)
+  Where it goes:  DATA_DIR/workspace/frontends/frontend_<name>.py
+                  (store packages install under DATA_DIR/installed/frontends/)
   Entry points:   start / poll / stop / render / session_key
   Gets:           sdk — never a context
   Box:            persistent, by definition. It is loaded once and stays.

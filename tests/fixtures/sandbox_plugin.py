@@ -82,3 +82,33 @@ def returns_every_extra(sdk):
         also_contains=["nested"],
         discovered_paths=["/tmp/found"],
     )
+
+
+def returns_canonical_values(sdk):
+    """Values whose Python spelling differs from their wire spelling."""
+    return {"pair": (1, 2), "blob": bytearray(b"ab")}
+
+
+def returns_reserved_tag_dict(sdk):
+    """User data must not be mistaken for the bytes codec's envelope."""
+    return {"__bytes__": "AA=="}
+
+
+def returns_live_object(sdk):
+    """A live object is outside the return contract."""
+    return object()
+
+
+def sends_live_object(sdk):
+    """A live object is outside the Request contract too."""
+    return sdk.services.call("absent", "noop", value=object())
+
+
+def returns_oversized_value(sdk):
+    """One Result must fit in one protocol frame under either runner."""
+    return "x" * (17 * 1024 * 1024)
+
+
+def sends_oversized_request(sdk):
+    """One Request must fit in one protocol frame under either runner."""
+    return sdk.services.call("x" * (17 * 1024 * 1024), "noop")

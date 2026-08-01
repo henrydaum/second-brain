@@ -1,6 +1,6 @@
 """LLM BACKEND TEMPLATE — how Second Brain talks to a model.
 
-Copy this to ``helpers/llm_<provider>.py`` in whichever plugin tree you are
+Copy this to ``llm/llm_<provider>.py`` in whichever plugin tree you are
 working in. The name matters: ``llm_*.py`` under ``helpers/`` at a tree's root
 is how the registry finds you.
 
@@ -215,7 +215,7 @@ class SomeProviderBackend(BaseLLMBackend):
 # ── VERIFYING ───────────────────────────────────────────────────────────
 #
 #   from sandbox.validator import validate_file
-#   print(validate_file("helpers/llm_myprovider.py").render())
+#   print(validate_file("llm/llm_myprovider.py").render())
 #
 # "conforms." means it will load in a box. Then add a profile with /llm,
 # choose your backend, and /llm -> load.

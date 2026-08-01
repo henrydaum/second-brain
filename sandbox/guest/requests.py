@@ -291,6 +291,13 @@ class Request:
     def __post_init__(self):
         if self.type not in ALL_TYPES:
             raise ValueError(f"unknown request type: {self.type}")
+        if not isinstance(self.args, dict):
+            raise protocol.ProtocolError("request args must be a dictionary")
+        object.__setattr__(self, "args", protocol.normalize(self.args))
+        # The same frame cap applies before either runner sees the Request.
+        # Otherwise an oversized call works in-process and raises from a pipe
+        # only when isolation happens to select a subprocess.
+        protocol.encode({"kind": protocol.REQUEST, "request": self.to_dict()})
 
     @property
     def family(self) -> str:
@@ -311,7 +318,8 @@ class Request:
         is what makes the two paths agree: a handler receives real ``bytes``
         either way and never learns which side of a pipe it is on.
         """
-        return {"type": self.type, "args": protocol.pack(dict(self.args))}
+        return protocol.pack_simple(
+            {"type": self.type, "args": dict(self.args)})
 
     @staticmethod
     def from_dict(raw: dict) -> "Request":
@@ -484,19 +492,28 @@ class Result:
         other direction: a ``db.query`` answering with a BLOB column, or a
         service export returning an embedding vector.
         """
-        return {"ok": self.ok, "data": protocol.pack(self.data),
-                "error": self.error, "retryable": self.retryable,
-                "code": self.code, "traceback": self.traceback,
-                "llm_summary": self.llm_summary,
-                "attachment_paths": list(self.attachment_paths),
-                "also_contains": list(self.also_contains),
-                "discovered_paths": list(self.discovered_paths),
-                "per_path": protocol.pack(list(self.per_path))}
+        return protocol.pack_simple({
+            "ok": self.ok, "data": self.data,
+            "error": self.error, "retryable": self.retryable,
+            "code": self.code, "traceback": self.traceback,
+            "llm_summary": self.llm_summary,
+            "attachment_paths": list(self.attachment_paths),
+            "also_contains": list(self.also_contains),
+            "discovered_paths": list(self.discovered_paths),
+            "per_path": list(self.per_path),
+        })
+
+    def crossing(self, kind: str = "result") -> "Result":
+        """Validate, size-check and canonicalize one boundary crossing."""
+        raw = self.to_dict()
+        protocol.encode({"kind": kind, "result": raw})
+        return Result.from_dict(raw)
 
     @staticmethod
     def from_dict(raw: dict) -> "Result":
         """Rebuild from the wire."""
-        return Result(ok=raw["ok"], data=protocol.unpack(raw.get("data")),
+        raw = protocol.unpack(raw)
+        return Result(ok=raw["ok"], data=raw.get("data"),
                       error=raw.get("error", ""),
                       retryable=raw.get("retryable", False),
                       code=raw.get("code", ""),
@@ -505,4 +522,4 @@ class Result:
                       attachment_paths=list(raw.get("attachment_paths") or []),
                       also_contains=list(raw.get("also_contains") or []),
                       discovered_paths=list(raw.get("discovered_paths") or []),
-                      per_path=protocol.unpack(raw.get("per_path") or []))
+                      per_path=raw.get("per_path") or [])

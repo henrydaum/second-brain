@@ -868,7 +868,7 @@ sandboxed subscriber sees it as an ordinary event and cannot answer it.
 
 An LLM backend is the one thing here that is **not a plugin**: no family, no
 entry point, nothing discovery registers. It is a class in
-`helpers/llm_<provider>.py`, found by declaration, loaded into a box, and
+`llm/llm_<provider>.py`, found by the LLM registry, loaded into a box, and
 called. Copy `templates/llm_backend_template.py` rather than starting blank.
 
 ```python
@@ -1104,7 +1104,7 @@ siblings:
 
 ```python
 class Caption(BaseTool):
-    dependencies_files = ["helpers/parse_image.py"]
+    dependencies_files = ["parsers/parse_image.py"]
 
 # then, in the same file
 from .parse_image import parse_image

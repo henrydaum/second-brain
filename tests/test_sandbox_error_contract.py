@@ -101,6 +101,27 @@ def test_an_invented_request_type_cannot_even_be_built():
         Request("not.a.request", {})
 
 
+@pytest.mark.parametrize("args", [
+    {"value": object()}, {1: "non-string key"}, {"value": {1, 2}},
+])
+def test_request_rejects_values_that_cannot_cross(args):
+    from sandbox.guest import protocol
+    from sandbox.guest.requests import Request
+
+    with pytest.raises(protocol.ProtocolError,
+                       match="live or non-serializable"):
+        Request(CONFIG_READ, args)
+
+
+def test_request_enforces_the_wire_frame_cap(monkeypatch):
+    from sandbox.guest import protocol
+    from sandbox.guest.requests import Request
+
+    monkeypatch.setattr(protocol, "MAX_MESSAGE_BYTES", 100)
+    with pytest.raises(protocol.ProtocolError, match="exceeds"):
+        Request(CONFIG_READ, {"key": "x" * 200})
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The return contract crosses the wire intact.
 # ──────────────────────────────────────────────────────────────────────
@@ -136,6 +157,22 @@ def test_a_result_round_trips_through_the_wire_format():
     """What the child sends is what the parent rebuilds."""
     original = _populated_result()
     assert Result.from_dict(original.to_dict()) == original
+
+
+def test_result_rejects_live_objects_when_it_crosses():
+    from sandbox.guest import protocol
+
+    with pytest.raises(protocol.ProtocolError,
+                       match="live or non-serializable"):
+        Result(data=object()).crossing()
+
+
+def test_result_enforces_the_wire_frame_cap(monkeypatch):
+    from sandbox.guest import protocol
+
+    monkeypatch.setattr(protocol, "MAX_MESSAGE_BYTES", 100)
+    with pytest.raises(protocol.ProtocolError, match="exceeds"):
+        Result(data="x" * 200).crossing()
 
 
 def test_from_dict_tolerates_a_peer_that_omits_a_field():

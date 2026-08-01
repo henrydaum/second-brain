@@ -77,6 +77,19 @@ def test_host_managed_resident_defers_lifecycle(interp, boxes, isolated):
     assert box.stop().ok
 
 
+def test_persistent_returns_obey_the_plain_data_boundary(interp, boxes,
+                                                         isolated):
+    box = boxes(interp, SERVICE, "Counter", name="counter_values",
+                isolated=isolated)
+    assert box.call("canonical").data == {"pair": [1, 2], "blob": b"ab"}
+    assert box.call("reserved").data == {"__bytes__": "AA=="}
+    refused = box.call("live")
+    assert not refused.ok
+    assert "live or non-serializable" in refused.error
+    assert box.alive
+    assert box.call("total").data == 0
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Ephemeral: the lifetime is the call.
 # ──────────────────────────────────────────────────────────────────────
