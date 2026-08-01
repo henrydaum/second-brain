@@ -150,7 +150,10 @@ class BaseTool(BasePlugin):
 
     parameters: dict = {}      # JSON schema for the arguments
     dependencies_tools: list = []
-    max_calls: int = 3         # per message; clamped
+    # Per message. Unset means the kernel's `default_tool_max_calls` setting,
+    # which is what governs almost every tool — declare a number only when the
+    # tool's own nature bounds it, not to ask for headroom.
+    max_calls: int | None = None
     auto_register: bool = True
 
     def run(self, sdk, **kwargs):

@@ -26,6 +26,7 @@ import time
 from typing import Any, Callable
 
 from agent.system_prompt import SYSTEM_CONTEXT_MARKER
+from agent.tool_registry import DEFAULT_TOOL_MAX_CALLS
 from events.event_bus import bus
 from events.event_channels import (
     AGENT_LLM_CALL_FINISHED,
@@ -195,12 +196,24 @@ class ConversationLoop:
         self._tool_choice_once = None
         self._suppress_tools_once = False
 
+    def _call_limit(self, tool) -> int:
+        """How many times `tool` may be called this message.
+
+        The registry owns the answer, because it holds the config the default
+        comes from. The fallback is for a registry that predates the method
+        (test doubles, mostly): a declared number, else the kernel default.
+        """
+        resolve = getattr(self.tool_registry, "call_limit", None)
+        if callable(resolve):
+            return resolve(tool)
+        return getattr(tool, "max_calls", None) or DEFAULT_TOOL_MAX_CALLS
+
     @property
     def max_tool_calls(self) -> int:
         """Return max tool calls."""
         return (
             getattr(self.tool_registry, "max_tool_calls", 0)
-            or sum(getattr(t, "max_calls", 1) for t in getattr(self.tool_registry, "tools", {}).values())
+            or sum(self._call_limit(t) for t in getattr(self.tool_registry, "tools", {}).values())
             or 1
         )
 
@@ -644,7 +657,7 @@ class ConversationLoop:
         tool = (getattr(self.tool_registry, "tools", {}) or {}).get(name) if self.tool_registry else None
         if not tool:
             return None
-        used, limit = self._tool_call_counts.get(name, 0), getattr(tool, "max_calls", 1)
+        used, limit = self._tool_call_counts.get(name, 0), self._call_limit(tool)
         if used >= limit:
             return f"Tool '{name}' has reached its call limit ({limit}). Try a different approach."
         self._tool_call_counts[name] = used + 1

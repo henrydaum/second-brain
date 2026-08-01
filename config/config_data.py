@@ -78,6 +78,17 @@ SETTINGS_DATA = [
      1.0,
      {"type": "slider", "range": (0.1, 10.0, 99), "is_float": True}),
 
+    # --- Agent ---
+    ("Default Tool Call Limit", "default_tool_max_calls",
+     "How many times the agent may call any one tool per message, for every "
+     "tool that does not say otherwise. A tool declares `max_calls` only when "
+     "its own nature bounds it — something that should be called once, or not "
+     "at all after the first answer — so this is the number that actually "
+     "governs almost every call. It also sets the turn's iteration budget, "
+     "which is derived from the sum across the tools in scope.",
+     25,
+     {"type": "slider", "range": (1, 100, 99), "is_float": False}),
+
     # --- Subagents ---
     # Kernel settings because spawning is kernel routing. They were declared by
     # the store's spawn tool, which is exactly the ownership accident

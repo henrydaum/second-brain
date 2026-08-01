@@ -61,10 +61,15 @@ over every file that appears. If it processes a corpus, it is a task.
 
 BUDGETS
 -------
-  max_calls = 3          how many times the agent may call this per message
+  max_calls = 1          how many times the agent may call this per message
 
-It is authority-bearing, so it is clamped. Declaring a bigger number is a
-request, not a grant.
+Leave it out. Unset means the user's `default_tool_max_calls` setting, which is
+what governs almost every tool, and a tool is not the right place to decide how
+much of a turn it deserves. Declare one only when the tool's own nature bounds
+it — something that answers once and has nothing to add on a second call.
+
+It is authority-bearing either way, so it is clamped: declaring a bigger number
+is a request, not a grant.
 
 Nothing here says whether a tool may run unattended, and nothing should: a
 session with nobody in it refuses every unsafe Request anyway, so a tool that

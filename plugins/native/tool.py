@@ -164,7 +164,10 @@ class BaseTool:
     dependencies_tools: list[str] = []
 
     # --- Agent controls ---
-    max_calls: int = 3           # Max times the agent can call this tool per message
+    # Max times the agent can call this tool per message. Unset means the
+    # kernel's `default_tool_max_calls` setting; a number here is a claim that
+    # this particular tool is bounded, not a request for more room.
+    max_calls: int | None = None
 
     # --- Discovery ---
     # When False, the plugin discoverer skips this tool. Use for tools that

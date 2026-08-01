@@ -17,6 +17,10 @@ from events.event_channels import TOOLS_CHANGED
 
 logger = logging.getLogger("Tool")
 
+# Fallback for `default_tool_max_calls` when no config reaches the registry.
+# Mirrors the setting's own default in config_data.
+DEFAULT_TOOL_MAX_CALLS = 25
+
 
 class ToolRegistry:
     """
@@ -112,10 +116,30 @@ class ToolRegistry:
             logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
             return ToolResult.failed(str(e))
 
+    def call_limit(self, tool) -> int:
+        """How many times `tool` may be called in one message.
+
+        The single place the declaration-or-default question is answered, so
+        the budget the loop enforces and the budget the iteration bound is
+        derived from cannot drift. An undeclared `max_calls` is the normal
+        case: a tool says a number only when its own nature bounds it.
+        """
+        declared = getattr(tool, "max_calls", None)
+        if declared is not None:
+            try:
+                return max(1, int(declared))
+            except (TypeError, ValueError):
+                pass
+        try:
+            return max(1, int((self.config or {}).get("default_tool_max_calls")
+                              or DEFAULT_TOOL_MAX_CALLS))
+        except (TypeError, ValueError):
+            return DEFAULT_TOOL_MAX_CALLS
+
     @property
     def max_tool_calls(self) -> int:
         """Return the agent's total tool-call budget for one message."""
-        return sum(t.max_calls for t in self._visible_tools())
+        return sum(self.call_limit(t) for t in self._visible_tools())
 
     def get_all_schemas(self) -> list[dict]:
         """Export schemas for every agent-visible tool."""

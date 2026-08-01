@@ -5,7 +5,7 @@ as dependencies of visible tools but are hidden from the LLM's schema list, and
 the agent cannot invoke a hidden tool directly through the state machine.
 """
 
-from agent.tool_registry import ToolRegistry
+from agent.tool_registry import DEFAULT_TOOL_MAX_CALLS, ToolRegistry
 from plugins.native.tool import BaseTool, ToolResult
 from runtime.agent_scope import load_scope, registry_with_tools, scoped_registry
 from state_machine.conversation import CallableSpec, ConversationState, Participant
@@ -163,3 +163,46 @@ def test_a_tool_cannot_declare_itself_unrunnable_in_the_background():
                            _session_key="spawn_subagent:7", query="x")
 
     assert result.success
+
+
+class _Unbounded(_Lexical):
+    """A tool that says nothing about how often it may be called."""
+    name = "unbounded_tool"
+    max_calls = None
+
+
+def test_an_undeclared_tool_takes_the_configured_default():
+    """``max_calls`` is unset on almost every tool, so the setting is the budget.
+
+    Pinned because the default moved out of the base class and into
+    ``default_tool_max_calls``: a regression that restored a class attribute
+    would look entirely healthy — the tool still runs, it just stops early on
+    a long turn, and the model reports a wall it was never meant to hit.
+    """
+    registry = ToolRegistry(None, {"default_tool_max_calls": 40})
+    registry.register(_Unbounded())
+
+    assert registry.call_limit(registry.tools["unbounded_tool"]) == 40
+    assert registry.max_tool_calls == 40
+
+
+def test_a_declared_limit_still_wins_over_the_setting():
+    """The declaration is what a bounded tool has left, so it must beat config."""
+    registry = ToolRegistry(None, {"default_tool_max_calls": 40})
+    registry.register(_Hybrid())          # declares max_calls = 2
+
+    assert registry.call_limit(registry.tools["hybrid_search"]) == 2
+
+
+def test_a_registry_with_no_config_falls_back_rather_than_failing():
+    """A registry built without settings still answers a number.
+
+    The fallback matters because the budget is read on the hot path of every
+    tool call: raising here would end the turn, and returning 0 would refuse
+    every tool in a session whose config never loaded.
+    """
+    registry = ToolRegistry(None, {})
+    registry.register(_Unbounded())
+
+    assert registry.call_limit(registry.tools["unbounded_tool"]) == DEFAULT_TOOL_MAX_CALLS
+    assert DEFAULT_TOOL_MAX_CALLS > 1
