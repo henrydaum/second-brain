@@ -131,6 +131,44 @@ class Chain:
         return " -> ".join((self.root,) + self.links)
 
 
+def setting_entries(raw) -> list:
+    """A list setting's entries, from either shape it can be stored in.
+
+    Every user-maintained grant list documents a comma-separated string as
+    well as a JSON array, because both are things a person types into
+    ``/config``. Four readers used to each carry their own copy of this —
+    ``_allowed_hosts``, ``_writable_dirs``, ``shell._allowed_prefixes`` and
+    ``options.remember`` — which is three chances for one of them to disagree
+    with the others about what a stored value means. A grant that the policy
+    honours and the listing does not show, or the reverse, is the failure that
+    duplication buys.
+
+    Public because it crosses modules; ``/permissions`` keeps a fifth copy on
+    purpose, since a command is guest code and cannot import the kernel.
+    """
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    return [text for item in (raw or []) if (text := str(item).strip())]
+
+
+def kernel_list(key: str) -> list:
+    """One kernel list setting's entries, read live.
+
+    Live on every call rather than cached, so a ``/config`` edit or a
+    ``/permissions`` revocation takes effect on the next Request instead of at
+    the next restart. Removing a grant has to be as immediate as adding one.
+
+    Absent kernel (tests, a bare container) answers empty, which grants
+    nothing — the only safe direction.
+    """
+    try:
+        from runtime.context import kernel_config
+
+        return setting_entries((kernel_config() or {}).get(key))
+    except Exception:
+        return []
+
+
 def chain_session(chain) -> str:
     """The session key a chain's root names, or "" if it names none.
 
@@ -259,21 +297,12 @@ def _writable_dirs() -> list:
     ``~`` is expanded because a person typing a path will write one. Absent
     kernel means an empty list, which grants nothing.
     """
-    try:
-        from runtime.context import kernel_config
-
-        raw = (kernel_config() or {}).get("fs_writable_dirs") or []
-    except Exception:
-        return []
-    if isinstance(raw, str):
-        raw = [part.strip() for part in raw.split(",")]
     dirs = []
-    for entry in raw:
-        if (text := str(entry).strip()):
-            try:
-                dirs.append(Path(text).expanduser())
-            except (OSError, ValueError, RuntimeError):
-                continue
+    for entry in kernel_list("fs_writable_dirs"):
+        try:
+            dirs.append(Path(entry).expanduser())
+        except (OSError, ValueError, RuntimeError):
+            continue
     return dirs
 
 
@@ -585,16 +614,8 @@ def _allowed_hosts() -> set:
     Absent kernel (tests, a bare container) means an empty allowlist, which
     refuses everything. Failing closed is the only safe direction here.
     """
-    try:
-        from runtime.context import kernel_config
-
-        raw = (kernel_config() or {}).get("net_allowed_hosts") or []
-    except Exception:
-        return set()
-    if isinstance(raw, str):
-        raw = [part.strip() for part in raw.split(",")]
-    return {str(host).strip().lower().lstrip(".") for host in raw
-            if str(host).strip()}
+    return {host.lower().lstrip(".")
+            for host in kernel_list("net_allowed_hosts")}
 
 
 def request_host(url) -> str:

@@ -220,10 +220,23 @@ def test_the_command_declares_its_write_up_front(module):
     assert "config.write" in command.requests
 
 
-def test_the_three_settings_are_the_three_the_policy_reads(module):
-    """One list drifting from the other is a view that lies about grants."""
+def test_this_view_lists_every_setting_a_grant_can_be_written_to(module):
+    """The drift that would fail in silence.
+
+    ``options.MERGERS`` is the complete set of settings an approval dialog can
+    write a grant into; ``SETTINGS`` is what this view can show and revoke. A
+    fourth grant type added to the first and forgotten in the second is a
+    permission nobody can find and therefore nobody can withdraw — with no
+    error anywhere, which is the whole failure mode this command exists to
+    prevent. Derived rather than restated, so the assertion cannot rot.
+    """
+    from sandbox.options import MERGERS
+
+    assert set(module.SETTINGS.values()) == set(MERGERS)
+
+
+def test_every_listed_setting_is_a_real_kernel_setting(module):
+    """A typo'd key would be revocable here and read by nobody."""
     from config.config_manager import DEFAULTS
 
-    assert set(module.SETTINGS.values()) == {
-        "net_allowed_hosts", "fs_writable_dirs", "shell_allowed_prefixes"}
     assert set(module.SETTINGS.values()) <= set(DEFAULTS)

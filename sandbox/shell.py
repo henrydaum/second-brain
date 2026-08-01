@@ -39,7 +39,7 @@ import shlex
 from pathlib import Path
 
 from .guest import requests as R
-from .policy import SAFE, UNSAFE, Decision
+from .policy import SAFE, UNSAFE, Decision, kernel_list
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -416,19 +416,14 @@ def command_prefix(argv) -> str:
 def _allowed_prefixes() -> set:
     """Command prefixes the user has said may run without being asked.
 
-    Read live on every call, like :func:`_allowed_hosts` — revoking has to be
-    as immediate as granting, and the user revokes with ``/config``.
-    """
-    try:
-        from runtime.context import kernel_config
+    Read live on every call, like ``policy._allowed_hosts`` — revoking has to
+    be as immediate as granting, and the user revokes with ``/permissions``.
 
-        raw = (kernel_config() or {}).get("shell_allowed_prefixes") or []
-    except Exception:
-        return set()
-    if isinstance(raw, str):
-        raw = raw.split(",")
-    return {" ".join(str(entry).split()).casefold()
-            for entry in raw if str(entry).strip()}
+    Inner whitespace is collapsed as well as trimmed, because the stored form
+    is two words and ``"git  push"`` is the same grant as ``"git push"``.
+    """
+    return {" ".join(entry.split()).casefold()
+            for entry in kernel_list("shell_allowed_prefixes")}
 
 
 def _remembered_prefix(shown: str, args: dict):

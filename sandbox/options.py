@@ -258,19 +258,6 @@ def chosen(options, value):
 _WRITE_LOCK = threading.Lock()
 
 
-def _entries(raw) -> list:
-    """A setting's current value as a list of non-empty strings.
-
-    Both existing lists accept a comma-separated *string* as well as a list
-    (``policy._allowed_hosts`` and ``_writable_dirs`` each handle it), so a
-    hand-edited config must not be silently discarded by the first grant made
-    after it.
-    """
-    if isinstance(raw, str):
-        raw = raw.split(",")
-    return [text for item in (raw or []) if (text := str(item).strip())]
-
-
 def _merge_text(entry: str, existing: list):
     """Exact, case-folded de-dupe. ``None`` when nothing would change."""
     if entry.casefold() in {item.casefold() for item in existing}:
@@ -349,6 +336,8 @@ def remember(key: str, entry: str) -> bool:
         return False
     try:
         from runtime.context import kernel_config
+
+        from . import policy
     except Exception:
         logger.exception("no kernel to remember %s in", key)
         return False
@@ -358,7 +347,7 @@ def remember(key: str, entry: str) -> bool:
         return False
 
     with _WRITE_LOCK:
-        merged = merge(entry, _entries(config.get(key)))
+        merged = merge(entry, policy.setting_entries(config.get(key)))
         if merged is None:
             return False
         previous = config.get(key)
