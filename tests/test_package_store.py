@@ -439,7 +439,7 @@ def test_skill_uninstall_removes_folder_keeps_shared_machinery(tmp_path, monkeyp
 # The publisher dev tool (was test_package_store_publisher.py)
 # ────────────────────────────────────────────────────────────────────
 
-from scripts import package_publisher
+from dev import package_publisher
 
 
 def test_write_package_copies_file_and_dir_and_validates(tmp_path):
