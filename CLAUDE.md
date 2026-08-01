@@ -835,13 +835,20 @@ what the phrase cannot carry — the arguments, then *who asked*
 print the title above the body, so a body repeating it is the same bug in a
 new place; there is no constant title any more either.
 
-`describe_asker` names the **leaf** and stops. The root is added only when it
-says something the leaf does not — a schedule, a background agent — because
-the dialog is *delivered to* the session the root names, so "you, in Telegram"
-told somebody reading Telegram that they were in Telegram. A session key never
-appears: it is a frontend-built identifier
-(`telegram:7912761600:7912761600:0`) and printing it put a ten-digit number,
-twice, over a question it had nothing to do with.
+`describe_asker` names the **leaf** and stops, and the reason is worth
+knowing before adding to it: *no root that reaches a dialog is worth naming*.
+Only an attended chain is asked about — step 3 refuses the rest — and the
+attended roots are exactly `user`, `user:command`, and a session key. The
+first two mean "you did this", which is what being asked already means; the
+third names the session the dialog is *delivered to*, so printing it told
+somebody reading Telegram that they were in Telegram, as a frontend-built
+identifier (`telegram:7912761600:7912761600:0`) that put a ten-digit number
+twice on screen. Everything a root could interestingly say — a cron schedule,
+a background agent, a service acting on its own — belongs to work nobody is
+watching, which is refused rather than asked. Those clauses were written and
+deleted; `test_only_attended_roots_reach_a_dialog_so_no_root_is_worth_naming`
+drives the approver to say so, since the fact is about the order of its steps
+rather than about the renderer.
 
 **Services are resident boxes**, and with frontends they are the half of the
 bridge that lives in `sandbox/residency.py` — a residency is not a call, so

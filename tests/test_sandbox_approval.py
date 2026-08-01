@@ -133,40 +133,57 @@ def test_the_dialog_names_the_effect_in_plain_terms():
     assert "network" in title.lower()
 
 
-def test_the_dialog_says_who_asked_in_words():
-    """The reason provenance exists, shown in the only place it matters.
+def test_the_dialog_names_the_plugin_that_asked():
+    """The reason provenance exists, shown in the only place it matters."""
+    request, decision = _egress()
+    chain = Chain(root="user").push("task_index").push("fetch")
+    _, body = describe(chain, request, decision)
+    assert "Asked by fetch" in body
 
-    Rendered rather than printed: the root of an agent-caused chain is a
-    *session key*, so a Telegram dialog used to lead with
-    ``telegram:7912761600:7912761600:0`` - a ten-digit number, twice, over a
-    question it had nothing to do with.
+
+def test_only_attended_roots_reach_a_dialog_so_no_root_is_worth_naming():
+    """Why ``describe_asker`` is the leaf and stops.
+
+    The origin clauses this once carried - "running on the nightly_index
+    schedule", "running in a background agent" - described work that is
+    *refused* rather than asked, so a dialog could never render them. What
+    can reach one is an attended chain, and every attended root either means
+    "you did this" or names the session the dialog is being delivered to.
+
+    Pinned by driving the approver, because the fact is about the order of
+    its steps rather than about the renderer: change step 3 and this line is
+    what says the renderer has to change with it.
     """
     request, decision = _egress()
-    chain = Chain(root="cron:nightly_index").push("task_index").push("fetch")
-    _, body = describe(chain, request, decision)
-    assert "Asked by fetch, running on the nightly_index schedule" in body
-    assert "cron:" not in body
+    rendered = []
 
+    class Runtime:
+        active_session_key = "telegram:1:1:0"
+        sessions = {"telegram:1:1:0": object()}
+        hooks = None
 
-def test_unattended_work_is_the_part_worth_naming():
-    """A schedule and a background agent change how the question should be
-    weighed; a session key does not."""
-    request, decision = _egress()
-    _, background = describe(
-        Chain(root="spawn_subagent:47").push("web_search"), request, decision)
-    assert "running in a background agent" in background
+        def is_attended(self, key):
+            return key == self.active_session_key
 
+        def request_input(self, key, title, prompt, **kwargs):
+            rendered.append((key, prompt))
+            return FakeRequest(answer=False)
 
-def test_a_session_key_names_the_plugin_and_stops():
-    """The dialog is delivered *to* the session its root names, so naming the
-    surface tells the reader where they already are - and "for you" restates
-    the fact that they are the one being asked."""
-    request, decision = _egress()
-    chain = Chain(root="telegram:7912761600:7912761600:0").push("web_search")
-    _, body = describe(chain, request, decision)
-    assert "Asked by web_search" in body
-    assert "7912761600" not in body
-    assert "Telegram" not in body
+    for root in ("cron:nightly_index", "spawn_subagent:47", "service:drive",
+                 "agent", "kernel"):
+        approve = build_approver(Runtime())
+        assert approve(Chain(root=root).push("leaf"), request,
+                       decision) is False
+    assert rendered == [], "an unattended chain reached a dialog"
+
+    # And the attended ones do render, with the leaf and no root.
+    for root in ("user", "user:command", "telegram:1:1:0"):
+        build_approver(Runtime())(
+            Chain(root=root).push("leaf"), request, decision)
+    assert len(rendered) == 3
+    for _, prompt in rendered:
+        assert "Asked by leaf" in prompt
+        assert "telegram" not in prompt and "user" not in prompt
 
 
 def test_a_person_acting_for_themselves_is_not_told_so():

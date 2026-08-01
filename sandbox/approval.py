@@ -80,58 +80,27 @@ def describe(chain, request, decision) -> tuple:
     return title, "\n\n".join(lines)
 
 
-#: What a chain root is worth saying out loud. Roots are kernel-assigned (see
-#: ``bridge._root_for``), so this is a closed set plus one open case: a session
-#: key, which is whatever the frontend named it.
-#:
-#: An empty string means *say nothing*, and that is the answer for every root
-#: a person caused — including a session key. The dialog is delivered to the
-#: session the root names (see ``build_approver`` step 4), so "you, in
-#: Telegram" was telling somebody reading Telegram that they were in Telegram,
-#: while "for you" restated the fact that they were being asked at all. What
-#: is worth a clause is the opposite case: work nobody is watching, which is
-#: the only thing here that changes how the question should be weighed.
-_ORIGIN_WORDS = {
-    "user": "",
-    "user:command": "",
-    "agent": "",
-    "kernel": "",
-}
-
-
 def describe_asker(chain) -> str:
-    """Who is asking, in words rather than in kernel identifiers.
+    """The plugin that made this Request, or "" when there is none.
 
-    The leaf is the plugin that made the Request, and is almost always the
-    whole answer: "Asked by edit_file" is a sentence a person can act on. The
-    root is added only when it says something the leaf does not — that this
-    was started by a schedule, or by an agent running in the background.
+    The leaf, and nothing else — because **the root of a chain that reaches
+    this function is never worth naming.** Only an attended chain gets a
+    dialog at all (step 3 refuses the rest), and the attended roots are
+    exactly ``user``, ``user:command``, and a session key. The first two mean
+    "you did this", which is what being asked already means. The third names
+    the session the dialog is *delivered to* (step 4), so printing it tells
+    somebody reading Telegram that they are in Telegram — and it is a
+    frontend-built identifier, so printing it raw put a ten-digit number,
+    twice, over a question it had nothing to do with.
 
-    The root of an agent-caused chain is a *session key* built by the frontend
-    that owns it (``telegram:7912761600:7912761600:0``), which is why it is
-    never printed raw: a ten-digit number, twice, over a question it had
-    nothing to do with.
+    Everything a root could interestingly say — a cron schedule, a background
+    agent, a service acting on its own — belongs to work nobody is watching,
+    which is refused rather than asked. Those clauses were written and then
+    deleted, because a dialog cannot render them. The chain is still recorded
+    whole in the ledger, which is where unattended provenance is read.
     """
-    root = str(getattr(chain, "root", "") or "")
     links = tuple(getattr(chain, "links", ()) or ())
-    leaf = links[-1] if links else ""
-
-    if root in _ORIGIN_WORDS:
-        origin = _ORIGIN_WORDS[root]
-    elif root.startswith("cron:"):
-        origin = f"running on the {root.split(':', 1)[1]} schedule"
-    elif root.startswith("spawn_subagent"):
-        origin = "running in a background agent"
-    elif root.startswith(("service:", "frontend:")):
-        origin = f"running on its own, inside {root.split(':', 1)[1]}"
-    elif ":" in root:
-        origin = ""              # a session key: the surface you are reading
-    else:
-        origin = f"started by {root}"
-
-    if leaf and origin:
-        return f"{leaf}, {origin}"
-    return leaf or origin
+    return links[-1] if links else ""
 
 
 def _action_line(request) -> str:
