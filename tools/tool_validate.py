@@ -87,7 +87,6 @@ class Validate(BaseTool):
     }
     requires_services = []
     max_calls = 5
-    background_safe = True
 
     def agent_prompt(self, sdk) -> str:
         """The authoring workflow, plus a live listing of what is in the tree."""

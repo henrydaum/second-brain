@@ -57,7 +57,6 @@ class Grep(BaseTool):
     }
     requires_services = []
     max_calls = 10
-    background_safe = True
 
     def run(self, sdk, **kwargs):
         """Run grep."""

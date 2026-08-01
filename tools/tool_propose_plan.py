@@ -24,7 +24,6 @@ class ProposePlan(BaseTool):
         "required": ["title", "plan"],
     }
     max_calls = 3
-    background_safe = False
     auto_register = False
 
     def run(self, context, **kwargs) -> ToolResult:

@@ -49,7 +49,6 @@ class ScheduleSubagent(BaseTool):
         "required": ["operation"],
     }
     requires_services = []
-    background_safe = False
     agent_prompt = (
         "## Scheduling and cron jobs\n"
         "Treat your schedule_subagent tool as the user's calendar and background task system.\n\n"

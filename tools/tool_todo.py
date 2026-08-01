@@ -60,7 +60,6 @@ class Todo(BaseTool):
     }
     requires_services = []
     max_calls = 20
-    background_safe = True
     agent_prompt = (
         "## Todos\n"
         "For any task with 3+ distinct steps, plan with the todo tool: add the steps, "

@@ -49,7 +49,6 @@ class AskQuestion(BaseTool):
     # There is nobody to answer in a background session. The policy function
     # refuses ui.ask unattended anyway; this keeps the tool out of the catalogue
     # so the model is not offered a question it cannot ask.
-    background_safe = False
 
     def run(self, sdk, **kwargs):
         """Run ask question."""

@@ -55,7 +55,6 @@ class ManagePackages(BaseTool):
     }
     requires_services = []
     max_calls = 5
-    background_safe = False  # installs need a human watching
 
     agent_prompt = (
         "## The package store\n"

@@ -71,7 +71,6 @@ class RunScript(BaseTool):
     }
     requires_services = []
     max_calls = 15
-    background_safe = True
 
     def agent_prompt(self, sdk) -> str:
         """Where scripts go and why to reach for one."""

@@ -111,7 +111,6 @@ class EditFile(BaseTool):
     }
     requires_services = []
     max_calls = 20
-    background_safe = False
     plan_mode_safe = False
 
     def run(self, sdk, **kwargs):

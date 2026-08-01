@@ -46,7 +46,6 @@ class Memory(BaseTool):
     }
     requires_services = []
     max_calls = 10
-    background_safe = True
 
     agent_prompt = (
         """## Remembering things (memory)

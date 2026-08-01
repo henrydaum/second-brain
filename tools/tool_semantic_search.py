@@ -129,7 +129,6 @@ class SemanticSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = []  # Checked dynamically per stream
-    background_safe = True
 
     def run(self, sdk, **kwargs):
         """Run semantic search."""

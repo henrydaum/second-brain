@@ -42,7 +42,6 @@ class SlashCommand(BaseTool):
     }
     requires_services = []
     max_calls = 20
-    background_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
         name = (kwargs.get("name") or "").strip().lstrip("/")

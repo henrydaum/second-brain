@@ -67,7 +67,6 @@ class LexicalSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = []
-    background_safe = True
 
     def run(self, sdk, **kwargs):
         """Run lexical search."""
