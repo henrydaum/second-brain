@@ -205,11 +205,18 @@ def test_a_second_word_naming_a_file_reduces_to_the_program():
 def test_no_command_option_when_there_is_no_unit_to_describe():
     """Everything the read-only recognizer refuses to look at."""
     for args in ({"argv": ["git", "push", "|", "tee", "log"]},
-                 {"argv": ["git", "push"], "shell": "powershell"},
-                 {"argv": ["git", "push"], "shell": "default"},
+                 {"argv": "git push && rm -rf /", "shell": "default"},
+                 {"argv": "git push > ~/out.txt", "shell": "cmd"},
                  {"argv": ["/usr/bin/git", "push"]},
                  {"argv": []}):
         assert _grants(Request(PROC_RUN, args)) == [], args
+
+
+def test_a_command_through_a_shell_is_still_offered_when_the_line_is_inert():
+    """``tool_run_command`` always names a shell, so without this the option
+    never appeared for any command at all."""
+    grants = _grants(Request(PROC_RUN, {"argv": "git pull", "shell": "default"}))
+    assert [g.label for g in grants] == ["Always allow: git pull"]
 
 
 # ── remembering ───────────────────────────────────────────────────────

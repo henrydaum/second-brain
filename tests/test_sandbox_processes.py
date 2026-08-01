@@ -32,17 +32,24 @@ from sandbox.policy import classify, render_command
 @pytest.mark.parametrize("kind", [R.PROC_RUN, R.PROC_START])
 @pytest.mark.parametrize("command", [
     "ls",                       # the most read-only thing there is
-    "git status",               # and the second
     "rm -rf /",
     "rg foo | head -20",
     "echo x > /etc/passwd",
 ])
-def test_starting_a_process_always_asks(kind, command):
-    """No whitelist, no exceptions, no argument about what `ls` does.
+def test_starting_a_process_asks_unless_something_vouches_for_it(kind, command):
+    """Asking is the default, and nothing here is vouched for.
 
     The old tool auto-ran the first two. That was not wrong so much as
-    unmaintainable: the whitelist has to be right about every way a shell can
-    smuggle a second command past it, forever, and it is wrong invisibly.
+    unmaintainable: its whitelist had to be right about every way a shell can
+    smuggle a second command past it, forever, and it was wrong invisibly.
+
+    A whitelist did come back, but somewhere it can be sound — as a
+    *recognizer* in the policy rather than a classifier in the plugin it
+    authorizes, keyed on ``(program, subcommand)``, and abstaining on anything
+    with a shell metacharacter in it. ``git status`` therefore no longer
+    belongs in this list; ``tests/test_shell_recognizer.py`` owns that half.
+    ``ls`` stays, deliberately: ``sdk.fs.list`` does it mediated and better, so
+    a dialog is the right nudge.
     """
     decision = classify(Request(kind, {"argv": command, "shell": "default"}),
                         Chain())

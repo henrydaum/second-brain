@@ -106,11 +106,48 @@ def test_things_that_look_inert_and_run_arbitrary_code_are_absent():
 
 # ── the three structural rules ────────────────────────────────────────
 
-def test_any_shell_abstains_because_a_parser_is_what_cannot_be_reasoned_about():
-    """``shell=None`` is the only shell-free path in the handler."""
+def test_a_named_shell_is_read_when_the_line_holds_nothing_it_could_act_on():
+    """The carve-out that makes any of this reachable in practice.
+
+    ``tool_run_command`` defaults ``shell`` to ``"default"``, so refusing every
+    named shell outright quietly disabled *both* recognizers: ``git status``
+    was never auto-allowed and no command was ever offered a remembered grant.
+    The tests missed it because they build Requests with no shell at all.
+
+    ``sh -c "git status"`` runs exactly ``git`` with the argument ``status``.
+    No expansion, no splitting ambiguity, nothing to be wrong about.
+    """
     assert _allowed(["git", "status"], shell=None)
     for shell in ("default", "cmd", "powershell"):
-        assert not _allowed(["git", "status"], shell=shell), shell
+        assert _allowed("git status", shell=shell), shell
+        assert _allowed(["git", "status"], shell=shell), shell
+
+
+def test_a_shell_line_with_anything_to_interpret_still_abstains():
+    """The whitelist is of *inert* characters, so this list need not be
+    complete — anything not provably inert is out by construction."""
+    for line in ('echo "hi" > ~/Desktop/test.txt',   # quotes, redirect, tilde
+                 "git status && git push",            # operator
+                 "git status | tee log",              # pipe
+                 "cat *.py",                          # glob
+                 "ls ~/Desktop",                      # tilde
+                 "echo $HOME",                        # substitution
+                 "git status; rm -rf /",              # separator
+                 "type C:\\Windows\\x.txt"):          # backslash
+        assert not _allowed(line, shell="default"), line
+
+
+def test_the_inert_carve_out_does_not_leak_into_a_remembered_grant():
+    """A grant matches through a shell only on the same inert terms."""
+    from runtime.context import set_kernel_parts
+
+    try:
+        set_kernel_parts(config={"shell_allowed_prefixes": ["git push"]})
+        assert _allowed("git push origin main", shell="default")
+        assert not _allowed("git push && rm -rf /", shell="default")
+        assert not _allowed("git push $(whoami)", shell="default")
+    finally:
+        set_kernel_parts(config={"shell_allowed_prefixes": []})
 
 
 def test_a_metacharacter_anywhere_abstains_without_parsing():
@@ -197,9 +234,9 @@ def test_a_remembered_grant_is_still_structurally_checked():
         _allow_prefixes("git push")
         assert not _allowed(["git", "push", "&&", "rm", "-rf", "/"])
         assert not _allowed(["git", "push", "$(whoami)"])
-        assert not _allowed(["git", "push"], shell="cmd")
-        assert not _allowed(["git", "push"], shell="powershell")
         assert not _allowed("git push && rm -rf /", shell="default")
+        assert not _allowed("git push `whoami`", shell="powershell")
+        assert not _allowed("git push > ~/out.txt", shell="cmd")
         assert not _allowed(["/tmp/evil/git", "push"])
     finally:
         _allow_prefixes()

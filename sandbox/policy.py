@@ -774,19 +774,50 @@ _READ_ONLY_COMMANDS = {
 }
 
 
+#: Characters a shell has nothing to say about. A **whitelist**, because the
+#: interesting question is not "which characters are dangerous" — that list is
+#: never finished — but "which are provably inert", which is short and closed.
+#: Letters, digits, space, and the punctuation that appears in program names,
+#: flags, versions and POSIX paths.
+#:
+#: Everything else is out, including several that look harmless: ``~`` (tilde
+#: expansion), ``*`` and ``?`` (globs), quotes and ``\`` (both change how the
+#: line splits), ``%`` and ``^`` (cmd.exe), ``!`` (history), ``#`` (comment).
+_SHELL_INERT = frozenset(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789 -_./:@+,=")
+
+
 def _exact_argv(args: dict):
     """The argv the handler will execute, or ``None`` if it cannot be known.
 
     Mirrors ``handlers.fs_net._invocation`` deliberately: a recognizer that
     reasons about a different command than the one that runs is worse than no
-    recognizer. ``shell=None`` is the only shell-free path there — ``default``,
-    ``cmd`` and ``powershell`` all hand the line to something that parses it,
-    and what a parser will make of a string is the question this whole module
-    refuses to answer.
+    recognizer.
+
+    ``shell=None`` runs the argv as given, so that case is exact. A *named*
+    shell (``default``, ``cmd``, ``powershell``) hands the line to something
+    that parses it, and what a parser will make of an arbitrary string is the
+    question this module refuses to answer — **unless the string contains
+    nothing a parser could act on.** ``git pull`` under ``sh -c`` runs exactly
+    ``git`` with the argument ``pull``; there is no expansion, no splitting
+    ambiguity and no substitution to be wrong about, so whitespace splitting is
+    what the shell itself will do.
+
+    That carve-out is not a nicety. ``tool_run_command`` defaults ``shell`` to
+    ``"default"``, so without it *every* command in practice came back ``None``
+    — which quietly disabled both recognizers. ``git status`` was never
+    auto-allowed and no command was ever offered a remembered grant, while the
+    tests passed because they construct Requests with no shell at all.
     """
-    if args.get("shell") is not None:
-        return None
     argv = args.get("argv")
+    if args.get("shell") is not None:
+        line = argv if isinstance(argv, str) else " ".join(
+            str(part) for part in (argv or []))
+        if not line.strip() or set(line) - _SHELL_INERT:
+            return None
+        return line.split()
     if isinstance(argv, str):
         try:
             argv = shlex.split(argv)
