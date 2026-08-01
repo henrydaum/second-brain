@@ -55,7 +55,6 @@ class ReadFile(BaseTool):
         "required": ["path"],
     }
     requires_services = []
-    max_calls = 10
 
     def run(self, sdk, **kwargs):
         """Run read file."""

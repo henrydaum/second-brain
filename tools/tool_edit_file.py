@@ -110,7 +110,6 @@ class EditFile(BaseTool):
         "required": ["operation", "path", "justification"],
     }
     requires_services = []
-    max_calls = 20
     plan_mode_safe = False
 
     def run(self, sdk, **kwargs):

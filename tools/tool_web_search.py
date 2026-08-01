@@ -73,7 +73,6 @@ class WebSearch(BaseTool):
     # so a name is read as nothing at all.
     requires_services = ["web_search_provider"]
     requests = ["service.call"]
-    max_calls = 5
 
     # ── talking to the provider ─────────────────────────────────────
 

@@ -45,7 +45,6 @@ class Memory(BaseTool):
         "required": ["action", "topic"],
     }
     requires_services = []
-    max_calls = 10
 
     agent_prompt = (
         """## Remembering things (memory)

@@ -70,7 +70,6 @@ class RunScript(BaseTool):
         "required": ["path"],
     }
     requires_services = []
-    max_calls = 15
 
     def agent_prompt(self, sdk) -> str:
         """Where scripts go and why to reach for one."""

@@ -45,7 +45,6 @@ class AskQuestion(BaseTool):
         "required": ["question"],
     }
     requires_services = []
-    max_calls = 5
     # There is nobody to answer in a background session. The policy function
     # refuses ui.ask unattended anyway; this keeps the tool out of the catalogue
     # so the model is not offered a question it cannot ask.

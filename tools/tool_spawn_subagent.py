@@ -42,7 +42,6 @@ class SpawnSubagent(BaseTool):
         "required": ["prompt"],
     }
     requires_services = []
-    max_calls = 5
     plan_mode_safe = False
     agent_prompt = (
         "## Spawning agents\n"

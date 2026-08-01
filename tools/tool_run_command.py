@@ -224,7 +224,6 @@ class RunCommand(BaseTool):
         "required": [],
     }
     requires_services = []
-    max_calls = 10
     agent_prompt = (
         "## Running shell commands\n"
         "run_command runs a real shell, scoped to the project root and the Second Brain "

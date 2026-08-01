@@ -45,7 +45,6 @@ class EmailMarkRead(BaseTool):
         "required": ["message_id"],
     }
     requires_services = ["gmail"]
-    max_calls = 10
     plan_mode_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:

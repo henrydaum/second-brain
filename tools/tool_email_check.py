@@ -94,7 +94,6 @@ class EmailCheck(BaseTool):
         "required": [],
     }
     requires_services = ["gmail"]
-    max_calls = 10
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run email check."""

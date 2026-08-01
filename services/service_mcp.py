@@ -94,7 +94,6 @@ class MCPTool(BaseTool):
     """
 
     auto_register = False
-    max_calls = 5
 
     def __init__(self, service: "MCPService", server: str, mcp_tool):
         """Build a tool wrapper from an MCP tool definition."""

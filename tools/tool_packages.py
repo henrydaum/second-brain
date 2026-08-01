@@ -54,7 +54,6 @@ class ManagePackages(BaseTool):
         "required": ["action"],
     }
     requires_services = []
-    max_calls = 5
 
     agent_prompt = (
         "## The package store\n"

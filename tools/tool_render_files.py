@@ -30,7 +30,6 @@ class RenderFiles(BaseTool):
         "required": ["paths"],
     }
     requires_services = []
-    max_calls = 5
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run render files."""
