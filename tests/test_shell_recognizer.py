@@ -6,6 +6,10 @@ here matter more than the allowances, and each names the specific way a
 name-keyed whitelist would have got it wrong.
 """
 
+import os
+
+import pytest
+
 from sandbox.policy import SAFE, UNSAFE, Chain, classify
 from sandbox.guest.requests import Request
 
@@ -274,6 +278,107 @@ def test_a_second_word_naming_a_file_reduces_to_the_program():
         assert not _allowed(["python", "train.py"]), "hand-edited entry matched"
     finally:
         _allow_prefixes()
+
+
+# ── segmentation ──────────────────────────────────────────────────────
+
+@pytest.fixture
+def posix(monkeypatch):
+    """Pretend the platform's default shell is /bin/sh.
+
+    ``shell="default"`` is ``sh`` on POSIX and ``cmd.exe`` on Windows — one
+    argument value, two lexers — so the segmentation path asks the platform
+    rather than trusting the name, and these tests have to say which.
+    """
+    monkeypatch.setattr(os, "name", "posix")
+
+
+def test_every_segment_must_be_granted_not_just_the_first(posix):
+    """The whole reason chaining can be allowed at all.
+
+    A string prefix would read "git push && rm -rf /" as starting with
+    "git push" and let it run. Segmentation asks a different question — is
+    every part covered — and nobody granted ``rm``.
+    """
+    try:
+        _allow_prefixes("git push")
+        assert not _allowed("git push && rm -rf /", shell="default")
+        _allow_prefixes("git push", "rm")
+        assert _allowed("git push && rm -rf /", shell="default")
+    finally:
+        _allow_prefixes()
+
+
+def test_a_quoted_operator_is_not_a_separator(posix):
+    """What the dead classifier's regex got wrong and a real lexer gets right."""
+    from sandbox.policy import _shell_segments
+
+    assert _shell_segments({"argv": 'git commit -m "fix && ship"',
+                            "shell": "default"}) == [
+        ["git", "commit", "-m", "fix && ship"]]
+
+
+def test_the_line_is_split_at_every_operator(posix):
+    from sandbox.policy import _shell_segments
+
+    assert _shell_segments({"argv": "a 1 && b 2 || c; d | e",
+                            "shell": "default"}) == [
+        ["a", "1"], ["b", "2"], ["c"], ["d"], ["e"]]
+
+
+def test_an_effect_that_lives_in_no_command_name_is_refused(posix):
+    """Redirects, substitution, subshells, assignment prefixes, bad quoting.
+
+    The redirect case is the one that started this: granting ``echo`` must not
+    license writing a file anywhere, so ``echo x > ~/f`` gets no unit at all.
+    The right door for it is ``fs.write``, which asks about the *path*.
+    """
+    from sandbox.policy import _shell_segments
+
+    for line in ('echo "Test text file." > ~/Desktop/test.txt',
+                 "cat < /etc/passwd",
+                 "ls >> log",
+                 "git push $(whoami)",
+                 "git push `whoami`",
+                 "echo ${HOME}",
+                 "(cd /tmp && rm -rf x)",
+                 "diff <(a) <(b)",
+                 "SECRET=x git push",
+                 'git commit -m "unbalanced'):
+        assert _shell_segments({"argv": line, "shell": "default"}) is None, line
+
+
+def test_windows_shells_keep_only_the_inert_path(posix, monkeypatch):
+    """``shlex`` implements POSIX quoting; cmd and PowerShell differ.
+
+    Mis-lexing a line is the failure that widens, so the shells whose rules
+    this does not implement get the inert fast path and nothing more.
+    """
+    from sandbox.policy import _shell_segments
+
+    assert _shell_segments({"argv": "a && b", "shell": "cmd"}) is None
+    assert _shell_segments({"argv": "a && b", "shell": "powershell"}) is None
+    monkeypatch.setattr(os, "name", "nt")
+    assert _shell_segments({"argv": "a && b", "shell": "default"}) is None
+
+
+def test_a_glob_in_the_program_position_names_nothing_grantable(posix):
+    """``* --help`` runs whatever sorts first in the working directory.
+
+    Elsewhere in the line a glob is ordinary argument expansion, and arguments
+    are unchecked by design — so this is only about ``argv[0]``.
+    """
+    from sandbox.policy import command_prefix, command_prefixes
+
+    assert command_prefix(["*", "--help"]) == ""
+    assert command_prefix(["~/bin/tool"]) == ""
+    assert command_prefixes({"argv": "cat *.py", "shell": "default"}) == ["cat"]
+
+
+def test_read_only_holds_across_a_pipeline(posix):
+    """Every segment, or it asks — same rule as the remembered half."""
+    assert _allowed("git status && git diff --stat", shell="default")
+    assert not _allowed("git status && git push", shell="default")
 
 
 def test_proc_start_gets_the_same_recognizer_as_proc_run():

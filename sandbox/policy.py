@@ -826,24 +826,155 @@ def _exact_argv(args: dict):
     return [str(part) for part in (argv or [])]
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Segmentation.
+# ──────────────────────────────────────────────────────────────────────
+#
+# The dead classifier decomposed a command line with a regex and then decided
+# whether each piece was *safe*. Two mistakes, and only the second one was
+# fatal. Splitting is fine if you use a real lexer — ``shlex`` knows that the
+# ``&&`` in ``git commit -m "fix && ship"`` is inside a quote, which is exactly
+# what the regex got wrong. Deciding safety is what nothing can do.
+#
+# So this splits, and then asks a different question: **is every segment
+# already covered by something the user granted?** Coverage is decidable given
+# correct segmentation, where safety never was, and an uncovered segment simply
+# asks. ``git push && rm -rf /`` needs ``rm`` granted too.
+#
+# POSIX shells only. ``shlex`` implements *their* quoting; ``cmd`` and
+# ``powershell`` do it differently and would be mis-lexed, so they keep only
+# the inert fast path in ``_exact_argv``.
+
+#: Separators between commands. Everything else built from these characters is
+#: refused, which is how redirects and subshells are excluded without keeping a
+#: list of them: ``>``, ``>>``, ``<``, ``>&``, ``<(``, ``(``, ``)`` are all
+#: punctuation-only tokens that are not in here.
+_SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&"})
+_SHELL_PUNCTUATION = frozenset("();<>|&")
+
+
+def _posix_shell(args: dict) -> bool:
+    """Whether the shell that will run this is one ``shlex`` describes.
+
+    ``"default"`` is ``/bin/sh`` on POSIX and ``cmd.exe`` on Windows — the
+    same argument value meaning two different lexers, which is why this asks
+    the platform rather than trusting the name.
+    """
+    import os
+
+    return args.get("shell") == "default" and os.name != "nt"
+
+
+def _shell_segments(args: dict):
+    """The separate commands a shell line runs, or ``None`` if unknowable.
+
+    Refused outright, because in each case the effect is not in any command
+    name and no grant could honestly describe it:
+
+    - **redirection** — ``echo x > /etc/passwd`` writes a file, and granting
+      ``echo`` would license writing anywhere. This is the shape of the
+      command that started the whole question, and it stays button-less on
+      purpose; the right door for it is ``fs.write``, which asks about the
+      *path*.
+    - **substitution and expansion** — ``$(…)``, backticks, ``$VAR``. The line
+      that runs is not the line that was read.
+    - **subshells and grouping**, and an ``x=1 cmd`` assignment prefix, where
+      the first token is not the program.
+    - **anything the lexer cannot read**, such as an unbalanced quote.
+    """
+    if not _posix_shell(args):
+        return None
+    argv = args.get("argv")
+    line = argv if isinstance(argv, str) else " ".join(
+        str(part) for part in (argv or []))
+    if not line.strip():
+        return None
+    try:
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+
+    segments, current = [], []
+    for token in tokens:
+        if "$" in token or "`" in token:
+            return None
+        if token and set(token) <= _SHELL_PUNCTUATION:
+            if token not in _SHELL_OPERATORS:
+                return None          # a redirect, a subshell, a grouping
+            if not current:
+                return None          # an operator with nothing before it
+            segments.append(current)
+            current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    if not segments or any("=" in segment[0] for segment in segments):
+        return None
+    return segments
+
+
+def _command_segments(args: dict):
+    """Every command this Request will run, or ``None``.
+
+    One list for the whole family, so the read-only recognizer, the remembered
+    one and the dialog's option all reason about the same decomposition.
+    """
+    if (argv := _exact_argv(args)):
+        return [argv]
+    return _shell_segments(args)
+
+
+def command_prefixes(args: dict) -> list:
+    """The prefixes every segment of this command would need granted.
+
+    Empty when any segment has no unit :func:`command_prefix` can describe —
+    all or nothing, since a partial grant would leave the dialog appearing
+    anyway and teach the person that the button does not work.
+    """
+    segments = _command_segments(args)
+    if not segments:
+        return []
+    prefixes = []
+    for argv in segments:
+        if not (prefix := command_prefix(argv)):
+            return []
+        prefixes.append(prefix)
+    return list(dict.fromkeys(prefixes))
+
+
 def _read_only_command(shown: str, args: dict):
-    """Allow a known read-only invocation, or abstain.
+    """Allow a command whose every segment only reads, or abstain.
 
     ``shown`` is ignored on purpose: the rendered line is for the person and
     the ledger, and reading it back to make a decision is the mistake the
     first classifier was built on.
     """
-    argv = _exact_argv(args)
+    segments = _command_segments(args)
+    if not segments:
+        return None
+    named = []
+    for argv in segments:
+        if not (name := _read_only_segment(argv)):
+            return None
+        named.append(name)
+    return ", ".join(dict.fromkeys(named)) + " only reads"
+
+
+def _read_only_segment(argv):
+    """One segment's name if it is a known read-only invocation, else ""."""
     if not argv:
-        return None
+        return ""
     if any(_SHELL_METACHARACTERS & set(part) for part in argv):
-        return None
+        return ""
 
     program = argv[0]
     # A bare name only. ``/tmp/somewhere/git`` is not the ``git`` this list is
     # talking about, and resolving which one it is means trusting PATH.
     if "/" in program or "\\" in program:
-        return None
+        return ""
     program = program.lower().removesuffix(".exe")
 
     rest = argv[1:]
@@ -853,7 +984,7 @@ def _read_only_command(shown: str, args: dict):
 
     entry = _READ_ONLY_COMMANDS.get((program, subcommand))
     if entry is None:
-        return None
+        return ""
     flags, positionals_ok = entry
     for part in rest:
         if part == "--" and positionals_ok:
@@ -862,11 +993,10 @@ def _read_only_command(shown: str, args: dict):
             # ``--flag=value`` is one token; the value cannot turn a read into
             # a write, so only the name is checked.
             if part.split("=", 1)[0] not in flags:
-                return None
+                return ""
         elif not positionals_ok:
-            return None
-    named = f"{program} {subcommand}".strip()
-    return f"{named} only reads"
+            return ""
+    return f"{program} {subcommand}".strip()
 
 
 def command_prefix(argv) -> str:
@@ -898,6 +1028,13 @@ def command_prefix(argv) -> str:
     program = argv[0]
     if "/" in program or "\\" in program:
         return ""
+    # A glob or a tilde in the *program* position names something the shell
+    # will pick, not something this grant could describe: ``* --help`` runs
+    # whatever happens to sort first in the working directory. Elsewhere in the
+    # line they are ordinary argument expansion, and arguments are unchecked by
+    # design — so this is deliberately only about ``argv[0]``.
+    if set(program) & set("*?[]~"):
+        return ""
     program = program.lower().removesuffix(".exe")
     if not program:
         return ""
@@ -928,20 +1065,26 @@ def _allowed_prefixes() -> set:
 
 
 def _remembered_prefix(shown: str, args: dict):
-    """Allow a command whose prefix the user already answered "always" to.
+    """Allow a command whose every segment the user answered "always" to.
 
     The *remembered* recognizer this section has been describing since it
     shipped empty: a decision persisted where the policy can see it, rather
     than inside the plugin it authorizes.
 
-    It re-derives the prefix from the structured argv instead of matching
-    ``shown``, which is the entire soundness argument — see
-    :func:`command_prefix`.
+    **Every** segment, which is what makes chaining safe to allow at all:
+    granting ``git push`` does not run ``git push && rm -rf /``, because ``rm``
+    is a segment of its own and nobody granted it. The question asked here is
+    coverage, not safety — and it is asked of a real lexer's decomposition
+    rather than a regex's, which is the other half of why this can exist where
+    the old classifier could not.
     """
-    prefix = command_prefix(_exact_argv(args))
-    if prefix and prefix.casefold() in _allowed_prefixes():
-        return f"you allowed `{prefix}`"
-    return None
+    prefixes = command_prefixes(args)
+    if not prefixes:
+        return None
+    allowed = _allowed_prefixes()
+    if any(prefix.casefold() not in allowed for prefix in prefixes):
+        return None
+    return "you allowed " + ", ".join(f"`{prefix}`" for prefix in prefixes)
 
 
 _SHELL_RECOGNIZERS: list = [_read_only_command, _remembered_prefix]

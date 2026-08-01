@@ -190,16 +190,33 @@ def test_the_command_option_offers_the_program_and_subcommand():
     assert [g.label for g in grants] == ["Always allow: git push"]
 
 
-def test_a_second_word_naming_a_file_reduces_to_the_program():
-    """And the label says so, which is the point.
+def test_a_program_whose_job_is_running_other_code_is_never_offered():
+    """The deny-set, and why it is about the *button* and not the matcher.
 
-    ``python train.py`` as a stored grant reads like permission for one known
-    script while actually granting whatever that file says tomorrow. Reducing
-    to ``python`` grants more but *describes* what it grants, so a person can
-    decline it.
+    A granted verb runs with whatever follows it — the bargain the setting
+    states. For these the bargain is unbounded by construction: their whole
+    job is to execute something named elsewhere, so "always allow python" is
+    the shell again under another name. ``command_prefix`` still reduces
+    ``python train.py`` honestly (see ``tests/test_shell_recognizer.py``);
+    there is simply no one-click way to grant it.
     """
-    grants = _grants(Request(PROC_RUN, {"argv": ["python", "train.py"]}))
-    assert [g.label for g in grants] == ["Always allow: python"]
+    for argv in (["python", "train.py"], ["npm", "install", "x"],
+                 ["bash", "-c", "date"], ["sudo", "apt", "update"],
+                 ["make", "build"]):
+        assert _grants(Request(PROC_RUN, argv and {"argv": argv})) == [], argv
+
+
+def test_config_remains_the_way_to_grant_one_anyway():
+    """The deny-set gates the dialog, not the allowlist.
+
+    Somebody who genuinely wants ``python`` unattended can put it in
+    ``shell_allowed_prefixes`` with ``/config`` — a considered act, rather than
+    one click in the middle of a turn.
+    """
+    from sandbox.policy import SAFE
+    set_kernel_parts(config={"shell_allowed_prefixes": ["python"]})
+    assert classify(Request(PROC_RUN, {"argv": ["python", "train.py"]}),
+                    CHAIN).level == SAFE
 
 
 def test_no_command_option_when_there_is_no_unit_to_describe():

@@ -150,23 +150,54 @@ def _always_allow_folder(chain, request, decision) -> list:
     return options
 
 
-def _always_allow_command(chain, request, decision) -> list:
-    """Offer to remember this command's ``(program, subcommand)`` prefix.
+#: Programs that never become a one-click grant, however the dialog got here.
+#:
+#: Not a safety claim about the rest — a granted verb runs with whatever flags
+#: and arguments follow it, which is the bargain the setting states. These are
+#: the ones where that bargain is unbounded by *construction*: their whole job
+#: is to execute something named elsewhere, so "always allow python" is not a
+#: grant with a shape, it is the shell again under another name.
+#:
+#: Deliberately gates only the button. Someone who genuinely wants ``python``
+#: in ``shell_allowed_prefixes`` can put it there with ``/config``, which is a
+#: considered act rather than one click in the middle of a turn.
+NEVER_OFFERED = frozenset({
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh",
+    "cmd", "command", "powershell", "pwsh",
+    "python", "python2", "python3", "node", "deno", "bun",
+    "ruby", "perl", "php", "lua", "osascript",
+    "npm", "npx", "yarn", "pnpm", "pip", "pip2", "pip3", "pipx",
+    "gem", "bundle", "make", "cmake", "gradle", "mvn", "ant",
+    "sudo", "doas", "su", "env", "eval", "exec", "xargs", "nohup",
+    "ssh", "scp", "curl", "wget",
+})
 
-    ``policy.command_prefix`` decides what that is and answers "" when there
-    is no unit it can describe honestly — a named shell, a metacharacter, a
-    program reached by path. No unit, no option.
+
+def _always_allow_command(chain, request, decision) -> list:
+    """Offer to remember every ``(program, subcommand)`` this command runs.
+
+    ``policy.command_prefixes`` decomposes the line with a real lexer and
+    answers ``[]`` when any segment has no unit it can describe honestly — a
+    redirect, a substitution, a shell whose quoting it does not implement. All
+    or nothing, because a partial grant leaves the dialog appearing anyway and
+    teaches the person that the button does not work.
     """
     from . import policy
     from .guest import requests as R
 
     if request.type not in (R.PROC_RUN, R.PROC_START):
         return []
-    prefix = policy.command_prefix(policy._exact_argv(request.args))
-    if not prefix or prefix.casefold() in policy._allowed_prefixes():
+    prefixes = policy.command_prefixes(request.args)
+    if not prefixes or any(p.split()[0] in NEVER_OFFERED for p in prefixes):
         return []
-    return [Option(f"always:{prefix}", f"Always allow: {prefix}",
-                   remember=lambda: remember("shell_allowed_prefixes", prefix))]
+    allowed = policy._allowed_prefixes()
+    missing = [p for p in prefixes if p.casefold() not in allowed]
+    if not missing:
+        return []
+    named = ", ".join(missing)
+    return [Option(f"always:{named}", f"Always allow: {named}",
+                   remember=lambda: all([remember("shell_allowed_prefixes", p)
+                                         for p in missing]))]
 
 
 OPTION_BUILDERS: list = [_always_allow_host, _always_allow_folder,
