@@ -481,8 +481,6 @@ def _service_adapter(
         "_channels": list(declarations.get("subscribed_channels") or []),
         "_box": box_name,
         "_entry": entry,
-        # Native services are named by model_name; the guest calls it name.
-        "model_name": name,
         "name": name,
         "__init__": __init__,
         "_load": _load,

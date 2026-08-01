@@ -109,7 +109,7 @@ PACKAGES_SECTION = (
     "  /packages install <id>     — install a package or bundle\n"
     f"  Next step: `{KNOWLEDGEBASE_BUNDLE}` — parsers, OCR, transcription, "
     "embeddings and the three search tools, so the agent can find things in "
-    "your own files. Individual packages (gmail, google_drive, mcp, skills, "
+    "your own files. Individual packages (gmail, google_drive, mcp, "
     "plan_mode) install by name."
 )
 

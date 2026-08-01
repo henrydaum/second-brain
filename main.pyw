@@ -366,15 +366,15 @@ def main():
 		# closed explicitly rather than left to the service loop below — which
 		# no longer knows about them.
 		llm.unload_all()
-		for svc in services.values():
+		for name, svc in services.items():
 			if getattr(svc, 'loaded', False):
 				try:
 					t0 = time.time()
-					logger.info(f"Unloading model: {svc.model_name}")
+					logger.info(f"Unloading service: {name}")
 					svc.unload()
-					logger.debug(f"Unloaded {svc.model_name} in {time.time() - t0:.2f}s")
+					logger.debug(f"Unloaded {name} in {time.time() - t0:.2f}s")
 				except Exception as e:
-					logger.debug(f"Model unload error: {e}")
+					logger.debug(f"Service unload error: {e}")
 		logger.info("Saving config...")
 		config_manager.save(config)
 		# Save plugin config separately
@@ -431,12 +431,12 @@ def main():
 				_stop_subagents(scaffold)
 				orchestrator.stop()
 				llm.unload_all()
-				for svc in services.values():
+				for name, svc in services.items():
 					if getattr(svc, "loaded", False):
 						try:
 							svc.unload()
 						except Exception as e:
-							logger.debug(f"Restart: unload '{svc.model_name}' failed: {e}")
+							logger.debug(f"Restart: unload '{name}' failed: {e}")
 				config_manager.save(config)
 				plugin_keys = {entry[1] for entry in get_plugin_settings()}
 				plugin_vals = {k: v for k, v in config.items() if k in plugin_keys}

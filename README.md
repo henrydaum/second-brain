@@ -39,7 +39,6 @@ With the right packages installed (the `full` bundle covers most of the list bel
 - Search the public web.
 - Run path-driven indexing tasks and event-driven background jobs to develop a robust database.
 - Schedule one-time and recurring subagents through Timekeeper cron jobs.
-- Use agentskills.io compatible skills.
 - Push reminders, findings, daily briefs, and alerts into Telegram.
 - Author, test, and live-load new tools, tasks, services, commands, and frontends. The possibilities are endless.
 

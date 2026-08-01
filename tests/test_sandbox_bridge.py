@@ -460,7 +460,7 @@ def test_a_migrated_service_looks_native(tmp_path, box):
 
     assert isinstance(service, BaseService)
     # Named the way the native side names services.
-    assert service.model_name == "counter"
+    assert service.name == "counter"
 
 
 PROMPTING_SERVICE = '''

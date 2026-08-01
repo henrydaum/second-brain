@@ -817,7 +817,6 @@ def test_a_service_listing_redacts_like_every_other_listing():
     class Service:
         """A service declaring one credential and one ordinary setting."""
         loaded = True
-        model_name = ""
         config_settings = [
             ("Brave Key", "secret_brave_api_key", "the key", "", {}),
             ("Result count", "search_count", "how many", 5, {}),

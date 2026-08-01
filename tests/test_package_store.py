@@ -345,29 +345,18 @@ def test_parser_helper_install_and_uninstall_rescan_parsers(tmp_path, monkeypatc
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Skills as store packages (skills/<name>/ folders)
+# Tree roots, and what is no longer one
 # ──────────────────────────────────────────────────────────────────────
 
-def _skill_md(name, deps="tools/tool_use_skill.py"):
-    return (
-        f"---\nname: {name}\ndescription: A {name} skill.\n"
-        f"dependencies_files: {deps}\n---\n# {name}\nBody.\n"
-    ).encode()
+def test_skills_are_not_a_store_family_any_more():
+    """Skills are gone, and the package layer must not quietly still accept one.
 
-
-_SKILL_FILES = {
-    "skills/demo/SKILL.md": _skill_md("demo"),
-    "skills/demo/reference/extra.md": b"support\n",
-    "skills/other/SKILL.md": _skill_md("other"),
-    "tools/tool_use_skill.py": _tool(deps=["services/service_skills.py"]),
-    "services/service_skills.py": b"from guest.bases import BaseService\nclass S(BaseService): pass\n",
-}
-
-
-def test_skill_paths_validate_and_plain_paths_still_reject():
-    assert package_manager._validate_rel_path("skills/demo/SKILL.md") == "skills/demo/SKILL.md"
-    assert package_manager._validate_rel_path("skills/demo/scripts/x.py")
-    for bad in ("skills/SKILL.md", "helpers/x.md", "helpers/skills/demo/SKILL.md", "tools/tool_a.md", "skills/../evil/SKILL.md"):
+    Pinned as a negative rather than simply deleted: the folder-as-package
+    handling was the only thing in the store that was not a single file, and a
+    path that validates but installs nothing would fail silently.
+    """
+    assert "skills" not in package_manager.EXTRA_FAMILIES
+    for bad in ("skills/demo/SKILL.md", "skills/demo/scripts/x.py"):
         with pytest.raises(package_manager.PackageError):
             package_manager._validate_rel_path(bad)
 
@@ -385,54 +374,6 @@ def test_scripts_are_a_tree_root_and_only_at_the_top():
     for bad in ("scripts/helpers/x.py", "scripts/sub/x.py", "scripts/x.md"):
         with pytest.raises(package_manager.PackageError):
             package_manager._validate_rel_path(bad)
-
-
-def test_skill_frontmatter_declares_dependencies():
-    meta = package_manager.read_dependency_meta(
-        "skills/demo/SKILL.md",
-        "---\nname: demo\ndescription: d\ndependencies_files: [tools/tool_use_skill.py]\ndependencies_pip: requests\n---\nBody",
-    )
-    assert meta.dependencies_files == ("tools/tool_use_skill.py",)
-    assert meta.dependencies_pip == ("requests",)
-    # Support files inside a skill folder carry no metadata and are never AST-parsed.
-    meta = package_manager.read_dependency_meta("skills/demo/scripts/x.py", "this is ! not python")
-    assert meta.dependencies_files == () and meta.dependencies_pip == ()
-
-
-def test_skill_installs_whole_folder_plus_frontmatter_deps(tmp_path, monkeypatch):
-    _patch_roots(monkeypatch, tmp_path)
-    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(dict(_SKILL_FILES)))
-
-    result = package_manager.install_package(tmp_path, "demo", _Context(tmp_path))
-
-    assert result.ok
-    base = package_manager.INSTALLED_PLUGINS
-    assert (base / "skills" / "demo" / "SKILL.md").exists()
-    assert (base / "skills" / "demo" / "reference" / "extra.md").exists()
-    assert (base / "tools" / "tool_use_skill.py").exists()
-    assert (base / "services" / "service_skills.py").exists()
-    # Listing shows the skill once, as one item.
-    skills = [i for i in package_manager.installed_packages() if i["family"] == "skills"]
-    assert [i["id"] for i in skills] == ["demo"]
-
-
-def test_skill_uninstall_removes_folder_keeps_shared_machinery(tmp_path, monkeypatch):
-    _patch_roots(monkeypatch, tmp_path)
-    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(dict(_SKILL_FILES)))
-    package_manager.install_package(tmp_path, "demo", _Context(tmp_path))
-    package_manager.install_package(tmp_path, "other", _Context(tmp_path))
-
-    result = package_manager.uninstall_package("demo", _Context(tmp_path))
-
-    assert result.ok
-    base = package_manager.INSTALLED_PLUGINS
-    assert not (base / "skills" / "demo").exists()
-    # The other installed skill still references the machinery via frontmatter.
-    assert (base / "tools" / "tool_use_skill.py").exists()
-    assert (base / "skills" / "other" / "SKILL.md").exists()
-
-    package_manager.uninstall_package("other", _Context(tmp_path))
-    assert not (base / "tools" / "tool_use_skill.py").exists()
 
 
 # ────────────────────────────────────────────────────────────────────

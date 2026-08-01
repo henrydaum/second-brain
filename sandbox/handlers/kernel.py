@@ -1417,7 +1417,6 @@ def _service_list(ctx, args: dict) -> Result:
         return Result(data=[{
             "name": name,
             "loaded": bool(getattr(service, "loaded", False)),
-            "model_name": getattr(service, "model_name", "") or "",
             "lifecycle": service_lifecycle(service),
             "config_settings": [
                 {

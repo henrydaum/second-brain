@@ -656,3 +656,91 @@ def test_nothing_outlives_the_hard_ceiling():
     # Far under the running deadline, far over the wall-clock ceiling.
     assert overdue(execution, started, deadline=1e9,
                    now=started + HARD_CEILING + 1)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The slowest wait in the system is a person reading a dialog.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_slow_approval_is_not_charged_to_the_guest():
+    """Reading the dialog is waiting on the kernel like any other wait.
+
+    The accounting above was applied to handlers and not to the approval leg,
+    so the dialog — which may sit for DIALOG_TIMEOUT, ten times the default
+    deadline — burned the guest's whole budget. Every unsafe Request a person
+    thought about failed with a timeout blaming the plugin, and the tool the
+    user *had* just approved reported that it had not run.
+    """
+    asked = []
+
+    def approve(chain, request, decision):
+        """A person who takes longer than the whole deadline to answer."""
+        asked.append(request.type)
+        time.sleep(0.5)
+        return True
+
+    it = Interpreter(approve=approve)
+    try:
+        def plugin(sdk):
+            """The Request the bug was reported against, answered slowly."""
+            try:
+                sdk.agent.schedule("do the thing", "0 9 * * *")
+            except sdk.Failed:
+                pass         # no timekeeper here; the answer is not the point
+            return "finished"
+
+        result = run_in_process(it, plugin, name="patient", timeout=0.3)
+    finally:
+        it.shutdown()
+
+    assert asked == ["agent.schedule"], "the dialog has to have been reached"
+    assert result.ok, result.error
+    assert result.data == "finished"
+
+
+def test_an_approval_that_lands_after_cancellation_does_not_take_effect(
+        monkeypatch):
+    """A yes given to a caller that has already been told "no" must not run.
+
+    Cancelling only set a flag the gate reads on the way *in*, and an approved
+    Request is long past the gate — so the handler ran anyway. Observed as a
+    scheduled subagent that timed out, was created regardless, and whose retry
+    reported that the job already existed.
+    """
+    from sandbox import interpreter as interpreter_module
+
+    ran = []
+    monkeypatch.setitem(
+        interpreter_module.HANDLERS, "config.write",
+        lambda ctx, args: ran.append(args) or Result(data=True))
+
+    execution = Execution(name="abandoned", chain=Chain())
+    answered = threading.Event()
+
+    def approve(chain, request, decision):
+        """Answer yes, but only once the caller has given up waiting."""
+        answered.wait(3.0)
+        return True
+
+    it = Interpreter(approve=approve)
+    try:
+        def plugin(sdk):
+            """One unsafe Request that will be abandoned mid-dialog."""
+            try:
+                return sdk.config.write("probe_setting", 1)
+            except BaseException:
+                return "unwound"
+
+        def cancel_soon():
+            """Play the deadline expiring while the dialog is still up."""
+            time.sleep(0.3)
+            it.cancel(execution)
+            answered.set()
+
+        threading.Thread(target=cancel_soon, daemon=True).start()
+        run_in_process(it, plugin, name="abandoned", timeout=5,
+                       execution=execution)
+    finally:
+        it.shutdown()
+
+    assert ran == [], "the handler ran for a caller that had already given up"

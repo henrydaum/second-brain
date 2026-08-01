@@ -146,6 +146,48 @@ def test_shell_commands_are_shown_as_code():
     assert "rm -rf build" in body
 
 
+def test_scheduling_shows_the_schedule_and_the_instructions():
+    """The two things being authorised, neither of which was ever shown.
+
+    ``agent.schedule`` fell through to the generic field scan, which reaches
+    for ``name`` — empty by default — so the dialog read "Schedule unattended
+    work" and stopped. A person was being asked to approve work they could
+    neither time nor read.
+    """
+    request = Request(R.AGENT_SCHEDULE, {
+        "prompt": "Summarise my unread email.",
+        "cron": "0 9 * * 1-5", "title": "Weekday digest"})
+    _, body = describe(Chain(root="user"), request, classify(request, Chain()))
+
+    assert "At 09:00, Monday through Friday" in body
+    assert "0 9 * * 1-5" in body
+    assert "Summarise my unread email." in body
+    assert "Weekday digest" in body
+    # cp1252: the REPL console cannot print what the library's own locale
+    # would have produced on a non-English machine.
+    body.encode("ascii")
+
+
+def test_a_scheduled_job_shows_its_schedule_too():
+    """``cron.create`` is the same question one layer down, and showed only
+    the job name — never when it runs or what it will do."""
+    request = Request(R.CRON_CREATE, {
+        "name": "nightly", "job": {"cron": "0 3 * * *", "channel": "x",
+                                   "payload": {"prompt": "Reindex."}}})
+    _, body = describe(Chain(root="user"), request, classify(request, Chain()))
+
+    assert "nightly" in body and "At 03:00" in body and "Reindex." in body
+
+
+def test_an_unreadable_cron_is_shown_once_not_twice():
+    """The description falls back to the expression, which must not then be
+    printed beside itself as though it were a translation."""
+    request = Request(R.AGENT_SCHEDULE, {"prompt": "x", "cron": "nonsense"})
+    _, body = describe(Chain(root="user"), request, classify(request, Chain()))
+
+    assert body.count("nonsense") == 1
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The order of consultation.
 # ──────────────────────────────────────────────────────────────────────

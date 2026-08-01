@@ -183,19 +183,12 @@ def _select_prompt(services):
 def _show(services):
     if not services:
         return "No services registered."
-    rows = [
-        (service["name"], _status(service), service["model_name"])
-        for service in services
-    ]
-    return "Services:\n\n" + _md_table(
-        ["Service", "Status", "Model"], rows)
+    rows = [(service["name"], _status(service)) for service in services]
+    return "Services:\n\n" + _md_table(["Service", "Status"], rows)
 
 
 def _describe(service):
-    pairs = [
-        ("Status", _status(service)),
-        ("Model", service["model_name"] or "-"),
-    ]
+    pairs = [("Status", _status(service))]
     pairs += [
         (setting["title"], _format_value(setting["current"]))
         for setting in service["config_settings"]

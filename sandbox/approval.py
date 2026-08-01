@@ -79,7 +79,11 @@ def _action_line(request) -> str:
     headline = phrase[:1].upper() + phrase[1:]
 
     if detail := _detail(kind, args):
-        return f"{headline}: {detail}"
+        # A detail that opens its own block is appended, not introduced: a
+        # trailing "run shell commands: " with the command on the next line
+        # reads as a colon somebody forgot to finish.
+        joiner = "" if detail.startswith("\n") else ": "
+        return f"{headline}{joiner}{detail}"
     return headline
 
 
@@ -117,6 +121,25 @@ def _detail(kind: str, args: dict) -> str:
                 f"directly")
     if kind in ("config.read", "config.write"):
         return f"`{args.get('key')}`" if args.get("key") else ""
+    if kind == "agent.schedule":
+        # The two things being authorised are *when* it fires and *what it is
+        # told to do*, and neither was shown: the generic scan below reaches
+        # for ``name``, which defaults to empty, so the dialog said "Schedule
+        # unattended work" and nothing else. Approving that is approving a
+        # blank cheque.
+        return _schedule_detail(
+            args.get("cron"), args.get("one_time"), None,
+            args.get("title"), args.get("prompt"))
+    if kind in ("cron.create", "cron.update"):
+        job = args.get("job") or args.get("patch") or {}
+        payload = job.get("payload") if isinstance(job, dict) else None
+        payload = payload if isinstance(payload, dict) else {}
+        detail = _schedule_detail(
+            job.get("cron"), job.get("one_time"), job.get("run_at"),
+            payload.get("title"), payload.get("prompt"))
+        if name := args.get("name"):
+            return f"`{name}`{detail}"
+        return detail
     # Everything else names its subject the same way, so a new Request gets
     # a useful line without a branch being added for it.
     for field in ("name", "stem", "package_id", "tool", "key", "channel",
@@ -124,6 +147,71 @@ def _detail(kind: str, args: dict) -> str:
         if value := args.get(field):
             return f"`{value}`"
     return ""
+
+
+PROMPT_PREVIEW_CHARS = 600
+
+
+def _schedule_detail(cron, one_time, run_at, title, prompt) -> str:
+    """When it fires and what it is told to do, for a person to check.
+
+    Scheduling is the one grant whose whole substance is in its arguments: a
+    cron expression is not readable at a glance and the instructions the agent
+    will follow unattended are the only thing worth reading twice. Both are
+    rendered here rather than by the timekeeper, because this runs on the gate
+    and calling into a guest service mid-classification is the wrong
+    direction — ``cron_descriptor`` is an SDK package the app already has.
+    """
+    lines = []
+    if when := _when(cron, one_time, run_at):
+        lines.append(f"\n**When:** {when}")
+    if title := (title or "").strip():
+        lines.append(f"\n**Title:** {title}")
+    if prompt := (prompt or "").strip():
+        shown = prompt[:PROMPT_PREVIEW_CHARS]
+        if len(prompt) > PROMPT_PREVIEW_CHARS:
+            shown += "\n..."
+        lines.append(f"\n**It will be told:**\n```\n{shown}\n```")
+    return "".join(lines)
+
+
+def _when(cron, one_time, run_at) -> str:
+    """A schedule in a person's words, falling back to the raw expression."""
+    if run_at:
+        return f"once at {run_at}"
+    cron = (cron or "").strip()
+    if not cron:
+        return ""
+    english = _cron_to_text(cron)
+    if english == cron:
+        # The description fell back to the expression itself — printing it
+        # twice tells the user nothing and reads like a bug.
+        return f"once, at the next `{cron}`" if one_time else f"`{cron}`"
+    if one_time:
+        return f"once, at the next `{cron}` ({english})"
+    return f"{english} (`{cron}`)"
+
+
+def _cron_to_text(cron: str) -> str:
+    """Describe a cron expression in English.
+
+    The locale is pinned rather than inherited. Left to itself the library
+    follows the machine's, so a Spanish-locale desktop rendered an English
+    dialog with a Spanish schedule in the middle of it — and the accented
+    output cannot be printed to the REPL's cp1252 console at all.
+
+    Guarded twice over besides: the package may be absent from a minimal
+    install, and it raises on an expression the user is about to be shown
+    *because* it might be wrong. Either way the raw cron is still worth
+    printing.
+    """
+    try:
+        from cron_descriptor import ExpressionDescriptor
+
+        text = ExpressionDescriptor(cron, locale_code="en_US").get_description()
+        return text.encode("ascii", "ignore").decode() or cron
+    except Exception:
+        return cron
 
 
 # ──────────────────────────────────────────────────────────────────────

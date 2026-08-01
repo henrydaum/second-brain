@@ -151,24 +151,22 @@ def format_tool_result(result) -> str:
 
 
 def format_services(services: list[dict], compact: bool = False) -> str:
-    """Format the service list showing name, loaded/unloaded status, and model."""
+    """Format the service list showing name and loaded/unloaded status."""
     if not services:
         return "No services registered."
 
     if compact:
         lines = []
         for s in services:
-            model = f" ({s['model_name']})" if s["model_name"] else ""
             status = "Extension" if s.get("lifecycle") == "extension" else status_badge(s['loaded'])
-            lines.append(f"{s['name']}: {status}{model}")
+            lines.append(f"{s['name']}: {status}")
         return "Services:\n" + "\n".join(lines)
 
     rows = [(
         s["name"],
         "Extension" if s.get("lifecycle") == "extension" else status_badge(s["loaded"]),
-        s["model_name"] or "",
     ) for s in services]
-    return "Services:\n\n" + md_table(["Service", "Status", "Model"], rows)
+    return "Services:\n\n" + md_table(["Service", "Status"], rows)
 
 
 def _task_sections(tasks) -> list[tuple[str, list[dict]]]:

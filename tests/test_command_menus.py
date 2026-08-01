@@ -137,10 +137,8 @@ def test_the_services_picker_carries_the_whole_status_table():
     module = _load("command_services")
 
     prompt = module._select_prompt([
-        {"name": "timekeeper", "loaded": True, "lifecycle": "managed",
-         "model_name": ""},
-        {"name": "compactor", "loaded": False, "lifecycle": "managed",
-         "model_name": ""},
+        {"name": "timekeeper", "loaded": True, "lifecycle": "managed"},
+        {"name": "compactor", "loaded": False, "lifecycle": "managed"},
     ])
 
     assert "timekeeper" in prompt and "compactor" in prompt

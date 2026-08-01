@@ -19,9 +19,8 @@ A root is declared here **only when the kernel itself routes it**. That test
 admits ``parsers/`` and ``llm/`` (kernel registries live in ``parsing/`` and
 ``llm/``) and ``scripts/`` (``script.run``, ``isolation.is_script``,
 ``policy._classify_script``) beside the five plugin families. It excludes
-``skills/``, ``memory/`` and ``bundles/``: those exist because of store
-packages, the kernel names none of them, and the package layer keeps handling
-them on its own. Adding a root here is a claim that core code needs standing
+``memory/`` and ``bundles/``: both exist because of store packages, the kernel
+names neither, and the package layer keeps handling them on its own. Adding a root here is a claim that core code needs standing
 knowledge of it — the same question CLAUDE.md asks before widening the kernel
 boundary.
 
@@ -172,7 +171,7 @@ class Located(NamedTuple):
     """Where a file sits: its tree, the root it is under, and the rest.
 
     ``root`` is None when the path is inside a tree but not inside any declared
-    root — a store-shipped ``skills/`` folder, say. That is a real answer, not a
+    root — a store-shipped ``bundles/`` folder, say. That is a real answer, not a
     failure: the tree is still known, which is all isolation needs.
     """
     tree: Tree

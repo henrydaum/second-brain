@@ -102,9 +102,9 @@ def _roots(sdk):
         families = sdk.plugins.list(source="families") or []
     except sdk.Failed:
         return []
-    # ``skills`` and ``bundles`` come back too; they are store families rather
-    # than tree roots and no tree has a directory for them.
-    return [name for name in families if name not in {"skills", "bundles"}]
+    # ``bundles`` comes back too; it is a store family rather than a tree
+    # root and no tree has a directory for it.
+    return [name for name in families if name != "bundles"]
 
 
 def _section(label, path, listing):

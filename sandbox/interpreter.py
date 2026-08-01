@@ -293,20 +293,35 @@ class Interpreter:
             execution.inbox.put(
                 _cancelled() if execution.cancelled else _shutting_down())
             return
+        # Bracketed in the same accounting a handler is, and for the same
+        # reason: the guest is waiting on us. A dialog may sit for
+        # DIALOG_TIMEOUT (300s) while the default deadline is 30s, so charging
+        # it to the guest killed every unsafe Request a person read carefully —
+        # the tool reported a timeout blaming the plugin for a question the
+        # user had not answered yet.
+        execution.entered()
         try:
             allowed = self._approve(execution.chain, request, decision)
         except Exception:
             logger.exception("approval callback raised")
             allowed = False
+        finally:
+            execution.left()
         if not allowed:
             self._settle(execution, request, decision,
                          Result.refusal(decision.reason,
                                         code=ERROR_APPROVAL_DECLINED))
             return
-        # Shutdown may have begun while the dialog was up. The execution still
-        # has to be answered — an unanswered Request is a thread blocked for
-        # the life of the process — but it does not get to act on a yes given
-        # to a sandbox that is already going away.
+        # Shutdown may have begun while the dialog was up, and so may
+        # cancellation. The execution still has to be answered — an unanswered
+        # Request is a thread blocked for the life of the process — but it does
+        # not get to act on a yes given to a sandbox that is already going
+        # away, nor on one whose caller has already been told it failed. That
+        # second case is the worse of the two: the handler ran, the job was
+        # created, and the model was told otherwise.
+        if execution.cancelled:
+            self._settle(execution, request, decision, _cancelled())
+            return
         if not self._running:
             self._settle(execution, request, decision,
                          _shutting_down())

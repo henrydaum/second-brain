@@ -26,8 +26,6 @@ class BaseService(ABC):
     What the kernel sees of a service.
 
     Class attributes:
-        model_name:
-            Human-readable name shown in frontends and service listings.
         lifecycle:
             "managed" services are user-loadable backends. "extension" services
             are runtime hook carriers that auto-load whenever installed.
@@ -42,7 +40,6 @@ class BaseService(ABC):
             Property indicating whether the service is ready for use.
     """
 
-    model_name: str = ""
     lifecycle: str = MANAGED
 
     # --- Config settings this plugin needs ---
@@ -91,7 +88,7 @@ class BaseService(ABC):
         A service is a box now, and the box owns its own start deadline — two
         timers racing over one load is a worse answer than one.
         """
-        name = self.model_name or self.__class__.__name__
+        name = getattr(self, "name", "") or self.__class__.__name__
         logger.info(f"Loading service: {name}...")
         t0 = time.time()
         try:

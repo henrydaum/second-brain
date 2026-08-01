@@ -10,8 +10,8 @@ The Flet GUI was removed; do not reintroduce.
 
 Second Brain is a **microkernel**: a minimal, reliable core that boots, runs
 the conversation loop + agent turn, persists conversations, and loads/unloads
-plugins. Product capabilities arrive through a **package store** (the
-agentskills.io model: a registry you browse, install, and uninstall from).
+plugins. Product capabilities arrive through a **package store**: a registry
+you browse, install, and uninstall from.
 Do not bake heavy features into the kernel; they belong in packages.
 
 > Goal in priority order: (1) the kernel works **flawlessly and reliably**, then
@@ -43,10 +43,14 @@ the other way, because there the agent means the file it wrote.
 
 **A root is declared only when the kernel itself routes it.** That is the test
 to apply before adding a ninth: it is a claim that core code needs standing
-knowledge of the folder, the same question the kernel boundary asks. `skills/`,
-`memory/` and `bundles/` fail it — all three exist because of store packages,
-the kernel names none of them, and `package_manager` keeps handling them on its
-own.
+knowledge of the folder, the same question the kernel boundary asks.
+`memory/` and `bundles/` fail it — both exist because of store packages, the
+kernel names neither, and `package_manager` keeps handling them on its own.
+`skills/` was a third, and is gone entirely: it was the only store package that
+was a *folder* rather than a file, which cost the package manager ~50 lines of
+bespoke handling — folder-as-package install, SKILL.md frontmatter dependency
+parsing, folder-prefix uninstall — for a concept nothing in the kernel routed.
+Removing the packages removed the plumbing with them.
 
 **There is no top-level `helpers/`.** A helper exists to help a plugin, so it
 lives inside the family it helps (`<tree>/tools/helpers/x.py`) — the one nested
@@ -439,8 +443,8 @@ It is pinned as a **negative** in `test_the_old_prompt_spelling_contributes_
 nothing` rather than simply deleted, because the failure it guarded against is
 silence in either direction: a plugin whose prompt never arrives looks
 entirely healthy, so the rename has to be something the suite states out loud.
-Unmigrated store plugins still spelling it (`service_location`,
-`service_skills`) do not load at all, so they cannot be the silent case.
+Unmigrated store plugins still spelling it (`service_location`) do not load
+at all, so they cannot be the silent case.
 
 ## Hardening applied for kernel reliability
 
@@ -525,7 +529,7 @@ tables into this one.
 
 The ledger is write-optimized filler by volume — read it *targeted*
 (by conversation_id / session_key / origin), never linearly; agent-facing
-guidance lives in the store `sb-troubleshooting` skill, not the kernel
+guidance belongs in a store package, not the kernel
 prompt. Row well-formedness is pinned by `tests/test_ledger.py`.
 Query/inspection UX (`/ledger`) is deliberately a
 future store package, not kernel.

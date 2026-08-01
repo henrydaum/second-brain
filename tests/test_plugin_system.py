@@ -563,12 +563,10 @@ from bundled.frontends.helpers.formatters import format_services
 
 class ManagedService(BaseService):
     """Managed service."""
-    model_name = "Managed"
 
 
 class ExtensionService(BaseService):
     """Extension service."""
-    model_name = "Extension"
     lifecycle = EXTENSION
 
 
@@ -594,9 +592,9 @@ def test_extension_services_autoload_without_config_entry():
 
 def test_format_services_labels_lifecycles():
     text = format_services([
-        {"name": "extension", "loaded": True, "model_name": "Extension", "lifecycle": "extension"},
-        {"name": "managed", "loaded": True, "model_name": "Managed", "lifecycle": "managed"},
-        {"name": "cold", "loaded": False, "model_name": "Cold", "lifecycle": "managed"},
+        {"name": "extension", "loaded": True, "lifecycle": "extension"},
+        {"name": "managed", "loaded": True, "lifecycle": "managed"},
+        {"name": "cold", "loaded": False, "lifecycle": "managed"},
     ])
 
     assert "| extension | Extension |" in text

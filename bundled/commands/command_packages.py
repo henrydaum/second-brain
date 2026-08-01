@@ -27,7 +27,6 @@ _LABELS = {
     "parsers": "Parsers",
     "llm": "LLM backends",
     "scripts": "Scripts",
-    "skills": "Skills",
     "bundles": "Bundles",
 }
 _BLURB = {
@@ -39,7 +38,6 @@ _BLURB = {
     "parsers": "file-type readers",
     "llm": "model providers",
     "scripts": "runnable SDK snippets",
-    "skills": "agent instructions",
     "bundles": "named groups of store files",
 }
 # What a family's members are called in a heading. Only the exceptions: a
@@ -50,7 +48,6 @@ _NOUN = {
     "parsers": "parsers",
     "llm": "LLM backends",
     "scripts": "scripts",
-    "skills": "skills",
 }
 
 
