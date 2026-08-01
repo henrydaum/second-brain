@@ -144,17 +144,29 @@ def test_the_dialog_says_who_asked_in_words():
     request, decision = _egress()
     chain = Chain(root="cron:nightly_index").push("task_index").push("fetch")
     _, body = describe(chain, request, decision)
-    assert "fetch" in body
-    assert "nightly_index schedule" in body
+    assert "Asked by fetch, running on the nightly_index schedule" in body
     assert "cron:" not in body
 
 
-def test_a_session_key_root_names_its_frontend_and_nothing_else():
+def test_unattended_work_is_the_part_worth_naming():
+    """A schedule and a background agent change how the question should be
+    weighed; a session key does not."""
+    request, decision = _egress()
+    _, background = describe(
+        Chain(root="spawn_subagent:47").push("web_search"), request, decision)
+    assert "running in a background agent" in background
+
+
+def test_a_session_key_names_the_plugin_and_stops():
+    """The dialog is delivered *to* the session its root names, so naming the
+    surface tells the reader where they already are - and "for you" restates
+    the fact that they are the one being asked."""
     request, decision = _egress()
     chain = Chain(root="telegram:7912761600:7912761600:0").push("web_search")
     _, body = describe(chain, request, decision)
-    assert "Asked by web_search, for you, in Telegram" in body
+    assert "Asked by web_search" in body
     assert "7912761600" not in body
+    assert "Telegram" not in body
 
 
 def test_a_person_acting_for_themselves_is_not_told_so():

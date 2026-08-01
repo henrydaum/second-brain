@@ -829,10 +829,19 @@ arguments by different code, so it said everything twice: "Run shell commands:
 `git pull`" over "run shell command: git pull (in Z:\…)". `reason` keeps the
 first two readers; `say` is the human half, and it is deliberately empty on
 most branches, because most have nothing to add beyond the arguments the
-action line already renders. The body is now the act, then *who asked* in
-words (`approval.describe_asker` — a session key like
-`telegram:7912761600:7912761600:0` renders as "you, in Telegram"), then `say`
-when there is one. There is no constant title any more.
+action line already renders. The title is the phrase and the body is only
+what the phrase cannot carry — the arguments, then *who asked*
+(`approval.describe_asker`), then `say` when there is one. Both frontends
+print the title above the body, so a body repeating it is the same bug in a
+new place; there is no constant title any more either.
+
+`describe_asker` names the **leaf** and stops. The root is added only when it
+says something the leaf does not — a schedule, a background agent — because
+the dialog is *delivered to* the session the root names, so "you, in Telegram"
+told somebody reading Telegram that they were in Telegram. A session key never
+appears: it is a frontend-built identifier
+(`telegram:7912761600:7912761600:0`) and printing it put a ten-digit number,
+twice, over a question it had nothing to do with.
 
 **Services are resident boxes**, and with frontends they are the half of the
 bridge that lives in `sandbox/residency.py` — a residency is not a call, so

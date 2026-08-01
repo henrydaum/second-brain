@@ -80,51 +80,57 @@ def describe(chain, request, decision) -> tuple:
     return title, "\n\n".join(lines)
 
 
-#: What a chain root means to a person. Roots are kernel-assigned (see
-#: ``bridge._root_for``), so this is a closed set plus one open case: a
-#: session key, which is whatever the frontend named it.
-_ROOT_WORDS = {
-    "user": "",                 # you did it yourself; saying so is noise
-    "user:command": "",         # ditto — the command is already the leaf
-    "agent": "the agent",
-    "kernel": "the kernel",
+#: What a chain root is worth saying out loud. Roots are kernel-assigned (see
+#: ``bridge._root_for``), so this is a closed set plus one open case: a session
+#: key, which is whatever the frontend named it.
+#:
+#: An empty string means *say nothing*, and that is the answer for every root
+#: a person caused — including a session key. The dialog is delivered to the
+#: session the root names (see ``build_approver`` step 4), so "you, in
+#: Telegram" was telling somebody reading Telegram that they were in Telegram,
+#: while "for you" restated the fact that they were being asked at all. What
+#: is worth a clause is the opposite case: work nobody is watching, which is
+#: the only thing here that changes how the question should be weighed.
+_ORIGIN_WORDS = {
+    "user": "",
+    "user:command": "",
+    "agent": "",
+    "kernel": "",
 }
 
 
 def describe_asker(chain) -> str:
     """Who is asking, in words rather than in kernel identifiers.
 
-    The chain root is a *session key* for anything the agent caused, and a
-    session key is built by the frontend that owns it —
-    ``telegram:7912761600:7912761600:0``. Printing it raw put a ten-digit
-    number twice in every Telegram dialog, over a question the number had
-    nothing to do with. The part before the first colon is the frontend, which
-    is the only part of it a person can use.
+    The leaf is the plugin that made the Request, and is almost always the
+    whole answer: "Asked by edit_file" is a sentence a person can act on. The
+    root is added only when it says something the leaf does not — that this
+    was started by a schedule, or by an agent running in the background.
 
-    Returns "" when there is nothing worth saying: a bare ``user`` root with
-    no links is a person approving their own action, and a line telling them
-    so is one more line between them and the decision.
+    The root of an agent-caused chain is a *session key* built by the frontend
+    that owns it (``telegram:7912761600:7912761600:0``), which is why it is
+    never printed raw: a ten-digit number, twice, over a question it had
+    nothing to do with.
     """
     root = str(getattr(chain, "root", "") or "")
     links = tuple(getattr(chain, "links", ()) or ())
     leaf = links[-1] if links else ""
 
-    if root in _ROOT_WORDS:
-        origin = _ROOT_WORDS[root]
+    if root in _ORIGIN_WORDS:
+        origin = _ORIGIN_WORDS[root]
     elif root.startswith("cron:"):
-        origin = f"the {root.split(':', 1)[1]} schedule"
-    elif root.startswith(("service:", "frontend:")):
-        origin = root.split(":", 1)[1]
+        origin = f"running on the {root.split(':', 1)[1]} schedule"
     elif root.startswith("spawn_subagent"):
-        origin = "a background agent"
+        origin = "running in a background agent"
+    elif root.startswith(("service:", "frontend:")):
+        origin = f"running on its own, inside {root.split(':', 1)[1]}"
     elif ":" in root:
-        surface = root.split(":", 1)[0]
-        origin = f"you, in {surface[:1].upper() + surface[1:]}"
+        origin = ""              # a session key: the surface you are reading
     else:
-        origin = root
+        origin = f"started by {root}"
 
     if leaf and origin:
-        return f"{leaf}, for {origin}"
+        return f"{leaf}, {origin}"
     return leaf or origin
 
 
