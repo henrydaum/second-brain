@@ -755,13 +755,13 @@ def _ui_approve(ctx, args: dict) -> Result:
 
     The Request *is* the question. ``ui.approve`` is classified unconditionally
     unsafe (``policy.classify``), so the gate has already run the whole
-    approval pipeline — hooks, the trusted list, attendance, the dialog — and
-    a refusal never arrives here at all. There is no second question to ask
-    and nothing left to decide.
+    approval pipeline — hooks, attendance, the dialog — and a refusal never
+    arrives here at all. There is no second question to ask and nothing left
+    to decide.
 
     This used to call ``context.approve_command``, a parallel doorway with its
-    own hook call, its own narrower reading of ``skip_permissions``, and no
-    attendance check. It is gone; this is what replaced it.
+    own hook call, its own reading of the trusted list, and no attendance
+    check. It is gone; this is what replaced it.
     """
     return Result(data=True)
 

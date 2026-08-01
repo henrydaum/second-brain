@@ -1017,8 +1017,8 @@ def classify(request: Request, chain: Chain) -> Decision:
     #
     # It used to be ALWAYS_SAFE, executing a handler that reached a second
     # approval doorway (``context.approve_command``) with its own hook call,
-    # its own reading of ``skip_permissions`` — by tool name rather than by
-    # chain — and no attendance check at all. Routing it here retires that
+    # its own reading of the trusted list, and no attendance check at all.
+    # Routing it here retires that
     # doorway entirely rather than teaching it to agree.
     #
     # The justification becomes the reason, which is exactly the slot it

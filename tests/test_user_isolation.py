@@ -285,23 +285,23 @@ def test_agent_switch_persists_active_profile_per_user(tmp_path):
     assert "active_agent_profile" not in rt.config
 
 
-def test_skip_permissions_persist_per_user(tmp_path):
+def test_a_user_scoped_setting_persists_per_user(tmp_path):
     db = Database(str(tmp_path / "skip.db"))
     uid = db.upsert_user("web", "alice")
     rt = plain_runtime(db)
     rt.set_session_user("alice", uid)
     context = SimpleNamespace(
-        config={"skip_permissions": []},
+        config={"startup_restore_conversation": True},
         runtime=rt, session_key="alice", db=db, user_id=uid,
     )
 
     result = _config_write(
         context,
-        {"key": "skip_permissions", "value": ["run_command"]},
+        {"key": "startup_restore_conversation", "value": False},
     )
     assert result.ok
-    assert db.get_user_config(uid)["skip_permissions"] == ["run_command"]
-    assert "skip_permissions" not in rt.config
+    assert db.get_user_config(uid)["startup_restore_conversation"] is False
+    assert "startup_restore_conversation" not in rt.config
 
 
 def test_open_session_binds_identity_prebound_session(tmp_path):

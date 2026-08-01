@@ -156,7 +156,7 @@ class PermissionQuery:
     Two stages knock at this doorway:
 
     - ``"approval"`` — something sensitive wants to happen; abstaining falls
-      through to the kernel's own approval flow (skip_permissions, then
+      through to the kernel's own approval flow (a dialog, then
       asking the human).
     - ``"unattended_call"`` — it was asked for from a session with no human
       present. Abstaining falls through to the kernel default: refuse. A gate

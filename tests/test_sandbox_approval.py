@@ -1,7 +1,7 @@
 """Approval: the moment the sandbox becomes visible to a person.
 
-The order under test is the whole design — policy hooks, then the user's
-trusted list, then a dialog, then a refusal when nobody is home. Each step
+The order under test is the whole design — policy hooks, then a dialog whose
+options can keep the answer, then a refusal when nobody is home. Each step
 reuses machinery the kernel already has rather than duplicating it.
 """
 
@@ -45,7 +45,7 @@ class FakeRequest:
 class FakeRuntime:
     """Just enough runtime to render a dialog."""
 
-    def __init__(self, *, answer=True, attended=True, trusted=(),
+    def __init__(self, *, answer=True, attended=True,
                  hooks=None, answers=True, cancelled=False):
         self.active_session_key = "repl"
         self.sessions = {"repl": object()}
@@ -53,7 +53,6 @@ class FakeRuntime:
         self.asked = []
         self._answer = answer
         self._attended = attended
-        self._trusted = list(trusted)
         self._answers = answers
         self._cancelled = cancelled
         self.answered = []
@@ -70,10 +69,6 @@ class FakeRuntime:
         confusion these tests exist to pin.
         """
         return self._attended and key == self.active_session_key
-
-    def user_setting(self, key, name):
-        """The user's trusted list."""
-        return self._trusted if name == "skip_permissions" else None
 
     def request_input(self, key, title, prompt, **kwargs):
         """Render the dialog."""
@@ -190,23 +185,6 @@ def test_the_hook_is_told_whether_anyone_is_present():
         request, decision = _egress()
         build_approver(runtime)(Chain().push("t"), request, decision)
         assert gate.queries[0]["stage"] == stage
-
-
-def test_the_trusted_list_short_circuits_the_dialog():
-    """Things the user already decided about are not re-asked."""
-    runtime = FakeRuntime(answer=False, trusted=["summarize"])
-    request, decision = _egress()
-    chain = Chain(root="user").push("summarize")
-    assert build_approver(runtime)(chain, request, decision) is True
-    assert runtime.asked == []
-
-
-def test_trust_is_checked_against_the_whole_chain():
-    """Trusting a tool trusts what it does, including through a service."""
-    runtime = FakeRuntime(answer=False, trusted=["summarize"])
-    request, decision = _egress()
-    chain = Chain(root="user").push("summarize").push("service_web")
-    assert build_approver(runtime)(chain, request, decision) is True
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -8,8 +8,9 @@ never reaches this; a plugin cannot propose an option, and the dialog cannot
 be reached without the policy having already refused the Request.
 
 Every "allow once" used to be thrown away. The only durable grant was
-``skip_permissions``, whose unit is a *plugin name* — trusting ``web_search``
-trusted every host it would ever reach. The lists here are narrower and the
+``skip_permissions``, whose unit was a *plugin name* — trusting ``web_search``
+trusted every host it would ever reach, forever, through any service it
+called. It is gone; these replaced it. The lists here are narrower and the
 person edits them the same way they read them, with ``/config``, which is the
 whole reason these live in config rather than in the database: an approval
 nobody can enumerate is one nobody can withdraw.

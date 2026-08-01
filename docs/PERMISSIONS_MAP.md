@@ -134,10 +134,16 @@ Runs only for UNSAFE. In order, first decisive answer wins:
 | # | Stage | Source of truth | Notes |
 |---|---|---|---|
 | 1 | `vet_permission` hooks | any service | stage is `approval` or `unattended_call` by attendance. **This is where plan mode lives** — it is not a special case, it is this layer working |
-| 2 | `skip_permissions` | user-scoped config list | matched against the **whole chain**, prefix-stripped (`tool_x` → `x`) |
-| 3 | secret ownership | setting registry | a plugin reading the credential it declared |
-| 4 | attendance | `policy.attended_now` | nobody home ⇒ refuse, never block |
-| 5 | dialog | `runtime.request_input` | 300 s; timeout and cancel both mean **no** |
+| 2 | secret ownership | setting registry | a plugin reading the credential it declared |
+| 3 | attendance | `policy.attended_now` | nobody home ⇒ refuse, never block |
+| 4 | dialog | `runtime.request_input` | 300 s; timeout and cancel both mean **no**. Its *options* are where a yes can be kept — `sandbox/options.py` |
+
+There was a step between 1 and 2: **`skip_permissions`**, a user-scoped list of
+plugin names whose dialogs were auto-approved. It was the only durable answer
+the system had, which is why its unit had to be that broad. Once an answer
+could be kept at the grain the question was asked at, a whole-plugin bypass was
+strictly worse than the thing it stood in for, so it was removed rather than
+left as a blunter option.
 
 ## 7. Layer 6 — State-machine approval (commands)
 
@@ -188,7 +194,7 @@ exactly when whatever ran it was. That is the whole rule.
 |---|---|---|
 | Allow once | **exists** — the dialog | — |
 | Deny once | **exists** — the dialog | — |
-| Allow always (per tool/plugin) | **exists** — `skip_permissions`, toggled from `/tools` | already chain-wide |
+| Allow always (per tool/plugin) | **removed** — was `skip_permissions` | superseded by the three destination grants |
 | Allow web domain | **exists** — an answer option, writing `net_allowed_hosts` | — |
 | Allow writable folder | **exists** — an answer option, writing `fs_writable_dirs` | — |
 | Allow command prefix | **exists** — an answer option, writing `shell_allowed_prefixes` | matched as `(program, subcommand)`, never a string prefix |
@@ -204,8 +210,7 @@ exactly when whatever ran it was. That is the whole rule.
 and `/config` is the undo, which is the whole reason they live in config rather
 than the database. What has no home yet is a grant scoped to **time** rather
 than to a destination — per turn, per session — since that needs a store, and
-`skip_permissions` remains the only durable answer whose unit is a *plugin
-name*, the coarsest grain there is.
+Nothing durable is left whose unit is a whole plugin.
 
 Two things follow from what already exists:
 
@@ -217,7 +222,7 @@ Two things follow from what already exists:
   entry rather than an edit.
 - **Modes belong at `vet_permission`**, not as a new layer. Plan mode already
   proves the doorway carries a whole-system policy, and a gate that has an
-  opinion wins over everything below it including `skip_permissions`.
+  opinion wins over everything below it.
 
 ---
 

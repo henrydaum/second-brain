@@ -4,8 +4,8 @@ from guest.bases import BaseCommand
 from guest.forms import FormStep
 
 
-ACTIONS = ["call", "toggle_skip_permissions"]
-ACTION_LABELS = ["Call tool", "Toggle skip permissions"]
+ACTIONS = ["call"]
+ACTION_LABELS = ["Call tool"]
 
 
 class ToolsCommand(BaseCommand):
@@ -16,7 +16,6 @@ class ToolsCommand(BaseCommand):
     category = "Capabilities"
     requests = [
         "tool.list", "tool.call", "config.read", "config.write",
-        "session.get",
     ]
 
     def form(self, sdk, args):
@@ -84,9 +83,6 @@ class ToolsCommand(BaseCommand):
                 **{key: args[key] for key in fields if key in args},
             )
             return sdk.md.tool_result(result)
-        if args.get("action") == "toggle_skip_permissions":
-            skipped = name in (sdk.config.read("skip_permissions") or [])
-            return _toggle_skip(sdk, name, not skipped)
         return f"Unknown action: {args.get('action')}"
 
 
@@ -101,12 +97,7 @@ def _describe(sdk, tool):
         f"{name}{'*' if name in required else ''}"
         for name in (params.get("properties") or {})
     ]
-    skipped = tool["name"] in (
-        sdk.config.read("skip_permissions") or [])
-    pairs = [
-        ("Args", ", ".join(fields) or "(none)"),
-        ("Skip permissions", "enabled" if skipped else "disabled"),
-    ]
+    pairs = [("Args", ", ".join(fields) or "(none)")]
     pairs += [
         (setting["title"], sdk.text.value(setting.get("current")))
         for setting in tool.get("config_settings") or []
@@ -114,32 +105,3 @@ def _describe(sdk, tool):
     card = sdk.md.card(tool["name"], pairs)
     desc = (tool.get("description") or "").strip()
     return f"{card}\n\n{sdk.md.quote(desc)}" if desc else card
-
-
-def _toggle_skip(sdk, tool_name, enabled):
-    """Add or remove a tool from the current user's permission skips."""
-    try:
-        session = sdk.session.get()
-    except sdk.Failed:
-        return "User settings are not available in this context."
-    if not session:
-        return "User settings are not available in this context."
-    names = [
-        str(name)
-        for name in (sdk.config.read("skip_permissions") or [])
-        if str(name)
-    ]
-    if enabled and tool_name not in names:
-        names.append(tool_name)
-    if not enabled:
-        names = [name for name in names if name != tool_name]
-    try:
-        sdk.config.write("skip_permissions", sorted(names))
-    except sdk.Failed as exc:
-        if "user settings are not available" in exc.error.lower():
-            return "User settings are not available in this context."
-        raise
-    return (
-        f"Skip permissions {'enabled' if enabled else 'disabled'} "
-        f"for {tool_name}."
-    )

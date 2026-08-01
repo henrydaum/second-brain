@@ -706,7 +706,8 @@ stack, so plugins can neither read nor misstate it; it is what makes an
 approval dialog answerable, and it doubles as the cycle detector. Approval
 reuses the kernel's existing `vet_permission` doorway (enriched with
 `origin="request"` plus the typed `request`/`chain`/`decision`), then
-`skip_permissions`, then a dialog; unattended sessions refuse rather than block.
+then a dialog whose options can keep the answer (`sandbox/options.py`);
+unattended sessions refuse rather than block.
 
 **The chain only became a stack once it could survive re-entry**
 (`sandbox/provenance.py`). `Chain.push` was called at the outermost run and
@@ -1478,9 +1479,8 @@ kernel admin bypass; frontends and policy plugins decide what it means. Plugins 
 reads/writes those against the current user's `config` blob instead of the global
 config. The remembered `last_active_conversation_id` also lives in the current
 user's config blob, so startup restore is per-user rather than one public/global
-pointer. `active_agent_profile` and `skip_permissions` are user-scoped too:
-profile definitions remain global, but the user's selected profile and trusted
-tool list live with that user. **Conversation ownership is enforced** by `runtime.assert_conversation_access`
+pointer. `active_agent_profile` is user-scoped too: profile definitions
+remain global, but the user's selected profile lives with that user. **Conversation ownership is enforced** by `runtime.assert_conversation_access`
 on every load/mutate-by-id path (`load_history`, `load_conversation`, `open_session`,
 `inject_user_message(..., conversation_id=...)`, `delete_conversation`, `set_conversation_category`,
 `set_conversation_notification_mode`) — listing filters are convenience only;

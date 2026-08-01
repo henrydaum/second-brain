@@ -75,7 +75,7 @@ def test_load_strips_user_config_keys_from_disk(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({
         "last_active_conversation_id": 12,
         "active_agent_profile": "builder",
-        "skip_permissions": ["run_command"],
+        "startup_restore_conversation": False,
     }))
 
     config = config_manager.load(path)
@@ -84,7 +84,7 @@ def test_load_strips_user_config_keys_from_disk(tmp_path):
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert "last_active_conversation_id" not in on_disk
     assert "active_agent_profile" not in on_disk
-    assert "skip_permissions" not in on_disk
+    assert "startup_restore_conversation" not in on_disk
 
 
 def test_load_normalizes_enabled_frontends(tmp_path):
@@ -154,13 +154,13 @@ def test_save_strips_user_config_keys(tmp_path):
     config_manager.save({
         "last_active_conversation_id": 12,
         "active_agent_profile": "builder",
-        "skip_permissions": ["run_command"],
+        "startup_restore_conversation": False,
     }, path)
 
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert "last_active_conversation_id" not in on_disk
     assert "active_agent_profile" not in on_disk
-    assert "skip_permissions" not in on_disk
+    assert "startup_restore_conversation" not in on_disk
 
 
 def test_load_plugin_config_repairs_trailing_data(tmp_path):

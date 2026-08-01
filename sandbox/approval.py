@@ -8,15 +8,19 @@ second permission system beside it:
    policy plugins stand — plan mode refuses everything there, and a trust
    plugin could allow. A gate that has an opinion wins; every gate abstaining
    falls through.
-2. **The user's trusted list.** ``skip_permissions`` is the user-scoped list
-   of things they have already decided about, and it is consulted for the
-   *root* of the chain rather than the leaf, because that is what they
-   actually approved.
-3. **The dialog.** ``runtime.request_input`` renders it, exactly as tool
-   approvals are rendered today.
-4. **Nobody home.** An unattended session refuses rather than blocking, which
+2. **The dialog.** ``runtime.request_input`` renders it, and its options are
+   where a "yes" can be kept — see :mod:`sandbox.options`.
+3. **Nobody home.** An unattended session refuses rather than blocking, which
    is the kernel's own default when every gate abstains at the
    ``unattended_call`` stage.
+
+There was a step between 1 and 2: ``skip_permissions``, a user-scoped list of
+plugin *names* whose dialogs were auto-approved. It was the only durable
+answer the system had, which is why its unit had to be that broad — trusting
+``web_search`` trusted every host it would ever reach, forever, through any
+service it called. Now that an answer can be kept at the grain the question
+was asked at, a whole-plugin bypass is strictly worse than the thing it was
+standing in for, so it is gone rather than left as a blunter option.
 
 The dialog is built from the chain, not the leaf. "service_web wants to make
 an HTTP request" is a question nobody can answer; "the summarize tool you just
@@ -285,46 +289,6 @@ def _grant_rank(kind: str) -> tuple:
     return (1 if writes else 2, 0, kind)
 
 
-# Prefixes a chain link may carry that a trusted name will not. A box is
-# named for its *file* (``service_timekeeper``), and a resident one roots its
-# chain at ``service:<name>``, while ``skip_permissions`` holds what the user
-# was shown — the plugin's own name. Comparing the two raw meant the trusted
-# list silently never matched anything behind a box.
-_LINK_PREFIXES = ("tool_", "task_", "service_", "command_", "frontend_")
-
-
-def _plain(name: str) -> str:
-    """A chain link reduced to the name a user would recognise."""
-    name = str(name or "")
-    if ":" in name:                       # service:timekeeper, cron:nightly
-        name = name.split(":", 1)[1]
-    for prefix in _LINK_PREFIXES:
-        if name.startswith(prefix) and len(name) > len(prefix):
-            return name[len(prefix):]
-    return name
-
-
-def _trusted(runtime, session_key, chain) -> bool:
-    """Whether the user has already decided about the thing that caused this.
-
-    Consulted across the whole chain rather than just its leaf: a user who
-    trusted a tool trusted what that tool does, including through a service it
-    calls.
-    """
-    if runtime is None or not session_key:
-        return False
-    reader = getattr(runtime, "user_setting", None)
-    if reader is None:
-        return False
-    try:
-        trusted = reader(session_key, "skip_permissions") or []
-    except Exception:
-        return False
-    raw = set(chain.links) | {chain.root}
-    names = raw | {_plain(name) for name in raw}
-    return bool(names & set(trusted))
-
-
 def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
     """Build the ``approve`` callable an :class:`Interpreter` takes.
 
@@ -366,15 +330,11 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
             if verdict is not None:
                 return bool(verdict.allow)
 
-        # 2. Things the user already decided about.
-        if _trusted(runtime, key, chain):
-            return True
-
-        # 2b. A plugin asking for its own credential. Configuring a key *for*
-        #     a service is the consent; re-asking on every load would be the
-        #     approval fatigue this whole design is trying to avoid. Another
-        #     plugin asking for that same key still gets a dialog, which is
-        #     the part actually worth a question.
+        # 2. A plugin asking for its own credential. Configuring a key *for*
+        #    a service is the consent; re-asking on every load would be the
+        #    approval fatigue this whole design is trying to avoid. Another
+        #    plugin asking for that same key still gets a dialog, which is
+        #    the part actually worth a question.
         if _owns_secret(chain, request):
             logger.debug("%s revealing its own %s", _leaf(chain),
                          request.args.get("name"))

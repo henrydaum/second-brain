@@ -116,11 +116,6 @@ SETTINGS_DATA = [
      False,
      {"type": "bool"}),
 
-    ("Skip Permissions", "skip_permissions",
-     "Tool names whose permission dialogs are automatically approved unless a permission plugin rejects them.",
-     [],
-     {"type": "json_list", "scope": "user"}),
-
     ("Allowed Network Hosts", "net_allowed_hosts",
      "Hosts sandboxed plugins may reach without asking you first, e.g. "
      "api.search.brave.com. A bare domain also covers its subdomains. "
