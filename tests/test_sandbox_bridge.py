@@ -1226,6 +1226,46 @@ def test_without_a_context_a_service_reads_nothing(tmp_path, box):
         service.unload()
 
 
+def test_a_service_owns_its_setting_no_matter_who_called_it(tmp_path, box,
+                                                            monkeypatch):
+    """Ownership cannot depend on who reached the service.
+
+    The timekeeper writing ``scheduled_jobs`` from its own poll was safe —
+    "timekeeper persists its own scheduled_jobs" — while the identical write,
+    reached through the ``agent.schedule`` handler, was unsafe. A box adopting
+    a caller's chain pushed its own *file stem* (``service_keeper``), and the
+    setting registry knows the *registered name* (``keeper``), so a service
+    called by anybody else became a stranger to its own bookkeeping.
+
+    What the user saw: approving ``schedule_subagent`` raised a second dialog,
+    mid tool call, for the callee's own persistence — and the session froze
+    around it.
+    """
+    from sandbox import provenance
+    from sandbox.policy import Chain
+
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names",
+        lambda key: ["keeper"] if key == "keeper_note" else [])
+    store = {}
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        config=store, db=None, services={}, runtime=None, user_id=1,
+        session_key=session_key))
+
+    service = _keeper(tmp_path, box)
+    assert service.load() is True
+    try:
+        # On its own initiative: the box's own chain, rooted service:keeper.
+        assert service.remember("from its own tick") is True
+        # Reached by somebody else, which is what a kernel handler answering
+        # agent.schedule does. Nothing about the write changed.
+        with provenance.serving(Chain(root="user").push("some_tool")):
+            assert service.remember("through a caller") is True
+    finally:
+        service.unload()
+    assert store["keeper_note"] == "through a caller"
+
+
 def test_a_service_write_outside_its_own_settings_is_refused(tmp_path, box):
     """Reaching the handler is not the same as being allowed to.
 

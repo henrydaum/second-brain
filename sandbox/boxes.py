@@ -120,7 +120,8 @@ class PersistentBox:
                 return self._call(method, args, kwargs, target)
             base_chain = self.execution.chain
             base_context = self.execution.context
-            self.execution.chain = caller.chain.push(self.name)
+            self.execution.chain = caller.chain.push(
+                self._identity(target, base_chain))
             if caller.context is not None:
                 self.execution.context = caller.context
             try:
@@ -130,6 +131,35 @@ class PersistentBox:
                 self.execution.context = base_context
         finally:
             self._lock.release()
+
+    def _identity(self, target: str, own_chain) -> str:
+        """What this box is called inside somebody else's chain.
+
+        A box is named for its *file* (``service_timekeeper``); everything that
+        reasons about plugin identity knows the *registered* name
+        (``timekeeper``) — the service registry, the setting registry, and
+        therefore policy's ownership exemption, which is what lets a resident
+        plugin persist its own declared state without asking.
+
+        Pushing the stem made a service a stranger to its own settings the
+        moment somebody else called it. The timekeeper writing ``scheduled_
+        jobs`` from its own poll was SAFE ("timekeeper persists its own
+        scheduled_jobs"); the same write, reached through ``agent.schedule``,
+        was UNSAFE — so approving *one* dialog raised a second one, mid tool
+        call, for the callee's own bookkeeping.
+
+        The name is never taken from the guest: ``target`` is assigned by the
+        adapter and the root by residency, which is the same reason
+        ``policy._callers`` trusts a resident root. ``target`` first, since it
+        names *which* occupant of a shared box is being called; the root is
+        the answer for the lone occupant, which deliberately sends no target.
+        """
+        if target:
+            return target
+        root = getattr(own_chain, "root", "") or ""
+        if root.startswith(("service:", "frontend:")):
+            return root.split(":", 1)[1] or self.name
+        return self.name
 
     def _acquire(self) -> bool:
         """Take this box's call lock, or give up. Returns whether we have it.

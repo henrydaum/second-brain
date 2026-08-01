@@ -811,9 +811,11 @@ def _callers(chain: Chain) -> set:
 
     Resident roots are assigned by the kernel adapter rather than supplied by
     guest code, so ``frontend:telegram`` is an authenticated identity and
-    belongs in the set. The box link is commonly the source-file stem
-    (``service_timekeeper``), which is why the root is added rather than
-    relied upon alone.
+    belongs in the set. The root is added rather than relied upon alone
+    because a box acting on its own initiative roots its chain at
+    ``service:timekeeper`` while a box adopting a caller's chain appears as a
+    *link* on it — see ``PersistentBox._identity`` for why that link is the
+    registered name and not the file stem it used to be.
     """
     callers = set(chain.links)
     if chain.root.startswith(("service:", "frontend:")):

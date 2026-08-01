@@ -741,6 +741,20 @@ its own `requests` declaration — that re-derivation was the widening
 `Chain.push` exists to prevent. A command's own manifest is read only when the
 command is the root of the call.
 
+**A callee still keeps its own identity, and that is what it is *called* that
+matters** (`PersistentBox._identity`). A box is named for its file, so
+adopting a caller's chain pushed `service_timekeeper`; every registry that
+reasons about plugin identity — services, settings, and therefore policy's
+ownership exemption — knows `timekeeper`. So a resident service became a
+stranger to its own bookkeeping the moment somebody else called it: the
+timekeeper writing `scheduled_jobs` from its own poll was SAFE ("timekeeper
+persists its own scheduled_jobs"), and the identical write reached through
+`agent.schedule` was UNSAFE. Approving one dialog therefore raised a second
+one, mid tool call, for the callee's own persistence — and the session froze
+around it. The pushed link is the registered name now: `target` when a shared
+box says which occupant, the box's own root otherwise. Neither comes from the
+guest, which is the same reason `policy._callers` trusts a resident root.
+
 **A handler answers from a context, and resident boxes had none.** `ctx` is the
 host-side `SecondBrainContext` — it never crosses into the guest; it is what
 *answers*. Tools and commands are handed one per call and frontends when their
