@@ -90,9 +90,24 @@ def _form_step_accepts(step, text: str) -> bool:
 
 
 def _approval_body(text: str, limit: int = 900) -> str:
-    """Internal helper to handle approval body."""
+    """Trim an over-long approval body without losing its ending.
+
+    Head-trimming cut the tail, and the tail is where the body puts what a
+    person most needs: who asked, and why they are being asked. A
+    scheduled-subagent dialog carries a prompt preview long enough to trigger
+    this every time, so the line explaining the dialog was reliably replaced
+    by a note saying something had been trimmed.
+
+    The middle goes instead: the first paragraph is the act and the last two
+    are the context, and what sits between them is argument detail — the part
+    that gets long, and the part a summary survives.
+    """
     text = (text or "").strip()
-    return text if len(text) <= limit else f"{text[:limit].rstrip()}\n\n...preview trimmed for readability."
+    if len(text) <= limit:
+        return text
+    tail = "\n\n".join(text.split("\n\n")[-2:])[:limit // 3]
+    head = text[:max(0, limit - len(tail) - 40)].rstrip()
+    return f"{head}\n\n...trimmed...\n\n{tail}"
 
 
 @dataclass

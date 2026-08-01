@@ -1555,7 +1555,11 @@ class _Markdown:
                 services = task.get("requires_services") or []
                 if services:
                     details.append(f"needs: {services}")
-                details.extend(task.get("schedules") or [])
+                # ``schedule_count`` is what ``task.list`` emits; this read
+                # ``schedules``, which nothing has ever put on the wire, so the
+                # branch contributed nothing for as long as it existed.
+                if scheduled := task.get("schedule_count"):
+                    details.append(f"{scheduled} scheduled job(s)")
                 counts = task["counts"]
                 rows.append((
                     task["name"],

@@ -14,24 +14,17 @@ scope before anything happens. ``/packages install`` shipped with exactly this
 gap, and while it was open it deadlocked the process.
 
 One test rather than one per command, and the consequential set is *derived*
-from the policy rather than restated, so a Request added to ``ALWAYS_UNSAFE``
-tomorrow is covered here without anyone remembering to come back.
+from the policy rather than restated, so a Request added to it tomorrow is
+covered here without anyone remembering to come back. That derivation now
+reads ``policy.CONSEQUENTIAL`` rather than assembling its own from
+``ALWAYS_UNSAFE`` plus three hand-listed branches — which is how ``task.reset``
+slipped past it for as long as it did: unsafe for every argument, but spelled
+as a branch, so a set-membership derivation could not see it.
 """
 
 from plugins.plugin_paths import iter_plugin_dirs
-from sandbox.guest.requests import NET_HTTP, PROC_RUN, SECRET_REVEAL
-from sandbox.policy import ALWAYS_UNSAFE
+from sandbox.policy import CONSEQUENTIAL
 from sandbox.validator import validate_file
-
-# ``ALWAYS_UNSAFE`` plus the three whose branch is about arguments rather than
-# about the caller — running a shell, reaching the network, and handing over a
-# credential are consequential however they are spelled.
-#
-# ``config.write`` is deliberately absent: policy already makes a plugin
-# persisting its *own* declared setting safe, so requiring a gate for it would
-# demand approval declarations from commands that only ever write their own
-# keys.
-CONSEQUENTIAL = ALWAYS_UNSAFE | {PROC_RUN, NET_HTTP, SECRET_REVEAL}
 
 
 def _command_files():

@@ -40,11 +40,24 @@ UNSAFE = "unsafe"
 class Decision:
     """A classification, with the reason that produced it.
 
-    The reason is not decoration: it is what the approval dialog shows the
-    user, and what lands in the ledger row.
+    Two strings, because ``reason`` had three readers with opposite needs: the
+    ledger row (greppable, stable, machine-shaped), the refusal handed back to
+    a *model* (`interpreter._settle`), and the approval dialog shown to a
+    *person*. Written for the first two it read badly to the third — and worse,
+    it duplicated the dialog's own action line, which is built from the same
+    arguments by different code. "Run shell commands: `git pull`" over "run
+    shell command: git pull (in Z:\\...)" is the same sentence twice.
+
+    So ``reason`` keeps the first two readers and no longer reaches the dialog.
+    ``say`` is the human half: the part a person needs that the action line
+    cannot carry — *why this is being asked at all*. It is deliberately absent
+    from most branches, because most branches have nothing to add beyond the
+    arguments the dialog already renders, and a line that restates the question
+    is worse than no line.
     """
     level: str
     reason: str = ""
+    say: str = ""
 
     @property
     def safe(self) -> bool:
@@ -538,6 +551,27 @@ _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
 
+#: What a command must declare a gate for — ``ALWAYS_UNSAFE`` plus the branched
+#: types that never actually answer SAFE.
+#:
+#: Living here rather than in the test that reads it, because it is a statement
+#: about policy and only policy can keep it true. The test derived it as
+#: ``ALWAYS_UNSAFE`` plus three hand-listed branches, which meant a Request
+#: that is unconditionally unsafe but *spelled* as a branch was invisible to
+#: it — precisely the case the derivation existed to catch. ``task.reset`` was
+#: that case: unsafe for every argument, missing from the list, so ``/tasks``
+#: shipped with no gate and its resets took the mid-run path.
+#:
+#: ``proc.run``/``net.http``/``secret.reveal`` do have safe arguments, and are
+#: here anyway: running a shell, reaching the network and handing over a
+#: credential are consequential however they are spelled. ``config.write`` is
+#: deliberately absent, since a plugin persisting its own declared setting is
+#: safe and gating it would demand declarations from commands that only ever
+#: write their own keys.
+CONSEQUENTIAL = ALWAYS_UNSAFE | {
+    PROC_RUN, R.PROC_START, NET_HTTP, R.SECRET_REVEAL, R.TASK_RESET,
+}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Database writes.
@@ -567,7 +601,8 @@ def _classify_db_write(args: dict) -> Decision:
 
     sql = args.get("sql") or ""
     if (table := is_kernel_delete(sql)):
-        return Decision(UNSAFE, f"delete rows from {table}")
+        return Decision(UNSAFE, f"delete rows from {table}",
+                        say="Deleted rows are not recoverable.")
     return Decision(SAFE, "write rows")
 
 
@@ -669,7 +704,10 @@ def _classify_net(args: dict) -> Decision:
     # answer is really about — and because a URL can be long enough to push
     # the decision off the end of a dialog.
     where = f" ({host})" if host else ""
-    return Decision(UNSAFE, f"outbound request to {url}{where}")
+    return Decision(UNSAFE, f"outbound request to {url}{where}",
+                    say=(f"{host} is not on your allowed-hosts list."
+                         if host else "This reaches a host outside your "
+                         "allowed-hosts list."))
 
 
 #: How much of a value the dialog will show before giving up on it. A person
@@ -700,16 +738,33 @@ def describe_setting_change(key: str, value) -> str:
         items = [str(item) for item in shown]
         joined = ", ".join(items)
         if len(joined) > _VALUE_CHARS:
-            joined = f"{len(items)} entries"
+            joined = _entries(len(items))
         return f"set {key} to [{joined}]"
     if isinstance(shown, dict):
-        return f"set {key} ({len(shown)} entries)"
+        # The keys, when they fit. This branch used to collapse to a bare
+        # count *whatever the size*, so a one-key write read "set
+        # scheduled_jobs (1 entries)" - a number standing in for a value that
+        # would have fitted, and ungrammatical besides.
+        joined = ", ".join(str(name) for name in shown)
+        if not joined:
+            return f"set {key} to nothing"
+        if len(joined) > _VALUE_CHARS:
+            joined = _entries(len(shown))
+        return f"set {key} ({joined})"
     if isinstance(shown, bool) or isinstance(shown, (int, float)):
         return f"set {key} to {shown}"
     text = str(shown)
     if len(text) > _VALUE_CHARS:
-        text = text[:_VALUE_CHARS] + "…"
+        # ASCII: this reaches the REPL's cp1252 console, where a unicode
+        # ellipsis raises rather than renders.
+        text = text[:_VALUE_CHARS] + "..."
     return f"set {key} to {text!r}"
+
+
+def _entries(count: int) -> str:
+    """``N entries``, pluralised. A count is a fallback for a value too long
+    to show, and one that cannot count to one reads as a bug."""
+    return f"{count} entry" if count == 1 else f"{count} entries"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -765,7 +820,8 @@ def _classify_script(args: dict) -> Decision:
         # containment story rests entirely on the file living somewhere the
         # kernel subprocesses unconditionally. Anywhere else and the honest
         # answer is that nobody knows what this is.
-        return Decision(UNSAFE, f"{path} is not in a scripts/ directory")
+        return Decision(UNSAFE, f"{path} is not in a scripts/ directory",
+                        say="Only files under scripts/ are contained before they run.")
 
     report = _script_report(path)
     if report is None:
@@ -774,7 +830,8 @@ def _classify_script(args: dict) -> Decision:
         # It would be refused by the loader moments later anyway. Saying so
         # here means the user is not asked to approve something that cannot
         # run, which is the worst possible thing to put in a dialog.
-        return Decision(UNSAFE, f"{Path(path).name} does not pass validation")
+        return Decision(UNSAFE, f"{Path(path).name} does not pass validation",
+                        say="It will not load even if you allow it.")
     if report.unmediated:
         # The one case that is asked about. An installed package importing a
         # foreign library is subprocessed and *not* asked, because somebody
@@ -784,8 +841,10 @@ def _classify_script(args: dict) -> Decision:
         # function. Naming it is most of the value of the dialog.
         libraries = ", ".join(sorted(report.unmediated))
         return Decision(UNSAFE,
-                        f"run {Path(path).name}, which imports {libraries} — "
-                        f"that library's own actions are not mediated")
+                        f"run {Path(path).name}, which imports {libraries} - "
+                        f"that library's own actions are not mediated",
+                        say=f"It imports {libraries}, whose own actions the "
+                            f"kernel cannot see or stop.")
     return Decision(SAFE, f"run the script {Path(path).name} (contained)")
 
 
@@ -896,9 +955,12 @@ def classify(request: Request, chain: Chain) -> Decision:
     # second job it does: it is the call stack, so it is also the cycle
     # detector.
     if chain.depth > MAX_DEPTH:
-        return Decision(UNSAFE, f"call chain deeper than {MAX_DEPTH}")
+        return Decision(UNSAFE, f"call chain deeper than {MAX_DEPTH}",
+                        say="This is nested unusually deep, which is "
+                            "normally a runaway rather than intent.")
     if chain.cyclic:
-        return Decision(UNSAFE, f"call cycle: {chain.render()}")
+        return Decision(UNSAFE, f"call cycle: {chain.render()}",
+                        say="Something here is calling itself.")
     kind = request.type
     args = request.args
 
@@ -937,7 +999,8 @@ def classify(request: Request, chain: Chain) -> Decision:
     if kind in (FS_WRITE, R.FS_WRITE_BYTES):
         if _freely_writable(args.get("path")):
             return Decision(SAFE, _write_reason(args.get("path")))
-        return Decision(UNSAFE, f"write to {args.get('path')}")
+        return Decision(UNSAFE, f"write to {args.get('path')}",
+                        say="That is outside the folders you allow writes in.")
 
     if kind == FS_MOVE:
         # Both ends, because a move is a write to one place and a delete from
@@ -947,13 +1010,16 @@ def classify(request: Request, chain: Chain) -> Decision:
                 and _freely_writable(args.get("dst"))):
             return Decision(SAFE, _write_reason(args.get("dst"), verb="move"))
         return Decision(UNSAFE,
-                        f"move {args.get('src')} to {args.get('dst')}")
+                        f"move {args.get('src')} to {args.get('dst')}",
+                        say="One end is outside the folders you allow writes "
+                            "in.")
 
     if kind == FS_DELETE:
         if _freely_writable(args.get("path")):
             return Decision(SAFE, _write_reason(args.get("path"),
                                                 verb="delete"))
-        return Decision(UNSAFE, f"delete {args.get('path')}")
+        return Decision(UNSAFE, f"delete {args.get('path')}",
+                        say="That is outside the folders you allow writes in.")
 
     if kind == FS_TEMP:
         return Decision(SAFE, "scratch space")
@@ -975,7 +1041,9 @@ def classify(request: Request, chain: Chain) -> Decision:
         if _owns_setting(chain, name):
             owner = sorted(_setting_owners(name) & _callers(chain))[0]
             return Decision(SAFE, f"{owner} reads its own {name}")
-        return Decision(UNSAFE, f"plaintext of {name or 'a secret'}")
+        return Decision(UNSAFE, f"plaintext of {name or 'a secret'}",
+                        say="It is not the plugin this credential was "
+                            "configured for.")
 
     # ── secrets are readable as handles, so reading them is safe ──
     if kind in (CONFIG_READ, ENV_READ):
@@ -1047,8 +1115,10 @@ def classify(request: Request, chain: Chain) -> Decision:
     # The justification becomes the reason, which is exactly the slot it
     # wants: the dialog renders it under "Why it needs asking".
     if kind == R.UI_APPROVE:
-        return Decision(UNSAFE, str(args.get("justification") or "")
-                        or "sandboxed code asks before acting")
+        justification = str(args.get("justification") or "")
+        return Decision(UNSAFE,
+                        justification or "sandboxed code asks before acting",
+                        say=justification)
 
     # ── unattended work gets less benefit of the doubt ────────────
     if kind in (SESSION_ADD_TOOL, SESSION_ADD_PROMPT, AGENT_SCHEDULE,
@@ -1058,12 +1128,14 @@ def classify(request: Request, chain: Chain) -> Decision:
     if kind == R.TASK_PAUSE:
         if args.get("paused", True):
             return Decision(SAFE, "pausing narrows scheduled work")
-        return Decision(UNSAFE, "unpausing resumes scheduled work")
+        return Decision(UNSAFE, "unpausing resumes scheduled work",
+                        say="It will start picking up work again.")
 
     if kind == R.TASK_RESET:
         return Decision(
             UNSAFE,
             "resetting task state makes pipeline work eligible to run again",
+            say="Everything it has already done becomes work to do again.",
         )
 
     if kind in ALWAYS_UNSAFE:

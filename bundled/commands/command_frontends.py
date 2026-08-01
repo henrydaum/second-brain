@@ -31,13 +31,15 @@ class FrontendsCommand(BaseCommand):
         """Build frontend, action, quicklink, profile-field, and value steps."""
         frontends = _frontends(sdk)
         enabled = set(sdk.config.read("enabled_frontends") or [])
+        # The status table goes in the *prompt*, the way ``/services`` and
+        # ``/schedule`` do it. ``_show`` renders exactly this and was reachable
+        # only from the no-argument path — i.e. never from the menu, because
+        # this step is required.
         steps = [FormStep(
             "frontend_name",
-            "Select a frontend.",
+            _show(sdk, frontends) + "\n\nSelect a frontend.",
             True,
             enum=[frontend["name"] for frontend in frontends],
-            enum_labels=[_frontend_label(enabled, frontend)
-                         for frontend in frontends],
             columns=2,
         )]
         name = args.get("frontend_name")
@@ -106,11 +108,6 @@ class FrontendsCommand(BaseCommand):
 def _frontends(sdk):
     return sdk.plugins.list(
         category="frontends", details=True)
-
-
-def _frontend_label(enabled, frontend):
-    """A name with its state in front of it, as ``/services`` does."""
-    return f"{'●' if frontend['name'] in enabled else '○'} {frontend['name']}"
 
 
 def _actions_for(enabled, name):
@@ -225,7 +222,7 @@ def _show(sdk, frontends):
     rows = [
         (
             frontend["name"],
-            "Enabled" if frontend["name"] in enabled else "Disabled",
+            _status(frontend, enabled),
             _profile_summary(profiles.get(frontend["name"])),
         )
         for frontend in frontends
@@ -241,14 +238,28 @@ def _describe(sdk, name, frontend=None):
     enabled = set(sdk.config.read("enabled_frontends") or [])
     profiles = sdk.config.read("frontend_profiles") or {}
     pairs = [
-        ("Status", "Enabled" if name in enabled else "Disabled"),
+        ("Status", _status(frontend or {"name": name}, enabled)),
         ("Profile", _profile_summary(profiles.get(name))),
     ]
     pairs += [
         (setting["title"], sdk.text.value(setting.get("current")))
         for setting in (frontend or {}).get("config_settings") or []
     ]
-    return sdk.md.card(name, pairs)
+    card = sdk.md.card(name, pairs)
+    description = ((frontend or {}).get("description") or "").strip()
+    return f"{card}\n\n{sdk.md.quote(description)}" if description else card
+
+
+def _status(frontend, enabled):
+    """Enabled, disabled, or enabled-but-not-running.
+
+    The payload has carried ``loaded`` all along and nothing read it, so a
+    frontend that was switched on and then failed to start looked exactly like
+    one that was serving traffic.
+    """
+    if frontend.get("name") not in enabled:
+        return "Disabled"
+    return "Enabled" if frontend.get("loaded", True) else "Enabled (not running)"
 
 
 def _profile_summary(profile):

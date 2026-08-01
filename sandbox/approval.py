@@ -42,18 +42,81 @@ STAGE_UNATTENDED = "unattended_call"
 def describe(chain, request, decision) -> tuple:
     """Build the title and body a person is shown.
 
-    Returns ``(title, body)``. The body leads with what will happen, then
-    where it came from — a chain the user can trace back to something they
-    did, or to the cron job that did it for them.
+    Returns ``(title, body)``. The body leads with what will happen, then who
+    asked, then — only when there is one — the part of the *why* the action
+    line cannot carry.
+
+    It used to print ``decision.reason`` unconditionally under "Why it needs
+    asking", which said the same thing twice: both lines are built from the
+    same arguments by different code, so a shell approval read "Run shell
+    commands: `git pull`" and then "run shell command: git pull (in Z:\\...)".
+    ``Decision.say`` is the half written for a person; see its docstring.
+
+    The title lost its one constant string for the same reason. "Sandboxed
+    code requests approval" was identical for every askable Request type, and
+    both shipped frontends print it above the body — a whole line of screen
+    that never varied and never told anybody anything.
     """
-    title = "Sandboxed code requests approval"
-    action = _action_line(request)
-    body = (
-        f"{action}\n\n"
-        f"**From:** `{chain.render()}`\n"
-        f"**Why it needs asking:** {decision.reason}"
-    )
-    return title, body
+    # The title is the bare phrase, never the action line: the line carries
+    # the arguments, and for a shell Request those are a fenced block. A title
+    # is a label — one line, or the frontend renders a code fence into a
+    # heading.
+    phrase = phrase_for(request.type)
+    title = phrase[:1].upper() + phrase[1:]
+    lines = [_action_line(request)]
+    if asker := describe_asker(chain):
+        lines.append(f"Asked by {asker}")
+    if say := (decision.say or "").strip():
+        lines.append(say)
+    return title, "\n\n".join(lines)
+
+
+#: What a chain root means to a person. Roots are kernel-assigned (see
+#: ``bridge._root_for``), so this is a closed set plus one open case: a
+#: session key, which is whatever the frontend named it.
+_ROOT_WORDS = {
+    "user": "",                 # you did it yourself; saying so is noise
+    "user:command": "",         # ditto — the command is already the leaf
+    "agent": "the agent",
+    "kernel": "the kernel",
+}
+
+
+def describe_asker(chain) -> str:
+    """Who is asking, in words rather than in kernel identifiers.
+
+    The chain root is a *session key* for anything the agent caused, and a
+    session key is built by the frontend that owns it —
+    ``telegram:7912761600:7912761600:0``. Printing it raw put a ten-digit
+    number twice in every Telegram dialog, over a question the number had
+    nothing to do with. The part before the first colon is the frontend, which
+    is the only part of it a person can use.
+
+    Returns "" when there is nothing worth saying: a bare ``user`` root with
+    no links is a person approving their own action, and a line telling them
+    so is one more line between them and the decision.
+    """
+    root = str(getattr(chain, "root", "") or "")
+    links = tuple(getattr(chain, "links", ()) or ())
+    leaf = links[-1] if links else ""
+
+    if root in _ROOT_WORDS:
+        origin = _ROOT_WORDS[root]
+    elif root.startswith("cron:"):
+        origin = f"the {root.split(':', 1)[1]} schedule"
+    elif root.startswith(("service:", "frontend:")):
+        origin = root.split(":", 1)[1]
+    elif root.startswith("spawn_subagent"):
+        origin = "a background agent"
+    elif ":" in root:
+        surface = root.split(":", 1)[0]
+        origin = f"you, in {surface[:1].upper() + surface[1:]}"
+    else:
+        origin = root
+
+    if leaf and origin:
+        return f"{leaf}, for {origin}"
+    return leaf or origin
 
 
 def _action_line(request) -> str:
@@ -117,7 +180,7 @@ def _detail(kind: str, args: dict) -> str:
         # and the body prints it one line down under "Why it needs asking".
         return f"`{args.get('action') or '?'}`"
     if kind == "secret.reveal":
-        return (f"`{args.get('name')}` — sandboxed code will then hold it "
+        return (f"`{args.get('name')}` - sandboxed code will then hold it "
                 f"directly")
     if kind in ("config.read", "config.write"):
         return f"`{args.get('key')}`" if args.get("key") else ""
@@ -271,6 +334,13 @@ GRANT_PHRASES = {
     "command.list": "see what commands exist",
     "service.list": "see what services exist",
     "task.list": "see background work", "task.status": "see background work",
+    "task.graph": "see background work",
+    # The write half of the family, split from the reads for the same reason
+    # ``plugin.*`` and ``cron.*`` were: one phrase for both would either
+    # overstate a listing or understate a reset.
+    "task.reset": "re-run work already done",
+    "task.pause": "pause or resume background work",
+    "task.trigger": "start background work now",
     "conv.list": "list conversations", "conv.read": "read conversations",
     "user.read": "read user accounts", "user.list": "read user accounts",
     "config.read": "read settings",

@@ -165,7 +165,6 @@ class BaseTool:
 
     # --- Agent controls ---
     max_calls: int = 3           # Max times the agent can call this tool per message
-    background_safe: bool = True # When False, refuses to run from a non-active session
 
     # --- Discovery ---
     # When False, the plugin discoverer skips this tool. Use for tools that

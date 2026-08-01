@@ -1056,6 +1056,26 @@ def _user_write(ctx, args: dict) -> Result:
 # Plugins, services, tools, commands.
 # ──────────────────────────────────────────────────────────────────────
 
+def _frontend_description(name: str, adapters: dict) -> str:
+    """One frontend's declared description, running or not.
+
+    A running frontend has an adapter carrying the declaration; a merely
+    installed one has only its class, which discovery can still hand over. The
+    listing shows both, so the description has to come from both.
+    """
+    adapter = adapters.get(name)
+    if adapter is not None:
+        return getattr(adapter, "description", "") or ""
+    try:
+        from plugins.plugin_discovery import discover_frontends
+
+        found = discover_frontends().get(name)
+        return getattr(found, "description", "") or ""
+    except Exception:
+        logger.exception("could not read %s's description", name)
+        return ""
+
+
 def _plugin_list(ctx, args: dict) -> Result:
     """Everything currently registered, by family."""
     source = args.get("source") or "registered"
@@ -1121,6 +1141,10 @@ def _plugin_list(ctx, args: dict) -> Result:
         return Result(data=[
             {
                 "name": name,
+                # A disabled frontend has no adapter, so its description comes
+                # from the class discovery found rather than from a live
+                # object. Both are the same declaration.
+                "description": _frontend_description(name, adapters),
                 "available": name in available,
                 "loaded": name in adapters,
                 "config_settings": [
@@ -1416,6 +1440,7 @@ def _service_list(ctx, args: dict) -> Result:
 
         return Result(data=[{
             "name": name,
+            "description": getattr(service, "description", "") or "",
             "loaded": bool(getattr(service, "loaded", False)),
             "lifecycle": service_lifecycle(service),
             "config_settings": [
@@ -2527,6 +2552,7 @@ def _task_list(ctx, args: dict) -> Result:
     return Result(data=[
         {
             "name": name,
+            "description": getattr(task, "description", "") or "",
             "trigger": getattr(task, "trigger", "path"),
             "counts": dict(counts.get(name) or {}),
             "paused": name in paused,

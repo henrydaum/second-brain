@@ -59,18 +59,17 @@ Tools are called on demand and answer immediately. Tasks run in the background
 over every file that appears. If it processes a corpus, it is a task.
 
 
-BUDGETS AND BACKGROUND SAFETY
------------------------------
+BUDGETS
+-------
   max_calls = 3          how many times the agent may call this per message
-  background_safe = True whether it may run with no human present
 
-Set `background_safe = False` for anything that asks the user something —
-sdk.ui.ask, sdk.ui.approve, anything interactive. The kernel refuses such tools
-from unattended sessions (scheduled subagents, background drivers) rather than
-letting them hang forever waiting for an answer nobody is there to give.
-
-Both are authority-bearing, so both are clamped. Declaring a bigger number is a
+It is authority-bearing, so it is clamped. Declaring a bigger number is a
 request, not a grant.
+
+Nothing here says whether a tool may run unattended, and nothing should: a
+session with nobody in it refuses every unsafe Request anyway, so a tool that
+asks the user something (sdk.ui.ask) fails there on its own. A declaration
+would only be the contained code describing its own containment.
 
 
 The three examples below are three separate tools, shown together for

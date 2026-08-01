@@ -54,11 +54,10 @@ class LlmCommand(BaseCommand):
         names = [*sorted(profiles), "add"]
         steps = [FormStep(
             "model_name",
-            _default_prompt(default),
+            _default_prompt(sdk, registry, profiles, default),
             True,
             enum=names,
-            enum_labels=[_model_label(registry, default, item)
-                         for item in names],
+            enum_labels=[_model_label(default, item) for item in names],
         )]
         if args.get("model_name") == "add":
             backends = _backend_names(registry)
@@ -328,21 +327,42 @@ def _describe(sdk, registry, profiles, default, name):
     ])
 
 
-def _model_label(registry, default, name):
+def _model_label(default, name):
     if name == "add":
         return "Add profile"
-    mark = " (default)" if default == name else ""
-    # A filled circle for an open pool, hollow for a configured but closed
-    # one. The status used to be visible only after picking a profile, so
-    # "which of these is actually running" took one round trip per model.
-    dot = "●" if _profile_row(registry, name).get("loaded") else "○"
-    return f"{dot} {name}{mark}"
+    return f"{name} (default)" if default == name else name
 
 
-def _default_prompt(default):
+def _show(sdk, registry, profiles, default):
+    """Every profile at a glance.
+
+    This command had no listing at all: the picker is required, so ``run``'s
+    no-name branch was unreachable and the only overview was a marker per
+    option. Which profile is loaded, on what backend, with how much context is
+    exactly the comparison a person opens ``/llm`` to make.
+    """
+    if not profiles:
+        return "No LLM profiles are configured."
+    rows = []
+    for name in sorted(profiles):
+        context = int((profiles[name] or {}).get("llm_context_size", 0) or 0)
+        rows.append((
+            f"{name} (default)" if name == default else name,
+            "Loaded" if _profile_row(registry, name).get("loaded")
+            else "Unloaded",
+            _backend_label(
+                registry, (profiles[name] or {}).get("llm_service_class", "")),
+            "reactive" if context == 0 else f"{context:,}",
+        ))
+    return "LLM profiles:\n\n" + sdk.md.table(
+        ["Profile", "Status", "Backend", "Context"], rows,
+        leading_blank=False)
+
+
+def _default_prompt(sdk, registry, profiles, default):
     return (
-        "Select an LLM profile, or add a new one.\n"
-        f"Default: {default or '(none)'}"
+        _show(sdk, registry, profiles, default)
+        + "\n\nSelect an LLM profile, or add a new one."
     )
 
 

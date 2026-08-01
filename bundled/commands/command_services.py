@@ -34,7 +34,6 @@ class ServicesCommand(BaseCommand):
         steps = [FormStep(
             "service_name", _select_prompt(services), True,
             enum=[service["name"] for service in services],
-            enum_labels=[_service_label(service) for service in services],
             columns=2)]
         service = _find(services, args.get("service_name"))
         if service is None:
@@ -45,7 +44,7 @@ class ServicesCommand(BaseCommand):
             steps.append(FormStep(
                 "action",
                 "What do you want to do with this service?\n\n"
-                + _describe(service),
+                + _describe(sdk, service),
                 True,
                 enum=actions,
                 enum_labels=labels,
@@ -71,7 +70,7 @@ class ServicesCommand(BaseCommand):
         if service is None:
             return "Unknown service."
         if not action:
-            return _describe(service)
+            return _describe(sdk, service)
 
         setting = _setting_for_action(service, action)
         if setting is not None:
@@ -163,16 +162,6 @@ def _status(service):
     return "Loaded" if service["loaded"] else "Unloaded"
 
 
-def _service_label(service):
-    """A name with its state in front of it.
-
-    Filled circle for running, hollow for available, dot for an extension —
-    which has no lifecycle to show because the kernel loads it automatically.
-    """
-    mark = {"Loaded": "●", "Unloaded": "○"}.get(_status(service), "·")
-    return f"{mark} {service['name']}"
-
-
 def _select_prompt(services):
     """The picker's prompt, carrying the whole status table."""
     if not services:
@@ -187,13 +176,15 @@ def _show(services):
     return "Services:\n\n" + _md_table(["Service", "Status"], rows)
 
 
-def _describe(service):
+def _describe(sdk, service):
     pairs = [("Status", _status(service))]
     pairs += [
         (setting["title"], _format_value(setting["current"]))
         for setting in service["config_settings"]
     ]
-    return _md_table([service["name"], ""], pairs)
+    card = _md_table([service["name"], ""], pairs)
+    description = (service.get("description") or "").strip()
+    return f"{card}\n\n{sdk.md.quote(description)}" if description else card
 
 
 def _value_type(setting):

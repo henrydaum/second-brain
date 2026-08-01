@@ -610,7 +610,7 @@ def test_the_dialog_says_plainly_what_reveal_means():
                        classify(request, Chain(root="user")))
     assert "plaintext" in body.lower()
     assert "gmail_client_secret" in body
-    assert "user -> service_gmail" in body
+    assert "Asked by service_gmail" in body
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

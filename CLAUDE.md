@@ -813,7 +813,26 @@ every name against the closed Request vocabulary (`_check_requests`) — the
 audit that motivated it found `/setup` declaring `path.get`, which is not a
 Request type and never was. The dialog states the grant rather than the
 command name (`approval.describe_grant`, rendered by the bridge from the same
-declaration) — a scope nobody is shown is not consent.
+declaration) — a scope nobody is shown is not consent. Which commands *must*
+declare a gate is `policy.CONSEQUENTIAL`, read by
+`tests/test_command_approval_declarations.py`. It lives in policy because only
+policy can keep it true: the test used to assemble it from `ALWAYS_UNSAFE`
+plus three hand-listed branches, so `task.reset` — unsafe for every argument
+but *spelled* as a branch — was invisible to a set-membership derivation, and
+`/tasks` shipped with no gate at all.
+
+**And a `Decision` carries two strings, because `reason` had three readers.**
+The ledger wants it stable and greppable, `interpreter._settle` hands it to a
+*model* as the refusal, and the dialog showed it to a *person* — who got the
+worst of the three. Worse, the dialog's action line is built from the same
+arguments by different code, so it said everything twice: "Run shell commands:
+`git pull`" over "run shell command: git pull (in Z:\…)". `reason` keeps the
+first two readers; `say` is the human half, and it is deliberately empty on
+most branches, because most have nothing to add beyond the arguments the
+action line already renders. The body is now the act, then *who asked* in
+words (`approval.describe_asker` — a session key like
+`telegram:7912761600:7912761600:0` renders as "you, in Telegram"), then `say`
+when there is one. There is no constant title any more.
 
 **Services are resident boxes**, and with frontends they are the half of the
 bridge that lives in `sandbox/residency.py` — a residency is not a call, so
@@ -1377,8 +1396,11 @@ the cache stack, surviving restarts via the persistence layer
 The runtime exposes `runtime.active_session_key` / `active_conversation_id`
 so background drivers can identify themselves: anything with a session key
 that doesn't match the active one is, by definition, running unattended.
-The tool registry uses this to refuse `background_safe=False` tools from
-non-active sessions. **Subagents are the kernel capability built on these
+A tool used to be able to declare `background_safe = False` and be refused
+there wholesale; that gate is gone, because an unattended chain already
+refuses every unsafe Request and the declaration was the contained code
+describing its own containment. **Subagents are the kernel capability built
+on these
 primitives** (`runtime/subagents.py`): a `SubagentRegistry` opens a
 `spawn_subagent:<cid>` session, drives `runtime.iterate_agent_turn(...)` on
 its own pool, and hands back a **handle**. There is no `is_subagent` flag in
@@ -1604,7 +1626,8 @@ conversation title on a persistent surface; fed by the
 - **Drive an agent from a task**: call `context.runtime.iterate_agent_turn(...)`
   on a session key. The runtime persists history and markers atomically
   for you. Background drivers should keep their session key distinct from
-  the active one so the registry's `background_safe` gate kicks in.
+  the active one, so their Requests build an unattended chain and nothing
+  unsafe can be approved on their behalf.
 - **Let an agent run a slash command**: use an installed command/tool bridge if
   one is present in the current tool catalog. The kernel should not hardcode
   command-running tools for packages it may not ship.

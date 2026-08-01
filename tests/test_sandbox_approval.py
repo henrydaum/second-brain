@@ -127,15 +127,52 @@ def test_the_dialog_names_the_effect_in_plain_terms():
                            decision)
     assert "POST" in body
     assert "example.invalid" in body
-    assert "approval" in title.lower()
+    # The title names the effect. It used to be one constant string shared by
+    # every askable type, which both frontends printed above a body that then
+    # said the same thing better.
+    assert "network" in title.lower()
 
 
-def test_the_dialog_shows_the_whole_chain():
-    """The reason provenance exists, shown in the only place it matters."""
+def test_the_dialog_says_who_asked_in_words():
+    """The reason provenance exists, shown in the only place it matters.
+
+    Rendered rather than printed: the root of an agent-caused chain is a
+    *session key*, so a Telegram dialog used to lead with
+    ``telegram:7912761600:7912761600:0`` - a ten-digit number, twice, over a
+    question it had nothing to do with.
+    """
     request, decision = _egress()
     chain = Chain(root="cron:nightly_index").push("task_index").push("fetch")
     _, body = describe(chain, request, decision)
-    assert "cron:nightly_index -> task_index -> fetch" in body
+    assert "fetch" in body
+    assert "nightly_index schedule" in body
+    assert "cron:" not in body
+
+
+def test_a_session_key_root_names_its_frontend_and_nothing_else():
+    request, decision = _egress()
+    chain = Chain(root="telegram:7912761600:7912761600:0").push("web_search")
+    _, body = describe(chain, request, decision)
+    assert "Asked by web_search, for you, in Telegram" in body
+    assert "7912761600" not in body
+
+
+def test_a_person_acting_for_themselves_is_not_told_so():
+    """A bare ``user`` root with no links has nothing to attribute, and a
+    line saying so is one more line between them and the decision."""
+    request, decision = _egress()
+    _, body = describe(Chain(root="user"), request, decision)
+    assert "Asked by" not in body
+
+
+def test_the_dialog_does_not_say_the_same_thing_twice():
+    """``decision.reason`` is written for the ledger and the model; printing
+    it here restated the action line the dialog had just rendered."""
+    request = Request(R.PROC_RUN, {"argv": ["git", "pull"], "cwd": "/tmp"})
+    decision = classify(request, Chain())
+    _, body = describe(Chain(), request, decision)
+    assert body.count("git pull") == 1
+    assert decision.reason not in body
 
 
 def test_shell_commands_are_shown_as_code():
@@ -512,7 +549,7 @@ def test_a_refused_request_reaches_the_plugin_as_a_denial(script):
     assert result.data == {"denied": True}
     assert len(runtime.asked) == 1
     assert "example.invalid" in runtime.asked[0]["prompt"]
-    assert "user -> reach" in runtime.asked[0]["prompt"]
+    assert "Asked by reach" in runtime.asked[0]["prompt"]
 
 
 def test_safe_requests_never_reach_the_dialog(tmp_path):

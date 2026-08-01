@@ -138,98 +138,28 @@ def test_registry_with_tools_leaves_uncloneable_registries_unchanged():
     assert registry_with_tools(registry, [_Injected()]) is registry
 
 
-class _Interactive(_Lexical):
-    """Interactive."""
-    name = "interactive_tool"
-    description = "Needs a human present."
-    background_safe = False
+def test_a_tool_cannot_declare_itself_unrunnable_in_the_background():
+    """The registry no longer gates on ``background_safe``.
 
-
-def test_unattended_refusal_tells_model_how_to_proceed():
-    """An interactive tool refused in an unattended session should tell the
-    model what to do instead of just that it can't."""
+    Pinned as a negative because the failure would be silent in the dangerous
+    direction: a store tool still carrying the declaration must not quietly
+    keep an authority the kernel stopped honouring, and a reader finding the
+    attribute in an old plugin should find this test rather than guess. What
+    refuses unattended work now is policy — an unattended chain approves
+    nothing unsafe, so ``sdk.ui.ask`` fails there on its own.
+    """
     from types import SimpleNamespace
 
+    class Interactive(_Lexical):
+        """A tool that would once have been refused outright."""
+        name = "interactive_tool"
+        background_safe = False
+
     registry = _registry()
-    registry.register(_Interactive())
+    registry.register(Interactive())
     registry.runtime = SimpleNamespace(is_attended=lambda key: False)
 
-    result = registry.call("interactive_tool", _session_key="spawn_subagent:7", query="x")
-
-    assert not result.success
-    assert "unattended" in result.error
-    assert "finish the turn" in result.error
-
-
-def _unattended_registry():
-    """Registry wired to a runtime with a hook registry and one unattended session."""
-    from types import SimpleNamespace
-
-    from runtime.hooks import HookRegistry
-
-    registry = _registry()
-    registry.register(_Interactive())
-    session = SimpleNamespace(key="spawn_subagent:7")
-    registry.runtime = SimpleNamespace(
-        is_attended=lambda key: False,
-        hooks=HookRegistry(),
-        sessions={"spawn_subagent:7": session},
-    )
-    return registry
-
-
-def test_permission_gate_can_allow_an_unattended_interactive_call():
-    """The background refusal is the kernel DEFAULT at the vet_permission
-    doorway, not a hard rule: a gate answering allow lets the call through."""
-    from runtime.hooks import PermissionVerdict
-
-    registry = _unattended_registry()
-    asked = []
-
-    def gate(ctx, query):
-        asked.append((query.tool_name, query.stage, query.command))
-        return PermissionVerdict(True)
-
-    registry.runtime.hooks.add("vet_permission", gate)
-
-    result = registry.call("interactive_tool", _session_key="spawn_subagent:7", query="x")
+    result = registry.call("interactive_tool",
+                           _session_key="spawn_subagent:7", query="x")
 
     assert result.success
-    assert asked == [("interactive_tool", "unattended_call", "")]
-
-
-def test_permission_gate_can_replace_the_unattended_refusal_reason():
-    from runtime.hooks import PermissionVerdict
-
-    registry = _unattended_registry()
-    registry.runtime.hooks.add(
-        "vet_permission",
-        lambda ctx, query: PermissionVerdict(False, "Interactive tools are off overnight."),
-    )
-
-    result = registry.call("interactive_tool", _session_key="spawn_subagent:7", query="x")
-
-    assert not result.success
-    assert result.error == "Interactive tools are off overnight."
-
-
-def test_abstaining_gates_fall_through_to_the_unattended_refusal():
-    registry = _unattended_registry()
-    registry.runtime.hooks.add("vet_permission", lambda ctx, query: None)
-
-    result = registry.call("interactive_tool", _session_key="spawn_subagent:7", query="x")
-
-    assert not result.success
-    assert "unattended" in result.error
-
-
-def test_attended_sessions_never_consult_the_unattended_stage():
-    registry = _unattended_registry()
-    registry.runtime.is_attended = lambda key: True
-    asked = []
-    registry.runtime.hooks.add("vet_permission", lambda ctx, query: asked.append(query) or None)
-
-    result = registry.call("interactive_tool", _session_key="spawn_subagent:7", query="x")
-
-    assert result.success
-    assert asked == []

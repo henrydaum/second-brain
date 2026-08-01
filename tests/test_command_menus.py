@@ -109,28 +109,31 @@ def test_llm_offers_one_half_of_the_load_toggle_and_hides_a_dead_default():
 # State on the label, so a picker is readable without opening anything.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_a_service_picker_shows_state_without_a_round_trip():
-    """The status table existed and was reachable only from the code path the
-    interactive form never takes."""
-    module = _load("command_services")
+def test_a_picker_option_is_a_name_and_nothing_else():
+    """The state markers are gone from every picker.
 
-    def label(loaded):
-        """Render one managed service's picker label."""
-        return module._service_label(
-            {"name": "x", "loaded": loaded, "lifecycle": "managed"})
+    They encoded status in a glyph the REPL prints into its `(options: ...)`
+    hint, where it is noise a person cannot type - and the same status is now
+    a column in the table each picker carries in its prompt, which both
+    frontends render. Pinned as a negative because the temptation to decorate
+    a label is what put them there the first time.
+    """
+    markers = "●○·⏸"
+    services = _load("command_services")
+    frontends = _load("command_frontends")
+    llm = _load("command_llm")
 
-    assert label(True).startswith("●")
-    assert label(False).startswith("○")
-
-
-def test_a_service_extension_reads_as_neither_loaded_nor_unloaded():
-    """An extension has no lifecycle to offer, so a load marker would lie."""
-    module = _load("command_services")
-
-    label = module._service_label(
-        {"name": "x", "loaded": True, "lifecycle": "extension"})
-
-    assert not label.startswith("●") and not label.startswith("○")
+    labels = [
+        llm._model_label("open", "open"),
+        llm._model_label("open", "shut"),
+        llm._model_label("open", "add"),
+    ]
+    assert not any(mark in label for label in labels for mark in markers)
+    # The words survive; only the glyphs went.
+    assert "(default)" in labels[0]
+    assert not hasattr(services, "_service_label")
+    assert not hasattr(frontends, "_frontend_label")
+    assert not hasattr(_load("command_tasks"), "_task_label")
 
 
 def test_the_services_picker_carries_the_whole_status_table():
@@ -143,19 +146,6 @@ def test_the_services_picker_carries_the_whole_status_table():
 
     assert "timekeeper" in prompt and "compactor" in prompt
     assert "Loaded" in prompt and "Unloaded" in prompt
-
-
-def test_an_llm_picker_marks_the_open_pools():
-    module = _load("command_llm")
-    registry = {"profiles": [
-        {"model_name": "open", "loaded": True},
-        {"model_name": "shut", "loaded": False},
-    ]}
-
-    assert module._model_label(registry, "open", "open").startswith("●")
-    assert module._model_label(registry, "open", "shut").startswith("○")
-    # The default is still called out, as it always was.
-    assert "(default)" in module._model_label(registry, "open", "open")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -278,3 +268,102 @@ def test_ending_the_app_is_not_filed_under_conversation():
     for stem in ("command_quit", "command_restart"):
         source = (_COMMANDS / f"{stem}.py").read_text(encoding="utf-8")
         assert re.search(r'^\s*category = "System"', source, re.M), stem
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tasks: the overview, and the two actions that reach every task.
+# ──────────────────────────────────────────────────────────────────────
+
+class _Md:
+    """The two ``sdk.md`` helpers these renderers use, as the guest sees them."""
+
+    @staticmethod
+    def table(headers, rows, leading_blank=True):
+        body = "\n".join(" | ".join(str(cell) for cell in row) for row in rows)
+        return " | ".join(headers) + "\n" + body
+
+    @staticmethod
+    def quote(text):
+        return "\n".join(f"> {line}" for line in text.splitlines())
+
+
+class _Sdk:
+    md = _Md()
+
+
+def _task(name, **kwargs):
+    task = {"name": name, "trigger": "path", "paused": False, "counts": {}}
+    task.update(kwargs)
+    return task
+
+
+def test_the_tasks_table_shows_every_status_at_a_glance():
+    """The six columns exist so tasks can be *compared* — which is stuck,
+    which is behind, which is paused. The renderer was reachable only from the
+    no-argument path, i.e. never from the menu."""
+    module = _load("command_tasks")
+
+    table = module._show(_Sdk(), [
+        _task("extract", counts={"PENDING": 2, "PROCESSING": 1,
+                                 "DONE": 40, "FAILED": 3}),
+        _task("embed", paused=True),
+    ])
+
+    assert "Task | Status | Pending | Running | Done | Failed" in table
+    assert "extract | Active | 2 | 1 | 40 | 3" in table
+    # A task with no rows reads as zero, not as blank: absent means none.
+    assert "embed | Paused | 0 | 0 | 0 | 0" in table
+
+
+def test_bulk_options_state_their_cost_on_the_option():
+    """"Reset all tasks" is one click from re-running the pipeline over every
+    indexed file, so the number of rows belongs in the thing being chosen."""
+    module = _load("command_tasks")
+    tasks = [
+        _task("extract", counts={"PENDING": 2, "DONE": 40, "FAILED": 3}),
+        _task("index", counts={"FAILED": 5, "DONE": 10}),
+        # Event tasks have no reset at all, so they must not be counted.
+        _task("digest", trigger="event", counts={"FAILED": 99}),
+    ]
+
+    retry, reset = module._bulk_labels(tasks)
+
+    assert "8 rows" in retry            # 3 + 5, and not the event task's 99
+    assert "60 rows" in reset           # 45 + 15
+    assert module._bulk_totals(tasks)[2] == 2
+
+
+def test_a_bulk_reset_skips_event_tasks_and_reports_what_it_did():
+    module = _load("command_tasks")
+    reset = []
+
+    class Tasks:
+        @staticmethod
+        def reset(name, failed_only=False):
+            reset.append((name, failed_only))
+
+    sdk = _Sdk()
+    sdk.tasks = Tasks()
+    tasks = [_task("extract", counts={"DONE": 4}),
+             _task("digest", trigger="event", counts={"DONE": 9})]
+
+    message = module._run_bulk(sdk, tasks, "reset_all")
+
+    assert reset == [("extract", False)]
+    assert "4 row" in message
+
+
+def test_a_bulk_retry_with_nothing_failed_does_nothing():
+    """An empty run must say so rather than reporting a successful no-op."""
+    module = _load("command_tasks")
+
+    class Tasks:
+        @staticmethod
+        def reset(name, failed_only=False):
+            raise AssertionError("nothing had failed")
+
+    sdk = _Sdk()
+    sdk.tasks = Tasks()
+
+    assert "Nothing has failed" in module._run_bulk(
+        sdk, [_task("extract", counts={"DONE": 3})], "retry_all")

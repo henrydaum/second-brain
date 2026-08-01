@@ -151,7 +151,6 @@ class BaseTool(BasePlugin):
     parameters: dict = {}      # JSON schema for the arguments
     dependencies_tools: list = []
     max_calls: int = 3         # per message; clamped
-    background_safe: bool = True   # authority-bearing: clamped, not trusted
     auto_register: bool = True
 
     def run(self, sdk, **kwargs):

@@ -75,7 +75,6 @@ These never produce a dialog. There is no "allow" answer.
 | desk token | `frontend.*` from code that is not that frontend |
 | one-shot token | `llm.proceed` / `llm.delta` outside the call it belongs to |
 | console claim | second frontend claiming `uses_console` |
-| `background_safe=False` | interactive tool from an unattended session (`agent/tool_registry.py`) |
 | caps | `DB_MAX_ROWS` 500, 16 MB message |
 | validator | a plugin importing a kernel module simply does not load |
 
