@@ -606,9 +606,12 @@ def test_the_dialog_says_plainly_what_reveal_means():
     from sandbox.approval import describe
 
     request = Request(R.SECRET_REVEAL, {"name": "gmail_client_secret"})
-    _, body = describe(Chain(root="user").push("service_gmail"), request,
-                       classify(request, Chain(root="user")))
-    assert "plaintext" in body.lower()
+    title, body = describe(Chain(root="user").push("service_gmail"), request,
+                           classify(request, Chain(root="user")))
+    # Title and body are rendered together by every frontend; what matters is
+    # that the pair says it, and that the word survives wherever it lives.
+    assert "plaintext" in f"{title}\n{body}".lower()
+    assert "hold it directly" in body
     assert "gmail_client_secret" in body
     assert "Asked by service_gmail" in body
 

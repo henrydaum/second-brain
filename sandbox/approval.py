@@ -57,13 +57,22 @@ def describe(chain, request, decision) -> tuple:
     both shipped frontends print it above the body — a whole line of screen
     that never varied and never told anybody anything.
     """
-    # The title is the bare phrase, never the action line: the line carries
-    # the arguments, and for a shell Request those are a fenced block. A title
-    # is a label — one line, or the frontend renders a code fence into a
-    # heading.
+    # The title is the bare phrase and the body carries only what the phrase
+    # cannot: the arguments. Both shipped frontends print the title above the
+    # body, so a body that opened with the action line said it twice —
+    #
+    #     Run shell commands
+    #
+    #     Run shell commands
+    #     ```echo ~/Desktop```
+    #
+    # which is the duplication this rewrite existed to remove, reintroduced
+    # the moment the title stopped being one constant string.
     phrase = phrase_for(request.type)
     title = phrase[:1].upper() + phrase[1:]
-    lines = [_action_line(request)]
+    lines = []
+    if detail := _detail(request.type, request.args).strip():
+        lines.append(detail)
     if asker := describe_asker(chain):
         lines.append(f"Asked by {asker}")
     if say := (decision.say or "").strip():

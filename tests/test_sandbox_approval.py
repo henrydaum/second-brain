@@ -165,6 +165,38 @@ def test_a_person_acting_for_themselves_is_not_told_so():
     assert "Asked by" not in body
 
 
+def test_the_title_is_not_repeated_by_the_body():
+    """Both shipped frontends print the title above the body.
+
+    While the title was one constant string that cost nothing; the moment it
+    became the effect's own phrase, a body that opened with the action line
+    said it twice - "Run shell commands" over "Run shell commands: `echo x`".
+    So the title carries the phrase and the body carries only the arguments.
+    """
+    request = Request(R.PROC_RUN, {"argv": ["echo", "hi"]})
+    title, body = describe(Chain(), request, classify(request, Chain()))
+
+    assert title == "Run shell commands"
+    assert title not in body
+    assert "echo hi" in body
+
+
+def test_a_request_with_no_arguments_to_show_has_a_body_or_no_dialog():
+    """Every askable type still renders something a person can answer.
+
+    The body is allowed to be empty of *detail* - some Requests have no
+    argument worth printing - but then the title has to be carrying the whole
+    question on its own, so it must never be the bare dotted type.
+    """
+    from sandbox.approval import phrase_for
+
+    for kind in sorted(R.ALL_TYPES):
+        title, _ = describe(Chain(), Request(kind, {}),
+                            classify(Request(kind, {}), Chain()))
+        assert title
+        assert phrase_for(kind) != kind, f"{kind} has no phrase"
+
+
 def test_the_dialog_does_not_say_the_same_thing_twice():
     """``decision.reason`` is written for the ledger and the model; printing
     it here restated the action line the dialog had just rendered."""
