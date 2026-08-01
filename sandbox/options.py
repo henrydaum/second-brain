@@ -59,7 +59,7 @@ DENY = Option("deny", "Deny", allow=False)
 #
 # ``builder(chain, request, decision) -> list[Option]``. Every builder is asked
 # about every dialog and answers with options it can *make good on*, or
-# nothing. Deliberately the same shape as ``policy._SHELL_RECOGNIZERS``, and
+# nothing. Deliberately the same shape as ``shell._SHELL_RECOGNIZERS``, and
 # for the same three reasons:
 #
 #   1. **Abstain, never assert.** A builder returns options or ``[]``. It has
@@ -176,21 +176,21 @@ NEVER_OFFERED = frozenset({
 def _always_allow_command(chain, request, decision) -> list:
     """Offer to remember every ``(program, subcommand)`` this command runs.
 
-    ``policy.command_prefixes`` decomposes the line with a real lexer and
+    ``shell.command_prefixes`` decomposes the line with a real lexer and
     answers ``[]`` when any segment has no unit it can describe honestly — a
     redirect, a substitution, a shell whose quoting it does not implement. All
     or nothing, because a partial grant leaves the dialog appearing anyway and
     teaches the person that the button does not work.
     """
-    from . import policy
+    from . import shell
     from .guest import requests as R
 
     if request.type not in (R.PROC_RUN, R.PROC_START):
         return []
-    prefixes = policy.command_prefixes(request.args)
+    prefixes = shell.command_prefixes(request.args)
     if not prefixes or any(p.split()[0] in NEVER_OFFERED for p in prefixes):
         return []
-    allowed = policy._allowed_prefixes()
+    allowed = shell._allowed_prefixes()
     missing = [p for p in prefixes if p.casefold() not in allowed]
     if not missing:
         return []

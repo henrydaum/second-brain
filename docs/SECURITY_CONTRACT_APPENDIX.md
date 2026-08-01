@@ -743,7 +743,7 @@ authorization does not live in the code being authorized.
 
 So the whole family is unsafe and the dialog is the control. That is annoying
 rather than wrong, and annoying is the failure mode to prefer. Where it gets
-better is `_SHELL_RECOGNIZERS` in `policy.py`: a recognizer reads the rendered
+better is `_SHELL_RECOGNIZERS` in `sandbox/shell.py`: a recognizer reads the rendered
 command line and returns a reason to allow it, or `None` to abstain. Two kinds
 are expected — *structural* ("every segment of this pipeline is a read-only
 command", the old classifier rebuilt where the policy can see it) and

@@ -183,26 +183,26 @@ def test_a_recognizer_can_only_ever_widen():
     authority only to vouch, so every path it does not recognise falls through
     to the dialog — which is what makes it safe to write at all.
     """
-    from sandbox import policy
+    from sandbox import shell
 
     assert all(recognize(" ", {"argv": ["definitely-not-known"]}) is None
-               for recognize in policy._SHELL_RECOGNIZERS)
+               for recognize in shell._SHELL_RECOGNIZERS)
     assert _run(["definitely-not-known"]).level == UNSAFE
 
 
 def test_a_raising_recognizer_abstains_rather_than_failing_the_gate():
     """Widening only, so failing it closed costs a dialog and nothing else."""
-    from sandbox import policy
+    from sandbox import shell
 
     def boom(shown, args):
         raise RuntimeError("recognizer bug")
 
-    original = policy._SHELL_RECOGNIZERS
+    original = shell._SHELL_RECOGNIZERS
     try:
-        policy._SHELL_RECOGNIZERS = [boom]
+        shell._SHELL_RECOGNIZERS = [boom]
         assert _run(["git", "status"]).level == UNSAFE
     finally:
-        policy._SHELL_RECOGNIZERS = original
+        shell._SHELL_RECOGNIZERS = original
 
 
 # ── the remembered half ───────────────────────────────────────────────
@@ -248,7 +248,7 @@ def test_a_remembered_grant_is_still_structurally_checked():
 
 def test_the_prefix_written_down_is_the_prefix_matched():
     """One vocabulary, or a grant nobody can reason about."""
-    from sandbox.policy import command_prefix
+    from sandbox.shell import command_prefix
 
     assert command_prefix(["git", "push", "--force"]) == "git push"
     assert command_prefix(["GIT.exe", "Push"]) == "git push"
@@ -269,7 +269,7 @@ def test_a_second_word_naming_a_file_reduces_to_the_program():
     and the reduction happens in ``command_prefix``, so a hand-edited config
     entry cannot resurrect the dishonest form either.
     """
-    from sandbox.policy import command_prefix
+    from sandbox.shell import command_prefix
 
     assert command_prefix(["python", "train.py"]) == "python"
     assert command_prefix(["python", "scripts/train.py"]) == "python"
@@ -311,7 +311,7 @@ def test_every_segment_must_be_granted_not_just_the_first(posix):
 
 def test_a_quoted_operator_is_not_a_separator(posix):
     """What the dead classifier's regex got wrong and a real lexer gets right."""
-    from sandbox.policy import _shell_segments
+    from sandbox.shell import _shell_segments
 
     assert _shell_segments({"argv": 'git commit -m "fix && ship"',
                             "shell": "default"}) == [
@@ -319,7 +319,7 @@ def test_a_quoted_operator_is_not_a_separator(posix):
 
 
 def test_the_line_is_split_at_every_operator(posix):
-    from sandbox.policy import _shell_segments
+    from sandbox.shell import _shell_segments
 
     assert _shell_segments({"argv": "a 1 && b 2 || c; d | e",
                             "shell": "default"}) == [
@@ -333,7 +333,7 @@ def test_an_effect_that_lives_in_no_command_name_is_refused(posix):
     license writing a file anywhere, so ``echo x > ~/f`` gets no unit at all.
     The right door for it is ``fs.write``, which asks about the *path*.
     """
-    from sandbox.policy import _shell_segments
+    from sandbox.shell import _shell_segments
 
     for line in ('echo "Test text file." > ~/Desktop/test.txt',
                  "cat < /etc/passwd",
@@ -354,7 +354,7 @@ def test_windows_shells_keep_only_the_inert_path(posix, monkeypatch):
     Mis-lexing a line is the failure that widens, so the shells whose rules
     this does not implement get the inert fast path and nothing more.
     """
-    from sandbox.policy import _shell_segments
+    from sandbox.shell import _shell_segments
 
     assert _shell_segments({"argv": "a && b", "shell": "cmd"}) is None
     assert _shell_segments({"argv": "a && b", "shell": "powershell"}) is None
@@ -368,7 +368,7 @@ def test_a_glob_in_the_program_position_names_nothing_grantable(posix):
     Elsewhere in the line a glob is ordinary argument expansion, and arguments
     are unchecked by design — so this is only about ``argv[0]``.
     """
-    from sandbox.policy import command_prefix, command_prefixes
+    from sandbox.shell import command_prefix, command_prefixes
 
     assert command_prefix(["*", "--help"]) == ""
     assert command_prefix(["~/bin/tool"]) == ""

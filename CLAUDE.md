@@ -1154,8 +1154,11 @@ invisible direction — a wrong "unsafe" gets reported, a wrong "safe" does not
 — and it lived inside the plugin it authorized. So the whole family is
 `UNSAFE` and every command is asked about; the migrated tool contains no
 classifier and must not regrow one. Where it gets less onerous is
-`policy._SHELL_RECOGNIZERS`: a recognizer returns a reason to allow a command
-or `None` to abstain, so it can only ever widen and a bug costs a dialog. Two
+`sandbox/shell.py` — its own module, because working out *what commands a
+line runs* stopped being a branch and became a subject: a lexer, a
+decomposition and two recognizers, with `classify_shell` as the one entry
+point `policy` calls. A recognizer returns a reason to allow a command or
+`None` to abstain, so it can only ever widen and a bug costs a dialog. Two
 ship. `_read_only_command` is the structural one, and it works only because it
 refuses to be complete — the dead classifier tried to decide *every* command,
 which is Rice's theorem, while deciding a few and abstaining on the rest is
@@ -1163,10 +1166,17 @@ trivial. Its unit is `(program, subcommand)`, because `git` is not read-only
 and `git status` is; it abstains on any shell, any metacharacter, and any
 program named by path. `_remembered_prefix` is the other, reading
 `shell_allowed_prefixes` — what a person answered "always" to in an approval
-dialog. Both derive that pair through `policy.command_prefix`, so the grant is
-stored and matched in one vocabulary; a raw string prefix would be unsound,
-since `git push` also prefixes `git push && rm -rf /`.
-`policy.render_command` is the one renderer the dialog and the ledger row
+dialog. Both ask about **coverage**, never safety — *is every segment already
+granted* — which is decidable where safety never was, and both derive their
+unit through `shell.command_prefix`, so a grant is stored and matched in one
+vocabulary. A raw string prefix would be unsound, since `git push` also
+prefixes `git push && rm -rf /`; the line is decomposed with a real lexer
+(`shlex`, POSIX shells only, since `cmd` and PowerShell quote differently)
+that knows the `&&` in `git commit -m "fix && ship"` is inside a quote — the
+thing the dead classifier's regex got wrong. Redirects, substitution and
+subshells are refused outright, because there the effect is not in any command
+name: granting `echo` must not license `echo x > ~/.bashrc`.
+`shell.render_command` is the one renderer the dialog and the ledger row
 share, so what a person approves is what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
 processes already approved at `start`, and stopping narrows — a dev server the
 agent cannot kill without a dialog is one it will not start.
@@ -1628,7 +1638,15 @@ move between built-in, sandbox, and installed trees.
   building the agent system prompt; gates sections by which tools the
   current scope exposes.
 - [sandbox/policy.py](sandbox/policy.py) — `classify()`: the entire
-  authorization surface for sandboxed code, plus `Chain` (provenance).
+  authorization surface for sandboxed code, plus `Chain` (provenance). The
+  eight mechanisms every argument-conditional branch is built from are
+  catalogued in a comment above `classify`.
+- [sandbox/shell.py](sandbox/shell.py) — the one family whose *question* is
+  hard: what commands does this line actually run. Lexer, decomposition, the
+  read-only and remembered recognizers, `render_command`.
+- [sandbox/options.py](sandbox/options.py) — what a person may answer an
+  approval dialog with. `OPTION_BUILDERS` is the seam for a new kind of
+  answer; `remember` is the only sandbox code that writes config.
 - [sandbox/interpreter.py](sandbox/interpreter.py) — the drive loop the whole
   sandbox hangs off: serial gate, parallel execution.
 - [sandbox/facade.py](sandbox/facade.py) — `Sandbox`: the one API.

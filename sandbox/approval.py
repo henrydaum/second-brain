@@ -88,7 +88,7 @@ def _detail(kind: str, args: dict) -> str:
     if kind in ("proc.run", "proc.start"):
         # The same renderer the policy's reason and the ledger row use, so the
         # command a person approves is the command that gets recorded.
-        from .policy import render_command
+        from .shell import render_command
 
         shown = render_command(args)
         return f"\n```\n{shown}\n```" if shown else ""

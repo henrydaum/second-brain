@@ -22,7 +22,8 @@ from sandbox import Chain, Request
 from sandbox.guest import requests as R
 from sandbox.handlers.fs_net import (_proc_list, _proc_run, _proc_start,
                                      _proc_status, _proc_stop)
-from sandbox.policy import classify, render_command
+from sandbox.policy import classify
+from sandbox.shell import render_command
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -95,25 +96,25 @@ def test_a_recognizer_can_widen_and_no_recognizer_can_narrow():
     recognizer that abstains changes nothing, and one that raises abstains
     rather than allowing.
     """
-    from sandbox import policy
+    from sandbox import shell
 
     # Deliberately not a command the shipped recognizer knows, so this tests
     # the seam and not the whitelist.
     request = Request(R.PROC_RUN, {"argv": "sortilege --now"})
-    original = list(policy._SHELL_RECOGNIZERS)
+    original = list(shell._SHELL_RECOGNIZERS)
 
-    policy._SHELL_RECOGNIZERS.append(lambda line, args: None)
-    policy._SHELL_RECOGNIZERS.append(lambda line, args: 1 / 0)
+    shell._SHELL_RECOGNIZERS.append(lambda line, args: None)
+    shell._SHELL_RECOGNIZERS.append(lambda line, args: 1 / 0)
     try:
         assert not classify(request, Chain()).safe
-        policy._SHELL_RECOGNIZERS.append(
+        shell._SHELL_RECOGNIZERS.append(
             lambda line, args: "vouched" if line.startswith("sortilege")
             else None)
         assert classify(request, Chain()).safe
         assert not classify(Request(R.PROC_RUN, {"argv": "rm x"}),
                             Chain()).safe
     finally:
-        policy._SHELL_RECOGNIZERS[:] = original
+        shell._SHELL_RECOGNIZERS[:] = original
 
 
 # ──────────────────────────────────────────────────────────────────────

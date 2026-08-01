@@ -119,9 +119,10 @@ itself, above `classify` — this table is the summary of that comment:
 | 5 | **Polarity** | does this widen or narrow? | `task.pause` (pause safe, unpause unsafe) |
 | 6 | **Attendance** | is a person there? | `ui.ask` |
 | 7 | **Provenance** | is this the command the user just typed? (`chain.typed_command`) | `config.write` |
-| 8 | **Recognizer** | does a pluggable predicate vouch for it? | `proc.run`/`proc.start`, `net.http` |
+| 8 | **Recognizer** | does a pluggable predicate vouch for it? | `proc.run`/`proc.start` (`sandbox/shell.py`), `net.http` |
 
-**`_SHELL_RECOGNIZERS` now holds two** — a structural read-only check and a
+**`shell._SHELL_RECOGNIZERS` now holds two** (`sandbox/shell.py`, split out
+once the shell family grew a lexer of its own) — a structural read-only check and a
 *remembered* one reading `shell_allowed_prefixes`. `_NET_RECOGNIZERS` is still
 empty, because egress is served by its allowlist directly. Both remain the
 designed extension point, and a recognizer can only ever widen.
@@ -247,6 +248,6 @@ doorway. One reader, `runtime.user_setting`, matching the whole chain.
 **No layer records what it decided at the grain it decided it.** Still open,
 and it is the blocker for everything in §9. The ledger records the Request and
 whether it was refused, but a "yes" leaves no trace of *what was approved* —
-the chain, the host, the rendered command. `policy.render_command` already
+the chain, the host, the rendered command. `shell.render_command` already
 exists as the one renderer the dialog, the ledger and a future recognizer
 share. That sharing is the seam to build on.
