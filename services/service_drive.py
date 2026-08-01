@@ -28,11 +28,20 @@ whether authenticating was worth attempting, and a machine with DNS but no
 route to Google passed it and failed anyway. Attempting the thing and reporting
 the failure is both simpler and more accurate. Same call as ``service_embed``.
 
-Credentials, both at the root of DATA_DIR:
-    - ``credentials.json`` — the OAuth client secret from Google Cloud Console.
-      You provide this once; nothing here writes it.
-    - ``token.json`` — the refresh token, written after the first login and
-      refreshed in place.
+Credentials:
+    - ``credentials.json`` at the root of DATA_DIR — the OAuth client secret
+      from Google Cloud Console. You provide this once; nothing here writes it,
+      and reading it needs no approval.
+    - ``token.json`` under ``workspace/drive/`` — the refresh token, written
+      after the first login and refreshed in place.
+
+The token lives in the workspace tree rather than beside the client secret
+because everything under DATA_DIR *except* the workspace is protected by
+policy, and a service loads unattended: an unattended chain is refused rather
+than asked, so writing to the DATA_DIR root was not a dialog nobody answered,
+it was a hard denial and the service could never finish starting. The workspace
+is freely writable, so the write is SAFE at boot and after every refresh. A
+token left at the old path is still read once, then rewritten to the new one.
 """
 
 
@@ -47,6 +56,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 CLIENT_SECRET_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
+TOKEN_DIR = "drive"
 
 
 def _exists(sdk, path) -> bool:
@@ -93,7 +103,9 @@ class GoogleDriveService(BaseService):
 
         data = sdk.paths.get("data")
         secret_path = sdk.path.join(data, CLIENT_SECRET_FILE)
-        token_path = sdk.path.join(data, TOKEN_FILE)
+        token_path = sdk.path.join(sdk.paths.get("workspace"), TOKEN_DIR,
+                                   TOKEN_FILE)
+        legacy_token = sdk.path.join(data, TOKEN_FILE)
 
         if not _exists(sdk, secret_path):
             sdk.log(f"no {CLIENT_SECRET_FILE} at {secret_path}; get one from "
@@ -102,10 +114,12 @@ class GoogleDriveService(BaseService):
             return False
 
         creds = None
-        if _exists(sdk, token_path):
+        stored = (token_path if _exists(sdk, token_path)
+                  else legacy_token if _exists(sdk, legacy_token) else None)
+        if stored:
             try:
                 creds = Credentials.from_authorized_user_info(
-                    json.loads(sdk.fs.read(token_path)), SCOPES)
+                    json.loads(sdk.fs.read(stored)), SCOPES)
             except (ValueError, KeyError) as exc:
                 # A token written by an older scope set, or half-written. Not
                 # an error worth failing on — the flow below replaces it.
@@ -113,6 +127,11 @@ class GoogleDriveService(BaseService):
                         level="debug")
 
         if creds and creds.valid:
+            if stored != token_path:
+                # Valid, but at the old address. Copy it across now rather than
+                # waiting for expiry, so the move happens once instead of
+                # falling back through this branch on every boot.
+                sdk.fs.write(token_path, creds.to_json())
             self._creds = creds
             return True
 
