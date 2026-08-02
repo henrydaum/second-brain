@@ -178,10 +178,19 @@ class ConversationRuntime:
                 # current model or tool call, which for a streaming model that
                 # had started repeating itself meant not immediate at all.
                 self._interrupt_work(session)
+                # Whether, not how many. ``cancel_for`` walks *down* the
+                # lineage and stops descendants too, but counts only the
+                # generation it iterated — ``pending_for`` matches on owner,
+                # and a grandchild's owner is its parent's session key rather
+                # than this one. So the number was only ever right while
+                # ``max_subagent_depth`` is 1 (the default, where a child
+                # cannot spawn at all) and would quietly under-report the
+                # moment anyone raised it. A count nobody can trust at every
+                # setting is worse than no count: this says the true thing at
+                # all of them.
                 return RuntimeResult(messages=[
-                    f"Cancelled ({stopped} background agent"
-                    f"{'' if stopped == 1 else 's'} stopped)."
-                    if stopped else "Cancelled."])
+                    "Cancelled. Subagents stopped." if stopped
+                    else "Cancelled."])
             if action_type in {"answer_approval", "cancel"} and session.cs.phase == PHASE_APPROVING_REQUEST:
                 pass  # fall through and dispatch
             elif action_type == "send_text":
