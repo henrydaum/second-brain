@@ -246,28 +246,58 @@ def test_calling_a_tool_stays_safe():
     assert classify(Request(TOOL_CALL, {"name": "x"}), _chain()).level == SAFE
 
 
-def test_an_approval_gated_command_is_refused_rather_than_dispatched():
-    """The state machine owns that answer; nothing here can supply it.
-
-    Dispatching with ``_approved=True`` from this path would forge exactly the
-    consent the approval mechanism exists to obtain.
-    """
+def test_an_approval_gated_command_receives_the_command_call_approval():
+    """Only a policy-approved command.call reaches the handler."""
     from sandbox.handlers.kernel import _command_call
 
     class Gated:
         require_approval = True
 
+        def requires_approval(self, args):
+            return args.get("action") == "update"
+
     class Registry:
         _commands = {"update": Gated()}
+        calls = []
 
-        def dispatch_dict(self, *a, **k):        # pragma: no cover - refused
-            raise AssertionError("must not dispatch an approval-gated command")
+        def dispatch_dict(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return "done"
 
     class Ctx:
         command_registry = Registry()
         session_key = "s"
 
-    assert _command_call(Ctx(), {"name": "update"}).denied
+    result = _command_call(
+        Ctx(), {"name": "update", "args": {"action": "update"}})
+    assert result.ok and result.data == "done"
+    assert Ctx.command_registry.calls[0][1]["_approved"] is True
+
+
+def test_an_ordinary_command_call_does_not_gain_a_nested_request_grant():
+    """Approval to use the command surface grants only declared gated actions."""
+    from sandbox.handlers.kernel import _command_call
+
+    class Ordinary:
+        require_approval = False
+
+        def requires_approval(self, _args):
+            return False
+
+    class Registry:
+        _commands = {"show": Ordinary()}
+        approved = None
+
+        def dispatch_dict(self, _name, _args, **kwargs):
+            self.approved = kwargs["_approved"]
+            return "shown"
+
+    class Ctx:
+        command_registry = Registry()
+        session_key = "s"
+
+    assert _command_call(Ctx(), {"name": "show"}).data == "shown"
+    assert Ctx.command_registry.approved is False
 
 
 # ── the linter closes the escape sitting next to a rule it enforces ───

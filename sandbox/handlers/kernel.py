@@ -1841,12 +1841,13 @@ def _command_call(ctx, args: dict) -> Result:
     ``CommandRegistry`` has neither — only ``dispatch_dict`` — so the Request
     was unreachable however it was classified.
 
-    And the gate: a command with ``require_approval`` is answered by the state
-    machine, which sets ``_approved`` on the execution it authorized. There is
-    no such answer here, so those commands are refused outright rather than
-    dispatched without one. Never pass ``_approved=True`` from this path — it
-    would forge the approval the whole mechanism exists to obtain. This matches
-    what the native ``slash_command`` tool already does.
+    ``command.call`` is itself unsafe, so a denied or unattended request never
+    reaches this handler. Reaching it therefore carries the user's answer for
+    this exact command and argument payload. When the command declares that
+    those completed arguments require approval, pass that answer into dispatch
+    so its declared nested-Request grant applies. Ordinary commands are *not*
+    marked approved: authorizing use of the command surface is not a skeleton
+    key for a command that declared no gated action.
     """
     registry = getattr(ctx, "command_registry", None)
     runner = getattr(registry, "dispatch_dict", None)
@@ -1858,15 +1859,16 @@ def _command_call(ctx, args: dict) -> Result:
     if command is None:
         return Result.failure(f"unknown command: /{name}",
                               code=ERROR_NOT_FOUND)
-    if getattr(command, "require_approval", False):
-        return Result.refusal(
-            f"/{name} requires the user's approval, which only the state "
-            f"machine can obtain; it is not callable through a Request")
+    command_args = args.get("args") or {}
+    requires = getattr(command, "requires_approval", None)
+    approved = bool(requires(command_args)) if callable(requires) else bool(
+        getattr(command, "require_approval", False))
 
     try:
         return Result(data=runner(
-            name, args.get("args") or {},
+            name, command_args,
             session_key=getattr(ctx, "session_key", None),
+            _approved=approved,
         ))
     except Exception as exc:
         logger.exception("command_call failed")

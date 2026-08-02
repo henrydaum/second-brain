@@ -1123,9 +1123,9 @@ def classify(request: Request, chain: Chain) -> Decision:
     # is not written to be called by other code: it is what the *person* types,
     # and the set includes things like package installation and config editing.
     # Running one on someone's behalf is worth a sentence, and the dialog can
-    # name it exactly. (Commands that carry ``require_approval`` never reach
-    # here at all — the handler refuses them, because the answer they need is
-    # one only the state machine can obtain.)
+    # name it exactly. If the completed arguments also declare a gated action,
+    # reaching the handler carries this exact approval into that command's
+    # scoped nested-Request grant; ordinary commands gain no such authority.
     if kind == R.COMMAND_CALL:
         return Decision(UNSAFE, f"run the command /{args.get('name', '')}")
 

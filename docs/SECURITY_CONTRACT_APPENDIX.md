@@ -441,7 +441,7 @@ keeps it inside its persistent container; callers get simple data back.
 | `tool.list()` / `tool.schema(name)` | Discover callable tools | — | safe |
 | `tool.call(name, args)` | Tool-to-tool composition | target tool | safe — callee's Requests gated with the chain |
 | `command.list()` | Discover slash commands | — | safe |
-| `command.call(name, args)` | One-shot slash command | target command name | unsafe; **refused** if the command needs approval |
+| `command.call(name, args)` | One-shot slash command | target command name and arguments | unsafe; an approved call satisfies the command's own gated action and only its declared Request grant |
 
 `tool.call` is safe and `command.call` is not, which is worth the distinction.
 A tool is narrowed by the agent's scope and written to be called by other code,
