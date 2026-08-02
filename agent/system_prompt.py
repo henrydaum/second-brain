@@ -335,34 +335,27 @@ def _filesystem_access(config: dict | None) -> str:
 
 
 def _agent_memory() -> str:
-    """Memory section: the MEMORY.md index inlined, topics listed by name.
+    """Inline the one memory artifact the kernel owns: ``MEMORY.md``.
 
-    Memory is a folder of per-topic markdown files plus an index
-    (see ``plugins/memory_paths.py``). Only the index is inlined so
-    prompt cost stays flat. How to read/write topics is the installed memory
-    tool's business — its ``agent_prompt`` carries those instructions, keeping
-    plugin guidance out of the kernel.
+    Topic layout, validation and file operations belong to the installed
+    memory tool. The kernel knows only the fixed workspace index path needed
+    to assemble the prompt.
     """
-    from plugins.memory_paths import INDEX_FILENAME, list_topics, memory_root
+    from paths import DATA_DIR
 
-    root = memory_root()
-    index_path = root / INDEX_FILENAME
+    index_path = DATA_DIR / "workspace" / "memory" / "MEMORY.md"
     try:
         index = index_path.read_text(encoding="utf-8").strip() if index_path.exists() else ""
     except OSError:
         index = ""
-    topics = [p.stem for p in list_topics()]
-
     lines = [
         "## Memory",
-        f"Path: {root}",
+        f"Index path: {index_path}",
         "Durable notes that persist across sessions.",
         "",
         "Index (MEMORY.md):",
         index or "(empty)",
     ]
-    if topics:
-        lines += ["", "Topic files: " + ", ".join(topics)]
     return "\n".join(lines)
 
 

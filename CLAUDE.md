@@ -68,8 +68,8 @@ home: promote it to a service, or let the owning family hold it. Do not
 resurrect the root.
 
 `plugins/` is **exclusively substrate** — `native/` (the five adapter base
-classes), discovery, the watcher, `plugin_paths`, `memory_paths`,
-`command_registry`. It is not a tree. That is what lets
+classes), discovery, the watcher, `plugin_paths`, `command_registry`. It is
+not a tree. That is what lets
 `tests/test_kernel_boundary.py` treat any `plugins.*` import as allowed
 instead of maintaining a nine-entry allowlist by hand; what keeps it honest is
 `test_the_plugins_package_holds_no_implementations`, which fails on a
