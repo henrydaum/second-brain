@@ -13,7 +13,8 @@ import pytest
 from sandbox.guest.requests import (COMMAND_CALL, DB_QUERY, DB_WRITE, FS_READ,
                                     FS_READ_BYTES, TOOL_CALL, Request)
 from sandbox.handlers.fs_net import _fs_read, _fs_read_bytes, _fs_search
-from sandbox.handlers.kernel import _db_define, _db_write
+from sandbox.handlers.kernel import (_db_define, _db_write,
+                                     _session_add_attachment)
 from sandbox.policy import SAFE, UNSAFE, Chain, classify
 from sandbox.users import KERNEL_TABLES, ScopeError, scope_write
 from sandbox.validator import validate_file
@@ -207,6 +208,19 @@ def test_reads_elsewhere_are_untouched(tmp_path):
     ordinary = tmp_path / "notes.txt"
     ordinary.write_text("hello", encoding="utf-8")
     assert _fs_read(None, {"path": str(ordinary)}).data == "hello"
+
+
+def test_staging_an_attachment_cannot_reach_a_protected_file():
+    """``session.add_attachment`` is a read, and reads the *kernel* performs.
+
+    The guest names a path and the kernel opens it and puts the contents in
+    front of the model — so a route that skipped the deny-list would read
+    ``config.json`` aloud to a provider, which is precisely the leak the two
+    tests above exist to close. This is the third door onto the same bytes.
+    """
+    result = _session_add_attachment(None, {"path": _config_path()})
+    assert result.denied
+    assert "secret_" in result.error
 
 
 # ── command.call carries the user's authority, so it is asked about ───

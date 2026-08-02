@@ -88,7 +88,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        SCRIPT_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
-                       SERVICE_UNLOAD, SESSION_ADD_PROMPT,
+                       SERVICE_UNLOAD, SESSION_ADD_ATTACHMENT,
+                       SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
                        SESSION_LIST, SESSION_PUSH, SESSION_REMOVE_PROMPT,
                        SESSION_REMOVE_TOOL, SESSION_STATE_GET,
@@ -396,6 +397,21 @@ class _Session(_Namespace):
     def remove_prompt(self, handle, key: str = ""):
         """Withdraw injected prompt text."""
         return self._ask(SESSION_REMOVE_PROMPT, handle=handle, key=key)
+
+    def add_attachment(self, path, key: str = ""):
+        """Stage a file for this session's next model call.
+
+        The kernel opens the path, parses it, and puts it in front of the
+        model — so this is how a tool shows the *model* an image, audio or
+        video file, as against ``sdk.ok(attachments=...)``, which shows a file
+        to the *user*. Different destinations, and this is the one that ends
+        with the model actually looking.
+
+        You do not need to know whether the model can see the modality. If it
+        cannot, the kernel substitutes the file's parsed text, and failing that
+        a line naming where the file is. Staging is always the right call.
+        """
+        return self._ask(SESSION_ADD_ATTACHMENT, path=str(path), key=key)
 
 
 class _UI(_Namespace):

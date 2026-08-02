@@ -455,6 +455,13 @@ ALWAYS_SAFE = {
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
     R.SESSION_STATE_GET, R.SESSION_STATE_SET, R.SESSION_REMOVE_TOOL,
     R.SESSION_REMOVE_PROMPT,
+    # Staging a file for the model to look at is safe for the reason FS_READ
+    # is, and the handler applies the same ``protected.reason_for`` guard. The
+    # guest could already read those bytes and hand them back as an
+    # ``llm_summary``; staging is that path with fewer hops, not new reach. It
+    # sits apart from its ADD_ siblings deliberately — those widen what the
+    # agent may *do*, where this only changes what it can see.
+    R.SESSION_ADD_ATTACHMENT,
     # UI_APPROVE is *not* here. Asking permission is a policy decision, so it
     # is always unsafe and the approver asks it — see the branch below.
     R.UI_RENDER,
@@ -891,7 +898,7 @@ def _owns_setting(chain: Chain, key: str) -> bool:
 # The eight mechanisms.
 # ──────────────────────────────────────────────────────────────────────
 #
-# Of the ~109 Request types, the great majority are a flat lookup: a set
+# Of the ~110 Request types, the great majority are a flat lookup: a set
 # membership in ALWAYS_SAFE or ALWAYS_UNSAFE. Only a handful are decided from
 # their arguments, and every one of those uses one of **eight** mechanisms.
 # They are the working vocabulary of this file, and writing them down is the

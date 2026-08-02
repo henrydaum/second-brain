@@ -998,8 +998,15 @@ class ConversationRuntime:
         return True
 
     def push_message(self, session_key: str, text: str, *, title: str | None = None,
-                     source: str | None = None, source_id: str | None = None) -> None:
-        """Surface a message in a session (typically the foreground one)."""
+                     source: str | None = None, source_id: str | None = None,
+                     attachments: list[str] | None = None) -> None:
+        """Surface a message in a session (typically the foreground one).
+
+        ``attachments`` are local paths the frontend renders alongside the
+        text. This is the only outbound file route for anything that is not a
+        tool: a tool hands files back on its ``ToolResult``, but a task, a
+        command and a service each return something with no room for them.
+        """
         payload = {"message": text, "session_key": session_key}
         if title:
             payload["title"] = title
@@ -1007,6 +1014,8 @@ class ConversationRuntime:
             payload["source"] = source
         if source_id:
             payload["source_id"] = source_id
+        if attachments:
+            payload["attachments"] = [str(p) for p in attachments]
         bus.emit(CHAT_MESSAGE_PUSHED, payload)
 
     def set_agent_profile(self, session_key: str, profile: str) -> bool:
@@ -1040,6 +1049,18 @@ class ConversationRuntime:
     def remove_system_prompt_extra(self, session_key: str, key: str) -> bool:
         """Remove system prompt extra."""
         return self.add_system_prompt_extra(session_key, key, None)
+
+    def add_turn_attachment(self, session_key: str, attachment) -> bool:
+        """Attach media to the next model call in this live session.
+
+        This existed once with no caller and was deleted for it. What it was
+        missing was the ``session.add_attachment`` Request, which is what any
+        plugin authored since the sandbox migration would have to reach it by.
+        """
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        return self.hooks.stage_attachment(session, attachment)
 
     def add_session_tool(self, session_key: str, tool_instance) -> bool:
         """Expose an extra tool instance to one live session."""

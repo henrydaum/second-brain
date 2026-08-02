@@ -427,7 +427,21 @@ sdk.session.state_set(value, namespace="sandbox")
 sdk.session.cancel(key="")
 sdk.session.add_tool(tool) / remove_tool(tool)
 sdk.session.add_prompt(text) / remove_prompt(handle)
+sdk.session.add_attachment(path)     # show the *model* a file
 ```
+
+Two different destinations, and the names are close enough to be worth stating
+apart. `sdk.session.add_attachment(path)` puts a file in front of the **model**
+on its next call — that is how a tool lets the agent actually look at an image.
+`sdk.ok(..., attachments=[path])` shows a file to the **user**. A tool that
+produced a file should return it; a tool that wants the agent to see one stages
+it; `sdk.ui.render(paths)` is the same user-facing move for a task, command or
+service, none of which returns anything with room for a file.
+
+You never need to check whether the model can read the modality. If it cannot,
+the kernel substitutes the file's parsed text, and failing that a line naming
+where the file is — so staging is always the right call, and a capability test
+in your plugin would only get the answer wrong.
 
 ### Other code
 
@@ -574,12 +588,10 @@ never trap the agent: past `DOORMAN_FIRE_LIMIT` interventions in one turn the
 kernel lets it out regardless.
 
 `turn_start` is the mirror image — it runs before the agent begins, and it
-adjusts rather than judges. Note one real limit: **staging an attachment into
-the coming turn is not reachable from inside a box.** No `session.*` Request
-exposes it, and the kernel-side method that used to be pointed at here had no
-callers either, so it went with the rest of the dead surface. A sandboxed
-`turn_start` hook can read and reshape; say so if you need to stage, and it
-becomes a Request with a handler behind it rather than a name in a doc.
+adjusts rather than judges. Staging an attachment into the coming turn is
+`sdk.session.add_attachment(path)`, which is reachable from anywhere in a box
+rather than only from this hook: a tool mid-turn stages onto the *next* model
+call, which is the same queue, drained at every agent action.
 
 The `llm_call` escort holds the phone as well as the request:
 

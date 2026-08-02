@@ -21,10 +21,14 @@ class _CaptureFrontend(BaseFrontend):
     def __init__(self):
         super().__init__()
         self.rendered: list[str] = []
+        self.files: list[str] = []
         self.stream_events: list[dict] = []
 
     def render_messages(self, _key, messages):
         self.rendered.extend(messages)
+
+    def render_attachments(self, _key, paths):
+        self.files.extend(paths)
 
     def render_stream_delta(self, _key, payload):
         self.stream_events.append(payload)
@@ -291,3 +295,54 @@ def test_a_targeted_message_still_reaches_an_unclaimed_session():
     frontend.on_bus_message_pushed({"message": "hello", "session_key": "new"})
 
     assert frontend.rendered == ["hello"]
+
+
+# ────────────────────────────────────────────────────────────────────
+# Pushed attachments — the only outbound file route a non-tool has
+# ────────────────────────────────────────────────────────────────────
+
+def test_a_push_carries_its_files_to_render_attachments():
+    frontend = _CaptureFrontend()
+
+    frontend.on_bus_message_pushed({"session_key": "s", "message": "here it is",
+                                    "attachments": ["/tmp/a.png"]})
+
+    assert frontend.rendered == ["here it is"]
+    assert frontend.files == ["/tmp/a.png"]
+
+
+def test_a_push_of_files_alone_is_not_dropped():
+    """``sdk.ui.render`` with no caption sends files and no words.
+
+    The handler returned early on a falsy ``message``, so the one call whose
+    entire purpose is the files was the one that rendered nothing.
+    """
+    frontend = _CaptureFrontend()
+
+    frontend.on_bus_message_pushed({"session_key": "s",
+                                    "attachments": ["/tmp/a.png"]})
+
+    assert frontend.rendered == []
+    assert frontend.files == ["/tmp/a.png"]
+
+
+def test_an_already_streamed_body_still_delivers_its_files():
+    """Dedup suppresses the text it saw stream past, never the attachments."""
+    frontend = _CaptureFrontend()
+    _stream(frontend, "checking files")
+
+    frontend.on_bus_message_pushed({"session_key": "s",
+                                    "message": "checking files",
+                                    "attachments": ["/tmp/a.png"]})
+
+    # The body already went out as deltas, so the push does not repeat it.
+    assert frontend.rendered == []
+    assert frontend.files == ["/tmp/a.png"]
+
+
+def test_an_empty_push_still_does_nothing():
+    frontend = _CaptureFrontend()
+
+    frontend.on_bus_message_pushed({"session_key": "s"})
+
+    assert frontend.rendered == [] and frontend.files == []

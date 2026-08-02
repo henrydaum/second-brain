@@ -543,6 +543,55 @@ def test_tool_can_stage_attachment_for_followup_llm_call():
     assert [a["file_name"] for a in llm.attachments[1]] == ["photo.png"]
 
 
+def test_the_add_attachment_request_stages_onto_the_live_session(tmp_path):
+    """The Request half of the test above, which had no way to be written.
+
+    Staging was reachable only from in-process native code: the runtime method
+    was deleted for having no callers, and no Request replaced it. A sandboxed
+    tool asking to show the model a file goes handler -> runtime -> hooks ->
+    session, and this drives that whole chain.
+    """
+    from runtime.conversation_runtime import ConversationRuntime
+    from sandbox.handlers.kernel import _session_add_attachment
+
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    runtime = SimpleNamespace(sessions={"chat": SimpleNamespace(key="chat")},
+                              hooks=HookRegistry())
+    runtime.add_turn_attachment = (
+        lambda key, att: ConversationRuntime.add_turn_attachment(runtime, key, att))
+    ctx = SimpleNamespace(runtime=runtime, session_key="chat", config={})
+
+    assert _session_add_attachment(ctx, {"path": str(photo)}).ok
+
+    staged = runtime.sessions["chat"].staged_attachments
+    assert [a.file_name for a in staged] == ["photo.png"]
+    # Resolved with no parser installed, off the registry's native defaults.
+    assert staged[0].modality == "image"
+
+
+def test_staging_into_a_dead_session_fails_rather_than_answering_false(tmp_path):
+    """A caller ignoring the return value must not silently lose the file.
+
+    ``False`` reads to the agent as a model that looked and saw nothing.
+    """
+    from runtime.conversation_runtime import ConversationRuntime
+    from sandbox.handlers.kernel import _session_add_attachment
+
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    runtime = SimpleNamespace(sessions={}, hooks=HookRegistry())
+    runtime.add_turn_attachment = (
+        lambda key, att: ConversationRuntime.add_turn_attachment(runtime, key, att))
+    ctx = SimpleNamespace(runtime=runtime, session_key="gone", config={})
+
+    result = _session_add_attachment(ctx, {"path": str(photo)})
+
+    assert not result.ok and not result.denied
+
+
 def test_compaction_uses_compactor_service_directly():
     class _Compactor:
         loaded = True

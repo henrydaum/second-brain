@@ -807,6 +807,48 @@ def test_crossable_modalities_are_allowed(modality):
     assert calls == ["notes.probe"]
 
 
+def test_ui_render_hands_the_paths_over_rather_than_counting_them():
+    """The one Request named for showing a file could not show one.
+
+    ``_ui_render`` pushed ``f"{len(paths)} file(s)"`` as *text* and dropped the
+    paths, so ``sdk.ui.render(["/x/a.png"])`` put the literal string
+    ``1 file(s)`` on screen and nothing else. It is the only outbound file
+    route a task, a command or a service has — a tool hands files back on its
+    ``ToolResult``, and none of those three returns anything with room for
+    them.
+    """
+    from sandbox.handlers.kernel import _ui_render
+
+    pushed = []
+
+    def push(key, text, **kwargs):
+        pushed.append((key, text, kwargs.get("attachments")))
+
+    ctx = SimpleNamespace(runtime=SimpleNamespace(push_message=push),
+                          session_key="s")
+
+    result = _ui_render(ctx, {"paths": ["/x/a.png", "/x/b.png"],
+                              "caption": "here you go"})
+
+    assert result.ok and result.data == {"rendered": 2}
+    assert pushed == [("s", "here you go", ["/x/a.png", "/x/b.png"])]
+
+
+def test_ui_render_without_a_caption_pushes_no_invented_text():
+    """The caption is the message; there is no message when there is none."""
+    from sandbox.handlers.kernel import _ui_render
+
+    pushed = []
+    ctx = SimpleNamespace(
+        runtime=SimpleNamespace(
+            push_message=lambda key, text, **kw: pushed.append(
+                (text, kw.get("attachments")))),
+        session_key="s")
+
+    assert _ui_render(ctx, {"paths": ["/x/a.png"]}).ok
+    assert pushed == [("", ["/x/a.png"])]
+
+
 def test_a_service_listing_redacts_like_every_other_listing():
     """``/services`` printed a provider's API key in plaintext into the chat.
 

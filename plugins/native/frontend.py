@@ -692,23 +692,34 @@ class BaseFrontend:
 
     def on_bus_message_pushed(self, payload: dict) -> None:
         """Handle on bus message pushed."""
-        message = (payload or {}).get("message")
-        if not message:
+        payload = payload or {}
+        message = payload.get("message")
+        # A push may be files with no words — ``sdk.ui.render`` with no caption
+        # sends exactly that, so an early return on a falsy message would drop
+        # the whole point of the call.
+        paths = [str(p) for p in (payload.get("attachments") or [])]
+        if not message and not paths:
             return
-        title = (payload or {}).get("title")
-        body = f"{title}\n\n{message}" if title else message
-        target = (payload or {}).get("session_key")
+        title = payload.get("title")
+        body = f"{title}\n\n{message}" if title and message else (message or title or "")
+        target = payload.get("session_key")
         keys = [target] if target else self._broadcast_session_keys()
         live = self._live_session_keys()
         for key in keys:
             if key not in live:
                 continue
-            if self._consume_streamed(key, body):
-                continue  # already rendered incrementally as a stream
-            try:
-                self.render_messages(key, [body])
-            except Exception:
-                logger.exception(f"render_messages (push) failed for '{self.name}'")
+            # A body already streamed in incrementally is suppressed; the files
+            # never were, so they still go out.
+            if body and not self._consume_streamed(key, body):
+                try:
+                    self.render_messages(key, [body])
+                except Exception:
+                    logger.exception(f"render_messages (push) failed for '{self.name}'")
+            if paths:
+                try:
+                    self.render_attachments(key, list(paths))
+                except Exception:
+                    logger.exception(f"render_attachments (push) failed for '{self.name}'")
 
     def on_bus_agent_text_delta(self, payload: dict) -> None:
         """Route streamed text deltas to ``render_stream_delta`` with dedup

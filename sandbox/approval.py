@@ -345,6 +345,7 @@ GRANT_PHRASES = {
     "session.add_prompt_extra": "add instructions to the agent's prompt",
     "session.remove_tool": "take a tool away from the agent",
     "session.remove_prompt_extra": "remove instructions from the prompt",
+    "session.add_attachment": "show the agent a file",
     # Machinery. Neither is something a plugin declares, but the table is
     # total so that a new Request cannot quietly render as a dotted name.
     "agent.complete": "finish the agent's turn",

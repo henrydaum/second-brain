@@ -286,7 +286,7 @@ never silently filtered.
 | `session.state_get/set/clear(key, ns)` | Per-session plugin scratch state | namespace | safe |
 | `session.set_attended(key, bool)` | Declare human presence | key | unsafe |
 | `session.cancel(key)` | Cancel the running turn | key | safe |
-| `session.add_attachment(key, path)` | Stage an attachment for the turn | path | safe |
+| `session.add_attachment(path, key)` | Stage a file for the next model call | — (handler applies the read deny-list) | safe |
 | `session.set_profile(key, profile)` | Switch agent profile | profile | unsafe |
 | `session.add_prompt_extra(key, text)` | Inject system prompt text | — | unsafe |
 | `session.remove_prompt_extra(key, id)` | Withdraw injected text | — | safe |
@@ -297,6 +297,13 @@ The asymmetry is intentional and runs through the whole catalogue: **widening
 capability is unsafe, narrowing it is safe.** Adding a tool, injecting prompt
 text, or claiming attendance changes what the agent may do next; the reverse
 never does.
+
+`session.add_attachment` sits in the table looking like a fourth widening and is
+not one: it changes what the agent can *see*, never what it may *do*. Its
+authority is exactly `fs.read`'s — the guest could already read those bytes and
+hand them back as an `llm_summary` — so the handler applies the same
+`protected.reason_for` deny-list, and with that in place staging is the shorter
+route to the same place rather than a new one.
 
 ## 5. User interaction
 

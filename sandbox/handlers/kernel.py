@@ -46,6 +46,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               PLUGIN_UNREGISTER, PLUGIN_UPDATE, PLUGIN_VALIDATE,
                               SERVICE_CALL, SERVICE_LIST,
                               SERVICE_LOAD, SERVICE_UNLOAD,
+                              SESSION_ADD_ATTACHMENT,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
@@ -58,10 +59,11 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
 from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
-                          ERROR_UNAVAILABLE)
+                          ERROR_NOT_PERMITTED, ERROR_UNAVAILABLE)
 from .args import float_arg, int_arg
 from ..credentials import lookup_from, redact, redact_nested, resolve
 from ..events import publish as _publish_event
+from ..protected import reason_for
 from ..users import ScopeError, scope_sql, scope_write
 
 # Two ``except`` paths here already logged and neither could: the name was
@@ -676,6 +678,48 @@ def _session_remove_prompt(ctx, args: dict) -> Result:
     return Result(data=True)
 
 
+def _session_add_attachment(ctx, args: dict) -> Result:
+    """Stage a file for this session's next model call.
+
+    The kernel opens the path rather than the guest, which is what lets an
+    image reach the model at all: the bytes go straight into the prompt and
+    never cross a wire. Read policy is therefore the read policy — the same
+    ``reason_for`` guard ``fs.read`` applies, because a route to the model's
+    context that skipped it would be a way to read ``config.json`` aloud.
+
+    ``parse_attachment`` rather than a hand-built ``Attachment``: it is what
+    fills ``parsed_text``, and that is exactly what the routing falls back to
+    when the model cannot see the modality.
+    """
+    raw = args.get("path")
+    if not raw:
+        return Result.failure("session.add_attachment requires a path",
+                              code=ERROR_INVALID_ARGUMENT)
+    path = Path(str(raw))
+    if (why := reason_for(path)):
+        return Result.refusal(f"{raw} is not readable: {why}",
+                              code=ERROR_NOT_PERMITTED)
+    if not path.is_file():
+        return Result.failure(f"{raw} is not a file", code=ERROR_NOT_FOUND)
+
+    runtime = _runtime(ctx)
+    stage = getattr(runtime, "add_turn_attachment", None)
+    if (bad := _need(stage, "attachment staging")) is not None:
+        return bad
+    from attachments.parse import parse_attachment
+
+    attachment = parse_attachment(str(path), file_name=path.name,
+                                  config=getattr(ctx, "config", None))
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    if not stage(key, attachment):
+        # Answering ``data=False`` would let a caller that ignores the return
+        # value drop the file silently, which reads to the agent as a model
+        # that looked and saw nothing.
+        return Result.failure("no live session to attach to",
+                              code=ERROR_NOT_FOUND)
+    return Result(data=True)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Talking to the user.
 # ──────────────────────────────────────────────────────────────────────
@@ -767,16 +811,20 @@ def _ui_approve(ctx, args: dict) -> Result:
 
 
 def _ui_render(ctx, args: dict) -> Result:
-    """Show files to the user in chat."""
+    """Show files to the user in chat.
+
+    The paths ride on the push rather than being counted into its text. This
+    once said ``f"{len(paths)} file(s)"`` and dropped them, so the one Request
+    named for showing a file was the one thing that could not.
+    """
     runtime = _runtime(ctx)
     push = getattr(runtime, "push_message", None)
     if (bad := _need(push, "rendering to the user")) is not None:
         return bad
-    paths = args.get("paths") or []
+    paths = [str(p) for p in (args.get("paths") or [])]
     caption = args.get("caption") or ""
     try:
-        push(getattr(ctx, "session_key", None),
-             caption or f"{len(paths)} file(s)")
+        push(getattr(ctx, "session_key", None), caption, attachments=paths)
         return Result(data={"rendered": len(paths)})
     except Exception as exc:
         logger.exception("ui_render failed")
@@ -2914,6 +2962,7 @@ HANDLERS = {
     SESSION_REMOVE_TOOL: _session_remove_tool,
     SESSION_ADD_PROMPT: _session_add_prompt,
     SESSION_REMOVE_PROMPT: _session_remove_prompt,
+    SESSION_ADD_ATTACHMENT: _session_add_attachment,
     UI_ASK: _ui_ask, UI_APPROVE: _ui_approve, UI_RENDER: _ui_render,
     CONFIG_READ: _config_read, CONFIG_WRITE: _config_write,
     PATH_GET: _path_get,

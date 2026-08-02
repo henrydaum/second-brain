@@ -106,7 +106,11 @@ Payload:
                                title is empty, may be used as a fallback header
     source:   str (optional) — identifier for the producer; frontends may
                                show this as attribution
-    source_id:str (optional) — producer-specific id"""
+    source_id:str (optional) — producer-specific id
+    attachments: list[str] (optional) — local file paths to render alongside
+                               the text. A push may carry these with no
+                               message at all, which is what ``sdk.ui.render``
+                               with no caption sends."""
 
 AGENT_TEXT_DELTA = "agent_text_delta"
 """A fragment of streamed assistant text (emitted only when the session's
