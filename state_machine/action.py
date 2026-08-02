@@ -280,8 +280,17 @@ class _CallableAction(Action):
         )
         approved = bool(
             needs_approval
-            and supplied_token
-            and supplied_token == expected_token
+            and (
+                (supplied_token and supplied_token == expected_token)
+                # Or the person answered this class of question in advance —
+                # a conversation in YOLO mode. Routed through ``approved``
+                # rather than around ``needs_approval`` on purpose: it lands in
+                # ``_run(approved=True)`` and becomes the same ``chain.approved``
+                # grant a typed "yes" produces, so the command is authorized to
+                # exactly what it declared instead of running ungranted and
+                # meeting the gate again on every Request inside it.
+                or self._pre_approved()
+            )
         )
         raw_arg = "arg" in args
         resumed_call_id = payload.get("_call_id")
@@ -321,6 +330,25 @@ class _CallableAction(Action):
             call_id=resumed_call_id,
             approved=approved,
         )
+
+    def _pre_approved(self) -> bool:
+        """Whether the user has already said yes to what is about to run.
+
+        Only the *loosening* direction is honoured here. A conversation in
+        lockdown deliberately reaches this as False rather than as a refusal:
+        the dialog this skips is about a command the person just typed, with
+        them sitting right there, and auto-refusing it would make lockdown
+        mean "you may not use your own machine" — including, fatally, the
+        ``/mode`` that leaves lockdown. Lockdown is enforced against
+        *sandboxed* work, one layer down, in ``sandbox/approval.py``.
+
+        A raising predicate asks, because the safe direction here is the
+        dialog.
+        """
+        try:
+            return bool(self.cs.auto_approve())
+        except Exception:
+            return False
 
     def _validate(self, spec: CallableSpec, args: dict[str, Any]) -> None:
         """Internal helper to validate collected args against the callable form."""

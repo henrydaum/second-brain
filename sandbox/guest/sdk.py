@@ -92,7 +92,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
                        SESSION_LIST, SESSION_PUSH, SESSION_REMOVE_PROMPT,
-                       SESSION_REMOVE_TOOL, SESSION_STATE_GET,
+                       SESSION_REMOVE_TOOL, SESSION_SET_MODE,
+                       SESSION_STATE_GET,
                        SESSION_STATE_SET, TASK_ENQUEUE, TASK_GRAPH, TASK_LIST,
                        TASK_OUTPUT, TASK_PAUSE, TASK_RESET, TASK_STATUS,
                        TASK_TRIGGER, TOOL_CALL, TOOL_LIST, UI_APPROVE, UI_ASK,
@@ -412,6 +413,21 @@ class _Session(_Namespace):
         a line naming where the file is. Staging is always the right call.
         """
         return self._ask(SESSION_ADD_ATTACHMENT, path=str(path), key=key)
+
+    def set_mode(self, mode: str, key: str = "", scope: str = "conversation"):
+        """Set how this conversation answers approval dialogs.
+
+        ``mode`` is ``"lockdown"`` (refuse anything that would be asked about),
+        ``"ask"`` (the default), or ``"yolo"`` (approve it). ``scope`` is
+        ``"conversation"``, which lasts until the conversation changes, or
+        ``"turn"``, which is dropped when the agent turn ends.
+
+        Tightening to ``"lockdown"`` is safe and never asks. Anything else is
+        a widening, so it raises an approval dialog unless the user typed the
+        command that is doing it — which is also what stops lockdown being a
+        trap, since ``/mode ask`` is that exact case.
+        """
+        return self._ask(SESSION_SET_MODE, mode=mode, key=key, scope=scope)
 
 
 class _UI(_Namespace):

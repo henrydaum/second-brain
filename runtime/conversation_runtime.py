@@ -48,6 +48,7 @@ from events.event_channels import (
     CONVERSATION_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
     SESSION_CLOSED,
+    SESSION_SECURITY_MODE_CHANGED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
 )
 
@@ -55,6 +56,16 @@ from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation import CallableSpec
 from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, FORM_PHASES, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError
+from runtime.security_modes import (
+    CONVERSATION_SCOPE,
+    DEFAULT_SECURITY_MODE,
+    TURN_SCOPE,
+    scope_name,
+)
+# Aliased: the reader below is *also* called ``security_mode``, and while a
+# method never shadows a global inside its own body, two identical names one
+# indent apart is a line nobody should have to think about twice.
+from runtime.security_modes import security_mode as _normalize_mode
 from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
 
 from runtime import runtime_approvals as _approvals
@@ -746,6 +757,74 @@ class ConversationRuntime:
         session = self.sessions.get(session_key)
         if session is not None:
             session.attended = attended
+
+    # ──────────────────────────────────────────────────────────────────
+    # Security mode — "how does this conversation answer approval dialogs?"
+    # The kernel only *reads* it in two places: the sandbox approver
+    # (``sandbox/approval.py``) and the state machine's command grant
+    # (``state_machine/action.py``). The person *owns* the policy, through
+    # ``/mode``; nothing else may loosen it without being asked (see
+    # ``sandbox.policy.classify``). Same division of labour as attendance
+    # above, one axis over: that one asks whether anybody is there, this one
+    # asks what they already said.
+    # ──────────────────────────────────────────────────────────────────
+
+    def security_mode(self, session_key: str) -> str:
+        """The mode in force for ``session_key``.
+
+        Precedence: a turn-scoped override, then the conversation's own mode,
+        then the default. A missing session answers the default, which is the
+        only safe direction — an approver that cannot find the session must
+        ask rather than assume.
+
+        The conversation check is the whole of "per conversation": a mode set
+        against one ``conversation_id`` simply does not apply to another, so
+        loading a different conversation, starting a new one, or being a
+        subagent with a conversation of its own all begin at ``ask`` with
+        nothing having to remember to reset anything.
+        """
+        session = self.sessions.get(session_key)
+        if session is None:
+            return DEFAULT_SECURITY_MODE
+        if session.turn_security_mode:
+            return _normalize_mode(session.turn_security_mode)
+        if session.security_mode is None:
+            return DEFAULT_SECURITY_MODE
+        if session.security_mode_conversation != session.conversation_id:
+            return DEFAULT_SECURITY_MODE
+        return _normalize_mode(session.security_mode)
+
+    def set_security_mode(self, session_key: str, mode: str, *,
+                          scope: str = CONVERSATION_SCOPE) -> str | None:
+        """Set the mode for a conversation or for the rest of the turn.
+
+        Returns the normalized mode that is now in force, or ``None`` when
+        there is no such session. Normalizing here rather than at the call
+        sites means an unknown value degrades to ``ask`` in one place instead
+        of reaching the approver as something it has no answer for.
+        """
+        session = self.sessions.get(session_key)
+        if session is None:
+            return None
+        resolved = _normalize_mode(mode)
+        if scope_name(scope) == TURN_SCOPE:
+            session.turn_security_mode = resolved
+        else:
+            session.security_mode = resolved
+            session.security_mode_conversation = session.conversation_id
+        bus.emit(SESSION_SECURITY_MODE_CHANGED, {
+            "session_key": session_key,
+            "conversation_id": session.conversation_id,
+            "mode": resolved,
+            "scope": scope_name(scope),
+        })
+        return resolved
+
+    def clear_turn_security_mode(self, session_key: str) -> None:
+        """Drop a turn-scoped mode. Called once per logical turn at its end."""
+        session = self.sessions.get(session_key)
+        if session is not None:
+            session.turn_security_mode = None
 
     # ──────────────────────────────────────────────────────────────────
     # User identity — "whose data is this session acting on?" Ephemeral,

@@ -292,11 +292,34 @@ never silently filtered.
 | `session.remove_prompt_extra(key, id)` | Withdraw injected text | — | safe |
 | `session.add_tool(key, name)` | Widen the agent's scope | tool name | unsafe |
 | `session.remove_tool(key, name)` | Narrow the agent's scope | tool name | safe |
+| `session.set_mode(mode, key, scope)` | How this conversation answers approvals | mode, `chain.typed_command` | **safe** for `lockdown` or a typed `/mode`; unsafe otherwise |
 
 The asymmetry is intentional and runs through the whole catalogue: **widening
 capability is unsafe, narrowing it is safe.** Adding a tool, injecting prompt
 text, or claiming attendance changes what the agent may do next; the reverse
 never does.
+
+`session.set_mode` is that rule applied to the approval dialog itself, and it
+is the one entry whose *effect* is on this table rather than in it — the mode
+is what the approver answers with in place of asking, so it decides the
+outcome of every later unsafe Request in the conversation. Two rules keep it
+from being a way around the catalogue:
+
+- **Polarity.** `lockdown` is the tightest of the three values, so arriving
+  there narrows whatever we were in and an agent may do it unasked. Every
+  other value could widen and is asked about — which the agent cannot answer
+  for itself, since a chain nobody is watching is refused before the mode is
+  ever consulted.
+- **Provenance.** A slash command the person typed is its own consent, scoped
+  to the command's own code exactly as `config.write` is. This is not a
+  convenience: the mode is enforced *at* the approver, so the act that leaves
+  lockdown must never reach it, or `/mode ask` would be auto-refused by the
+  thing it exists to lift.
+
+`scope="turn"` sets a mode the kernel drops at the end of the agent turn. It
+is the first grant in the system whose unit is time rather than a destination,
+and it needs no revocation surface for that reason — it is gone before anyone
+could look for it.
 
 `session.add_attachment` sits in the table looking like a fourth widening and is
 not one: it changes what the agent can *see*, never what it may *do*. Its

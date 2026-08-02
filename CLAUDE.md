@@ -132,17 +132,19 @@ future store) — *not* by deleting them. What remains:
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
   wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
   `locations`, `commands`, `tools`, `services`, `tasks`, `packages`,
-  `permissions`, `schedule`, `quit`, `restart`. The last two used to be native
-  `_HostCommand` instances built in the composition root, holding
+  `permissions`, `mode`, `schedule`, `quit`, `restart`. The last two used to be
+  native `_HostCommand` instances built in the composition root, holding
   `shutdown_fn` and the scaffold directly; they are ordinary sandboxed
   commands over the `app.stop` Request now, which is what parity with the
-  other seventeen means.
+  other eighteen means.
   `schedule` is kernel because it manages *any* Timekeeper job and the
   Timekeeper is a kernel service — a store command was the only way to reach
-  two things the kernel already owned. `permissions` is kernel for the same
-  shape of reason: it lists and revokes the three standing-grant settings the
-  policy reads, and a safety surface that stops working when a package is
-  uninstalled is worse than none.
+  two things the kernel already owned. `permissions` and `mode` are kernel for
+  the same shape of reason: one lists and revokes the three standing-grant
+  settings the policy reads, the other sets the standing answer the approver
+  gives, and a safety surface that stops working when a package is uninstalled
+  is worse than none. Between them they are the two commands that answer "what
+  is allowed here" — one scoped to destinations, one to time.
   Profile/MCP/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 
@@ -1373,6 +1375,66 @@ their own I/O; a plugin reading its *own* declared setting is not asked
 (configuring it was the consent), anyone else is. A credential inside a foreign
 library is past the kernel's reach — accepted, documented, would need real OS
 containment to fix.
+
+**The mode is a standing answer to the dialog, not a new layer**
+(`runtime/security_modes.py`, `/mode`). Three values — `lockdown` refuses
+anything that would have raised a dialog, `ask` is the default, `yolo`
+approves it — read at the one point in `build_approver` where the dialog would
+otherwise be drawn. Its **position in that order is the whole of its scope**,
+and both neighbours were chosen rather than fallen into. It sits *after*
+attendance, so `yolo` never reaches work nobody is watching — a cron tick, a
+service poll, a subagent — which is what stops a grant given for a foreground
+task being spent by something the person cannot see. It sits *after* the hooks
+and the own-secret exemption, so `lockdown` answers only what would have
+reached the person: it does not countermand a plugin gate that positively
+allowed something, and it does not stop a service reading the credential it was
+configured with. Lockdown means "stop asking me, the answer is no", which is a
+promise it can keep; "break the plugins I already set up" is not.
+
+`yolo` also pre-answers the state machine's command grant, through
+`ConversationState.auto_approve` — a predicate the driver installs beside
+`unlocked`, so `state_machine/` stays ignorant of the mode vocabulary and only
+ever asks whether it may skip asking. It routes through `_run(approved=True)`,
+so the command gets the same `chain.approved` grant a typed yes produces
+rather than running ungranted. `lockdown` deliberately stops short of that
+layer: it is about a command *the person just typed*, and auto-refusing it
+would mean "you may not use your own machine".
+
+**Two properties are load-bearing and neither is a policy.** *Lockdown is not
+a trap*: the mode is enforced at the approver, so the act that leaves it must
+never arrive there — `session.set_mode` is SAFE for `chain.typed_command`, the
+same exemption `config.write` uses, and without it `/mode ask` would be
+auto-refused by the very thing it lifts and restarting the app would be the
+only way out. *A mode cannot outlive its conversation*, and that is
+**structural rather than maintained**: the session stores the mode and the
+`conversation_id` it was set against, and the reader answers `ask` when they
+disagree. The alternative was resetting at `/new`, `/clear`,
+`load_conversation` and the three paths that null the id — a list to keep in
+step, in the direction where forgetting one leaves `yolo` running in somebody
+else's conversation. Nothing is persisted either, so a restart returns to
+`ask`.
+
+Who may change it is mechanisms 5 and 7 together: arriving at `lockdown`
+narrows whatever we were in, so an agent may do it unasked; everything else
+could widen, so it raises a dialog. `scope="turn"` sets a mode dropped at
+`HookRegistry.finish_turn` — stacked there rather than registered as a
+`turn_finish` hook, same argument as the compaction layer and the subagent
+barrier, because a grant that expires only when some plugin happens to be
+installed is not a grant that expires. That slot is what "Allow, and stop
+asking for the rest of this turn" writes (`options._rest_of_this_turn`, the
+first `OPTION_BUILDERS` entry whose unit is *time*, and the proof the opaque
+`remember` closure was worth having — it writes to the session, and neither
+`options_for` nor the dialog had to learn it was different).
+
+**Plan mode is deliberately not built, and everything under it is.** It is a
+fourth value of the same field plus a `propose_plan` tool: the refusing mode,
+the turn-scoped yolo for the turn after approval, the Request that sets the
+mode, the per-turn prompt line, and the clearing at turn end all ship here.
+`docs/PERMISSIONS_MAP.md` §6a is the fuller writeup, and it corrects what that
+file used to claim — that modes belong at `vet_permission`. They do not: a
+hook comes from a service, a service is a store package, and a lockdown that
+stops working when you uninstall something is worse than none. The mode is
+kernel-owned and hook-*shaped*.
 
 **Docs:** `docs/SDK.md` (hand this to an agent writing sandbox code — its examples
 are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the

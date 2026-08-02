@@ -2,10 +2,11 @@
 
 :mod:`sandbox.approval` answers *how* we ask. This answers *what may be said*,
 and — the part that makes it worth its own module — it is the only code in the
-sandbox that **writes config**. That is safe for exactly one reason: what it
-writes is a person's own answer to a question the kernel asked. Guest code
-never reaches this; a plugin cannot propose an option, and the dialog cannot
-be reached without the policy having already refused the Request.
+sandbox that **writes config**, and now the only code that sets a security
+mode. That is safe for exactly one reason: what it writes is a person's own
+answer to a question the kernel asked. Guest code never reaches this; a plugin
+cannot propose an option, and the dialog cannot be reached without the policy
+having already refused the Request.
 
 Every "allow once" used to be thrown away. The only durable grant was
 ``skip_permissions``, whose unit was a *plugin name* — trusting ``web_search``
@@ -73,13 +74,17 @@ DENY = Option("deny", "Deny", allow=False)
 #      is worse than no option at all: it is a grant the person believes they
 #      made. Builders check before offering.
 #
-# Adding "Approve for the rest of this turn", "Always trust this tool", "Deny
-# forever" or a mode switch is an entry in this list and a function beside it.
-# It is not a branch in ``build_approver``.
+# Adding "Always trust this tool" or "Deny forever" is an entry in this list
+# and a function beside it. It is not a branch in ``build_approver``.
 #
-# The three that ship all do the same thing one layer down — they turn "yes"
-# into an entry in a list the user keeps — so each is really only two
-# questions: what is the grantable unit here, and is it already granted.
+# Three of the four ship the same thing one layer down — they turn "yes" into
+# an entry in a list the user keeps — so each is really only two questions:
+# what is the grantable unit here, and is it already granted.
+#
+# ``_rest_of_this_turn`` is the fourth and it is the proof the opaque
+# ``remember`` closure was worth having: its unit is **time**, so it writes to
+# the session rather than to config, and neither ``options_for`` nor the dialog
+# had to learn that it was different.
 
 
 def _always_allow_host(chain, request, decision) -> list:
@@ -201,8 +206,57 @@ def _always_allow_command(chain, request, decision) -> list:
                                          for p in missing]))]
 
 
+def _rest_of_this_turn(chain, request, decision) -> list:
+    """Offer to stop asking for the remainder of the current agent turn.
+
+    The first grant here whose unit is **time** rather than a destination, and
+    the reason it needs no merger below: it writes nothing to config. A grant
+    that expires on its own is not something the person has to be able to find
+    and revoke later, because it is gone before they could look — which is the
+    whole difference between this and the three lists.
+
+    Offered only on an agent's own turn. A slash command states its scope up
+    front and is over in one act, so "the rest of the turn" names nothing a
+    person could reason about; and unattended work never reaches a dialog at
+    all. Both fall out of asking whether the chain names a live session.
+
+    Not offered when the turn is already running in ``yolo``, since the button
+    would grant what is already granted — rule 3, never offer what changes
+    nothing.
+    """
+    from .policy import chain_session
+
+    key = chain_session(chain)
+    if not key:
+        return []
+    runtime = _kernel_runtime()
+    setter = getattr(runtime, "set_security_mode", None)
+    if setter is None:
+        return []
+    try:
+        from runtime.security_modes import TURN_SCOPE, YOLO
+
+        if runtime.security_mode(key) == YOLO:
+            return []
+    except Exception:
+        return []
+    return [Option(
+        "allow:turn", "Allow, and stop asking for the rest of this turn",
+        remember=lambda: setter(key, YOLO, scope=TURN_SCOPE) is not None)]
+
+
+def _kernel_runtime():
+    """The live runtime, or None. Lazy so this module imports standalone."""
+    try:
+        from runtime.context import kernel_runtime
+
+        return kernel_runtime()
+    except Exception:
+        return None
+
+
 OPTION_BUILDERS: list = [_always_allow_host, _always_allow_folder,
-                         _always_allow_command]
+                         _always_allow_command, _rest_of_this_turn]
 
 
 def options_for(chain, request, decision) -> list:

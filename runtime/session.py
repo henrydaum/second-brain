@@ -91,6 +91,32 @@ class RuntimeSession:
     # Ephemeral live state — deliberately NOT persisted in to_marker(), so it
     # resets to None (defer-to-global) across restarts.
     attended: bool | None = None
+    # How this conversation answers approval dialogs: one of
+    # ``runtime.security_modes.SECURITY_MODES``, or None for the default
+    # ("ask"). Set by ``/mode`` through ``runtime.set_security_mode``.
+    #
+    # ``security_mode_conversation`` is what makes the mode **per
+    # conversation** rather than per session, and it does it structurally: the
+    # reader answers the default whenever this does not match the session's
+    # live ``conversation_id``. That is deliberate over resetting the mode at
+    # each of the places a conversation changes — ``load_conversation``,
+    # ``/new``, ``/clear``, and the three paths that null the id out — because
+    # a reset is a list to keep in step and this is a fact that cannot drift.
+    # A mode cannot leak into the next conversation because there is nowhere
+    # for it to leak from.
+    #
+    # Both are ephemeral — deliberately NOT persisted in to_marker(), so a
+    # restart returns to "ask". A forgotten "yolo" that survives a restart is
+    # the one failure this must not have.
+    security_mode: str | None = None
+    security_mode_conversation: int | None = None
+    # A mode for the rest of the current agent turn, outranking the one above
+    # and dropped by ``HookRegistry.finish_turn``. This is the grant scoped to
+    # *time* that the three standing grant lists could never express — what
+    # "allow, and stop asking for the rest of this turn" writes, and what an
+    # approved plan hands the turn that follows it. Ephemeral for the same
+    # reason and more so.
+    turn_security_mode: str | None = None
     # User messages sent while the agent was mid-turn. The busy guard queues
     # them here instead of rejecting; ConversationLoop drains the list at each
     # loop boundary, and handle_action starts a fresh turn with any leftovers

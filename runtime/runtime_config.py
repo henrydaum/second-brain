@@ -23,6 +23,7 @@ from state_machine.conversation import CallableSpec, ConversationState, Particip
 from runtime.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import BASE_PHASE
 from state_machine.forms import schema_to_form_steps
+from runtime.security_modes import YOLO, prompt_note
 from runtime.session import RuntimeSession
 from events.event_bus import bus
 from events.event_channels import (
@@ -176,6 +177,11 @@ def new_state(
         # machine is built *with* a session behind it; one built without keeps
         # the no-op default and behaves as before.
         cs.unlocked = session.unlocked
+        # And whether the person has pre-answered the approval a gated command
+        # would raise. A closure over the live session rather than a value, so
+        # a mode set mid-conversation takes effect on the next command instead
+        # of at the next time something happens to rebuild the state machine.
+        cs.auto_approve = lambda: runtime.security_mode(session.key) == YOLO
     from attachments.attachment import Attachment
     cs.pending_attachments = [
         Attachment.from_dict(a) if isinstance(a, dict) else a
@@ -268,6 +274,22 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         username = (user or {}).get("username")
         return f'You are assisting the user "{username}".' if username else ""
 
+    def _mode_suffix() -> str:
+        """Tell the agent how this conversation answers approval dialogs.
+
+        Empty in ``ask``, which is the default and needs no saying. Lazy and
+        in the dynamic section for the same reason as the two above — but here
+        it is load-bearing rather than merely tidy: the mode changes *within* a
+        conversation, so text baked into the cacheable prefix, or into a
+        plugin's ``agent_prompt`` (read once per plugin load), would go stale
+        the moment somebody typed ``/mode``.
+
+        Worth telling it at all because a refusal it cannot explain is a
+        refusal it retries. An agent that knows it is in lockdown reports the
+        wall; one that does not looks for a way around it.
+        """
+        return prompt_note(runtime.security_mode(session.key))
+
     def _conversation_meta() -> dict[str, Any] | None:
         """Return current conversation metadata for the dynamic prompt."""
         return runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
@@ -320,7 +342,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             command_filter=command_filter,
             active_llm=active_llm(runtime, session),
         )
-        return _append_dynamic(sections, _account_suffix())
+        return _append_dynamic(sections, _account_suffix(), _mode_suffix())
     return _session_prompt
 
 

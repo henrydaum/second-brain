@@ -22,6 +22,11 @@ def _nothing_to_park():
     """The default ``ConversationState.unlocked``: the driver holds no lock."""
     yield
 
+
+def _nobody_said_yes() -> bool:
+    """The default ``ConversationState.auto_approve``: ask, as always."""
+    return False
+
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
 FormFactory = Callable[[dict[str, Any], Any], list["FormStep"]]
@@ -303,6 +308,14 @@ class ConversationState:
         # lock for exactly this reason. The default does nothing, so a state
         # machine built without a runtime behind it behaves as before.
         self.unlocked: Callable[[], Any] = _nothing_to_park
+        # A predicate the driver may install answering "has the user already
+        # said yes to whatever comes next?". It is what lets a conversation in
+        # YOLO mode run a gated command without a dialog, and it is phrased as
+        # a question about *approval* rather than about the mode so this file
+        # stays ignorant of the mode vocabulary — the state machine only ever
+        # needs to know whether it may skip asking. The default asks, so a
+        # state machine built without a runtime behind it behaves as before.
+        self.auto_approve: Callable[[], bool] = _nobody_said_yes
 
     @property
     def active(self) -> Participant:

@@ -428,7 +428,18 @@ sdk.session.cancel(key="")
 sdk.session.add_tool(tool) / remove_tool(tool)
 sdk.session.add_prompt(text) / remove_prompt(handle)
 sdk.session.add_attachment(path)     # show the *model* a file
+sdk.session.set_mode(mode, scope="conversation")
+                                     # "lockdown" | "ask" | "yolo".
+                                     # scope="turn" expires at turn end.
 ```
+
+`sdk.session.get()["mode"]` reads how this conversation answers approval
+dialogs. Setting it is the one place the widening/narrowing rule below has
+teeth for a *plugin*: `"lockdown"` narrows and goes through, anything else
+raises a dialog — and one you cannot answer for yourself, since unattended
+work is refused before a mode is ever consulted. Reach for it only when a
+plugin genuinely owns the conversation's posture. The person's own route is
+`/mode`.
 
 Two different destinations, and the names are close enough to be worth stating
 apart. `sdk.session.add_attachment(path)` puts a file in front of the **model**

@@ -50,7 +50,8 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
-                              SESSION_REMOVE_TOOL, SESSION_STATE_GET,
+                              SESSION_REMOVE_TOOL, SESSION_SET_MODE,
+                              SESSION_STATE_GET,
                               SESSION_STATE_SET, SCRIPT_RUN,
                               TASK_ENQUEUE, TASK_GRAPH,
                               TASK_LIST, TASK_OUTPUT, TASK_PAUSE, TASK_RESET,
@@ -551,6 +552,12 @@ def _session_get(ctx, args: dict) -> Result:
         "agent_profile": _session_profile(runtime, session),
         "frontend": getattr(session, "frontend_name", None),
         "user_id": getattr(session, "user_id", None),
+        # How this conversation answers approval dialogs. Answered from the
+        # runtime's reader rather than the session field, because the field
+        # alone does not say whether it still applies — it is scoped to the
+        # conversation it was set against, and a turn-scoped mode outranks it.
+        "mode": runtime.security_mode(key)
+        if hasattr(runtime, "security_mode") else None,
     }
     if args.get("details"):
         if machine is None:
@@ -654,6 +661,27 @@ def _session_remove_tool(ctx, args: dict) -> Result:
     remover(args.get("key") or getattr(ctx, "session_key", None),
             args.get("tool"))
     return Result(data=True)
+
+
+def _session_set_mode(ctx, args: dict) -> Result:
+    """Set how this conversation answers approval dialogs.
+
+    The verdict about *whether* this may happen was already made by
+    ``policy.classify`` and, for a widening, by the approver — so there is
+    nothing to check here. Normalization is the runtime's, in one place, so an
+    unknown mode degrades to ``ask`` rather than reaching the approver as
+    something it has no answer for.
+    """
+    runtime = _runtime(ctx)
+    setter = getattr(runtime, "set_security_mode", None)
+    if (bad := _need(setter, "the security mode")) is not None:
+        return bad
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    mode = setter(key, args.get("mode"), scope=args.get("scope") or "conversation")
+    if mode is None:
+        return Result.failure(f"no live session for {key!r}",
+                              code=ERROR_NOT_FOUND)
+    return Result(data=mode)
 
 
 def _session_add_prompt(ctx, args: dict) -> Result:
@@ -2963,6 +2991,7 @@ HANDLERS = {
     SESSION_ADD_PROMPT: _session_add_prompt,
     SESSION_REMOVE_PROMPT: _session_remove_prompt,
     SESSION_ADD_ATTACHMENT: _session_add_attachment,
+    SESSION_SET_MODE: _session_set_mode,
     UI_ASK: _ui_ask, UI_APPROVE: _ui_approve, UI_RENDER: _ui_render,
     CONFIG_READ: _config_read, CONFIG_WRITE: _config_write,
     PATH_GET: _path_get,

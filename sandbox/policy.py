@@ -182,6 +182,36 @@ def kernel_list(key: str) -> list:
         return []
 
 
+def _security_mode(value) -> str:
+    """Normalize a requested security mode, for the dialog and the branch.
+
+    Lazy like every other kernel reach in this file, so ``policy`` stays
+    importable with no kernel behind it. An absent one answers with whatever
+    was asked for, which is only ever used to *render* — the decision below
+    rests on :func:`_tightens`, which fails the other way.
+    """
+    try:
+        from runtime.security_modes import security_mode
+
+        return security_mode(value)
+    except Exception:
+        return str(value or "")
+
+
+def _tightens(mode) -> bool:
+    """Whether moving to ``mode`` can only narrow. False is the safe answer.
+
+    Absent kernel says no, so an unresolvable mode is asked about rather than
+    waved through — the same direction :func:`kernel_list` fails in.
+    """
+    try:
+        from runtime.security_modes import tightens
+
+        return bool(tightens(mode))
+    except Exception:
+        return False
+
+
 def chain_session(chain) -> str:
     """The session key a chain's root names, or "" if it names none.
 
@@ -553,7 +583,8 @@ _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
              R.COMMAND_CALL,
              UI_ASK, R.UI_APPROVE, SESSION_ADD_TOOL,
-             SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE,
+             SESSION_ADD_PROMPT, R.SESSION_SET_MODE, AGENT_SCHEDULE,
+             CONV_DELETE,
              R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
@@ -575,8 +606,13 @@ assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
 #: deliberately absent, since a plugin persisting its own declared setting is
 #: safe and gating it would demand declarations from commands that only ever
 #: write their own keys.
+#: ``session.set_mode`` is here for the same reason as those three: it has a
+#: safe argument (``lockdown``, which can only narrow) and is consequential
+#: however it is spelled, because the widening direction changes how every
+#: later Request in the conversation is answered.
 CONSEQUENTIAL = ALWAYS_UNSAFE | {
     PROC_RUN, R.PROC_START, NET_HTTP, R.SECRET_REVEAL, R.TASK_RESET,
+    R.SESSION_SET_MODE,
 }
 
 
@@ -1131,6 +1167,34 @@ def classify(request: Request, chain: Chain) -> Decision:
     if kind in (SESSION_ADD_TOOL, SESSION_ADD_PROMPT, AGENT_SCHEDULE,
                 CONV_DELETE):
         return Decision(UNSAFE, f"{kind} ({chain.render()})")
+
+    # ── the standing answer itself ────────────────────────────────
+    #
+    # Mechanisms 5 and 7 together, and both halves are load-bearing.
+    #
+    # **Polarity.** ``lockdown`` is the tightest of the three, so arriving at
+    # it widens nothing whatever the conversation was in a moment ago — which
+    # is decidable without knowing the current mode, where "is this looser
+    # than what we have?" would not be. Every other value could widen, so
+    # every other value is asked about.
+    #
+    # **Provenance**, and this is what stops lockdown being a trap. The mode
+    # is enforced at the approver; the one act that leaves it must therefore
+    # never reach the approver, or ``/mode ask`` would be auto-refused by the
+    # very thing it exists to lift and the only way out would be restarting
+    # the app. A command the person typed is its own consent, exactly as it is
+    # for ``config.write`` above — and scoped the same way, so a *tool* that
+    # reaches ``session.set_mode`` is judged on its own and gets a dialog.
+    if kind == R.SESSION_SET_MODE:
+        if chain.typed_command:
+            return Decision(SAFE, "a command the user typed")
+        mode = _security_mode(args.get("mode"))
+        if _tightens(mode):
+            return Decision(SAFE, "lockdown only narrows what may run")
+        return Decision(
+            UNSAFE, f"switch this conversation to {mode} mode",
+            say="This changes how every later request in this conversation "
+                "is answered, not just this one.")
 
     if kind == R.TASK_PAUSE:
         if args.get("paused", True):

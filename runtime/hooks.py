@@ -359,7 +359,7 @@ class HookRegistry:
                 logger.exception("Turn starter raised; continuing")
 
     def finish_turn(self, session, outcome: TurnOutcome | None = None, runtime=None) -> None:
-        """Run the ``turn_finish`` observers, then clear staged attachments."""
+        """Run the ``turn_finish`` observers, then drop what the turn owned."""
         ctx = self._ctx(session, runtime, TURN_FINISH)
         for finalizer in self._hooks[TURN_FINISH]:
             try:
@@ -369,6 +369,15 @@ class HookRegistry:
         # Staged-but-undrained attachments do not survive the turn.
         if getattr(session, "staged_attachments", None):
             session.staged_attachments.clear()
+        # Neither does a turn-scoped security mode. Cleared here, after the
+        # observers rather than by one of them, for the reason the compaction
+        # layer and the subagent barrier are stacked rather than registered:
+        # a grant that expires only when some plugin happens to be installed
+        # is not a grant that expires. Written directly rather than through
+        # ``runtime.clear_turn_security_mode`` so it still holds for a turn
+        # driven with no runtime behind it.
+        if getattr(session, "turn_security_mode", None):
+            session.turn_security_mode = None
 
     def wrap_llm_call(self, session, runtime, base: Callable[[ModelRequest], Any]) -> Callable[[ModelRequest], Any]:
         """Build the escort onion around one model call.

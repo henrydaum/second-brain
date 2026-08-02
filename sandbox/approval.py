@@ -168,6 +168,14 @@ def _detail(kind: str, args: dict) -> str:
                 f"directly")
     if kind in ("config.read", "config.write"):
         return f"`{args.get('key')}`" if args.get("key") else ""
+    if kind == "session.set_mode":
+        # The mode *and* what it means, because the word alone is the one
+        # thing a person cannot check: "yolo" tells you it is permissive and
+        # nothing about what stops being asked.
+        from runtime.security_modes import MODE_BLURBS, security_mode
+
+        mode = security_mode(args.get("mode"))
+        return f"`{mode}` - {MODE_BLURBS.get(mode, '')}"
     if kind == "agent.schedule":
         # The two things being authorised are *when* it fires and *what it is
         # told to do*, and neither was shown: the generic scan below reaches
@@ -346,6 +354,10 @@ GRANT_PHRASES = {
     "session.remove_tool": "take a tool away from the agent",
     "session.remove_prompt_extra": "remove instructions from the prompt",
     "session.add_attachment": "show the agent a file",
+    # Named for its effect rather than its mechanism. "Change the security
+    # mode" describes a setting; what is actually being granted is the power
+    # to stop the user being consulted, and only the second is answerable.
+    "session.set_mode": "decide for you whether future actions get approved",
     # Machinery. Neither is something a plugin declares, but the table is
     # total so that a new Request cannot quietly render as a dotted name.
     "agent.complete": "finish the agent's turn",
@@ -489,13 +501,42 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
                         request.type, chain.render())
             return False
 
-        # 4. Ask — on the session the work belongs to, which is not always the
-        #    one this approver was built with. ``build_approver`` is wired with
-        #    no key, so ``key`` is whatever happens to be active; the chain
-        #    names the session the agent was actually acting in. Reaching here
-        #    at all means attendance was resolved against that same session, so
-        #    the dialog lands where the person who can answer it is looking.
+        # The session the work belongs to, which is not always the one this
+        # approver was built with. ``build_approver`` is wired with no key, so
+        # ``key`` is whatever happens to be active; the chain names the session
+        # the agent was actually acting in. Reaching here at all means
+        # attendance was resolved against that same session, so both the mode
+        # below and the dialog after it read from — and land on — the
+        # conversation the person can actually answer for.
         target = chain_session(chain) or key
+
+        # 4. The mode this conversation is in, which is a standing answer to
+        #    the dialog step 5 would otherwise draw. Deliberately *here* rather
+        #    than at the top:
+        #
+        #    - after attendance, so ``yolo`` never reaches work nobody is
+        #      watching. A cron job or a subagent cannot spend a grant given
+        #      for a foreground task, and ``sandbox/policy.py`` rests the
+        #      safety of ``agent.spawn`` on exactly that.
+        #    - after 1 and 2, so ``lockdown`` answers only what would have
+        #      reached the person. It does not countermand a plugin gate that
+        #      positively allowed something, and it does not countermand a
+        #      service reading the credential it was configured with. Lockdown
+        #      means "stop asking me, the answer is no" — not "break the
+        #      plugins I already set up", which is a different and much worse
+        #      promise to make.
+        #
+        #    What it cannot touch either way is everything the policy settled
+        #    without a dialog: a structural refusal produced no question, so
+        #    there is no answer here to stand in for it.
+        standing = _standing_answer(runtime, target)
+        if standing is not None:
+            logger.info("%s %s for %s (mode)",
+                        "allowing" if standing else "refusing",
+                        request.type, chain.render())
+            return standing
+
+        # 5. Ask.
         title, body = describe(chain, request, decision)
         options = options_for(chain, request, decision)
         try:
@@ -546,6 +587,30 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
         return answer.allow
 
     return approve
+
+
+def _standing_answer(runtime, session_key):
+    """What the conversation's mode answers, or ``None`` to ask the person.
+
+    Asked of the runtime rather than imported, exactly as attendance is: the
+    approver already holds the runtime, the mode is per conversation, and a
+    reader is the only thing that knows whether a mode set against one
+    conversation still applies to the one this Request came from.
+
+    Every failure is ``None``. A runtime too old to have the reader, a missing
+    session, a raiser — all of them mean "ask", which is the behaviour this
+    feature is invisible against.
+    """
+    reader = getattr(runtime, "security_mode", None)
+    if reader is None or not session_key:
+        return None
+    try:
+        from runtime.security_modes import standing_answer
+
+        return standing_answer(reader(session_key))
+    except Exception:
+        logger.exception("could not read the security mode; asking")
+        return None
 
 
 def _owns_secret(chain, request) -> bool:

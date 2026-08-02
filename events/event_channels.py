@@ -287,6 +287,17 @@ Payload:
     old_profile:  str
     new_profile:  str"""
 
+SESSION_SECURITY_MODE_CHANGED = "session_security_mode_changed"
+"""The security mode a conversation answers approval dialogs with changed
+(``/mode``, or an approval answered "for the rest of this turn"). Frontends
+that show a persistent posture indicator subscribe to this; so does anything
+wanting to notice that a session stopped asking.
+Payload:
+    session_key:     str
+    conversation_id: int | None
+    mode:            str   (lockdown | ask | yolo)
+    scope:           str   (conversation | turn)"""
+
 SYSTEM_PROMPT_EXTRA_CHANGED = "system_prompt_extra_changed"
 """A plugin added/updated/removed a system prompt extra on a session.
 Useful for frontends or subscribers that want to surface what's pinned to

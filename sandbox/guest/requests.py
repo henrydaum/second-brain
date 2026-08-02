@@ -60,6 +60,7 @@ SESSION_REMOVE_TOOL = "session.remove_tool"
 SESSION_ADD_PROMPT = "session.add_prompt_extra"
 SESSION_REMOVE_PROMPT = "session.remove_prompt_extra"
 SESSION_ADD_ATTACHMENT = "session.add_attachment"
+SESSION_SET_MODE = "session.set_mode"
 
 # ── user interaction ──────────────────────────────────────────────────
 UI_ASK = "ui.ask"
@@ -233,6 +234,7 @@ ALL_TYPES = {
     SESSION_GET, SESSION_LIST, SESSION_PUSH, SESSION_STATE_GET,
     SESSION_STATE_SET, SESSION_CANCEL, SESSION_ADD_TOOL, SESSION_REMOVE_TOOL,
     SESSION_ADD_PROMPT, SESSION_REMOVE_PROMPT, SESSION_ADD_ATTACHMENT,
+    SESSION_SET_MODE,
     UI_ASK, UI_APPROVE, UI_RENDER,
     CONFIG_READ, CONFIG_WRITE, PATH_GET,
     USER_READ, USER_LIST, USER_WRITE,
