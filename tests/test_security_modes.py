@@ -426,6 +426,54 @@ def test_the_real_runtime_reader_agrees_with_the_rules(tmp_path):
     assert runtime.set_security_mode("no-such-session", YOLO) is None
 
 
+def test_a_mode_set_before_the_conversation_exists_survives_its_creation(tmp_path):
+    """A session exists from the frontend's first breath; its conversation is
+    created by the first message. So ``/mode lockdown`` at a fresh prompt
+    stamped ``None``, and plain equality then dropped the mode the instant the
+    user said anything — silently, and in the permissive direction.
+
+    The rule the check was always trying to express is "is this still the same
+    piece of work", and the conversation a session opens right after the mode
+    was set is that same work.
+    """
+    from tests.support import plain_runtime
+    from pipeline.database import Database
+    from runtime.persistence import get_or_create_session
+
+    db = Database(str(tmp_path / "late.db"))
+    runtime = plain_runtime(db)
+    session = get_or_create_session(runtime, "repl")
+    assert session.conversation_id is None
+
+    runtime.set_security_mode("repl", LOCKDOWN)
+    assert runtime.security_mode("repl") == LOCKDOWN
+
+    session.conversation_id = db.create_conversation("first message")
+    assert runtime.security_mode("repl") == LOCKDOWN, (
+        "the conversation the session just opened is the work the mode was "
+        "set for")
+
+
+def test_binding_late_does_not_reopen_the_leak_it_was_checking_for(tmp_path):
+    """The whole point of the check: switching *away* still resets."""
+    from tests.support import plain_runtime
+    from pipeline.database import Database
+    from runtime.persistence import get_or_create_session
+
+    db = Database(str(tmp_path / "late2.db"))
+    runtime = plain_runtime(db)
+    session = get_or_create_session(runtime, "repl")
+
+    runtime.set_security_mode("repl", YOLO)          # unbound
+    session.conversation_id = db.create_conversation("one")
+    assert runtime.security_mode("repl") == YOLO     # adopts it
+
+    session.conversation_id = db.create_conversation("two")
+    assert runtime.security_mode("repl") == ASK, (
+        "an adopted stamp is an ordinary stamp - a second conversation is a "
+        "different piece of work")
+
+
 def test_the_real_runtime_normalizes_junk_to_ask(tmp_path):
     from tests.support import make_runtime
 
@@ -661,3 +709,40 @@ def test_the_picker_does_not_repeat_what_its_buttons_say(command):
 def test_the_command_offers_exactly_the_kernel_modes(command):
     """Two lists of three that must not drift apart."""
     assert tuple(command.MODES) == SECURITY_MODES
+
+
+# ──────────────────────────────────────────────────────────────────────
+# ``/new`` says the mode it just reset.
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def new_command():
+    import importlib.util
+    from pathlib import Path
+
+    path = (Path(__file__).resolve().parents[1] / "bundled" / "commands"
+            / "command_new.py")
+    spec = importlib.util.spec_from_file_location("_new_command", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_new_names_the_mode_it_reset(new_command):
+    """The silent reset that cost an afternoon.
+
+    A mode belongs to the conversation it was set in, so ``/new`` returns you
+    to ``ask`` — and the person who typed ``/mode lockdown`` has no reason to
+    re-check. The next thing they see is an approval dialog for something they
+    believed would be refused outright.
+    """
+    line = new_command._mode_line(LOCKDOWN, ASK)
+    assert line.startswith(ASK)
+    assert "reset" in line and LOCKDOWN in line
+    assert "/mode lockdown" in line, "say how to get it back"
+
+
+def test_new_stays_quiet_when_nothing_was_reset(new_command):
+    """No lecture when there is nothing to warn about."""
+    assert new_command._mode_line(ASK, ASK) == ASK
+    assert new_command._mode_line(YOLO, YOLO) == YOLO

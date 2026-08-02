@@ -782,6 +782,23 @@ class ConversationRuntime:
         loading a different conversation, starting a new one, or being a
         subagent with a conversation of its own all begin at ``ask`` with
         nothing having to remember to reset anything.
+
+        **Setting a mode before a conversation exists binds it late.** A
+        session exists from the moment a frontend has a session key, but its
+        conversation is created by the first message — so ``/mode lockdown``
+        typed at a fresh prompt stamps ``None``, and the plain equality check
+        then dropped the mode the instant the user said anything. Silently,
+        and in the permissive direction, which is the worst pairing available:
+        you set lockdown, the conversation opened, and the next shell command
+        raised a dialog as though you had never typed it.
+
+        The rule that fixes it is the one the check was always trying to
+        express. Not "the id must match" but "this must still be the same
+        piece of work" — and the conversation a session opens *right after*
+        the mode was set is that same piece of work, not another one. So an
+        unbound stamp adopts the first conversation it sees and is an ordinary
+        stamp from then on, which keeps the leak the check exists to prevent:
+        switching away afterwards still drops it.
         """
         session = self.sessions.get(session_key)
         if session is None:
@@ -790,6 +807,13 @@ class ConversationRuntime:
             return _normalize_mode(session.turn_security_mode)
         if session.security_mode is None:
             return DEFAULT_SECURITY_MODE
+        if session.security_mode_conversation is None:
+            # Bind late. A reader that writes is worth the smell here: the
+            # alternative is stamping at every site that assigns a
+            # conversation_id, which is the list this design exists to avoid
+            # keeping in step. Idempotent, and two threads can only ever write
+            # the same value.
+            session.security_mode_conversation = session.conversation_id
         if session.security_mode_conversation != session.conversation_id:
             return DEFAULT_SECURITY_MODE
         return _normalize_mode(session.security_mode)

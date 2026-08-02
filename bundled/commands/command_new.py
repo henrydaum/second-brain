@@ -20,6 +20,7 @@ class NewCommand(BaseCommand):
                 "No LLM is configured yet. Run /setup to add one before "
                 "starting a conversation."
             )
+        before = _mode(sdk)
         created = sdk.conv.create(
             "New conversation (Main)",
             category=None,
@@ -29,8 +30,36 @@ class NewCommand(BaseCommand):
             return "Failed to create conversation."
         return (
             f"Started new conversation #{created['id']} under 'Main'.\n"
-            f"Agent: {created.get('profile') or 'default'}"
+            f"Agent: {created.get('profile') or 'default'}\n"
+            f"Mode: {_mode_line(before, _mode(sdk))}"
         )
+
+
+DEFAULT_MODE = "ask"
+
+
+def _mode(sdk) -> str:
+    """How the session answers approval dialogs, or the default if unreadable."""
+    try:
+        return (sdk.session.get() or {}).get("mode") or DEFAULT_MODE
+    except sdk.Failed:
+        return DEFAULT_MODE
+
+
+def _mode_line(before: str, after: str) -> str:
+    """The mode now, saying so out loud when starting here reset it.
+
+    A security mode belongs to the conversation it was set in, so ``/new``
+    silently returns you to ``ask``. Silently is the problem: the person who
+    typed ``/mode lockdown`` five minutes ago has no reason to re-check it, and
+    the next thing they see is an approval dialog for something they believed
+    would be refused outright. Read after the switch rather than assumed, so
+    this reports what is true rather than what should be.
+    """
+    if before != after and before != DEFAULT_MODE:
+        return (f"{after} - reset from {before}, because a mode belongs to the "
+                f"conversation it was set in. `/mode {before}` restores it.")
+    return after
 
 
 def _available(sdk):
