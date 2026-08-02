@@ -2,7 +2,9 @@
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["session.get", "session.state_get", "session.state_set"]
+requests = [
+    "session.get", "session.push", "session.state_get", "session.state_set",
+]
 
 from guest.bases import BaseTool
 
@@ -140,7 +142,9 @@ class Todo(BaseTool):
                 lines.append(f"- [ ] #{item['id']} **{item['content']}** (in progress)")
             else:
                 lines.append(f"- [ ] #{item['id']} {item['content']}")
+        summary = "\n".join(lines)
+        sdk.session.push(summary)
         return sdk.ok(
             {"conversation_id": conversation_id, "todos": items},
-            llm_summary="\n".join(lines),
+            llm_summary=summary,
         )
