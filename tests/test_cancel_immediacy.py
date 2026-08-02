@@ -386,6 +386,88 @@ def test_a_normal_turn_still_says_what_it_always_said(conv_runtime):
     assert out.messages == ["(The agent ended its turn without a reply.)"]
 
 
+# ── Telling the model it was cancelled ───────────────────────────────
+
+def test_the_next_turn_is_told_the_last_one_was_cancelled(conv_runtime):
+    """A cancelled turn used to leave no trace in the transcript at all.
+
+    The last rows are the agent's own tool calls; the next user message
+    simply follows. Nothing says the turn was stopped, so the model reads
+    its own plan and carries on executing it.
+    """
+    rt, session, _ = conv_runtime()
+    rt.handle_action(session.key, "cancel")
+
+    assert session.pending_user_messages == []
+
+    session.busy = True
+    rt.handle_action(session.key, "cancel")
+
+    assert len(session.pending_user_messages) == 1
+    notice = session.pending_user_messages[0]
+    assert "cancelled your previous turn" in notice
+    assert "did not finish" in notice
+
+
+def test_the_notice_survives_the_queue_being_cleared(conv_runtime):
+    """Cancel drops queued user messages, and the notice is queued after.
+
+    Reversed, the notice would be swallowed by the very clear that makes
+    room for it — and the failure is silent, because an empty queue is
+    exactly what an uncancelled session has.
+    """
+    rt, session, _ = conv_runtime()
+    session.busy = True
+    session.pending_user_messages.extend(["stale one", "stale two"])
+
+    rt.handle_action(session.key, "cancel")
+
+    assert len(session.pending_user_messages) == 1
+    assert "stale" not in session.pending_user_messages[0]
+
+
+def test_stopped_subagents_are_named_as_producing_nothing(conv_runtime):
+    """The reported symptom: "I'll wait for the four subagents to finish",
+    said about agents cancelled minutes earlier. Saying the turn stopped is
+    not enough — it leaves "but the background work might still land" open."""
+    rt, session, _ = conv_runtime()
+    session.busy = True
+    rt.subagents.cancel_for = lambda owner: 4
+
+    rt.handle_action(session.key, "cancel")
+
+    notice = session.pending_user_messages[0]
+    assert "none are coming" in notice
+    assert "offer to wait for them" in notice
+    assert "4" not in notice, "a count the model would repeat must be right"
+
+
+def test_a_turn_with_no_subagents_says_nothing_about_them(conv_runtime):
+    rt, session, _ = conv_runtime()
+    session.busy = True
+
+    rt.handle_action(session.key, "cancel")
+
+    assert "background agents" not in session.pending_user_messages[0]
+
+
+def test_the_notice_reaches_history_on_the_next_turn(conv_runtime):
+    """End to end: queued as an agent-facing message, drained into the
+    transcript at the next turn's first loop boundary, and therefore in
+    front of the model before it says anything."""
+    rt, session, _ = conv_runtime([response(content="understood")])
+    session.busy = True
+    rt.handle_action(session.key, "cancel")
+    session.busy = False
+
+    rt.handle_action(session.key, "send_text", "different question")
+
+    prompts = "\n".join(
+        str(m.get("content") or "")
+        for m in rt.services["llm"].calls[0])
+    assert "cancelled your previous turn" in prompts
+
+
 # ── The sandbox half ─────────────────────────────────────────────────
 
 def test_interrupt_session_cancels_only_that_session_s_runs(sandbox_box):

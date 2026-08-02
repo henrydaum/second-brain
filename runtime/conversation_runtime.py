@@ -78,6 +78,32 @@ from pipeline.database import DEFAULT_USER_ID
 logger = logging.getLogger("Runtime")
 
 
+def _cancel_notice(stopped_subagents: bool) -> str:
+    """What the model is told, next turn, about the turn that was cancelled.
+
+    Written in the second person and stated as fact, because the alternative
+    reading is the one that caused this: an agent that remembers spawning work
+    and has no evidence it ended will offer to wait for it. Saying results are
+    *not coming* matters more than saying the turn stopped — "cancelled" alone
+    leaves "…but the background agents might still land" open, and that is
+    exactly the gap the model filled in for itself.
+
+    No count, for the same reason ``/cancel``'s own message carries none:
+    ``cancel_for`` stops descendants but can only count the generation it
+    iterated. A number the model would repeat to the user has to be right at
+    every ``max_subagent_depth``, and this one is not.
+    """
+    notice = ("[The user cancelled your previous turn. Whatever tool call was "
+              "running at the time was stopped mid-run and did not finish. Do "
+              "not resume that work unless you are asked to.")
+    if stopped_subagents:
+        notice += (" The background agents that turn had started were "
+                   "cancelled with it: they produced no results, none are "
+                   "coming, and you must not report anything on their behalf "
+                   "or offer to wait for them.")
+    return notice + "]"
+
+
 class ConversationRuntime:
     """Owns sessions, persistence, commands/forms, approvals, and agent turns."""
 
@@ -167,6 +193,20 @@ class ConversationRuntime:
                 stopped = self.subagents.cancel_for(session_key)
                 with session.lock:
                     session.pending_user_messages.clear()
+                    # Then say so, to the model. A cancelled turn used to
+                    # leave *no trace in the transcript at all*: the last
+                    # rows are the agent's own tool calls, the next user
+                    # message simply follows, and nothing anywhere says the
+                    # turn was stopped. So the model reads its own "I spawned
+                    # four subagents" and reasonably concludes they are still
+                    # running — and offers to wait for results that were
+                    # cancelled minutes ago. The queue is the agent-facing
+                    # channel (``SubagentRegistry._deliver`` uses the same
+                    # one): invisible to the person, drained into history at
+                    # the next turn's first loop boundary. Queued *after* the
+                    # clear above, which is what keeps it.
+                    session.pending_user_messages.append(
+                        _cancel_notice(bool(stopped)))
                 session.cancel_event.set()
                 # The flag first, then the stoppers: everything that wakes up
                 # must find the turn already cancelled, or it carries on doing

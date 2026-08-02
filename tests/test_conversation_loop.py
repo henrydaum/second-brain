@@ -839,13 +839,23 @@ def test_busy_empty_text_is_still_rejected(tmp_path):
 
 
 def test_cancel_clears_the_queue(tmp_path):
+    """The queued message is dropped; what is left is the cancel notice.
+
+    The queue is not empty afterwards any more — cancel puts one
+    agent-facing line on it saying the turn was stopped, since otherwise a
+    cancelled turn leaves no trace in the transcript and the model carries
+    on executing the plan it remembers making. What still has to hold is
+    that the *user's* queued message does not survive.
+    """
     rt, session = _busy_runtime(tmp_path)
     rt.handle_action("s", "send_text", "queued one")
 
     out = rt.handle_action("s", "cancel", None)
 
     assert "Cancelled." in out.messages
-    assert session.pending_user_messages == []
+    assert "queued one" not in session.pending_user_messages
+    assert len(session.pending_user_messages) == 1
+    assert "cancelled your previous turn" in session.pending_user_messages[0]
     assert session.cancel_event.is_set()
 
 
