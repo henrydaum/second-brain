@@ -32,9 +32,11 @@ BLURBS = {
     YOLO: "Approve anything that needs approval, without asking.",
 }
 
+#: Button text. Each carries its own blurb, which is why the picker prompt
+#: does not also print the table — see ``_picker_prompt``.
 LABELS = {
     LOCKDOWN: "Lockdown - refuse without asking",
-    ASK: "Ask - the default",
+    ASK: "Ask - the default, ask me each time",
     YOLO: "YOLO - approve without asking",
 }
 
@@ -67,7 +69,20 @@ class ModeCommand(BaseCommand):
     )
 
     def form(self, sdk, args):
-        """One step, and only when no mode was named on the line.
+        """One step: all three modes, as buttons, with the current one marked.
+
+        **Required**, and that word is the whole of whether this command has a
+        UI. ``_missing`` keeps a step only when ``required or
+        prompt_when_missing``, so an optional one is never missing, the form
+        never suspends, and ``run`` is reached immediately with no action —
+        which renders the text fallback and no buttons at all. It fails
+        silently in both directions: nothing errors, and the command still
+        prints something plausible.
+
+        All three are offered rather than the two you are not in. The current
+        one answers "already in this mode", which costs a line; hiding it would
+        move the other two buttons depending on where you are, which costs the
+        ability to click the same place twice.
 
         Named ``action`` because ``approval_actions`` is matched against
         ``args["action"]`` and nothing else, which is also what makes
@@ -77,12 +92,11 @@ class ModeCommand(BaseCommand):
             return []
         current = _current(sdk)
         return [FormStep(
-            "action", f"Currently **{current}**. Switch this conversation to:",
-            False, enum=list(MODES),
-            enum_labels=[LABELS[mode] for mode in MODES], columns=1)]
+            "action", _picker_prompt(current), True, enum=list(MODES),
+            enum_labels=[_label(mode, current) for mode in MODES], columns=1)]
 
     def run(self, sdk, args):
-        """Show the current mode, or switch to the one named."""
+        """Switch to the mode named, or describe where we are."""
         action = (args.get("action") or "").strip().lower()
         if not action:
             return _overview(sdk, _current(sdk))
@@ -113,8 +127,41 @@ def _current(sdk) -> str:
     return ((session or {}).get("mode") or ASK)
 
 
+def _label(mode: str, current: str) -> str:
+    """Button text, marking where we are.
+
+    Worth the four characters: the buttons are what you are looking at, so a
+    picker whose options give no sign which one is already in force makes you
+    read the prompt to find out, every time.
+    """
+    return LABELS[mode] + (" (current)" if mode == current else "")
+
+
+def _picker_prompt(current: str) -> str:
+    """What the buttons cannot say, and deliberately nothing they can.
+
+    No table of what each mode does: the three labels beside this each carry
+    their own blurb, and a prompt repeating them is the approval dialog's old
+    "Run shell commands / Run shell commands" bug in a new place. What is left
+    is the part no button has room for — where we are, and the limit that
+    makes the permissive option answerable.
+    """
+    return (
+        f"This conversation is in **{current}** mode.\n\n"
+        "A mode answers the approval dialogs you would have seen, and nothing "
+        "else: it grants no more than you could have approved yourself, and "
+        "never applies to work nobody is watching."
+    )
+
+
 def _overview(sdk, current: str) -> str:
-    """The landing view: what is in force, what the others do, what none touch."""
+    """The text fallback, for a surface with no buttons on it.
+
+    Reached when the form was skipped — a cancelled picker, or a caller that
+    supplied no action. It *does* print the table the picker leaves out, which
+    is not a second voice saying the same thing: there are no labels here to
+    carry the blurbs, so this is the one place they have to be written down.
+    """
     rows = [
         [f"**{mode}**" if mode == current else mode, BLURBS[mode]]
         for mode in MODES

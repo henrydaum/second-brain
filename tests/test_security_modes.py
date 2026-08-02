@@ -607,6 +607,57 @@ def test_the_form_step_is_called_action(command):
     assert list(step["enum"]) == list(SECURITY_MODES)
 
 
+def test_the_step_is_required_so_the_buttons_actually_render(command):
+    """The regression that shipped: ``required=False`` means no UI at all.
+
+    ``_missing`` keeps a step only when ``required or prompt_when_missing``, so
+    an optional one is never missing, the form never suspends, and ``run`` is
+    reached with no action — which prints the text fallback and no buttons.
+    Nothing raises and the output looks plausible, which is why this needs a
+    test rather than a reviewer.
+    """
+    from sandbox.bridge import _form_step
+    from state_machine.action import _missing
+    from state_machine.conversation import CallableSpec
+
+    step = command.ModeCommand().form(_SDK(), {})[0]
+    assert step["required"] or step["prompt_when_missing"]
+
+    # Through the real predicate, and through the real guest->kernel step
+    # conversion the bridge does on the way — a bare /mode must suspend.
+    sdk = _SDK()
+
+    def steps(args, cs=None):
+        return [_form_step(s) for s in command.ModeCommand().form(sdk, args)]
+
+    spec = CallableSpec("mode", lambda *a, **k: None, form_factory=steps)
+    assert [s.name for s in _missing(spec, {})] == ["action"]
+    assert _missing(spec, {"action": YOLO}) == []
+
+
+def test_every_mode_is_offered_and_the_current_one_is_marked(command):
+    """Three fixed buttons in a fixed order, so a click lands in one place."""
+    for current in SECURITY_MODES:
+        step = command.ModeCommand().form(_SDK(current), {})[0]
+        assert list(step["enum"]) == list(SECURITY_MODES)
+        marked = [label for label in step["enum_labels"] if "(current)" in label]
+        assert len(marked) == 1
+        assert marked[0].lower().startswith(current[:4])
+
+
+def test_the_picker_does_not_repeat_what_its_buttons_say(command):
+    """The dialog's old 'Run shell commands / Run shell commands' bug.
+
+    Each label carries its mode's blurb, so a prompt printing them again is
+    one screen saying everything twice.
+    """
+    step = command.ModeCommand().form(_SDK(), {})[0]
+    prompt = step["prompt"].lower()
+    for blurb in command.BLURBS.values():
+        assert blurb.lower() not in prompt
+    assert "ask" in prompt, "the prompt must still say where we are"
+
+
 def test_the_command_offers_exactly_the_kernel_modes(command):
     """Two lists of three that must not drift apart."""
     assert tuple(command.MODES) == SECURITY_MODES
