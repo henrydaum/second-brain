@@ -111,7 +111,9 @@ thing and stays a different thing: a person may decide what the code may not.
 | `fs.temp()` | Allocate a scratch file or directory | — | safe, always |
 
 `fs.temp` exists so that "I need somewhere to put this" never requires a policy
-decision. Scratch space is granted, not requested by path.
+decision. Scratch space is granted under `workspace/temp`, not the operating
+system's shared temp directory, so plugins cannot alter other programs' temp
+files.
 
 **The agent writes its own plugins freely.** Every path under
 `workspace/` is writable, deletable and movable without a dialog, and

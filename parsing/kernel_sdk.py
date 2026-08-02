@@ -122,10 +122,14 @@ class _Fs:
         """Scratch space, for parsers that must hand a path to a library."""
         import os
         import tempfile
+        import trees
 
+        scratch = Path(trees.tree("workspace").path) / "temp"
+        scratch.mkdir(parents=True, exist_ok=True)
         if directory:
-            return tempfile.mkdtemp()
-        handle, path = tempfile.mkstemp(suffix=suffix)
+            return tempfile.mkdtemp(prefix="sb-box-", dir=scratch)
+        handle, path = tempfile.mkstemp(prefix="sb-box-", suffix=suffix,
+                                        dir=scratch)
         os.close(handle)
         return path
 

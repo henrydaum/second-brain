@@ -254,7 +254,7 @@ sdk.fs.search(pattern, root=".", regex=True, mode="content",
               context_lines=0, limit=100)  # -> {root, mode, results, ...}
 sdk.fs.delete(path)
 sdk.fs.move(src, dst, copy=False)
-sdk.fs.temp(directory=False, suffix="")    # scratch space; always allowed
+sdk.fs.temp(directory=False, suffix="")    # workspace/temp scratch; always allowed
 ```
 
 **Testing whether a path exists.** There is no `sdk.fs.exists`, and

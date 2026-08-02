@@ -286,21 +286,21 @@ def _scratch_roots() -> list:
 
     Resolved from the kernel's own path constants rather than the
     environment, so this agrees with where the kernel actually keeps things.
-    Falls back to the system temp directory when the kernel is absent, which
-    is the case in tests and in a bare container.
+    Scratch belongs to Second Brain under ``workspace/temp``; the operating
+    system's shared temp tree is deliberately not writable by plugins.
 
     The ``workspace`` tree is here for a different reason than the rest, and
     it is the point of the whole boundary — see :func:`_authoring_root`.
     """
-    import tempfile
-
-    roots = [Path(tempfile.gettempdir())]
+    roots = []
+    if (authoring := _authoring_root()) is not None:
+        roots.append(authoring / "temp")
     try:
         from paths import ATTACHMENT_CACHE
         roots.append(Path(ATTACHMENT_CACHE))
     except Exception:
         pass
-    if (authoring := _authoring_root()) is not None:
+    if authoring is not None:
         roots.append(authoring)
     return [r for r in roots if r]
 
@@ -414,6 +414,9 @@ def _write_reason(path, verb: str = "write") -> str:
     a listed folder can contain either.
     """
     root = _authoring_root()
+    scratch = root / "temp" if root is not None else None
+    if scratch is not None and _within(path, [scratch]):
+        return f"{verb} in scratch"
     if root is not None and _within(path, [root]):
         return f"{verb} in the agent's own tree"
     if _within(path, _scratch_roots()):

@@ -440,12 +440,13 @@ def tool(tmp_path, request):
 @pytest.mark.parametrize("tool", ["", "subprocess"], indirect=True)
 def test_bytes_survive_the_crossing_unchanged(box, tool, tmp_path):
     """The claim: what went in is what came out, in either runner."""
-    import tempfile
+    import trees
 
     src = tmp_path / "in.png"
     # Reads are safe anywhere; writes are judged by where, so the copy has to
     # land in scratch or the run is (correctly) denied.
-    dst = Path(tempfile.gettempdir()) / "sb-test-copy.png"
+    dst = trees.tree("workspace").path / "temp" / "sb-test-copy.png"
+    dst.parent.mkdir(parents=True, exist_ok=True)
     dst.unlink(missing_ok=True)
     src.write_bytes(PAYLOAD)
 
@@ -481,9 +482,14 @@ def test_reading_bytes_is_as_safe_as_reading_text():
 def test_writing_bytes_is_judged_by_where_exactly_like_text(tmp_path):
     """Same act, different encoding — so it must get the same answer."""
     import tempfile
-    scratch = f"{tempfile.gettempdir()}/sb-test-bytes.bin"
-    assert classify(R.Request(R.FS_WRITE_BYTES, {"path": scratch, "data": "eA=="}),
+    import trees
+    scratch = trees.tree("workspace").path / "temp" / "sb-test-bytes.bin"
+    assert classify(R.Request(R.FS_WRITE_BYTES, {"path": str(scratch), "data": "eA=="}),
                     Chain()).safe
+    foreign_temp = Path(tempfile.gettempdir()) / "another-program.bin"
+    assert not classify(
+        R.Request(R.FS_WRITE_BYTES, {"path": str(foreign_temp), "data": "eA=="}),
+        Chain()).safe
     assert not classify(
         R.Request(R.FS_WRITE_BYTES, {"path": "main.pyw", "data": "eA=="}),
         Chain()).safe

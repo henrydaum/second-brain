@@ -615,10 +615,15 @@ def _fs_temp(ctx, args: dict) -> Result:
     somewhere to put this" should never need a policy decision.
     """
     try:
+        import trees
+
+        scratch = Path(trees.tree("workspace").path) / "temp"
+        scratch.mkdir(parents=True, exist_ok=True)
         if args.get("directory"):
-            return Result(data=tempfile.mkdtemp(prefix="sb-box-"))
+            return Result(data=tempfile.mkdtemp(prefix="sb-box-", dir=scratch))
         handle, path = tempfile.mkstemp(prefix="sb-box-",
-                                        suffix=args.get("suffix") or "")
+                                        suffix=args.get("suffix") or "",
+                                        dir=scratch)
         os.close(handle)
         return Result(data=path)
     except OSError as exc:

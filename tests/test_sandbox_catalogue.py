@@ -185,9 +185,13 @@ def test_egress_is_unsafe_whatever_the_verb():
 def test_writing_to_scratch_is_safe_and_elsewhere_is_not(tmp_path):
     """Level is a property of the arguments, never of the Request type."""
     import tempfile
-    scratch = f"{tempfile.gettempdir()}/sb-test-note.txt"
-    assert classify(Request(R.FS_WRITE, {"path": scratch, "data": "x"}),
+    import trees
+    scratch = trees.tree("workspace").path / "temp" / "sb-test-note.txt"
+    assert classify(Request(R.FS_WRITE, {"path": str(scratch), "data": "x"}),
                     Chain()).safe
+    foreign_temp = Path(tempfile.gettempdir()) / "another-program.tmp"
+    assert not classify(Request(R.FS_WRITE, {"path": str(foreign_temp), "data": "x"}),
+                        Chain()).safe
     assert not classify(Request(R.FS_WRITE, {"path": "main.pyw", "data": "x"}),
                         Chain()).safe
 
