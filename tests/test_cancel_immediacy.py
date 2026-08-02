@@ -516,6 +516,96 @@ def test_interrupt_session_cancels_only_that_session_s_runs(sandbox_box):
     assert finished.cancelled is False
 
 
+def test_a_nested_run_is_still_matched_to_the_session_that_caused_it(sandbox_box):
+    """What makes ``/cancel`` reach a *script*, and it is one line elsewhere.
+
+    A script is not started by the session; it is started by a tool that was.
+    ``Chain.push`` preserves ``root``, so the script's own Run carries the
+    session key however deep it sits — which is why nothing had to be plumbed
+    for scripts at all. It also covers a ``wait=False`` script, where
+    ``_script_run``'s ``caller.abandoned`` poll never runs because nobody is
+    waiting.
+    """
+    from sandbox.policy import Chain
+
+    class _Run:
+        def __init__(self, chain):
+            self.chain = chain
+            self.done = False
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def wait(self, timeout=None):
+            return None
+
+    deep = _Run(Chain(root="s").push("tool_something").push("some_script"))
+    sandbox_box._runs.append(deep)
+
+    assert sandbox_box.interrupt_session("s") == 1
+    assert deep.cancelled is True
+
+
+def test_cancelling_a_child_interrupts_the_work_it_was_doing():
+    """The only route to a *subagent's* in-flight work, and it is one hop.
+
+    A child's session key is ``spawn_subagent:<cid>``, so the parent's own
+    ``interrupt_session`` cannot match anything the child started — a script
+    the child is running is rooted at the child's key. Nothing reaches it
+    except ``SubagentRegistry.cancel`` stepping into the child's session, and
+    that hop depends on ``runtime.sessions`` still holding it. Missing, the
+    flag would be set on nothing and the child's script would run on to its
+    own ceiling with nobody waiting for it.
+    """
+    import threading as _threading
+
+    from runtime.subagents import RUNNING, SESSION_PREFIX, Handle, SubagentRegistry
+
+    child = _session(f"{SESSION_PREFIX}7")
+    interrupted = []
+
+    class _Runtime:
+        sessions = {child.key: child}
+
+        def _interrupt_work(self, session):
+            interrupted.append(session.key)
+            return 0
+
+    registry = SubagentRegistry.__new__(SubagentRegistry)
+    registry._lock = _threading.RLock()
+    registry._handles = {}
+    registry.runtime = _Runtime()
+    registry._handles["h"] = Handle(
+        id="h", conversation_id=7, owner="repl", title="c", timeout=30,
+        state=RUNNING)
+
+    assert registry.cancel("h") is True
+    assert interrupted == [child.key], "the child's own work was left running"
+    assert child.cancel_event.is_set()
+
+
+def test_cancelling_a_child_whose_session_is_gone_does_not_raise():
+    """Fail quiet, not loud: a cancel that raises leaves the rest of the
+    children running."""
+    import threading as _threading
+
+    from runtime.subagents import RUNNING, Handle, SubagentRegistry
+
+    class _Runtime:
+        sessions = {}
+
+    registry = SubagentRegistry.__new__(SubagentRegistry)
+    registry._lock = _threading.RLock()
+    registry._handles = {}
+    registry.runtime = _Runtime()
+    registry._handles["h"] = Handle(
+        id="h", conversation_id=7, owner="repl", title="c", timeout=30,
+        state=RUNNING)
+
+    assert registry.cancel("h") is True
+
+
 def test_interrupt_session_ignores_an_empty_key(sandbox_box):
     """A chain rooted at ``user`` names no session, and every root that is not
     a session answers "" — cancelling on that would cancel the world."""
