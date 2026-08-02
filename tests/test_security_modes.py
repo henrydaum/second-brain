@@ -746,3 +746,34 @@ def test_new_stays_quiet_when_nothing_was_reset(new_command):
     """No lecture when there is nothing to warn about."""
     assert new_command._mode_line(ASK, ASK) == ASK
     assert new_command._mode_line(YOLO, YOLO) == YOLO
+
+
+def test_restoring_a_conversation_says_the_permission_mode(tmp_path):
+    """A restart is the other place the mode silently goes back to the default.
+
+    The conversation is restored, the agent profile is restored, and the mode
+    is not — it is ephemeral on purpose, so a forgotten ``yolo`` cannot outlive
+    the process. Which makes the restore message the one moment that can say
+    so to somebody who set lockdown before quitting.
+    """
+    from pipeline.database import Database
+    from tests.support import plain_runtime
+
+    db = Database(str(tmp_path / "restore.db"))
+    cid = db.create_conversation("New conversation (Main)")
+
+    before = plain_runtime(db)
+    before.load_conversation("repl", cid)
+    before.active_session_key = "repl"
+    before.set_security_mode("repl", LOCKDOWN)
+    assert before.security_mode("repl") == LOCKDOWN
+    before._remember_last_active(before.session_user_id("repl"), cid)
+
+    # A brand new runtime over the same database: the restart.
+    after = plain_runtime(db)
+    message = after.restore_last_active("repl")
+
+    assert f"Permission mode: {ASK}" in message
+    assert after.security_mode("repl") == ASK, "a mode must not survive a restart"
+    # Reported, not assumed: the line has to follow the load.
+    assert message.index("Permission mode") > message.index("Agent:")

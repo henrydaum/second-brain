@@ -979,7 +979,14 @@ class ConversationRuntime:
         title = (self.db.get_conversation(conv_id) or {}).get("title") or ""
         profile = session.profile_override or session.active_agent_profile or "default"
         suffix = f": {title.strip()}" if title.strip() else ""
-        msg = f"Loaded last conversation{suffix}.\nAgent: {profile}"
+        # The permission mode, on the same footing as the agent profile, and
+        # read *after* the load rather than assumed. Restoring a conversation
+        # does not restore the mode it was in — the mode is ephemeral, so a
+        # restart always lands on the default — and the person who set
+        # lockdown before quitting has no reason to suspect otherwise. Saying
+        # it here costs one line and is the only moment it can be said.
+        msg = (f"Loaded last conversation{suffix}.\nAgent: {profile}"
+               f"\nPermission mode: {self.security_mode(session_key)}")
         if session.restore_notices:
             msg += "\n" + "\n".join(session.restore_notices)
         return msg
