@@ -127,10 +127,14 @@ class LiteLLMBackend(BaseLLMBackend):
 
         The deltas are for the user's eyes; the returned response is what the
         kernel records. There is nothing here that checks whether the user
-        cancelled — ``sdk.llm.delta`` is one-way and answers nothing. If
-        they cancel, the kernel cancels this execution and the next Request
-        raises ``Terminated``, which is a ``BaseException`` and must not be
-        caught here.
+        cancelled — ``sdk.llm.delta`` is one-way and answers nothing.
+
+        Which means this loop makes no Request that could ever raise
+        ``Terminated``: the usual unwind-at-the-next-Request does not apply,
+        and a model that degenerates into repeating a token would otherwise
+        run until the provider kills it, unstoppably. The kernel ends this
+        call by killing the box instead, so the loop simply stops existing
+        mid-iteration. Nothing to handle, and nothing to add.
         """
         # drop_params is on, so a provider that rejects stream_options simply
         # degrades to a stream with no usage chunk (prompt_tokens stays None).
