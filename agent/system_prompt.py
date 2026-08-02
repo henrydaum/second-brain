@@ -97,7 +97,7 @@ def build_prompt_sections(
         "for provider compatibility. Not authored by the user; contains no user "
         "instructions. The user's actual message, if any, follows this block.",
         _current_datetime(),
-        _model_status(services, active_llm),
+        _model_status(active_llm),
         _profile_status(profile_name, scope),
         _services_status(services),
         _pipeline_status(db, orchestrator),
@@ -196,25 +196,27 @@ def _current_datetime() -> str:
     )
 
 
-def _model_status(services: dict, active_llm=None) -> str:
-    # active_llm is the session's profile-resolved brain (build_loop drives
-    # this one); the router is only the no-caller-context fallback — a profile
-    # pinning a non-default LLM must be described as itself, not the default.
-    llm = active_llm or (services or {}).get("llm")
+def _model_status(llm=None) -> str:
+    """Describe the session's profile-resolved brain to the model itself.
+
+    ``native_modalities`` is the *backend's* half and ``capabilities`` the
+    *model's*; a modality counts only when both agree, which is the same pair
+    ``ConversationLoop._route_attachments`` splits an attachment bundle on. It
+    is worth reading them from the same names routing does — this asked for
+    ``native_attachment_modalities``, which no ``Brain`` has ever had, so the
+    ``getattr`` default quietly made every model blind in its own prompt while
+    routing worked perfectly.
+    """
     if not llm:
         return "Current model: unavailable."
-    name = getattr(llm, "_active_name", None)
-    inner = getattr(llm, "active", None)
-    model = getattr(inner, "model_name", None) if inner else getattr(llm, "model_name", None)
-    target = inner or llm
-    caps = getattr(target, "capabilities", {}) or {}
-    native = set(getattr(target, "native_attachment_modalities", set()) or set())
+    model = getattr(llm, "model_name", None)
+    caps = getattr(llm, "capabilities", {}) or {}
+    native = set(getattr(llm, "native_modalities", set()) or set())
     parts = []
     for modality, label in (("image", "images"), ("audio", "audio"), ("video", "video")):
         parts.append(f"{label}: {'yes' if caps.get(modality) and modality in native else 'no'}")
-    status = f"{name} ({model})." if name and model else f"{name or model or 'unknown'}."
     return (
-        f"Current model: {status}\n"
+        f"Current model: {model or 'unknown'}.\n"
         f"Native attachment processing: {'; '.join(parts)}. "
         "For unsupported modalities, rely only on parsed text or file pointers."
     )

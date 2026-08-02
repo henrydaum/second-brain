@@ -75,40 +75,39 @@ from agent.system_prompt import _model_status
 
 
 def test_model_status_reports_effective_native_attachment_capabilities():
-    active = SimpleNamespace(
+    # A modality counts only when both halves agree: the model ingests it
+    # (capabilities) and the backend can put it on the wire (native_modalities).
+    brain = SimpleNamespace(
         model_name="MiniMax-M3",
         capabilities={"image": True, "audio": True, "video": False},
-        native_attachment_modalities={"image", "video"},
+        native_modalities={"image", "video"},
     )
-    router = SimpleNamespace(_active_name="m3", active=active)
 
-    status = _model_status({"llm": router})
+    status = _model_status(brain)
 
-    assert "Current model: m3 (MiniMax-M3)." in status
+    assert "Current model: MiniMax-M3." in status
     assert "images: yes" in status
-    assert "audio: no" in status
-    assert "video: no" in status
+    assert "audio: no" in status      # model reads it, backend cannot send it
+    assert "video: no" in status      # backend sends it, model cannot read it
 
 
 def test_model_status_reports_unavailable_without_llm():
-    assert _model_status({}) == "Current model: unavailable."
+    assert _model_status(None) == "Current model: unavailable."
 
-def test_model_status_prefers_session_resolved_llm_over_router():
-    # A profile pinning a non-default LLM must be described as itself: the
-    # router (default profile) is only the fallback when no caller context.
-    pinned = SimpleNamespace(
-        model_name="minimax/MiniMax-M3",
-        capabilities={"image": True},
-        native_attachment_modalities={"image"},
-    )
-    router = SimpleNamespace(
-        _active_name="deepseek/deepseek-chat",
-        active=SimpleNamespace(model_name="deepseek/deepseek-chat",
-                               capabilities={}, native_attachment_modalities=set()),
-    )
-    status = _model_status({"llm": router}, pinned)
-    assert "minimax/MiniMax-M3" in status and "deepseek" not in status
-    assert "images: yes" in status
+
+def test_model_status_reads_the_attributes_brain_actually_publishes():
+    """The names in the prompt must be the names routing uses.
+
+    This asked a ``Brain`` for ``native_attachment_modalities``, which no Brain
+    has ever had. ``getattr`` answered its default, so every model was told it
+    was blind while ``_route_attachments`` sent it images perfectly well. No
+    ``SimpleNamespace`` fake can catch that — a fake has whatever attribute the
+    test gives it — so pin the real class instead.
+    """
+    from llm.registry import Brain
+
+    for attr in ("model_name", "capabilities", "native_modalities"):
+        assert isinstance(getattr(Brain, attr, None), property), attr
 
 
 def test_session_prompt_names_the_profile_pinned_llm(tmp_path):
@@ -119,11 +118,9 @@ def test_session_prompt_names_the_profile_pinned_llm(tmp_path):
     from runtime.runtime_config import session_system_prompt
 
     pinned = SimpleNamespace(model_name="minimax/MiniMax-M3", loaded=True,
-                             capabilities={}, native_attachment_modalities=set())
-    router = SimpleNamespace(_active_name="deepseek/deepseek-chat",
-                             active=SimpleNamespace(model_name="deepseek/deepseek-chat",
-                                                    capabilities={},
-                                                    native_attachment_modalities=set()))
+                             capabilities={}, native_modalities=set())
+    router = SimpleNamespace(model_name="deepseek/deepseek-chat", loaded=True,
+                             capabilities={}, native_modalities=set())
     from pipeline.database import Database
     db = Database(str(tmp_path / "prompt.db"))
     rt = ConversationRuntime(
