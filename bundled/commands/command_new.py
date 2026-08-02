@@ -31,7 +31,7 @@ class NewCommand(BaseCommand):
         return (
             f"Started new conversation #{created['id']} under 'Main'.\n"
             f"Agent: {created.get('profile') or 'default'}\n"
-            f"Mode: {_mode_line(before, _mode(sdk))}"
+            f"Permission mode: {_mode_line(before, _mode(sdk))}"
         )
 
 

@@ -744,6 +744,12 @@ failure. The body is UTF-8-decoded with replacement, so this Request answers
 about text and text only; binary egress is absent by design, since the things
 wanting it are foreign libraries doing their own I/O inside their own box.
 
+**Redirects are answers, never implicit Requests.** The host HTTP client does
+not follow a 3xx. It returns the status and `Location` header, and following it
+requires another `net.http` Request. That makes a redirect to a different host
+cross the same policy gate as any other outbound destination instead of
+spending the original host's approval twice.
+
 Secret handles are substituted here, on the way out, after the policy function
 has already decided.
 

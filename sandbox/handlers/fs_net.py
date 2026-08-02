@@ -73,6 +73,17 @@ PROC_TIMEOUT = 600.0
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Return redirects instead of silently changing network destination."""
+
+    def redirect_request(self, request, file_pointer, code, message, headers,
+                         new_url):
+        return None
+
+
+_HTTP_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _fs_read(ctx, args: dict) -> Result:
     """Read a file as text."""
     raw = args.get("path")
@@ -644,7 +655,7 @@ def _net_http(ctx, args: dict) -> Result:
         data=body.encode("utf-8") if isinstance(body, str) else body,
     )
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        with _HTTP_OPENER.open(request, timeout=HTTP_TIMEOUT) as response:
             return Result(data=_answer(response))
     except urllib.error.HTTPError as exc:
         # An error *status* is an answer, not a failed request. The body is

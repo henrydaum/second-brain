@@ -847,6 +847,59 @@ class Database:
 	# =================================================================
 	# DIRECT QUERY
 	# =================================================================
+	# SQLite's PRAGMA namespace mixes introspection with mutations
+	# (foreign_keys, writable_schema, WAL checkpoints, ...).  The one read-only
+	# form exposed here is the schema inspection plugins already use.
+	_READ_PRAGMA = re.compile(
+		r"^\s*pragma\s+(?:main\.)?table_info\s*\(\s*"
+		r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\)\s*;?\s*$",
+		re.IGNORECASE,
+	)
+	READ_PREFIXES = ("select", "explain", "with")
+
+	@classmethod
+	def _validate_read_sql(cls, sql: str) -> None:
+		"""Refuse anything outside the deliberately read-only SQL surface."""
+		normalized = " ".join((sql or "").strip().split()).lower()
+		if normalized.startswith(cls.READ_PREFIXES):
+			return
+		if cls._READ_PRAGMA.fullmatch(sql or ""):
+			return
+		if normalized.startswith("pragma"):
+			raise ValueError(
+				"Only PRAGMA table_info(<table>) is available through a read; "
+				"other PRAGMAs can change database state.")
+		raise ValueError(
+			"Only SELECT / EXPLAIN / WITH statements and read-only "
+			"PRAGMA table_info(<table>) are allowed; use db.write for a "
+			"mutation.")
+
+	@staticmethod
+	def _read_authorizer(action, arg1, arg2, database_name, trigger_name):
+		"""Let SQLite prove a query has no write or configuration effects."""
+		allowed = {
+			sqlite3.SQLITE_SELECT,
+			sqlite3.SQLITE_READ,
+			sqlite3.SQLITE_FUNCTION,
+			sqlite3.SQLITE_RECURSIVE,
+		}
+		if action in allowed:
+			return sqlite3.SQLITE_OK
+		if (action == sqlite3.SQLITE_PRAGMA
+				and str(arg1 or "").lower() == "table_info"
+				and _VALID_IDENTIFIER.fullmatch(str(arg2 or ""))):
+			return sqlite3.SQLITE_OK
+		return sqlite3.SQLITE_DENY
+
+	@contextmanager
+	def _read_guard(self):
+		"""Install the read authorizer while the caller holds ``self.lock``."""
+		self.conn.set_authorizer(self._read_authorizer)
+		try:
+			yield
+		finally:
+			self.conn.set_authorizer(None)
+
 	def query(self, sql: str, params=(), max_rows: int = 25) -> dict:
 		"""
 		Execute a read-only SQL query and return results.
@@ -858,17 +911,16 @@ class Database:
 				"truncated": bool — True if results were capped at max_rows,
 			}
 
-		Raises ValueError for non-SELECT statements.
+		Raises ValueError for statements outside the read-only SQL surface.
 		Raises sqlite3.Error for invalid SQL.
 		"""
-		normalized = " ".join(sql.strip().split()).lower()
-		if not (normalized.startswith("select") or normalized.startswith("pragma")):
-			raise ValueError("Only SELECT and PRAGMA statements are allowed.")
+		self._validate_read_sql(sql)
 
 		with self.lock:
-			cur = self.conn.execute(sql, tuple(params or ()))
-			columns = [desc[0] for desc in cur.description] if cur.description else []
-			rows = cur.fetchmany(max_rows + 1)
+			with self._read_guard():
+				cur = self.conn.execute(sql, tuple(params or ()))
+				columns = [desc[0] for desc in cur.description] if cur.description else []
+				rows = cur.fetchmany(max_rows + 1)
 
 			truncated = len(rows) > max_rows
 			if truncated:
@@ -879,11 +931,6 @@ class Database:
 				"rows": [tuple(row) for row in rows],
 				"truncated": truncated,
 			}
-
-	# Read prefixes ``query_rows`` accepts. Broader than ``query`` because the
-	# Request path is what plugins actually write SQL against, and EXPLAIN and
-	# CTEs are ordinary reads there.
-	READ_PREFIXES = ("select", "pragma", "explain", "with")
 
 	def query_rows(self, sql: str, params=(), max_rows: int = 500) -> list:
 		"""
@@ -898,15 +945,12 @@ class Database:
 		Raises ValueError for a statement that is not a read.
 		Raises sqlite3.Error for invalid SQL.
 		"""
-		normalized = " ".join(sql.strip().split()).lower()
-		if not normalized.startswith(self.READ_PREFIXES):
-			raise ValueError(
-				"Only SELECT / PRAGMA / EXPLAIN / WITH statements read; "
-				"use db.write for a mutation.")
+		self._validate_read_sql(sql)
 
 		with self.lock:
-			cur = self.conn.execute(sql, tuple(params or ()))
-			return cur.fetchmany(max_rows)
+			with self._read_guard():
+				cur = self.conn.execute(sql, tuple(params or ()))
+				return cur.fetchmany(max_rows)
 
 	def execute_write(self, sql: str, params=()) -> dict:
 		"""

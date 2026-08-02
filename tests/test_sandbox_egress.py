@@ -133,10 +133,22 @@ def test_a_plugin_cannot_declare_its_own_reach():
 class _Handler(BaseHTTPRequestHandler):
     """Answers 200 on /ok and 429 with an explanation everywhere else."""
 
+    redirect_hits = 0
+
     def log_message(self, *args):
         return
 
     def do_GET(self):
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/redirect-target")
+            self.end_headers()
+            return
+        if self.path == "/redirect-target":
+            type(self).redirect_hits += 1
+            self.send_response(200)
+            self.end_headers()
+            return
         body, code = (b'{"hello":"world"}', 200) if self.path == "/ok" else (
             json.dumps({"error": "rate limited", "retry_after": 60}).encode(),
             429)
@@ -151,6 +163,7 @@ class _Handler(BaseHTTPRequestHandler):
 @pytest.fixture
 def server():
     """A local HTTP server, so these tests need no network."""
+    _Handler.redirect_hits = 0
     httpd = TCPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -179,6 +192,16 @@ def test_an_error_status_is_an_answer_not_a_failure(server):
     assert result.ok
     assert result.data["status"] == 429
     assert json.loads(result.data["body"])["retry_after"] == 60
+
+
+def test_a_redirect_is_returned_and_never_followed(server):
+    """Following would spend the original host decision on a new URL."""
+    result = _net_http(None, {"url": f"{server}/redirect"})
+
+    assert result.ok
+    assert result.data["status"] == 302
+    assert result.data["headers"]["location"] == "/redirect-target"
+    assert _Handler.redirect_hits == 0
 
 
 def test_no_reply_at_all_is_still_a_failure():

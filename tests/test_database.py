@@ -5,6 +5,8 @@ durable conversation storage. These tests run against a fresh on-disk DB in a
 temp dir, so the schema bootstrap in ``_setup`` is exercised for real.
 """
 
+import sqlite3
+
 import pytest
 
 from pipeline.database import Database, DEFAULT_USER_ID
@@ -225,6 +227,40 @@ def test_query_truncates_at_max_rows(db):
     result = db.query("SELECT path FROM files", max_rows=2)
     assert len(result["rows"]) == 2
     assert result["truncated"] is True
+
+
+def test_read_queries_allow_only_schema_introspection_pragmas(db):
+    result = db.query("PRAGMA table_info(files)")
+    assert "name" in result["columns"]
+
+    rows = db.query_rows("PRAGMA main.table_info(files)")
+    assert any(row["name"] == "path" for row in rows)
+
+
+@pytest.mark.parametrize("sql", [
+    "PRAGMA foreign_keys = OFF",
+    "PRAGMA writable_schema = ON",
+    "PRAGMA wal_checkpoint(TRUNCATE)",
+    "PRAGMA journal_mode = DELETE",
+    "PRAGMA optimize",
+])
+def test_read_queries_reject_stateful_pragmas(db, sql):
+    with pytest.raises(ValueError, match="PRAGMA table_info"):
+        db.query_rows(sql)
+
+    assert db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_a_cte_cannot_disguise_a_write_as_a_read(db):
+    db.upsert_file("/notes/a.md", "a.md", ".md", "text", 100.0)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        db.query_rows(
+            "WITH chosen AS (SELECT path FROM files) "
+            "DELETE FROM files WHERE path IN (SELECT path FROM chosen)"
+        )
+
+    assert db.get_all_files() == {"/notes/a.md": 100.0}
 
 
 def test_system_stats_groups_files_and_tasks(db):

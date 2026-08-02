@@ -1144,7 +1144,10 @@ class _Net(_Namespace):
 
         Secret handles may appear anywhere in the url, headers, or body; the
         kernel substitutes the real values on the way out, so the sandbox uses
-        a credential it never held.
+        a credential it never held. Redirects are returned as 3xx replies and
+        are never followed automatically: call ``http`` again with the
+        response's ``location`` header so the new host gets its own policy
+        decision.
         """
         return self._ask(NET_HTTP, url=url, method=method,
                          headers=headers or {}, body=body)

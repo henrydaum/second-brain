@@ -240,6 +240,11 @@ deliberate: a 429's body is where an API tells you which limit you hit and for
 how long, and only a request that got no reply at all (DNS, refused, timed out)
 raises. `body` is decoded text; there is no binary download.
 
+Redirects are also ordinary answers and are **not followed automatically**.
+Read the 3xx response's `headers["location"]` and make another `sdk.net.http`
+call if you want to follow it. That second call is intentional: a server may
+choose a new host, but it cannot authorize that host on the plugin's behalf.
+
 Whether it asks the user depends entirely on **where** it is going. The kernel
 config setting `net_allowed_hosts` lists hosts a plugin may reach without a
 dialog, and a bare domain covers its subdomains. Anything else prompts, naming
