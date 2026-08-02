@@ -26,11 +26,11 @@ Container parsers.
 Returns ParseResult(modality="container", output=list[str]).
 
 The output is a list of absolute paths to extracted child files.
-These paths live under the app's data directory (DATA_DIR/extracted),
+These paths live under Second Brain's managed scratch tree (workspace/temp),
 not in the user's original folder. The user's filesystem is never modified.
 
 Extraction directory structure:
-    <DATA_DIR>/extracted/<hash_of_archive_path>/
+    <workspace>/temp/sb-box-<random>/
         ├── report.pdf
         ├── images/
         │   ├── photo1.jpg
@@ -55,11 +55,8 @@ Supports: ZIP, TAR, GZ, BZ2, 7Z (if py7zr installed), EML
 # Safety limits
 MAX_EXTRACT_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB total extracted
 MAX_FILES = 10_000                           # max files per archive
-# One extraction directory per archive, per process. The old version keyed a
-# stable directory under DATA_DIR off the archive's hash so re-parsing reused
-# it; sandboxed code cannot name a location outside its scratch space, so the
-# cache lives here instead — same effect within a run, nothing left behind
-# after one.
+# One managed scratch directory per archive path and parser process. Re-parsing
+# during that process reuses the extraction rather than creating duplicates.
 _EXTRACT_DIRS: dict = {}
 
 
