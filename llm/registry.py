@@ -430,14 +430,44 @@ class Brain:
             if box in self._boxes and box not in self._idle and box.alive:
                 self._idle.append(box)
 
+    def _interrupt(self, box):
+        """End the call this box is serving, by ending the box.
+
+        Nothing lighter works. A streaming backend's only outbound Request is
+        ``sdk.llm.delta``, a one-way notice, so refusing to answer it reaches
+        nothing and the caller stays blocked on the pipe until the provider
+        finishes. This is what ``/cancel`` spends to stop a model mid-token.
+
+        **Evicted from ``_boxes``, not merely from ``_idle``.** ``_grow``
+        counts ``len(self._boxes)`` against the ceiling and ``_lease`` hands
+        back ``self._boxes[0]`` once there, so a dead box left in that list
+        means the pool never reopens and starts leasing a corpse — every later
+        call failing with "box is not running". ``_release`` already declines
+        to re-idle a dead box, which is precisely what hides the other half.
+        """
+        with self._lock:
+            if box in self._idle:
+                self._idle.remove(box)
+            if box in self._boxes:
+                self._boxes.remove(box)
+        box.interrupt()
+
     # --- the call --------------------------------------------------
 
-    def chat(self, request: LLMRequest, on_delta=None) -> LLMResponse:
+    def chat(self, request: LLMRequest, on_delta=None, on_call=None) -> LLMResponse:
         """Place one call and return what the model said.
 
         ``on_delta`` is a host-side callable receiving text fragments. It is
         parked under a one-shot token for the duration of this call and never
         crosses the boundary — the box gets the token, not the callable.
+
+        ``on_call`` is handed a zero-argument callable that ends this call,
+        the moment a box has been leased to serve it. It exists because a
+        caller cannot know *what* to stop until then: which box serves a
+        profile is the pool's business, and a call queued behind a busy one
+        has nothing to interrupt yet. See ``ConversationLoop._call_backend``,
+        which arms it into the session's interrupt registry so ``/cancel``
+        can fire it from another thread.
 
         Raises :class:`LLMProviderError` when the failure is one the kernel
         reacts to (a context overflow triggers compaction and a retry). Other
@@ -461,6 +491,8 @@ class Brain:
         if box is None:
             unpark(token)
             return LLMResponse.failure("no box available", "not_loaded")
+        if on_call is not None:
+            on_call(lambda: self._interrupt(box))
         try:
             result = box.call("__chat__", request=request.to_dict(),
                               token=token)

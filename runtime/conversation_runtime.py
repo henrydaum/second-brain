@@ -168,6 +168,16 @@ class ConversationRuntime:
                 with session.lock:
                     session.pending_user_messages.clear()
                 session.cancel_event.set()
+                # The flag first, then the stoppers: everything that wakes up
+                # must find the turn already cancelled, or it carries on doing
+                # the work it was just interrupted out of.
+                #
+                # Setting the flag alone is what ``/cancel`` used to be, and
+                # it is only read *between* actions — while everything slow
+                # lives inside one. So cancelling was as immediate as the
+                # current model or tool call, which for a streaming model that
+                # had started repeating itself meant not immediate at all.
+                self._interrupt_work(session)
                 return RuntimeResult(messages=[
                     f"Cancelled ({stopped} background agent"
                     f"{'' if stopped == 1 else 's'} stopped)."
@@ -428,18 +438,32 @@ class ConversationRuntime:
                 logger.warning("Turn restart requested with the drive budget exhausted; ending the turn instead.")
                 session.restart_turn = False
         except Exception as e:
-            err = ActionError("agent_failed", str(e))
-            session.cs.last_error = err
-            out.ok = False
-            out.error = err.to_dict()
-            # Deliberately *not* also appended to ``out.messages``: a frontend
-            # renders both channels, so the same sentence arrived twice — once
-            # bare and once as "Error: ...". ``render_error`` is required of
-            # every frontend, so the error channel alone is enough.
+            # A cancel is not a crash. Interrupting the turn *is* how it stops
+            # — the model box is killed out from under the call, so the
+            # exception says "box 'llm_0_0' died during '__chat__'", which is
+            # the mechanism working exactly as asked. Reporting it would put
+            # an ``Error:`` on screen immediately after ``Cancelled.``, which
+            # is both alarming and the specific thing this change promised not
+            # to do. Read here rather than in the finally below, because that
+            # is where the flag gets cleared.
+            interrupted = session.cancel_event.is_set()
+            if not interrupted:
+                err = ActionError("agent_failed", str(e))
+                session.cs.last_error = err
+                out.ok = False
+                out.error = err.to_dict()
+                # Deliberately *not* also appended to ``out.messages``: a
+                # frontend renders both channels, so the same sentence arrived
+                # twice — once bare and once as "Error: ...".
+                # ``render_error`` is required of every frontend, so the error
+                # channel alone is enough.
+                crash_error = str(e)
+            else:
+                logger.info("agent turn for %s ended by cancellation: %s",
+                            session.key, e)
             # A restart requested by a turn that then crashed is void — the
             # finally below must reclaim priority for the user as usual.
             session.restart_turn = False
-            crash_error = str(e)
         finally:
             # Read before the clear below — this is the only record of whether
             # the turn was actually interrupted (used for the no-reply label).
@@ -483,7 +507,15 @@ class ConversationRuntime:
             })
             return out
 
-        if reply:
+        if was_cancelled:
+            # Nothing. The ``/cancel`` action already answered "Cancelled." on
+            # its own thread, and this result would render a second copy — or,
+            # worse, fall through to the ``new_messages`` branch below and
+            # surface the last assistant content, which is agent output
+            # arriving after the person stopped the agent. Silence here is
+            # what makes the cancel the last word.
+            pass
+        elif reply:
             # The reply's SESSION_MESSAGE was already emitted when the loop
             # recorded the send_text row (see ConversationLoop._record).
             out.messages.append(reply)
@@ -495,10 +527,10 @@ class ConversationRuntime:
             # Agent ended without final text but produced messages — surface
             # the last assistant content if any, otherwise say what happened.
             last_assistant = next((m for m in reversed(new_messages) if m.get("role") == "assistant"), None)
-            fallback = "Cancelled." if was_cancelled else "(The agent ended its turn without a reply.)"
+            fallback = "(The agent ended its turn without a reply.)"
             out.messages.append(last_assistant.get("content") if last_assistant and last_assistant.get("content") else fallback)
         else:
-            out.messages.append("Cancelled." if was_cancelled else "(The agent ended its turn without a reply.)")
+            out.messages.append("(The agent ended its turn without a reply.)")
 
         out.attachments.extend(attachments)
         out.data.setdefault("conversation_id", session.conversation_id)
@@ -732,6 +764,36 @@ class ConversationRuntime:
             return None
         session = self.sessions.get(key)
         return session.conversation_id if session else None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Interruption — the other half of ``cancel_event``. The flag says a turn
+    # is over; this ends the call that is holding it open. Two stoppers,
+    # because the two things a turn blocks on are answered differently: the
+    # model call is one named box the pool leased, and tool calls are whatever
+    # ephemeral runs the sandbox is tracking for this session.
+    # ──────────────────────────────────────────────────────────────────
+
+    def _interrupt_work(self, session) -> int:
+        """End whatever this session is currently blocked on. Never raises.
+
+        One place, so a third kind of blocking call cannot reintroduce the
+        freeze by forgetting to be stopped — the same argument
+        ``sandbox.events.publish`` and ``handlers.kernel._drive`` make for
+        theirs. Best-effort at every step: a stopper that fails must not leave
+        the cancel half-applied, since a turn that is flagged cancelled and
+        still running is worse than either end of that.
+        """
+        stopped = 0
+        try:
+            stopped += session.interrupt()
+        except Exception:
+            logger.exception("interrupting session %s failed", session.key)
+        try:
+            from sandbox.bridge import get_sandbox
+            stopped += get_sandbox().interrupt_session(session.key)
+        except Exception:
+            logger.exception("interrupting sandbox runs for %s failed", session.key)
+        return stopped
 
     # ──────────────────────────────────────────────────────────────────
     # Attendance — "is a human present at this session right now?" The

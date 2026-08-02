@@ -15,6 +15,7 @@ from __future__ import annotations
 
 
 import contextlib
+import logging
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +23,8 @@ from typing import Any
 from state_machine.conversation import ConversationState
 from state_machine.errors import ActionResult
 from runtime.notifications import DEFAULT_NOTIFICATION_MODE
+
+_logger = logging.getLogger("Runtime")
 
 
 @dataclass
@@ -47,6 +50,56 @@ class RuntimeResult:
             self.error = result.error.to_dict()
             self.messages.append(result.error.message)
         return self
+
+
+class _InterruptSlot:
+    """One armable place in a session's interrupt registry.
+
+    Occupies its slot for the life of the ``interruptible`` block whether or
+    not anything was ever armed into it, so the registry stays a fixed set of
+    "calls currently in flight" rather than a list that only grows when a
+    caller happens to reach the arming point.
+    """
+
+    __slots__ = ("_session", "_stop")
+
+    def __init__(self, session: "RuntimeSession"):
+        self._session = session
+        self._stop = None
+        with session.lock:
+            session._interrupts.append(self)
+
+    def arm(self, stop) -> bool:
+        """Say what would end this call. Returns whether it was accepted.
+
+        Refused after a cancel, because the fire already happened: accepting
+        here would park a stopper nobody is left to call and leave the caller
+        blocking on exactly the thing it just asked to stop.
+        """
+        with self._session.lock:
+            if self._session.cancel_event.is_set():
+                return False
+            self._stop = stop
+            return True
+
+    @property
+    def armed(self) -> bool:
+        """Whether a stopper is currently parked here."""
+        return self._stop is not None
+
+    def _disarm(self):
+        """Vacate the slot.
+
+        Removal is by identity rather than by position: calls nest (a
+        compaction retry re-enters the model call), so an index would be
+        invalidated by whichever slot happens to leave first.
+        """
+        with self._session.lock:
+            self._stop = None
+            try:
+                self._session._interrupts.remove(self)
+            except ValueError:
+                pass
 
 
 @dataclass
@@ -156,6 +209,52 @@ class RuntimeSession:
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    # Stoppers for work currently in flight, armed by whoever is about to
+    # block. ``cancel_event`` alone is a flag nobody watches: it is read
+    # between actions, and everything slow lives *inside* one — so cancelling
+    # was only ever as immediate as the current model or tool call. See
+    # ``interruptible``. Holds :class:`_InterruptSlot` objects, one per call in
+    # flight. Ephemeral by construction, and deliberately NOT in to_marker():
+    # a stopper is a live callable.
+    _interrupts: list = field(default_factory=list, repr=False)
+
+    @contextlib.contextmanager
+    def interruptible(self):
+        """Arm a stopper for the duration of one blocking call.
+
+        Yields a slot; whoever is about to block calls ``slot.arm(stop)`` with
+        something that ends the wait, and ``interrupt`` fires it. A *slot*
+        rather than a plain argument because the caller often does not know
+        what to stop until it is already inside the call — the model path only
+        learns which box is serving it once ``Brain.chat`` has leased one.
+
+        **Arming is refused once ``cancel_event`` is set**, and that is the
+        race this whole mechanism exists to close: a cancel landing between
+        the loop's last check and the next call would otherwise register a
+        stopper nobody is left to fire, and the turn would block anyway.
+        ``interrupt`` cannot be given a second chance — it has already run.
+        """
+        slot = _InterruptSlot(self)
+        try:
+            yield slot
+        finally:
+            slot._disarm()
+
+    def interrupt(self) -> int:
+        """Fire every armed stopper. Returns how many. Never raises.
+
+        Called from the *canceller's* thread while the work it is stopping
+        blocks on another, so a stopper that raises must not take the cancel
+        down with it — a half-cancelled turn is the worst outcome available.
+        """
+        with self.lock:
+            stoppers = [slot._stop for slot in self._interrupts if slot.armed]
+        for stop in stoppers:
+            try:
+                stop()
+            except Exception:
+                _logger.exception("interrupt stopper failed for %s", self.key)
+        return len(stoppers)
 
     @contextlib.contextmanager
     def unlocked(self):

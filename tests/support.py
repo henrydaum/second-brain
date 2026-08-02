@@ -86,8 +86,14 @@ class FakeLLM:
         """Already loaded."""
         return True
 
-    def chat(self, request, on_delta=None):
-        """Record the call and answer with the next queued response."""
+    def chat(self, request, on_delta=None, on_call=None):
+        """Record the call and answer with the next queued response.
+
+        ``on_call`` is accepted and ignored: a real ``Brain`` uses it to hand
+        back a stopper for the box serving this call, and there is no box
+        here. A double that *wants* to be interruptible arms it itself — see
+        ``tests/test_cancel_immediacy.py``.
+        """
         self.calls.append(list(request.messages))
         self.records.append({"messages": list(request.messages),
                              "tools": request.tools,

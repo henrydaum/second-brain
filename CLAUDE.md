@@ -306,9 +306,22 @@ boundary. Text now goes out through `sdk.llm.delta` — token-scoped like
 `llm.proceed`, and sent as a one-way `notice` on the wire (still classified
 and recorded, just not awaited), because a reply per token would make streaming
 from a subprocess slower than not streaming. The abort boolean is simply gone:
-stopping is *cancellation*, which the kernel already owns, and a cancelled
-guest's next Request raises `Terminated`. A native backend still gets the old
-boolean, since it runs in-process and can be told.
+stopping is *cancellation*, which the kernel already owns. A native backend
+still gets the old boolean, since it runs in-process and can be told.
+
+**And giving up the answer gave up the unwind, which took a while to notice.**
+The rule everywhere else is that a cancelled guest learns at its *next*
+Request, which raises `Terminated`. A streaming loop has no next Request — the
+only one it makes is `llm.delta`, and a notice is never answered, so
+`channel.notify` can only raise on a *closed pipe*. So there was nothing to
+refuse and nothing to raise, and the loop thread sat on the pipe until the
+provider was done. A model that degenerated into repeating one token ran to
+the provider's own repetition guard, unstoppably, while `/cancel` did nothing
+anybody could see. The kernel ends such a call by ending the box
+(`PersistentBox.interrupt`, and `Brain._interrupt` which must evict it from
+`_boxes` as well as `_idle`, or the pool leases a corpse forever after). That
+is why cancelling a model call costs a subprocess start — see **Cancelling
+is immediate** below.
 
 **Attachment routing moved kernel-side.** It used to be `BaseLLM.
 _prepare_attachments`, which meant every backend inherited a method reaching
@@ -709,6 +722,46 @@ call timeout, and a cancelled `Terminated` surfaces as a failure rather than
 `ok` with no data. It used to surface as success, which is how a starved REPL
 kept polling a dead box forever: `_drive_polls` read the success, reset its
 failure count, and the terminal accepted keystrokes and did nothing.
+
+**Cancelling is immediate, because a flag is not a signal.**
+`session.cancel_event` is read *between* actions — the top of
+`ConversationLoop.drive`'s iteration — and everything slow lives *inside* one.
+So `/cancel` was only ever as immediate as the current model or tool call, and
+for a streaming model it was not immediate at all. Meanwhile the turn kept
+producing: the narration pushed alongside a tool call, the ✕ status, the final
+reply, the tail message, and — worst — the subagent barrier, which ran on a
+cancelled turn and could force a whole fresh re-drive that was not even
+cancelled, since `_drive_agent_turn`'s `finally` clears the flag on the way
+past.
+
+The flag now has subscribers. `RuntimeSession.interruptible()` arms a stopper
+for the duration of one blocking call and `interrupt()` fires them;
+`ConversationRuntime._interrupt_work` is the **one** place that does it, so a
+third kind of blocking call cannot reintroduce the freeze by forgetting to be
+stopped — the same argument `sandbox/events.publish` and
+`handlers/kernel._drive` make for theirs. Two stoppers, because the two things
+a turn blocks on are answered differently: the model call is one named box the
+pool leased (handed back through `Brain.chat(on_call=...)`, since a caller
+cannot know *which* box until the lease happens), and tool calls are whatever
+ephemeral runs the sandbox is already tracking in `Sandbox._runs` —
+`interrupt_session` filters them with `policy.chain_session`, which is exact
+rather than a guess because `bridge._root_for` already roots an agent-caused
+call at its session key. **Resident boxes are deliberately out of scope**: a
+cancel that took the transport down with it would be worse than the freeze.
+
+Two properties are load-bearing and both are about *silence*. Arming is
+**refused once the flag is set** (`_InterruptSlot.arm`), or a cancel landing
+between the loop's last check and the next call parks a stopper nobody is left
+to fire. And an interrupted turn reports as **cancelled rather than as an
+error**: killing the box makes the call fail with `box '…' died during
+'__chat__'`, which is the mechanism working, and rendering it puts an `Error:`
+on screen one line after `Cancelled.` The turn also says nothing at all in its
+own result — the `/cancel` action already answered, and the `new_messages`
+branch would otherwise surface the last assistant content, which is agent
+output arriving after the person stopped the agent. The interrupted tool still
+gets a history row (`Interrupted by user`), because an assistant `tool_calls`
+row with no matching tool row is an invalid transcript next turn; only the
+status is dropped.
 
 **Provenance.** Every Request carries a chain rooted in what *caused* the work
 (`user`, `cron:nightly_index`, a subagent). The kernel owns it as its own call

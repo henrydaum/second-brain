@@ -41,7 +41,7 @@ from .isolation import required_isolation
 from .guest.loader import install_parsers, load_entry, unload_box
 from .guest.requests import Result
 from .interpreter import Execution, Interpreter
-from .policy import Chain
+from .policy import Chain, chain_session
 from .runner import run_in_process
 from .runner_subprocess import run_in_subprocess
 from .validator import validate_file
@@ -530,6 +530,37 @@ class Sandbox:
         outcome = box.stop()
         unload_box(name)
         return outcome
+
+    # ──────────────────────────────────────────────────────────────
+    # Interruption.
+    # ──────────────────────────────────────────────────────────────
+
+    def interrupt_session(self, session_key: str) -> int:
+        """Cancel every ephemeral run this session started. Returns how many.
+
+        What ``/cancel`` reaches for. Nothing needed plumbing: ``_runs``
+        already tracks what is in flight, ``Run.cancel`` already starves and
+        then closes the pipe, and ``bridge._root_for`` already roots an
+        agent-caused tool call at the session key it happened in — so
+        ``chain_session`` is an exact filter rather than a guess.
+
+        **Resident boxes are deliberately out of scope.** A service or a
+        frontend is not the turn's work, and a cancel that took the transport
+        down with it would be worse than the freeze it is fixing. Only
+        ephemeral runs live in ``_runs``; the model call is stopped separately
+        and by name.
+        """
+        if not session_key:
+            return 0
+        with self._lock:
+            runs = [run for run in self._runs
+                    if not run.done and chain_session(run.chain) == session_key]
+        for run in runs:
+            run.cancel()
+        if runs:
+            logger.info("interrupted %d run(s) for session %s",
+                        len(runs), session_key)
+        return len(runs)
 
     # ──────────────────────────────────────────────────────────────
     # Teardown.

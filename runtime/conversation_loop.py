@@ -20,6 +20,8 @@ until input arrives.
 from __future__ import annotations
 
 
+import contextlib
+import inspect
 import json
 import logging
 import time
@@ -44,6 +46,29 @@ logger = logging.getLogger("ConversationLoop")
 def _clean(text: str | None) -> str:
     """The one cleaner. Deltas run through the same filter, incrementally."""
     return filter_text(text or "")
+
+
+def _accepts_on_call(chat) -> bool:
+    """Whether this brain can hand back a stopper for the call it is placing.
+
+    A real :class:`llm.registry.Brain` can; anything else duck-typed into the
+    brain slot may not, and ``usable_brain`` has never required more than
+    ``chat(request, on_delta=None)``. Asked rather than tried, because
+    catching ``TypeError`` around the call would also swallow one raised
+    *inside* the backend — turning a provider bug into a silently
+    uninterruptible call.
+
+    Not being able to offer one is not a failure: it means this brain cannot
+    be stopped mid-call, which is what the behaviour was for everybody before
+    the slot existed.
+    """
+    try:
+        params = inspect.signature(chat).parameters
+    except (TypeError, ValueError):
+        return False
+    return ("on_call" in params
+            or any(p.kind is inspect.Parameter.VAR_KEYWORD
+                   for p in params.values()))
 
 
 def _truncate_middle(text: str, max_chars: int) -> str:
@@ -355,7 +380,15 @@ class ConversationLoop:
                 # the quiet failure this whole mechanism exists to prevent,
                 # so it is asked on every path out rather than on the two
                 # that happened to be doorways.
-                if self._subagent_barrier(self._session()):
+                #
+                # Every path out *except* a cancel. ``subagents.cancel_for``
+                # already stopped this turn's children, so there is nothing
+                # left worth delivering — and a barrier that collects sets
+                # ``restarting``, which re-drives. The re-drive is not even
+                # cancelled: ``_drive_agent_turn``'s finally clears
+                # ``cancel_event`` on the way past. That is a whole fresh
+                # agent turn arriving after the person said stop.
+                if not self._cancelled() and self._subagent_barrier(self._session()):
                     restarting = True
                 else:
                     # Only nudge the LLM for a wrap-up when the loop genuinely
@@ -484,6 +517,16 @@ class ConversationLoop:
             self._pending_ephemeral_notes.clear()
         response = self._invoke(messages, schemas or None, bundle, history, tool_choice=tool_choice)
 
+        # Cancelled while the model was answering. Everything below this line
+        # *renders* — narration to the frontend, a final reply, an open stream
+        # closed with text — so it is the last point at which the answer can
+        # be dropped rather than shown. Dropping it is the whole promise of
+        # ``/cancel``: no agent output after the cancel lands. The response is
+        # discarded, not recorded; the turn ends where the person stopped it.
+        if self._cancelled():
+            self._finish_stream(aborted=True)
+            return None, None
+
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
             cleaned = _clean(getattr(response, "content", None))
@@ -559,6 +602,16 @@ class ConversationLoop:
         """Serialize the action's outcome into `(text, attachment_paths)`."""
         if "__invalid_arguments__" in (args or {}):
             return json.dumps({"error": f"Invalid JSON in tool arguments: {args['__invalid_arguments__']}"}), []
+
+        # Killed by ``/cancel`` rather than by anything about the tool. What
+        # the box actually reported is a corpse's error ("box died during
+        # 'run'"), which would read to the model next turn as a broken tool
+        # and invite a retry of work the person just stopped. The row itself
+        # is not optional: an assistant ``tool_calls`` row with no matching
+        # tool row is an invalid transcript, so this is written even though
+        # nothing renders it.
+        if self._cancelled():
+            return json.dumps({"error": "Interrupted by user."}), []
 
         # The `call_tool` action's data carries the underlying ToolResult.
         payload = (getattr(result, "data", None) or {})
@@ -835,11 +888,28 @@ class ConversationLoop:
             "model": getattr(llm, "model_name", None),
             "streaming": streaming,
         })
-        try:
-            response = self._invoke_inner(request, streaming)
-        except Exception as e:
-            self._emit_llm_finished(llm, llm_call_started, ok=False, error=str(e))
-            raise
+        # Armed for the duration of the call, so ``/cancel`` on another thread
+        # can end it. This is the one long block in the turn that cancellation
+        # could not previously reach: a streaming backend's only outbound
+        # Request is a one-way notice, so starving it reaches nothing and this
+        # thread sits on the pipe until the provider is done. What gets armed
+        # is the box the pool leased — hence a slot filled from inside the
+        # call rather than a stopper we could name up front.
+        # Asked of the session by name rather than by type, like every other
+        # session read in this file: a turn can be driven against a stand-in
+        # that carries only the few attributes its test needs, and a loop that
+        # insists on the full dataclass fails on the rig instead of the code.
+        # A session that cannot offer a slot simply cannot be interrupted
+        # mid-call, which is what the old behaviour was for everybody.
+        interruptible = getattr(self._session(), "interruptible", None)
+        with (interruptible() if interruptible is not None
+              else contextlib.nullcontext(None)) as slot:
+            on_call = getattr(slot, "arm", None)
+            try:
+                response = self._invoke_inner(request, streaming, on_call=on_call)
+            except Exception as e:
+                self._emit_llm_finished(llm, llm_call_started, ok=False, error=str(e))
+                raise
         self._emit_llm_finished(llm, llm_call_started, ok=True, response=response)
         return response
 
@@ -855,13 +925,16 @@ class ConversationLoop:
             "has_tool_calls": bool(getattr(response, "has_tool_calls", False)),
         })
 
-    def _invoke_inner(self, request, streaming):
+    def _invoke_inner(self, request, streaming, on_call=None):
         """Issue one LLM call with streaming.
 
         Wrapped by ``_call_backend``, which brackets it with the
         AGENT_LLM_CALL_STARTED / _FINISHED bus events. Extra provider kwargs
         (``request.params``, ``tool_choice``) are forwarded only when set, so
         backends and test fakes that don't accept them are never surprised.
+        ``on_call`` follows the same rule for the same reason — it is how the
+        cancel path learns which box is serving this call, and a brain that
+        does not offer one simply cannot be interrupted mid-call.
         Failures — including error-shaped responses — are raised; the
         compaction layer above catches context-limit ones and retries."""
         from llm import LLMRequest
@@ -885,8 +958,12 @@ class ConversationLoop:
                 self._stream_seq = 0
                 self._stream_emitted = False
                 self._stream_filter = ModelTextFilter()
+            extra = ({"on_call": on_call}
+                     if on_call is not None and _accepts_on_call(llm.chat)
+                     else {})
             response = llm.chat(
-                outgoing, on_delta=self._emit_delta if streaming else None)
+                outgoing, on_delta=self._emit_delta if streaming else None,
+                **extra)
         except Exception:
             # Any deltas already shown are now stale — tell frontends to
             # discard the partial line before the retry/raise above.
@@ -1388,8 +1465,15 @@ class ConversationLoop:
         return name, call_id
 
     def _tool_finished(self, started, result=None, error: str | None = None):
-        """Internal helper to handle tool finished."""
-        if not started or not self.on_tool_result:
+        """Internal helper to handle tool finished.
+
+        Silent on a cancelled turn. The tool was killed mid-run by the cancel
+        itself, so its ✕ says nothing about the tool and everything about the
+        thing the person already knows they did — and the promise is that
+        ``Cancelled.`` is the last line they see. The history row is still
+        written (see ``_format_tool_result``); only the status is dropped.
+        """
+        if not started or not self.on_tool_result or self._cancelled():
             return
         name, call_id = started
         try:

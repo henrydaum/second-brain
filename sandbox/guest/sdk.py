@@ -797,9 +797,15 @@ class _LLM(_Namespace):
         rather than a round trip per chunk.
 
         There is deliberately nothing to check here. Whether the user wants
-        this stream to continue is the kernel's decision, not the backend's:
-        if they cancel, this execution is cancelled and the next Request
-        raises ``Terminated``.
+        this stream to continue is the kernel's decision, not the backend's.
+
+        Note what that decision costs, because it is not the usual one. A
+        cancelled execution normally unwinds at its *next* Request, which
+        answers ``Terminated`` — but a streaming loop's only Request is this
+        one, and a notice is never answered. So there is nothing to refuse and
+        nothing to raise, and the kernel ends such a call by ending the box
+        (``PersistentBox.interrupt``). Do not add a check here hoping to be
+        told: the boundary cannot tell you.
         """
         if not text:
             return

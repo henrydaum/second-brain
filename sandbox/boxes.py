@@ -213,6 +213,28 @@ class PersistentBox:
         """Shut down: ask, then starve, then kill."""
         raise NotImplementedError
 
+    def interrupt(self):
+        """End this box now, at somebody's request rather than on a deadline.
+
+        The same escalation the watchdog reaches for, asked for out loud. It
+        is the *only* thing that stops a call whose guest is not waiting on
+        the kernel for anything: a backend streaming tokens sends
+        ``sdk.llm.delta``, which is a one-way notice, so starvation has
+        nothing to refuse and the caller blocks until the provider is done.
+        Ending the box ends both sides, which is why cancelling a model call
+        costs the box.
+
+        Marks it dead like every other route here, so a pool holding this box
+        must drop its reference (see ``llm.registry.Brain._interrupt``) rather
+        than lease out a corpse. In-process there is no kill and the surviving
+        worker thread is exactly why the box cannot be reused — the same
+        reasoning the deadline path already spells out in ``InProcessBox``.
+        """
+        self._alive = False
+        interpreter = getattr(self, "_interpreter", None)
+        if interpreter is not None:
+            interpreter.cancel(self.execution)
+
     def _call(self, method: str, args: tuple, kwargs: dict,
               target: str = "") -> Result:
         """Runner-specific call."""
@@ -493,6 +515,10 @@ class SubprocessBox(PersistentBox):
         if message["kind"] == protocol.FAULT:
             return fault_result(message, self.name)
         return Result.from_dict(message["result"])
+
+    def interrupt(self):
+        """Starve, then close the pipe. The subprocess half of the base's rule."""
+        self._kill()
 
     def _starve(self):
         """Stop answering this box's Requests so a stuck call unwinds."""

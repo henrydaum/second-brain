@@ -543,6 +543,13 @@ class SubagentRegistry:
         event = getattr(session, "cancel_event", None)
         if event is not None:
             event.set()
+            # A child blocks on a model call exactly like a foreground turn
+            # does, so the flag alone leaves it running until the provider is
+            # finished — with nobody left to read the answer. Same order as
+            # ``/cancel``: flag, then stoppers.
+            interrupt = getattr(self.runtime, "_interrupt_work", None)
+            if interrupt is not None:
+                interrupt(session)
         handle._done.set()
         for child in children:
             self.cancel(child)
