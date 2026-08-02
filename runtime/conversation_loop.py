@@ -400,6 +400,8 @@ class ConversationLoop:
                     if not self._restart_requested():
                         self._enact_logged(cs, "end_turn", None, actor_id)
 
+            if self._cancelled():
+                self._record_cancellation(history, new_messages, db, conversation_id)
             return self._final_text, new_messages, attachments
         finally:
             # Belt-and-braces: a cancel or unexpected exit can leave a stream
@@ -1380,6 +1382,39 @@ class ConversationLoop:
         self._finish_stream(text, "final")
         self._final_text = text
         self._absorb(self._enact_logged(cs, "send_text", text, actor_id), "send_text", text, history, new_messages, attachments, db, conversation_id)
+
+    CANCEL_NOTICE = (
+        "[The user cancelled the previous turn. Everything it had started — "
+        "tool calls, background agents — was stopped and produced no results, "
+        "and nothing from it is still coming. Do not resume that work, report "
+        "on it, or offer to wait for it unless you are asked to.]"
+    )
+
+    def _record_cancellation(self, history, new_messages, db, conversation_id) -> None:
+        """Leave one row saying the turn was stopped.
+
+        Without it a cancelled turn leaves **no trace in the transcript at
+        all**: the last rows are the agent's own tool calls — five successful
+        ``spawn_subagent`` results, say — and the next user message simply
+        follows. The model reads its own plan back, sees no evidence anything
+        ended, and offers to wait for results that were cancelled minutes ago.
+
+        Written here rather than queued on ``session.pending_user_messages``,
+        which was the first attempt and was worse than the problem: that list
+        is a *drive trigger*, drained by ``handle_action``'s closing-race
+        check into a fresh ``send_text`` — so the notice started a whole new
+        agent turn, and one that was no longer cancelled, since the flag is
+        cleared on the way out. Recorded on the loop's own thread, at the one
+        point the turn is known to be over, it reaches the model at its next
+        call and starts nothing.
+
+        One sentence for every cancel, rather than a tailored one: what
+        differs between "a tool was running" and "five agents were running" is
+        not something the model needs to act on differently, and the branch
+        cost a boolean threaded through two files.
+        """
+        self._record({"role": "user", "content": self.CANCEL_NOTICE},
+                     history, new_messages, db, conversation_id)
 
     def _cancelled(self) -> bool:
         """Internal helper to handle cancelled."""

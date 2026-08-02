@@ -388,84 +388,102 @@ def test_a_normal_turn_still_says_what_it_always_said(conv_runtime):
 
 # ── Telling the model it was cancelled ───────────────────────────────
 
-def test_the_next_turn_is_told_the_last_one_was_cancelled(conv_runtime):
+def test_a_cancelled_turn_leaves_a_row_saying_so(conv_runtime):
     """A cancelled turn used to leave no trace in the transcript at all.
 
-    The last rows are the agent's own tool calls; the next user message
-    simply follows. Nothing says the turn was stopped, so the model reads
-    its own plan and carries on executing it.
+    The last rows are the agent's own tool calls — five successful
+    ``spawn_subagent`` results, say — and the next user message simply
+    follows. The model reads its own plan back, sees no evidence anything
+    ended, and offers to wait for results cancelled minutes ago.
     """
-    rt, session, _ = conv_runtime()
-    rt.handle_action(session.key, "cancel")
+    class _Late(FakeLLM):
+        def chat(self, request, on_delta=None, on_call=None):
+            session.cancel_event.set()
+            return response(content="ignored")
 
+    session = _session()
+    loop, session, _ = _cancelled_loop(_Late(), session)
+    history = [{"role": "user", "content": "hi"}]
+
+    loop.drive(session.cs, "agent", history)
+
+    assert history[-1]["role"] == "user"
+    assert "cancelled the previous turn" in history[-1]["content"]
+    assert "nothing from it is still coming" in history[-1]["content"]
+
+
+def test_an_uncancelled_turn_leaves_no_such_row(conv_runtime):
+    session = _session()
+    loop, session, _ = _cancelled_loop(FakeLLM([response(content="done")]), session)
+    history = [{"role": "user", "content": "hi"}]
+
+    loop.drive(session.cs, "agent", history)
+
+    assert not any("cancelled the previous turn" in str(m.get("content") or "")
+                   for m in history)
+
+
+def test_the_notice_does_not_start_a_new_turn(conv_runtime):
+    """The bug the first attempt shipped, and the reason this row is written
+    by the loop rather than queued on ``pending_user_messages``.
+
+    That list is a *drive trigger*: ``handle_action``'s closing-race check
+    pops it and dispatches it as a fresh ``send_text``. So the notice started
+    a whole new agent turn — one that was no longer cancelled, since the flag
+    is cleared on the way out, and which happily re-ran the searches the
+    person had just stopped.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    class _Blocking(FakeLLM):
+        def chat(self, request, on_delta=None, on_call=None):
+            calls.append(1)
+            if len(calls) > 1:
+                raise AssertionError(
+                    "the cancel notice drove a second turn")
+            if on_call is not None:
+                on_call(release.set)
+            entered.set()
+            release.wait(timeout=10)
+            raise RuntimeError("interrupted")
+
+    rt, session, _ = conv_runtime()
+    rt.services["llm"] = _Blocking()
+
+    turn = threading.Thread(
+        target=rt.handle_action, args=(session.key, "send_text", "go"),
+        daemon=True)
+    turn.start()
+    assert entered.wait(timeout=10)
+
+    rt.handle_action(session.key, "cancel")
+    turn.join(timeout=10)
+
+    assert not turn.is_alive()
+    assert len(calls) == 1
     assert session.pending_user_messages == []
 
-    session.busy = True
-    rt.handle_action(session.key, "cancel")
 
-    assert len(session.pending_user_messages) == 1
-    notice = session.pending_user_messages[0]
-    assert "cancelled your previous turn" in notice
-    assert "did not finish" in notice
+def test_the_notice_is_in_front_of_the_model_on_the_next_turn(conv_runtime):
+    """End to end: recorded into history by the cancelled turn, so the next
+    call carries it whether or not anything drained a queue."""
+    class _Late(FakeLLM):
+        def chat(self, request, on_delta=None, on_call=None):
+            session.cancel_event.set()
+            return response(content="ignored")
 
-
-def test_the_notice_survives_the_queue_being_cleared(conv_runtime):
-    """Cancel drops queued user messages, and the notice is queued after.
-
-    Reversed, the notice would be swallowed by the very clear that makes
-    room for it — and the failure is silent, because an empty queue is
-    exactly what an uncancelled session has.
-    """
     rt, session, _ = conv_runtime()
-    session.busy = True
-    session.pending_user_messages.extend(["stale one", "stale two"])
+    rt.services["llm"] = _Late()
+    rt.handle_action(session.key, "send_text", "first question")
 
-    rt.handle_action(session.key, "cancel")
-
-    assert len(session.pending_user_messages) == 1
-    assert "stale" not in session.pending_user_messages[0]
-
-
-def test_stopped_subagents_are_named_as_producing_nothing(conv_runtime):
-    """The reported symptom: "I'll wait for the four subagents to finish",
-    said about agents cancelled minutes earlier. Saying the turn stopped is
-    not enough — it leaves "but the background work might still land" open."""
-    rt, session, _ = conv_runtime()
-    session.busy = True
-    rt.subagents.cancel_for = lambda owner: 4
-
-    rt.handle_action(session.key, "cancel")
-
-    notice = session.pending_user_messages[0]
-    assert "none are coming" in notice
-    assert "offer to wait for them" in notice
-    assert "4" not in notice, "a count the model would repeat must be right"
-
-
-def test_a_turn_with_no_subagents_says_nothing_about_them(conv_runtime):
-    rt, session, _ = conv_runtime()
-    session.busy = True
-
-    rt.handle_action(session.key, "cancel")
-
-    assert "background agents" not in session.pending_user_messages[0]
-
-
-def test_the_notice_reaches_history_on_the_next_turn(conv_runtime):
-    """End to end: queued as an agent-facing message, drained into the
-    transcript at the next turn's first loop boundary, and therefore in
-    front of the model before it says anything."""
-    rt, session, _ = conv_runtime([response(content="understood")])
-    session.busy = True
-    rt.handle_action(session.key, "cancel")
-    session.busy = False
-
+    second = FakeLLM([response(content="understood")])
+    rt.services["llm"] = second
     rt.handle_action(session.key, "send_text", "different question")
 
-    prompts = "\n".join(
-        str(m.get("content") or "")
-        for m in rt.services["llm"].calls[0])
-    assert "cancelled your previous turn" in prompts
+    prompts = "\n".join(str(m.get("content") or "") for m in second.calls[0])
+    assert "cancelled the previous turn" in prompts
 
 
 # ── The sandbox half ─────────────────────────────────────────────────
