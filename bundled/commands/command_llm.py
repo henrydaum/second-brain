@@ -41,6 +41,7 @@ class LlmCommand(BaseCommand):
         "llm.list", "llm.load", "llm.unload",
     ]
     agent_prompt = (
+        "## Current model\n"
         "The default LLM can be switched mid-conversation with /llm. Earlier "
         "assistant turns in this conversation may have been produced by a "
         "different model; the [SYSTEM CONTEXT UPDATE] block names the model "

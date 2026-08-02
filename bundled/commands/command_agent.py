@@ -20,6 +20,7 @@ class AgentCommand(BaseCommand):
     category = "System"
     requests = ["config.read", "config.write", "tool.list"]
     agent_prompt = (
+        "## Agent profiles\n"
         "Agent profiles can be switched mid-conversation with /agent, changing "
         "the LLM, tool access, and extra instructions from that point on. The "
         "[SYSTEM CONTEXT UPDATE] block names the profile active for the "

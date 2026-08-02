@@ -61,6 +61,7 @@ class ModeCommand(BaseCommand):
     requests = ["session.get", "session.set_mode"]
 
     agent_prompt = (
+        "## Permission mode\n"
         "The user controls how this conversation answers permission requests "
         "with /mode (lockdown, ask, yolo). You are told which mode is active "
         "when it is not the default. If something of yours is refused because "

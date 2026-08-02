@@ -146,28 +146,47 @@ plugin goes in that family's own `helpers/` subfolder.
 That same set of folders appears in three **trees**, named for where the code
 came from: `bundled/` in the project root ships with the app, `DATA_DIR/installed`
 is delivered by the package store, and `DATA_DIR/workspace` is the agent's own —
-the one place it may write without asking, because everything under it runs in a
-subprocess. Bundled plugins are source-controlled; the other two live in the
+its free-write code tree, because everything under it runs in a
+subprocess. The user can separately open user-owned folders through
+`fs_writable_dirs`; those are work destinations, not extension trees. Bundled plugins are source-controlled; the other two live in the
 Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; the kernel plugin watcher then syncs adds, edits, and deletes live.
 
-The agent can create new plugins on-the-fly. When you ask Second Brain to make a new plugin (and the validate tool is installed), it'll follow these instructions:
+The agent can create new plugins on-the-fly. When you ask Second Brain to make
+one, the kernel prompt teaches this install-independent workflow:
 
-1. Read the relevant template in `templates/`.
-2. Read a similar installed store plugin when one exists.
-3. Create or edit the plugin file with `edit_file`.
-4. Validate the file with the SDK validator and let the kernel plugin watcher auto-load it.
-5. If validation or loading fails, fix the same file and repeat until it conforms and loads.
-6. To remove it durably and from the live runtime, delete the workspace file; the kernel plugin watcher unloads it.
+1. Read `docs/SDK.md`.
+2. Read the relevant file in `templates/` from top to bottom.
+3. Follow the code pointers in those documents when a detail is still unclear.
+4. Create or edit the file under the matching `DATA_DIR/workspace/` root.
+5. Validate it through `sdk.plugins.validate` or any currently installed tool
+   exposing that Request, then run or register it and verify a small behavior.
+6. If validation or loading fails, fix the same file and repeat until it
+   conforms and works.
 
-These instructions are supplied by the validate tool's `agent_prompt` method. Plugins can declare their own system prompt text too. If a plugin is not loaded, its text takes no context. One name has two shapes: write `agent_prompt = "..."` when the text never changes, or `def agent_prompt(self, sdk)` when it depends on live state. The system prompt is recalculated with every step of the conversation while preserving stable prompt blocks for caching.
+Plugins can declare their own system prompt text. If a plugin is not loaded,
+its text takes no context. One name has two shapes: write
+`agent_prompt = "..."` when the text never changes, or
+`def agent_prompt(self, sdk)` when it depends on live state. The system prompt
+is recalculated with every step of the conversation while preserving stable
+prompt blocks for caching.
 
 In other words, the system prompt has been fully engineered.
 
 ## Security
 
-Rogue plugins are the primary security issue for Second Brain. If a plugin gets an infection, it's important to prevent it from taking down the whole system. Plugins written against the sandbox SDK cannot act on the outside world at all — every effect is a typed Request the kernel classifies and executes on their behalf — and agent-authored ones run in a subprocess with bounded CPU and memory, so a runaway is killed rather than tolerated. Service loads are given a timeout; if they can't get the job done within that timeframe, it gets cancelled. This fixes freezes. There's also a system fallback for crashes. If Second Brain crashes, then it will restart itself automatically. When this happens, all your conversations will be reloaded exactly where they were, even if you were in the middle of a command.
+Sandbox plugins cannot act on the outside world directly. Every mediated effect
+is a typed Request that the kernel classifies, executes, and records on their
+behalf. Validation blocks direct kernel access; provenance determines process
+isolation; permission policy decides whether each Request is allowed, refused,
+or shown to the user. Agent-authored workspace code is always subprocessed.
+Installed code is subprocessed when its imports or declarations require it.
 
-The bad news: rogue plugins can still kill Second Brain. All plugins run in-process, which means that there are no subprocesses. If a plugin calls `os._exit()`, then it will take down the whole process. Like malware, a plugin can theoretically prompt the agent to mine for private information and share it. Although no plugins like this exist in the store (they have been vetted by me personally), you should make sure you trust plugins before adding them to your runtime. And when writing new plugins for Second Brain, you should use an intelligent model that won't mess things up. Consider using Codex or Claude Code for in-depth coding exercises.
+Third-party libraries are the important limit: their internal I/O cannot be
+converted into Requests, so they are isolated and disclosed rather than
+treated as fully mediated. Treat extension installation as a capability change,
+not as a harmless file copy. See `docs/The Second Brain Security Contract.md`
+for the model, `docs/PERMISSIONS_MAP.md` for the decision order, and
+`docs/SECURITY_CONTRACT_APPENDIX.md` for the Request catalogue.
 
 ## File Indexing And Retrieval
 
@@ -436,6 +455,8 @@ Second Brain/
 │   ├── command_template.py
 │   ├── frontend_template.py
 │   ├── hook_template.py
+│   ├── llm_backend_template.py
+│   ├── parser_template.py
 │   ├── script_template.py
 │   ├── service_template.py
 │   ├── task_template.py
@@ -446,7 +467,7 @@ Second Brain/
     ├── database.db
     ├── attachment_cache/
     ├── memory/
-    ├── workspace/          # the agent's tree — the only writable one
+    ├── workspace/          # the agent-owned, freely writable tree
     │   ├── tools/
     │   ├── tasks/
     │   ├── services/
@@ -471,6 +492,8 @@ may declare, and then the template for what is specific to that family:
 - `templates/script_template.py` — sandboxed code that is not a plugin
 - `templates/frontend_template.py`
 - `templates/hook_template.py`
+- `templates/parser_template.py`
+- `templates/llm_backend_template.py`
 
 `docs/MIGRATING_PLUGINS.md` covers converting an existing native plugin.
 
@@ -486,7 +509,7 @@ Authoring rules:
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
 - Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
 
-For source-controlled additions, place stable app-shipped plugins under the matching `bundled/` family. For live experimentation, keep them under `DATA_DIR/workspace`, run the validate tool, and let the kernel plugin watcher load them.
+For source-controlled additions, place stable app-shipped plugins under the matching `bundled/` family. For live experimentation, keep them under `DATA_DIR/workspace`, validate them, and then run or register them. `DATA_DIR/workspace` is agent-owned. The separate `fs_writable_dirs` setting may open user-owned project folders for no-dialog writes; those remain user data and are not extension discovery roots.
 
 ## Philosophy
 

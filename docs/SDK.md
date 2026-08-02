@@ -4,6 +4,65 @@
 
 ---
 
+## How to use this guide
+
+Read this document **before writing any new script or extension**. Then read the
+matching file in `templates/` from top to bottom. The two documents have
+different jobs:
+
+- `docs/SDK.md` defines what all sandbox code can ask the kernel to do, how
+  Requests return and fail, what validation rejects, and where the underlying
+  contracts live.
+- `templates/<type>_template.py` defines that type's filename, folder,
+  declarations, lifecycle, entry-point signature, and common failure modes. It
+  also contains executable examples.
+
+Do not infer an API from a similar framework or an older Second Brain plugin.
+If this guide and the template do not answer a detail, follow their code
+pointer and inspect the implementation. The shortest safe authoring loop is:
+
+1. Choose the code type with the table below.
+2. Read this guide and its template.
+3. Write the file under `<DATA_DIR>/workspace/<root>/`.
+4. Validate it with `sdk.plugins.validate(path)` (or the installed validation
+   tool that exposes the same operation).
+5. Run a script or register/reload a plugin, then verify its smallest useful
+   behavior. Writing a file and activating it are separate operations.
+
+| Need | Write | Read next |
+|---|---|---|
+| One-off computation or a reusable private routine | script | `templates/script_template.py` |
+| An action the model can call | tool | `templates/tool_template.py` |
+| File- or event-driven pipeline work | task | `templates/task_template.py` |
+| A persistent shared capability | service | `templates/service_template.py` |
+| A slash workflow the user invokes | command | `templates/command_template.py` |
+| A new user interaction surface | frontend | `templates/frontend_template.py` |
+| A file-type reader | parser | `templates/parser_template.py` |
+| A model-provider connection | LLM backend | `templates/llm_backend_template.py` |
+| A service that influences agent turns | hook | `templates/hook_template.py` and `sandbox/guest/hooks.py` |
+
+### Where to look when this guide stops
+
+These are implementation references, not additional prerequisites:
+
+| Question | Authoritative code |
+|---|---|
+| Which roots and filename prefixes exist? | `trees.py` |
+| What may each plugin family declare? | `sandbox/guest/bases.py` |
+| What methods and signatures does `sdk` expose? | `sandbox/guest/sdk.py` |
+| What Request names exist and how failures are represented? | `sandbox/guest/requests.py` |
+| Why was a Request safe, gated, or refused? | `sandbox/policy.py`, then `docs/PERMISSIONS_MAP.md` |
+| What source patterns does validation allow? | `sandbox/validator.py` |
+| Why does code run in- or out-of-process? | `sandbox/isolation.py` |
+| How are plugins discovered and adapted? | `plugins/plugin_discovery.py`, `sandbox/bridge.py` |
+| How are parsers or model backends discovered? | `parsing/registry.py`, `llm/registry.py` |
+
+`CLAUDE.md` is the broad architecture map when a change crosses several of
+these areas. `docs/MIGRATING_PLUGINS.md` is only for converting old native
+plugins; do not use the old contract for new code.
+
+---
+
 ## The model, in one paragraph
 
 Your code cannot act. It can only **ask**. Anything that touches disk, network,
@@ -12,6 +71,19 @@ whether to allow it, does the work, and hands back the answer. Everything else
 — arithmetic, string handling, your own logic — runs normally and costs
 nothing. You are not writing async code and there are no callbacks: a Request
 looks and behaves like an ordinary blocking function call.
+
+Validation, isolation, and permission are different layers. Validation limits
+what code may do directly. Isolation decides which process holds it. Permission
+decides whether the kernel will perform a particular Request. Passing validation
+or running in a subprocess never grants a Request.
+
+The agent owns `<DATA_DIR>/workspace/`: it may freely create, replace, move, or
+delete files there. The user may separately configure `fs_writable_dirs`.
+Those are **user-owned folders opened to the agent**, not extra agent workspace.
+Writes there do not prompt, but code must touch them only when the user's task
+calls for it and must preserve unrelated work. The source tree and installed
+package tree remain protected from that standing grant. See
+`docs/PERMISSIONS_MAP.md` and `sandbox/policy.py` for the exact decision path.
 
 ---
 
@@ -33,10 +105,11 @@ def main(sdk, path):
 
 That is a complete, runnable sandbox program.
 
-**Put it in `scripts/`** — `<DATA_DIR>/workspace/scripts/<name>.py`,
+**Put agent-authored scripts in `scripts/`** —
+`<DATA_DIR>/workspace/scripts/<name>.py`,
 which `sdk.paths.get("scripts")` will tell you. The directory is the whole
-declaration, the way `helpers/` is: there is no prefix, no base class and no
-keyword that could say what this file is, so where it sits has to.
+declaration: there is no prefix, base class, or keyword that could say what
+this file is, so where it sits has to.
 
 Run it with `sdk.scripts.run(path)`, which calls `main(sdk)` by default and
 hands back what it returned. **This is what to reach for instead of
@@ -65,6 +138,10 @@ Subclass a base when the *kernel* has to register and schedule the thing.
 The filename must carry the family prefix — `tool_*.py`, `task_*.py`,
 `service_*.py`, `command_*.py`, `frontend_*.py` — because discovery finds
 plugins by filename.
+
+Before writing it, read the template for its family. The template is more
+specific than this overview and wins if an example here omits a declaration or
+lifecycle detail.
 
 ```python
 """Count the words in a file."""
@@ -1262,11 +1339,14 @@ own database is still an error, caught at `db.conn` rather than at the import.
 
 ## Things worth knowing
 
-**Safe work is silent.** Reads, database queries, scratch writes, calling
-tools and services — none of these interrupt anyone. The user is asked only
-for things that reach outside or change what the system can do: network
-requests, shell commands, writes outside scratch, config changes, installing
-plugins, creating scheduled work.
+**Safe work is silent.** Reads, database queries, scratch and agent-workspace
+writes, writes inside a user-configured `fs_writable_dirs` folder, and calls to
+tools or services do not interrupt anyone. The two write grants are not the
+same: workspace is agent-owned; configured writable folders are user-owned and
+must be handled as user data. The user is asked for Requests that reach an
+unapproved destination or change what the system can do, including other
+network requests, shell commands, other filesystem writes, configuration
+changes, package installation, and scheduled work.
 
 **Widening capability is always checked; narrowing it never is.** Adding a
 tool to a session asks; removing one does not.
@@ -1280,12 +1360,12 @@ discovery what a file is:
 
 ```python
 config_settings = [
-    ("Brave key", "secret_brave_api_key", "API key for search.", "", {}),
+    ("Provider key", "secret_example_api_key", "API key for this service.", "", {}),
 ]
 ```
 
-`sdk.config.read("secret_brave_api_key")` then returns
-`<secret:secret_brave_api_key>` rather than the value. Pass that straight into
+`sdk.config.read("secret_example_api_key")` then returns
+`<secret:secret_example_api_key>` rather than the value. Pass that straight into
 `sdk.net.http` and the kernel substitutes the real thing on the way out, so
 your code uses a credential it never held and cannot leak one by accident. A
 setting *without* the prefix is not a secret and is handed over as-is — the
@@ -1299,7 +1379,7 @@ that performs its own network I/O — an OAuth client, a provider SDK — there 
 no Request to substitute into and you genuinely need the value:
 
 ```python
-key = sdk.secrets.reveal("gmail_client_secret")   # always asks the user
+key = sdk.secrets.reveal("provider_client_secret")   # always asks the user
 ```
 
 **Asking for your own credential does not interrupt anyone.** A plugin that

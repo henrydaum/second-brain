@@ -101,6 +101,7 @@ def build_prompt_sections(
         _profile_status(profile_name, scope),
         _services_status(services),
         _pipeline_status(db, orchestrator),
+        _filesystem_access(config),
         _sync_dirs(config),
         _agent_memory(),
         _conversation_metadata(conversation_metadata),
@@ -302,6 +303,35 @@ def _services_status(services: dict) -> str:
 def _sync_dirs(config: dict | None) -> str:
     dirs = (config or {}).get("sync_directories") or []
     return "## Sync directories\n" + ("\n".join(f"- {d}" for d in dirs) if dirs else "None configured.")
+
+
+def _filesystem_access(config: dict | None) -> str:
+    """Tell the agent which write locations are its own and which are the user's.
+
+    The distinction is security-relevant and cannot live only in static prose:
+    ``fs_writable_dirs`` is configuration, so the model needs its current value
+    in the same prompt that tells it what the grant means.
+    """
+    from paths import DATA_DIR
+
+    raw = (config or {}).get("fs_writable_dirs") or []
+    if isinstance(raw, str):
+        raw = [part.strip() for part in raw.split(",")]
+    writable = [str(item).strip() for item in raw if str(item).strip()]
+
+    lines = [
+        "## Filesystem access",
+        f"Agent-owned workspace (free write): {DATA_DIR / 'workspace'}",
+        "User-owned writable folders (free write only when the user's task "
+        "calls for it):",
+    ]
+    lines.extend(f"- {path}" for path in writable)
+    if not writable:
+        lines.append("- None configured.")
+    lines.append(
+        "Second Brain source and installed-package paths remain protected "
+        "from this standing folder grant.")
+    return "\n".join(lines)
 
 
 def _agent_memory() -> str:

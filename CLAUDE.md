@@ -4,6 +4,13 @@ Local-first AI kernel with SQLite persistence, a REPL frontend, package
 install/uninstall, and live plugin loading. Python / SQLite. Solo dev (Henry).
 The Flet GUI was removed; do not reintroduce.
 
+This file is the deep architecture map for changing the kernel. It is not the
+authoring contract for sandbox code. Before writing a script or extension,
+read `docs/SDK.md` and the matching executable template in `templates/`; use
+the code pointers there for the specific subsystem. For permission questions,
+start with `docs/PERMISSIONS_MAP.md`. Current code wins over historical notes
+in this file when they disagree.
+
 ---
 
 # ⚡ THE KERNEL (READ FIRST)
@@ -240,9 +247,9 @@ are still not watched at all: observers are scheduled non-recursively, so
 editing one silently requires a restart.
 
 The kernel keeps only the dependency-light `parse_text` parser (UTF-8 / code /
-CSV / TSV, stdlib); shared text helpers are `parsing/utils.py`, re-exported
-from `parsing` so every parser reaches them by one absolute path regardless of
-which tree it landed in. The registry carries a static native-modality default
+CSV / TSV, stdlib); the parser contract and shared text helpers live in
+`sandbox/guest/parsing.py`, which every parser imports as `guest.parsing` so
+the same file works in-process and in a subprocess. The registry carries a static native-modality default
 map so `get_modality` resolves image/audio/video with **no parser installed**
 (attachment routing relies on this). Every heavier parser is an installable
 store package (`parser-pdf`, `parser-office`, `parser-tabular`,

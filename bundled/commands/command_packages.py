@@ -58,6 +58,7 @@ class PackagesCommand(BaseCommand):
     description = "Browse, install, or uninstall store files by category"
     category = "Capabilities"
     agent_prompt = (
+        "## Package changes\n"
         "Installing or uninstalling a package changes the live catalogs: new "
         "tools and commands appear on the next turn, not instantly. After an "
         "install, re-check the tool catalog before concluding a capability is "

@@ -1,13 +1,19 @@
 """LLM BACKEND TEMPLATE — how Second Brain talks to a model.
 
-Copy this to ``llm/llm_<provider>.py`` in whichever plugin tree you are
-working in. The name matters: ``llm_*.py`` under ``helpers/`` at a tree's root
-is how the registry finds you.
+Read docs/SDK.md first, then this entire template. Copy the result to
+``DATA_DIR/workspace/llm/llm_<provider>.py``. The folder and name matter:
+``llm/llm_*.py`` is how the registry finds a backend. There is no top-level
+``helpers/`` directory.
+
+For details not defined here, inspect sandbox/guest/llm.py (the request,
+response, and streaming contract), llm/registry.py (discovery, profiles, and
+pooling), sandbox/guest/sdk.py (LLM Requests), and sandbox/isolation.py
+(containment). Validate the finished file before loading its profile.
 
 A backend is **not a plugin**. There is no family, no entry point, and nothing
 discovery registers — same as a parser. It is a class the kernel loads into a
-box and calls, and it lives under ``helpers/`` precisely because it belongs to
-no family: it is a way of reaching a model, not a capability the agent has.
+box and calls. Its dedicated ``llm/`` root exists because the model registry,
+not plugin discovery, finds and pools it.
 
 WHAT YOU ARE HANDED, AND WHAT YOU GIVE BACK
     def chat(self, sdk, request: LLMRequest) -> LLMResponse

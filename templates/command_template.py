@@ -7,6 +7,12 @@ imported by the running system.
 Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a command can declare. This file covers what is specific to commands.
 
+Before writing: read docs/SDK.md, then this entire template. For details not
+defined here, inspect sandbox/guest/bases.py (BaseCommand declarations),
+sandbox/guest/forms.py (sandbox form values), plugins/native/command.py (host
+adapter and approval declarations), and state_machine/forms.py (form
+progression). Validate the finished file before registering it.
+
   Where it goes:  DATA_DIR/workspace/commands/command_<name>.py
   Filename:       must start with "command_"
   Entry points:   run(self, sdk, args) and optionally form(self, sdk, args)

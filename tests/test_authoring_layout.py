@@ -17,6 +17,7 @@ AUTHORING_SOURCES = (
     ROOT / "templates" / "frontend_template.py",
     ROOT / "templates" / "script_template.py",
     ROOT / "templates" / "llm_backend_template.py",
+    ROOT / "templates" / "parser_template.py",
 )
 
 
@@ -26,6 +27,25 @@ def test_the_authoring_roots_come_from_the_kernel_table():
         encoding="utf-8")
     for root in trees.ROOTS:
         assert f"{root.name}/" in documented, root.name
+
+
+def test_system_prompt_teaches_the_sdk_template_and_permission_workflow():
+    documented = (ROOT / "agent" / "system_prompt_static.md").read_text(
+        encoding="utf-8")
+    sdk_position = documented.index("Read docs/SDK.md")
+    template_position = documented.index("Read the matching template")
+    assert sdk_position < template_position
+    assert "fs_writable_dirs" in documented
+    assert "belong to the user" in documented
+    assert "docs/PERMISSIONS_MAP.md" in documented
+    assert "Telegram" not in documented
+
+
+def test_every_template_routes_back_to_sdk_and_implementation():
+    for path in (ROOT / "templates").glob("*_template.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "docs/SDK.md" in text, path.name
+        assert "sandbox/" in text, path.name
 
 
 def test_authoring_sources_do_not_restore_retired_layouts():
@@ -49,3 +69,7 @@ def test_each_plugin_template_names_its_workspace_family():
     llm = (ROOT / "templates" / "llm_backend_template.py").read_text(
         encoding="utf-8")
     assert "llm/llm_<provider>.py" in llm
+
+    parser = (ROOT / "templates" / "parser_template.py").read_text(
+        encoding="utf-8")
+    assert "workspace/parsers/" in parser

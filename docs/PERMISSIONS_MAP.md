@@ -9,6 +9,34 @@ individually; none of the docs showed the *order*.
 This file is the missing overview. `docs/SECURITY_CONTRACT_APPENDIX.md` remains
 the per-Request catalogue — this is the machinery around it.
 
+## The answer agents need first
+
+Do not collapse **capability**, **isolation**, and **permission** into one idea:
+
+- The live catalog says whether a capability exists and is in the current
+  agent profile's scope.
+- Validation and isolation say how extension code is contained. They grant no
+  authority by themselves.
+- The Request policy says whether a particular effect is safe, refused, or
+  needs the user's answer.
+
+Filesystem writes have two standing safe destinations with different owners.
+`DATA_DIR/workspace/` is the agent's own tree: it may freely create, replace,
+move, or delete anything there. `fs_writable_dirs` is a list of **user-owned**
+folders that the user opened to the agent. A write there needs no dialog, but
+the folder is still user data and should be changed only as the task requires.
+Second Brain source and installed packages stay protected from this list even
+when a listed parent directory contains them. Reads are a separate policy and
+the writable list does not restrict them. The executable rules are
+`sandbox/policy.py::_scratch_roots`, `_writable_dirs`, `_protected`, and
+`_freely_writable`.
+
+When explaining a denial, identify the layer that stopped it. A missing tool is
+not a permission denial, and a policy refusal is not evidence that the tool is
+missing. The user controls standing folder, host, and command-prefix grants via
+configuration and can review or revoke them through the permission UI; the
+agent should explain that route, not silently edit the user's security posture.
+
 ---
 
 ## 1. The pipeline, in order

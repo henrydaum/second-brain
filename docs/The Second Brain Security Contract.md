@@ -2,6 +2,13 @@ The Second Brain Security Contract
 
 Second Brain is a microkernel with a boundary. On the other side live plugins, which consist of arbitrary code. If Second Brain is like the brain and plugins are cybernetic augmentations, then the immune system is like the security system. It mediates the boundary between the two and raises the alarm when attention is needed.
 
+For the operational version of this model—including agent scope, isolation,
+validation, approval modes, standing permissions, and the distinction between
+the agent-owned workspace and user-owned `fs_writable_dirs`—read
+`docs/PERMISSIONS_MAP.md`. For the complete Request-by-Request classification,
+read `docs/SECURITY_CONTRACT_APPENDIX.md`. The implementation that decides a
+Request is `sandbox/policy.py`.
+
 Two ways to run (arbitrary) code:
 
 1. In-process  

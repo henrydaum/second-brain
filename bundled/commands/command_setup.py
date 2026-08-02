@@ -117,7 +117,7 @@ PACKAGES_SECTION = (
 class SetupCommand(BaseCommand):
     """Slash-command handler for `/setup`."""
     name = "setup"
-    description = "Onboarding: install a starter bundle, then configure an LLM and Telegram"
+    description = "Onboarding: install a starter bundle, then configure an LLM and optional frontend"
     category = "System"
     # No per-action split is available — the wizard has no ``action``
     # argument, and every route through it installs packages or writes

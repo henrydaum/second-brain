@@ -12,6 +12,12 @@ code by name, it does not need a plugin class.
 Read docs/SDK.md for the Request surface. This file covers what is specific to
 scripts and helper files.
 
+Before writing: read docs/SDK.md, then this entire template. For details not
+defined here, inspect sandbox/guest/sdk.py (`sdk.scripts` and other call
+signatures), sandbox/guest/loader.py (entry loading and box lifetime),
+sandbox/isolation.py (script recognition), and sandbox/policy.py (permission
+classification). Validate the finished file before running it.
+
   Where it goes:  <DATA_DIR>/workspace/scripts/, and nowhere else.
                   `sdk.paths.get("scripts")` will tell you the absolute path.
                   The directory is the entire declaration — a script has no

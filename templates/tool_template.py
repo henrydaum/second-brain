@@ -9,6 +9,12 @@ the validator rejects. Read sandbox/guest/bases.py for every attribute a tool
 can declare. This file covers only what is specific to tools and cannot be
 guessed from either.
 
+Before writing: read docs/SDK.md, then this entire template. If a detail is not
+specified here, inspect sandbox/guest/bases.py (the BaseTool contract),
+sandbox/guest/sdk.py (call signatures), sandbox/validator.py (source rules),
+and plugins/plugin_discovery.py (loading). Validate the finished file before
+registering or relying on live reload.
+
   Where it goes:  DATA_DIR/workspace/tools/tool_<name>.py
   Filename:       must start with "tool_" — discovery is by filename
   Entry point:    run(self, sdk, **kwargs)

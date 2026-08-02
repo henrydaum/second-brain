@@ -101,13 +101,13 @@ thing and stays a different thing: a person may decide what the code may not.
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `fs.read(path)` | File contents as text | path | safe, except protected files |
-| `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch and the agent's plugin tree, else unsafe |
+| `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch, agent workspace, or user-configured writable folders; else unsafe |
 | `fs.read_bytes(path)` | File contents as raw bytes | path | safe, except protected files |
-| `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch and the agent's plugin tree, else unsafe |
+| `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch, agent workspace, or user-configured writable folders; else unsafe |
 | `fs.list(path, pattern, details, recursive, files_only, sort, limit)` | Directory listing, glob, stat, pruning walk | path | safe |
 | `fs.search(pattern, root, glob, regex, mode, ...)` | Content search across a tree | root path | safe; protected files skipped |
-| `fs.delete(path)` | Remove a file or tree | path | unsafe |
-| `fs.move(src, dst)` | Copy, rename, replace | both paths | unsafe outside scratch |
+| `fs.delete(path)` | Remove a file or tree | path | safe in scratch, agent workspace, or user-configured writable folders; else unsafe |
+| `fs.move(src, dst)` | Copy, rename, replace | both paths | safe when both paths are freely writable; else unsafe |
 | `fs.temp()` | Allocate a scratch file or directory | — | safe, always |
 
 `fs.temp` exists so that "I need somewhere to put this" never requires a policy
@@ -127,9 +127,15 @@ Be precise about what this does *not* grant, because it is the LibOS
 invariant exactly. Writing a file changes what the system can **ask**. It does
 not change what it may **affect**: the new plugin's own Requests are classified
 like anybody else's, and it inherits no authority from having been written
-without a dialog. Free authorship, unchanged authorization. The grant is also
-scoped to that one tree — writing into `plugins/` or anywhere else is unsafe as
-before, because containment does not apply there.
+without a dialog. Free authorship, unchanged authorization.
+
+There is one separate write grant: `fs_writable_dirs` lists folders the
+**user** has opened to the agent. Create, overwrite, move, and delete operations
+inside those folders are safe because the user chose the destination in
+advance, not because the agent owns it. Treat their contents as user data and
+change only what the task requires. Second Brain's source and installed-package
+trees remain protected from this list even when a listed parent contains them.
+Writing anywhere covered by neither grant is unsafe as before.
 
 `fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
 anyway: doing it by hand costs one round trip per file.
@@ -169,8 +175,10 @@ same credentials in plaintext, so an unrestricted `fs.read` made the handle
 decorative. The database is reachable through `db.query`, which scopes rows per
 user and refuses `password_hash`; reading the file walks around all of it.
 `fs.search` counts as a read here because its hits carry matching *lines* —
-`pattern="secret_"` would do the job by itself. Writes need no rule: a write
-outside scratch is already unsafe, so editing these asks like any other.
+`pattern="secret_"` would do the job by itself. Writes need no separate read
+protection rule: these files sit outside the agent workspace, and the
+`fs_writable_dirs` grant explicitly carves out protected kernel data, so editing
+them still asks.
 Directories are not protected; listing a folder reveals nothing the path
 constants do not already say.
 

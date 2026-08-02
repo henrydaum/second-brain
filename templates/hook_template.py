@@ -7,6 +7,12 @@ Reference for authoring one; not imported by the running system.
 Read docs/SDK.md for the Request surface and sandbox/guest/hooks.py for the payload
 and verdict definitions. This file covers what is specific to hooks.
 
+Before writing: read docs/SDK.md, then this entire template and
+templates/service_template.py, because hooks live on services. For details not
+defined here, inspect sandbox/guest/hooks.py (moments, payloads, and verdicts),
+runtime/hooks.py (kernel traversal), and sandbox/bridge.py (service adapter).
+Validate the service file before registering it.
+
   Where they live:  inside a SERVICE — see templates/service_template.py
   Declared by:      hooks = {moment: method_name}
   Signature:        method(self, sdk, ctx, payload)

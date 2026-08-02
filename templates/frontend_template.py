@@ -8,6 +8,12 @@ Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute and method BaseFrontend defines. What follows is only what is
 specific to frontends, and most of it is not guessable.
 
+Before writing: read docs/SDK.md, then this entire template. For details not
+defined here, inspect sandbox/guest/bases.py (BaseFrontend declarations),
+sandbox/frontends.py (the host bridge), sandbox/guest/sdk.py (frontend
+Requests), and state_machine/form_display.py (render payloads). Validate the
+finished file before enabling it.
+
   Where it goes:  DATA_DIR/workspace/frontends/frontend_<name>.py
                   (store packages install under DATA_DIR/installed/frontends/)
   Entry points:   start / poll / stop / render / session_key

@@ -8,6 +8,12 @@ system.
 Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a task can declare. This file covers what is specific to tasks.
 
+Before writing: read docs/SDK.md, then this entire template. For details not
+defined here, inspect sandbox/guest/bases.py (BaseTask declarations),
+pipeline/orchestrator.py (dependency and run behavior), pipeline/event_trigger.py
+(event tasks), and pipeline/database.py (run and output storage). Validate the
+finished file before registering it.
+
   Where it goes:  DATA_DIR/workspace/tasks/task_<name>.py
   Filename:       must start with "task_"
   Entry point:    run(self, sdk, paths)

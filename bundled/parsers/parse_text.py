@@ -3,8 +3,8 @@
 Reads any UTF-8 (falling back to latin-1) text or code file and returns a
 standardized ``ParseResult(modality="text")``. This is the kernel's minimal
 parsing floor; richer document parsers (PDF, Office, Google Drive, audio,
-image, …) are installable packages that drop their own ``parse_*.py`` helper
-into ``helpers/`` at a plugin tree's root, where ``parsing.discover()`` finds
+image, …) are installable packages that drop their own ``parse_*.py`` file
+into ``parsers/`` at a plugin tree's root, where ``parsing.discover()`` finds
 them.
 
 A parser is a *library*, not a plugin: no base class, no entry point. Code

@@ -47,6 +47,7 @@ class PermissionsCommand(BaseCommand):
     requests = ["config.read", "config.write"]
 
     agent_prompt = (
+        "## Standing permissions\n"
         "The user can review and withdraw standing permissions with "
         "/permissions. If a request of yours is refused and they ask why, "
         "that is where the answer lives — do not offer to edit the settings "

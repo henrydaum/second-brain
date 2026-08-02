@@ -74,6 +74,28 @@ from types import SimpleNamespace
 from agent.system_prompt import _model_status
 
 
+def test_filesystem_access_distinguishes_agent_and_user_owned_paths(monkeypatch, tmp_path):
+    from agent.system_prompt import _filesystem_access
+    import paths
+
+    monkeypatch.setattr(paths, "DATA_DIR", tmp_path / "data")
+    user_project = tmp_path / "user-project"
+    text = _filesystem_access({"fs_writable_dirs": [str(user_project)]})
+
+    assert f"Agent-owned workspace (free write): {tmp_path / 'data' / 'workspace'}" in text
+    assert "User-owned writable folders" in text
+    assert str(user_project) in text
+    assert "remain protected" in text
+
+
+def test_filesystem_access_names_an_empty_grant(monkeypatch, tmp_path):
+    from agent.system_prompt import _filesystem_access
+    import paths
+
+    monkeypatch.setattr(paths, "DATA_DIR", tmp_path / "data")
+    assert "- None configured." in _filesystem_access({})
+
+
 def test_model_status_reports_effective_native_attachment_capabilities():
     # A modality counts only when both halves agree: the model ingests it
     # (capabilities) and the backend can put it on the wire (native_modalities).

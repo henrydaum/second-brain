@@ -25,7 +25,8 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 # contract anywhere.
 SANDBOXED = ["tool_template.py", "task_template.py", "command_template.py",
              "service_template.py", "script_template.py", "hook_template.py",
-             "frontend_template.py", "llm_backend_template.py"]
+             "frontend_template.py", "llm_backend_template.py",
+             "parser_template.py"]
 
 # Deliberately still native, each for a stated reason carried in a banner at
 # the top of the file. Listed explicitly so that adding a template forces a
@@ -70,7 +71,8 @@ def test_sandboxed_template_validates(filename):
 # base class at all; an LLM backend has one, but it is not a *plugin* base —
 # it lives in ``guest.llm`` beside the parser contract, because a backend
 # belongs to no family and discovery never registers it.
-NO_PLUGIN_BASE = {"script_template.py", "llm_backend_template.py"}
+NO_PLUGIN_BASE = {"script_template.py", "llm_backend_template.py",
+                  "parser_template.py"}
 
 # The base classes a plugin template has to subclass one of. ``guest.llm`` and
 # ``guest.parsing`` are contract modules too, but neither carries a *plugin*

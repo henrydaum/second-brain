@@ -8,6 +8,12 @@ running system.
 Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a service can declare. This file covers what is specific to services.
 
+Before writing: read docs/SDK.md, then this entire template. For details not
+defined here, inspect sandbox/guest/bases.py (BaseService declarations),
+sandbox/bridge.py (kernel adapter and exports), sandbox/guest/hooks.py (turn
+hooks), and sandbox/guest/sdk.py (service calls and Requests). Validate the
+finished file before registering it.
+
   Where it goes:  DATA_DIR/workspace/services/service_<name>.py
   Filename:       must start with "service_"
   Entry points:   start(self, sdk) and stop(self, sdk), plus its exports
