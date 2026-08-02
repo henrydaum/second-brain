@@ -1,37 +1,30 @@
-"""Service plugin providing ambient location context to the agent.
+"""Provide ambient location context to the agent.
 
-While loaded, the service contributes a short "## Location" block to the
-agent system prompt via ``agent_prompt_for``. A manually configured
-location always wins; otherwise the service resolves an approximate
-location by IP geolocation (keyless, stdlib urllib only) and caches it.
+A manually configured location wins. Otherwise the service resolves an
+approximate location by IP when it starts, trying two keyless providers. The
+result becomes a stable ``## Location`` system-prompt contribution.
 
-The prompt contribution lands in the semi-stable (cacheable) block of the
-system prompt, so the returned string must stay stable between turns: the
-prompt path never performs network I/O — reads serve the cache, and a
-stale cache triggers a background refresh that takes effect next turn.
+Sandbox prompt contributions are cached until a plugin reloads, so location
+is deliberately resolved at startup rather than refreshed behind the cached
+prompt. Reload the service after changing location or network/VPN context.
 """
 
 dependencies_files = []
 dependencies_pip = []
 
 import json
-import logging
-import threading
-import time
-import urllib.request
 
-from plugins.BaseService import BaseService, MANAGED
-
-logger = logging.getLogger("LocationService")
+from guest.bases import BaseService
 
 
 class LocationService(BaseService):
-    """Resolves and caches the user's approximate location for the agent prompt."""
+    """Resolve the user's approximate location for the agent prompt."""
 
-    model_name = "location"
+    name = "location"
+    description = "Add a configured or IP-derived location to the agent prompt."
     shared = True
-    lifecycle = MANAGED
-    load_timeout = 30.0
+    timeout = 30
+    requests = ["config.read", "net.http"]
 
     config_settings = [
         ("Manual Location", "location_manual",
@@ -39,137 +32,102 @@ class LocationService(BaseService):
          "When set, it is used as-is and no network lookup is performed.",
          "",
          {"type": "text"}),
-
-        ("Location Refresh (minutes)", "location_refresh_minutes",
-         "How long an automatically detected (IP-based) location stays fresh "
-         "before it is re-resolved in the background.",
-         60,
-         {"type": "slider", "range": (5, 1440, 287), "is_float": False}),
     ]
 
-    # Keyless IP-geolocation endpoints, tried in order. Each maps the raw
-    # JSON payload onto the shared field names used by _format_auto.
     PROVIDERS = [
-        ("https://ipinfo.io/json",
-         lambda d: {"city": d.get("city"), "region": d.get("region"),
-                    "country": d.get("country"), "timezone": d.get("timezone")}),
-        ("http://ip-api.com/json",
-         lambda d: {"city": d.get("city"), "region": d.get("regionName"),
-                    "country": d.get("country"), "timezone": d.get("timezone")}
-         if d.get("status") != "fail" else {}),
+        ("https://ipinfo.io/json", "ipinfo"),
+        ("http://ip-api.com/json", "ip-api"),
     ]
 
-    def __init__(self, config: dict | None = None):
-        """Initialize the location service."""
-        super().__init__()
-        self.config = config or {}
-        self._cache: dict = {}
-        self._fetched_at: float = 0.0
-        self._refresh_lock = threading.Lock()
-        self._refreshing = False
+    def __init__(self):
+        self.manual = ""
+        self.location = {}
 
-    # ── Lifecycle ───────────────────────────────────────────────────
+    def start(self, sdk):
+        """Read configuration and resolve location once."""
+        self.manual = str(sdk.config.read("location_manual") or "").strip()
+        self.location = {}
+        if self.manual:
+            return True
 
-    def _load(self) -> bool:
-        """Mark loaded and warm the cache in the background (never blocks boot)."""
-        self.loaded = True
-        if not self._manual():
-            self._refresh_async()
+        for url, provider in self.PROVIDERS:
+            data = self._fetch_json(sdk, url)
+            fields = self._extract(provider, data)
+            if fields:
+                self.location = fields
+                break
+        if not self.location:
+            sdk.log("could not resolve an approximate location", level="warning")
         return True
 
-    def unload(self):
-        """Release the cached location so a reload starts fresh."""
-        self.loaded = False
-        self._cache = {}
-        self._fetched_at = 0.0
+    def stop(self, sdk):
+        """Discard cached location state."""
+        self.manual = ""
+        self.location = {}
 
-    # ── Agent prompt contribution ───────────────────────────────────
-
-    def agent_prompt_for(self, ctx) -> str:
-        """The '## Location' block, or '' when nothing is known yet.
-
-        Cache-only: serves the last resolved location and kicks a
-        background refresh when stale, so the semi-stable prompt block
-        never waits on the network and stays byte-stable between turns.
-        """
-        manual = self._manual(getattr(ctx, "config", None))
-        if manual:
-            return f"## Location\nThe user's location (user-provided): {manual}"
-        if self._stale():
-            self._refresh_async()
-        text = self._format_auto(self._cache)
+    def agent_prompt(self, sdk):
+        """Return the stable location prompt block, if location is known."""
+        if self.manual:
+            return f"## Location\nThe user's location (user-provided): {self.manual}"
+        text = self._format_auto(self.location)
         if not text:
             return ""
-        return ("## Location\nThe user's approximate location (IP-based, "
-                f"may lag travel/VPNs): {text}")
+        return (
+            "## Location\nThe user's approximate location (IP-based, may lag "
+            f"travel/VPNs): {text}"
+        )
 
-    # ── Internals ───────────────────────────────────────────────────
-
-    def _manual(self, config: dict | None = None) -> str:
-        """The manually configured location, preferring live config when given."""
-        cfg = config if isinstance(config, dict) and config else self.config
-        return str((cfg or {}).get("location_manual") or "").strip()
-
-    def _ttl_seconds(self) -> float:
-        """Handle ttl seconds."""
+    def _fetch_json(self, sdk, url):
+        """Fetch one provider payload; failures allow the fallback provider."""
         try:
-            minutes = float(self.config.get("location_refresh_minutes") or 60)
-        except (TypeError, ValueError):
-            minutes = 60
-        return max(minutes, 1) * 60
-
-    def _stale(self) -> bool:
-        """Handle stale."""
-        return (time.time() - self._fetched_at) > self._ttl_seconds()
-
-    def _refresh_async(self):
-        """Kick one background refresh; concurrent calls coalesce."""
-        with self._refresh_lock:
-            if self._refreshing:
-                return
-            self._refreshing = True
-        threading.Thread(target=self._refresh, daemon=True,
-                         name="location-refresh").start()
-
-    def _refresh(self):
-        """Resolve the location once; failures degrade to the previous cache."""
-        try:
-            for url, extract in self.PROVIDERS:
-                data = self._fetch_json(url)
-                fields = extract(data) if isinstance(data, dict) else {}
-                fields = {k: str(v).strip() for k, v in (fields or {}).items() if v}
-                if fields:
-                    self._cache = fields
-                    break
-            # A failed sweep still stamps the clock so we don't hammer
-            # providers every prompt build while offline.
-            self._fetched_at = time.time()
-        finally:
-            with self._refresh_lock:
-                self._refreshing = False
-
-    def _fetch_json(self, url: str) -> dict:
-        """Fetch one provider payload; any failure returns {}."""
-        try:
-            request = urllib.request.Request(
-                url, headers={"User-Agent": "SecondBrain-Location/1.0",
-                              "Accept": "application/json"})
-            with urllib.request.urlopen(request, timeout=8) as response:
-                return json.loads(response.read().decode("utf-8", errors="replace"))
-        except Exception as e:
-            logger.debug(f"Location provider failed ({url}): {e}")
+            answer = sdk.net.http(
+                url,
+                headers={
+                    "User-Agent": "SecondBrain-Location/1.0",
+                    "Accept": "application/json",
+                },
+            )
+            status = int(answer.get("status") or 0)
+            if status >= 400:
+                sdk.log(f"location provider returned HTTP {status}: {url}",
+                        level="debug")
+                return {}
+            return json.loads(answer.get("body") or "{}")
+        except (sdk.Failed, ValueError, TypeError) as error:
+            sdk.log(f"location provider failed ({url}): {error}", level="debug")
             return {}
 
     @staticmethod
-    def _format_auto(fields: dict) -> str:
-        """Render cached fields as 'City, Region, Country (timezone TZ)'."""
-        place = ", ".join(fields[k] for k in ("city", "region", "country") if fields.get(k))
-        tz = fields.get("timezone") or ""
-        if place and tz:
-            return f"{place} (timezone {tz})"
-        return place or (f"timezone {tz}" if tz else "")
+    def _extract(provider, data):
+        """Normalize a provider payload into shared location fields."""
+        if not isinstance(data, dict):
+            return {}
+        if provider == "ip-api":
+            if data.get("status") == "fail":
+                return {}
+            raw = {
+                "city": data.get("city"),
+                "region": data.get("regionName"),
+                "country": data.get("country"),
+                "timezone": data.get("timezone"),
+            }
+        else:
+            raw = {
+                "city": data.get("city"),
+                "region": data.get("region"),
+                "country": data.get("country"),
+                "timezone": data.get("timezone"),
+            }
+        return {key: str(value).strip() for key, value in raw.items() if value}
 
-
-def build_services(config: dict) -> dict:
-    """Build services."""
-    return {"location": LocationService(config)}
+    @staticmethod
+    def _format_auto(fields):
+        """Render fields as ``City, Region, Country (timezone TZ)``."""
+        place = ", ".join(
+            fields[key] for key in ("city", "region", "country")
+            if fields.get(key)
+        )
+        timezone = fields.get("timezone") or ""
+        if place and timezone:
+            return f"{place} (timezone {timezone})"
+        return place or (f"timezone {timezone}" if timezone else "")

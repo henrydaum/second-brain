@@ -1,190 +1,112 @@
-"""
-tool_email_check — Read mail directly from Gmail (no SQL mirror).
+"""Read Gmail messages without mirroring them into the database."""
 
-Use scope to pick a common view, or pass a raw Gmail search query for
-anything else. Returns message summaries; set include_body=true to also
-fetch the body of each result (slower).
-
-Scopes:
-    inbox     — recent messages in the INBOX label.
-    ai_sent   — messages sent FROM any configured ai_email_addresses entry.
-    ai_inbox  — messages addressed TO any configured ai_email_addresses entry.
-    custom    — use the `query` parameter as a raw Gmail search string.
-
-Config:
-    ai_email_addresses — list of Gmail send-as aliases the agent may use.
-                         Empty list = no agent access (subagents fail).
-                         Shared with tool_email_send and tool_email_mark_read.
-"""
-
-
-dependencies_files = ['services/service_gmail.py', 'tools/helpers/email_context.py']
+dependencies_files = ["tools/helpers/email_context.py"]
 dependencies_pip = []
+requests = ["service.call", "config.read", "session.get", "conv.read"]
 
-import logging
-
-from plugins.BaseTool import BaseTool, ToolResult
-from .helpers.email_context import is_main_conversation
-
-logger = logging.getLogger("tool_email_check")
+from guest.bases import BaseTool
+from .email_context import allowed_addresses, is_main_conversation
 
 
-def _allowed_addresses(config) -> list[str]:
-    """Internal helper to handle allowed addresses."""
-    raw = config.get("ai_email_addresses") or []
-    if not isinstance(raw, list):
-        return []
-    return [str(a).strip().lower() for a in raw if str(a).strip()]
-
-
-def _alias_scope_clause(allowed: list[str], include_from: bool = False) -> str:
-    """Internal helper to handle alias scope clause."""
-    ops = ["to", "cc", "bcc", "deliveredto"] + (["from"] if include_from else [])
-    return " OR ".join(f'{op}:"{a}"' for a in allowed for op in ops)
+def _alias_clause(addresses, include_from=False):
+    operations = ["to", "cc", "bcc", "deliveredto"]
+    if include_from:
+        operations.append("from")
+    return " OR ".join(
+        f'{operation}:"{address}"'
+        for address in addresses for operation in operations
+    )
 
 
 class EmailCheck(BaseTool):
-    """Email check."""
     name = "email_check"
     description = (
-        "Read mail from Gmail. Pick a scope (inbox, ai_sent, ai_inbox, "
-        "custom) or pass a raw Gmail query. Returns message summaries; "
-        "set include_body=true to also fetch bodies."
+        "Read Gmail by inbox, AI-sent, AI-inbox, or custom query. Returns "
+        "summaries and optionally message bodies."
     )
     config_settings = [
-        (
-            "AI Agent Email Addresses",
-            "ai_email_addresses",
-            "List of Gmail send-as aliases the agent may read, mark, and send from. "
-            "Empty list = no agent access (subagents will fail).",
-            [],
-            {"type": "json_list"},
-        ),
+        ("AI Agent Email Addresses", "ai_email_addresses",
+         "Gmail send-as aliases the agent may autonomously access.", [],
+         {"type": "json_list"}),
     ]
     parameters = {
         "type": "object",
         "properties": {
-            "scope": {
-                "type": "string",
-                "enum": ["inbox", "ai_sent", "ai_inbox", "custom"],
-                "description": "Which view of mail to read. Default 'inbox'.",
-                "default": "inbox",
-            },
-            "query": {
-                "type": "string",
-                "description": (
-                    "Raw Gmail search query, only used when scope='custom' "
-                    "(e.g. 'is:unread', 'from:foo@bar.com newer_than:7d')."
-                ),
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum messages to return. Default 20.",
-                "default": 20,
-            },
-            "include_body": {
-                "type": "boolean",
-                "description": (
-                    "If true, fetch the body of each message. Off by default "
-                    "to keep responses small."
-                ),
-                "default": False,
-            },
+            "scope": {"type": "string",
+                      "enum": ["inbox", "ai_sent", "ai_inbox", "custom"],
+                      "default": "inbox"},
+            "query": {"type": "string", "description": "Raw Gmail query for custom scope."},
+            "limit": {"type": "integer", "default": 20},
+            "include_body": {"type": "boolean", "default": False},
         },
         "required": [],
     }
     requires_services = ["gmail"]
 
-    def run(self, context, **kwargs) -> ToolResult:
-        """Run email check."""
-        gmail = context.services.get("gmail")
-        if not gmail:
-            return ToolResult.failed("Gmail service not available.")
-        if not gmail.loaded:
-            if not gmail.load():
-                return ToolResult.failed("Gmail not connected.")
-
-        scope = kwargs.get("scope") or "inbox"
-        limit = int(kwargs.get("limit", 20))
+    def run(self, sdk, **kwargs):
+        scope = str(kwargs.get("scope") or "inbox")
+        try:
+            limit = max(1, min(int(kwargs.get("limit", 20)), 100))
+        except (TypeError, ValueError):
+            limit = 20
         include_body = bool(kwargs.get("include_body", False))
-        query = (kwargs.get("query") or "").strip()
-        allowed = _allowed_addresses(context.config)
+        query = str(kwargs.get("query") or "").strip()
+        allowed = allowed_addresses(sdk)
 
-        # Non-main conversations can only read mail involving an allowed alias.
-        if not is_main_conversation(context):
+        if not is_main_conversation(sdk):
             if not allowed:
-                return ToolResult.failed(
-                    "Non-main conversation but ai_email_addresses is empty — no "
-                    "mail access. Configure it under Settings → Plugin Config "
-                    "→ AI Agent Email Addresses."
-                )
+                return sdk.fail("Non-main conversation has no configured AI email access.")
             if scope == "inbox":
-                logger.warning("[EmailCheck] Non-main conversation: rewriting scope 'inbox' → 'ai_inbox'.")
                 scope = "ai_inbox"
             elif scope == "custom":
                 if not query:
-                    return ToolResult.failed("scope='custom' requires a 'query' argument.")
-                scope_clause = _alias_scope_clause(allowed, include_from=True)
-                query = f"({query}) AND ({scope_clause})"
-                logger.info(f"[EmailCheck] Non-main scope=custom rewritten: {query}")
+                    return sdk.fail("scope='custom' requires query.")
+                query = f"({query}) AND ({_alias_clause(allowed, True)})"
 
         if scope == "inbox":
-            summaries = gmail.fetch_inbox(max_results=limit)
+            messages = sdk.services.call(
+                "gmail", "fetch_inbox", max_results=limit) or []
             label = "inbox"
-        elif scope == "ai_sent":
+        elif scope in {"ai_sent", "ai_inbox"}:
             if not allowed:
-                return ToolResult.failed("ai_email_addresses is empty.")
-            q = " OR ".join(f'from:"{a}"' for a in allowed)
-            summaries = gmail.search(f"({q})", max_results=limit)
-            label = f"sent from {', '.join(allowed)}"
-        elif scope == "ai_inbox":
-            if not allowed:
-                return ToolResult.failed("ai_email_addresses is empty.")
-            q = _alias_scope_clause(allowed)
-            summaries = gmail.search(f"({q})", max_results=limit)
-            label = f"addressed to {', '.join(allowed)}"
+                return sdk.fail("ai_email_addresses is empty.")
+            clause = (" OR ".join(f'from:"{value}"' for value in allowed)
+                      if scope == "ai_sent" else _alias_clause(allowed))
+            messages = sdk.services.call(
+                "gmail", "search", query=f"({clause})", max_results=limit) or []
+            label = "sent from AI aliases" if scope == "ai_sent" else "addressed to AI aliases"
         elif scope == "custom":
             if not query:
-                return ToolResult.failed("scope='custom' requires a 'query' argument.")
-            summaries = gmail.search(query, max_results=limit)
+                return sdk.fail("scope='custom' requires query.")
+            messages = sdk.services.call(
+                "gmail", "search", query=query, max_results=limit) or []
             label = f"matching {query!r}"
         else:
-            return ToolResult.failed(f"Unknown scope: {scope}")
-
-        summaries = summaries or []
+            return sdk.fail(f"Unknown scope: {scope}")
 
         if include_body:
-            for s in summaries:
-                full = gmail.get_message(s["message_id"])
+            for message in messages:
+                full = sdk.services.call(
+                    "gmail", "get_message", message_id=message.get("message_id"))
                 if full:
-                    s["body_plain"] = full.get("body_plain", "")
-                    s["body_html"] = full.get("body_html", "")
-                    s["recipients"] = full.get("recipients", "")
+                    for key in ("body_plain", "body_html", "recipients", "cc"):
+                        message[key] = full.get(key, "")
 
-        logger.info(f"[EmailCheck] {len(summaries)} message(s) — {label}")
-
-        if not summaries:
-            llm_summary = f"No messages {label}."
-        else:
-            lines = [f"Found {len(summaries)} message(s) {label}:"]
-            for i, s in enumerate(summaries, 1):
-                read_flag = "" if s.get("is_read") else " [UNREAD]"
-                line = (
-                    f"{i}. id={s.get('message_id','')}{read_flag}\n"
-                    f"   from:    {s.get('sender','')}\n"
-                    f"   subject: {s.get('subject','(no subject)')}\n"
-                    f"   snippet: {(s.get('snippet','') or '')[:200]}"
-                )
-                if include_body and s.get("body_plain"):
-                    body = s["body_plain"].strip().replace("\r\n", "\n")
-                    if len(body) > 1500:
-                        body = body[:1500] + "…[truncated]"
-                    line += f"\n   body:\n{body}"
-                lines.append(line)
-            llm_summary = "\n".join(lines)
-
-        return ToolResult(
-            success=True,
-            data={"emails": summaries, "count": len(summaries), "scope": scope},
-            llm_summary=llm_summary,
+        lines = [f"Found {len(messages)} message(s) {label}:"]
+        for index, message in enumerate(messages, 1):
+            unread = " [UNREAD]" if not message.get("is_read") else ""
+            lines.append(
+                f"{index}. id={message.get('message_id', '')}{unread}\n"
+                f"   from: {message.get('sender', '')}\n"
+                f"   subject: {message.get('subject') or '(no subject)'}\n"
+                f"   snippet: {str(message.get('snippet') or '')[:200]}"
+            )
+            if include_body and message.get("body_plain"):
+                body = str(message["body_plain"]).strip()[:1500]
+                lines[-1] += f"\n   body:\n{body}"
+        summary = "\n".join(lines) if messages else f"No messages {label}."
+        sdk.log(f"email check returned {len(messages)} message(s) {label}")
+        return sdk.ok(
+            {"emails": messages, "count": len(messages), "scope": scope},
+            llm_summary=summary,
         )

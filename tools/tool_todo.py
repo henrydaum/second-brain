@@ -1,45 +1,20 @@
-"""Per-conversation todo checklist — the agent's working plan for multi-step tasks.
-
-Todos live in a ``todos`` table keyed by conversation_id with ON DELETE
-CASCADE, so they are cleaned up with their conversation (explicit delete or
-retention prune) — no separate retention knob.
-"""
+"""Per-conversation todo checklist backed by persisted plugin state."""
 
 dependencies_files = []
 dependencies_pip = []
+requests = ["session.get", "session.state_get", "session.state_set"]
 
-import time
+from guest.bases import BaseTool
 
-from plugins.BaseTool import BaseTool, ToolResult
 
 MAX_TODOS = 50
-
-_DDL = """
-CREATE TABLE IF NOT EXISTS todos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    content TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'in_progress', 'completed')),
-    position INTEGER NOT NULL DEFAULT 0,
-    created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_todos_conversation ON todos(conversation_id);
-"""
-
 _STATUSES = {"pending", "in_progress", "completed"}
-
-
-def _conversation_id(context) -> int | None:
-    """Current conversation id via the session, or None."""
-    runtime, key = getattr(context, "runtime", None), getattr(context, "session_key", None)
-    session = getattr(runtime, "sessions", {}).get(key) if runtime and key else None
-    return getattr(session, "conversation_id", None)
+_NAMESPACE = "todo"
 
 
 class Todo(BaseTool):
-    """Todo."""
+    """Manage the active conversation's working checklist."""
+
     name = "todo"
     description = (
         "Manage this conversation's todo checklist. Use it as your working plan on "
@@ -50,11 +25,29 @@ class Todo(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
-            "operation": {"type": "string", "enum": ["add", "update", "complete", "remove", "list"], "description": "Operation to perform."},
-            "content": {"type": "string", "description": "Todo text. Required for add (unless items is given); optional rewording for update."},
-            "items": {"type": "array", "items": {"type": "string"}, "description": "Bulk add: several todos at once (add only)."},
-            "todo_id": {"type": "integer", "description": "Target todo id. Required for update, complete, and remove."},
-            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "New status (update only)."},
+            "operation": {
+                "type": "string",
+                "enum": ["add", "update", "complete", "remove", "list"],
+                "description": "Operation to perform.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Todo text. Required for add unless items is given; optional rewording for update.",
+            },
+            "items": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Bulk add: several todos at once (add only).",
+            },
+            "todo_id": {
+                "type": "integer",
+                "description": "Target todo id. Required for update, complete, and remove.",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["pending", "in_progress", "completed"],
+                "description": "New status (update only).",
+            },
         },
         "required": ["operation"],
     }
@@ -65,91 +58,89 @@ class Todo(BaseTool):
         "keep exactly one in_progress, and mark items completed immediately when done."
     )
 
-    def run(self, context, **kwargs) -> ToolResult:
-        """Run todo."""
-        op = (kwargs.get("operation") or "").strip().lower()
+    def run(self, sdk, **kwargs):
+        op = str(kwargs.get("operation") or "").strip().lower()
         if op not in {"add", "update", "complete", "remove", "list"}:
-            return ToolResult.failed(f"Unknown operation: {op}")
-        db = getattr(context, "db", None)
-        if db is None:
-            return ToolResult.failed("No database available.")
-        cid = _conversation_id(context)
-        if cid is None:
-            return ToolResult.failed("Todos require a persisted conversation; none is active in this session.")
+            return sdk.fail(f"Unknown operation: {op}")
 
-        db.ensure_output_table("todo", _DDL)
-        now = time.time()
+        try:
+            session = sdk.session.get() or {}
+            conversation_id = session.get("conversation_id")
+            if conversation_id is None:
+                return sdk.fail(
+                    "Todos require a persisted conversation; none is active in this session."
+                )
+            state = sdk.session.state_get(namespace=_NAMESPACE) or {}
+            items = [dict(item) for item in state.get("items", [])]
+            next_id = int(state.get("next_id") or 1)
 
-        if op == "add":
-            texts = [t.strip() for t in (kwargs.get("items") or []) if (t or "").strip()]
-            single = (kwargs.get("content") or "").strip()
-            if single:
-                texts.append(single)
-            if not texts:
-                return ToolResult.failed("add requires 'content' or 'items'.")
-            with db.lock:
-                count = db.conn.execute(
-                    "SELECT COUNT(*) FROM todos WHERE conversation_id = ?", (cid,)).fetchone()[0]
-                if count + len(texts) > MAX_TODOS:
-                    return ToolResult.failed(f"Todo cap reached ({MAX_TODOS} per conversation). Remove or complete items first.")
-                pos = db.conn.execute(
-                    "SELECT COALESCE(MAX(position), 0) FROM todos WHERE conversation_id = ?", (cid,)).fetchone()[0]
+            if op == "add":
+                texts = [
+                    str(text).strip() for text in (kwargs.get("items") or [])
+                    if str(text or "").strip()
+                ]
+                single = str(kwargs.get("content") or "").strip()
+                if single:
+                    texts.append(single)
+                if not texts:
+                    return sdk.fail("add requires 'content' or 'items'.")
+                if len(items) + len(texts) > MAX_TODOS:
+                    return sdk.fail(
+                        f"Todo cap reached ({MAX_TODOS} per conversation). Remove items first."
+                    )
                 for text in texts:
-                    pos += 1
-                    db.conn.execute(
-                        "INSERT INTO todos (conversation_id, content, status, position, created_at, updated_at) "
-                        "VALUES (?, ?, 'pending', ?, ?, ?)", (cid, text, pos, now, now))
-                db.conn.commit()
+                    items.append({"id": next_id, "content": text, "status": "pending"})
+                    next_id += 1
 
-        elif op in {"update", "complete", "remove"}:
-            todo_id = kwargs.get("todo_id")
-            if not isinstance(todo_id, int):
-                return ToolResult.failed(f"{op} requires an integer 'todo_id'.")
-            with db.lock:
-                row = db.conn.execute(
-                    "SELECT id FROM todos WHERE id = ? AND conversation_id = ?", (todo_id, cid)).fetchone()
-                if row is None:
-                    return ToolResult.failed(f"No todo #{todo_id} in this conversation.")
+            elif op in {"update", "complete", "remove"}:
+                todo_id = kwargs.get("todo_id")
+                if not isinstance(todo_id, int) or isinstance(todo_id, bool):
+                    return sdk.fail(f"{op} requires an integer 'todo_id'.")
+                item = next((entry for entry in items if entry.get("id") == todo_id), None)
+                if item is None:
+                    return sdk.fail(f"No todo #{todo_id} in this conversation.")
                 if op == "remove":
-                    db.conn.execute("DELETE FROM todos WHERE id = ? AND conversation_id = ?", (todo_id, cid))
+                    items.remove(item)
                 else:
-                    status = "completed" if op == "complete" else (kwargs.get("status") or "").strip()
-                    content = (kwargs.get("content") or "").strip()
+                    status = (
+                        "completed" if op == "complete"
+                        else str(kwargs.get("status") or "").strip()
+                    )
+                    content = str(kwargs.get("content") or "").strip()
                     if op == "update" and not status and not content:
-                        return ToolResult.failed("update requires 'status' and/or 'content'.")
+                        return sdk.fail("update requires 'status' and/or 'content'.")
                     if status and status not in _STATUSES:
-                        return ToolResult.failed(f"Unknown status: {status}")
+                        return sdk.fail(f"Unknown status: {status}")
                     if status:
-                        db.conn.execute(
-                            "UPDATE todos SET status = ?, updated_at = ? WHERE id = ? AND conversation_id = ?",
-                            (status, now, todo_id, cid))
+                        item["status"] = status
                     if content:
-                        db.conn.execute(
-                            "UPDATE todos SET content = ?, updated_at = ? WHERE id = ? AND conversation_id = ?",
-                            (content, now, todo_id, cid))
-                db.conn.commit()
+                        item["content"] = content
 
-        return self._checklist(db, cid)
+            if op != "list":
+                sdk.session.state_set(
+                    {"items": items, "next_id": next_id}, namespace=_NAMESPACE
+                )
+            return self._checklist(sdk, conversation_id, items)
+        except sdk.Denied as error:
+            return sdk.fail(f"Todo access was denied: {error}")
+        except sdk.Failed as error:
+            return sdk.fail(f"Todo operation failed: {error}")
 
     @staticmethod
-    def _checklist(db, cid) -> ToolResult:
-        """Render the conversation's full checklist."""
-        with db.lock:
-            rows = db.conn.execute(
-                "SELECT id, content, status FROM todos WHERE conversation_id = ? ORDER BY position, id",
-                (cid,)).fetchall()
-        items = [{"id": r[0], "content": r[1], "status": r[2]} for r in rows]
-        open_n = sum(1 for i in items if i["status"] != "completed")
-        done_n = len(items) - open_n
-        lines = [f"### Todos ({open_n} open, {done_n} done)"]
+    def _checklist(sdk, conversation_id, items):
+        open_count = sum(1 for item in items if item.get("status") != "completed")
+        done_count = len(items) - open_count
+        lines = [f"### Todos ({open_count} open, {done_count} done)"]
         if not items:
             lines.append("(empty)")
-        for i in items:
-            if i["status"] == "completed":
-                lines.append(f"- [x] #{i['id']} {i['content']}")
-            elif i["status"] == "in_progress":
-                lines.append(f"- [ ] #{i['id']} **{i['content']}** (in progress)")
+        for item in items:
+            if item.get("status") == "completed":
+                lines.append(f"- [x] #{item['id']} {item['content']}")
+            elif item.get("status") == "in_progress":
+                lines.append(f"- [ ] #{item['id']} **{item['content']}** (in progress)")
             else:
-                lines.append(f"- [ ] #{i['id']} {i['content']}")
-        return ToolResult(True, data={"conversation_id": cid, "todos": items},
-                          llm_summary="\n".join(lines))
+                lines.append(f"- [ ] #{item['id']} {item['content']}")
+        return sdk.ok(
+            {"conversation_id": conversation_id, "todos": items},
+            llm_summary="\n".join(lines),
+        )

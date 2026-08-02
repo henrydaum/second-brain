@@ -1,0 +1,12 @@
+{
+  "description": "Connect Gmail once, then read messages, send or reply, mark read or unread, and add or remove labels. Reuses the Google OAuth token at workspace/drive/token.json and requests Gmail modify access when needed.",
+  "files": [
+    "services/service_gmail.py",
+    "tools/helpers/email_context.py",
+    "tools/tool_email_check.py",
+    "tools/tool_email_send.py",
+    "tools/tool_email_mark_read.py",
+    "tools/tool_email_modify_labels.py"
+  ],
+  "name": "Gmail"
+}

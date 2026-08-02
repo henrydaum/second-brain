@@ -1,21 +1,17 @@
-"""Package-store tool — let the agent browse and manage store packages.
+"""Browse and manage packages through guarded SDK requests.
 
-Bridges the agent to the same package manager that backs /packages, so a
-missing capability becomes a recoverable state: search the store, show the
-user what an install would do, and (with explicit approval) install it.
-Mutating actions are gated through context.approve_command, and the tool is
-not background-safe — an unattended session can never self-install.
+Read-only catalogue requests run directly. Install, uninstall, and update are
+classified unsafe by the kernel; the Request itself is the approval boundary,
+so this tool never asks through a second permission mechanism.
 """
-
 
 dependencies_files = []
 dependencies_pip = []
+requests = [
+    "plugin.list", "plugin.install", "plugin.uninstall", "plugin.update",
+]
 
-import logging
-
-from plugins.BaseTool import BaseTool, ToolResult
-
-logger = logging.getLogger("PackagesTool")
+from guest.bases import BaseTool
 
 
 class ManagePackages(BaseTool):
@@ -23,16 +19,8 @@ class ManagePackages(BaseTool):
 
     name = "manage_packages"
     description = (
-        "Browse and manage the Second Brain package store. Actions:\n"
-        "- search: list available store packages, optionally filtered by a query.\n"
-        "- info: show one package's file path, family, and dependencies.\n"
-        "- installed: list currently installed packages.\n"
-        "- install: install a package (and its dependencies) by stem. Requires user approval.\n"
-        "- uninstall: remove an installed package by stem. Requires user approval.\n"
-        "- update: re-install every installed file whose store copy changed. Requires user approval.\n\n"
-        "Use this when the user asks for a capability you don't currently have "
-        "(a tool, parser, frontend, or service) — search the store first, then "
-        "propose the install. Never install without telling the user what it adds."
+        "Browse and manage the Second Brain package store. Search/info/list are "
+        "read-only. Install, uninstall, and update require kernel approval."
     )
     parameters = {
         "type": "object",
@@ -40,151 +28,130 @@ class ManagePackages(BaseTool):
             "action": {
                 "type": "string",
                 "enum": ["search", "info", "installed", "install", "uninstall", "update"],
-                "description": "What to do against the package store.",
             },
             "target": {
                 "type": "string",
-                "description": (
-                    "Package stem for info/install/uninstall (e.g. 'tool_web_search', "
-                    "'parse_pdf', 'frontend_telegram'). For search, an optional "
-                    "substring query."
-                ),
+                "description": "Package or bundle ID; optional substring for search.",
             },
         },
         "required": ["action"],
     }
     requires_services = []
-
     agent_prompt = (
         "## The package store\n"
-        "Second Brain is a small kernel plus installable packages. If the user asks for "
-        "something you have no tool for (web search, PDF parsing, email, scheduling, "
-        "shell access, etc.), don't just say you can't — use manage_packages to search "
-        "the store for a package that adds the capability, tell the user what you found "
-        "and what it would install, and install it once they agree (an approval prompt "
-        "will confirm). Newly installed tools become available on your next turn."
+        "If a requested capability is missing, use manage_packages to search "
+        "the store, explain what you found, and install only through the "
+        "approval-gated install action. New tools appear on the next turn."
     )
 
-    def run(self, context, **kwargs) -> ToolResult:
-        from bundled.commands.helpers import package_manager
-        from bundled.commands.helpers.store_backend import StoreBackendError
-
-        action = (kwargs.get("action") or "").strip()
-        target = (kwargs.get("target") or "").strip()
-        root_dir = getattr(context, "root_dir", None) or _default_root()
-
+    def run(self, sdk, **kwargs):
+        action = str(kwargs.get("action") or "").strip().lower()
+        target = str(kwargs.get("target") or "").strip()
         try:
             if action == "search":
-                return self._search(package_manager, root_dir, target)
+                return self._search(sdk, target)
             if action == "info":
-                return self._info(package_manager, root_dir, target)
+                return self._info(sdk, target)
             if action == "installed":
-                return self._installed(package_manager)
+                return self._installed(sdk)
             if action == "install":
-                return self._install(package_manager, context, root_dir, target)
+                return self._mutate(sdk, action, target)
             if action == "uninstall":
-                return self._uninstall(package_manager, context, root_dir, target)
+                return self._mutate(sdk, action, target)
             if action == "update":
-                return self._update(package_manager, context, root_dir)
-            return ToolResult.failed(f"Unknown action: {action!r}.")
-        except (package_manager.PackageError, StoreBackendError) as e:
-            return ToolResult.failed(f"Package {action or 'store'} operation failed: {e}")
+                return self._mutate(sdk, action, "")
+            return sdk.fail(f"Unknown action: {action!r}.")
+        except sdk.Denied as error:
+            return sdk.fail(
+                f"Package {action} was denied: {error}. The operation was not "
+                "performed. STOP and do not retry."
+            )
+        except sdk.Failed as error:
+            return sdk.fail(f"Package {action or 'store'} operation failed: {error}")
 
-    # ── read-only actions ────────────────────────────────────────────────
+    def _catalogue(self, sdk):
+        available = list(sdk.plugins.list(source="available") or [])
+        installed = list(sdk.plugins.list(source="installed") or [])
+        installed_paths = {item.get("path") for item in installed}
+        combined = []
+        for item in available:
+            combined.append({**item, "installed": False})
+        for item in installed:
+            combined.append({**item, "installed": True})
+        # Bundles are not files in the installed tree and are exposed through
+        # the removable catalogue even before installation.
+        for item in sdk.plugins.list(source="removable") or []:
+            if item.get("family") == "bundles" and item.get("path") not in installed_paths:
+                combined.append({**item, "installed": False})
+        unique = {}
+        for item in combined:
+            unique[(item.get("id"), item.get("path"))] = item
+        return sorted(
+            unique.values(),
+            key=lambda item: (item.get("family", ""), item.get("id", "")),
+        )
 
-    def _search(self, pm, root_dir, query) -> ToolResult:
-        items = pm.search_packages(root_dir, query)
-        installed = {item["path"] for item in pm.installed_packages()}
+    def _search(self, sdk, query):
+        lowered = query.lower()
+        items = [
+            item for item in self._catalogue(sdk)
+            if not lowered or lowered in str(item.get("id", "")).lower()
+            or lowered in str(item.get("path", "")).lower()
+        ]
         lines = [
-            f"{item['id']} [{item['family']}]"
+            f"{item.get('id')} [{item.get('family', 'unknown')}]"
             + (" [helper]" if item.get("helper") else "")
-            + (" [installed]" if item["path"] in installed else "")
+            + (" [installed]" if item.get("installed") else "")
             for item in items
         ]
         summary = (
-            f"{len(items)} store package(s)" + (f" matching {query!r}" if query else "") + ":\n"
-            + "\n".join(lines)
-            if lines else f"No store packages found{f' matching {query!r}' if query else ''}."
+            f"{len(items)} store package(s)"
+            + (f" matching {query!r}" if query else "")
+            + (":\n" + "\n".join(lines) if lines else ".")
         )
-        return ToolResult(data={"items": items}, llm_summary=summary)
+        return sdk.ok({"items": items}, llm_summary=summary)
 
-    def _info(self, pm, root_dir, target) -> ToolResult:
+    def _info(self, sdk, target):
         if not target:
-            return ToolResult.failed("'target' is required for info.")
-        info = pm.package_info(root_dir, target)
+            return sdk.fail("'target' is required for info.")
+        matches = [
+            item for item in self._catalogue(sdk)
+            if target in {str(item.get("id") or ""), str(item.get("path") or "")}
+        ]
+        if not matches:
+            return sdk.fail(f"No package named {target!r}.")
+        if len(matches) > 1:
+            return sdk.fail(
+                f"Package name {target!r} is ambiguous: "
+                + ", ".join(str(item.get("path")) for item in matches)
+            )
+        item = matches[0]
         summary = (
-            f"{info['id']} — {info['path']} (family: {info['family']})\n"
-            f"File dependencies: {', '.join(info['dependencies_files']) or 'none'}\n"
-            f"Pip dependencies: {', '.join(info['dependencies_pip']) or 'none'}"
+            f"{item.get('id')} — {item.get('path')} "
+            f"(family: {item.get('family')}; "
+            f"{'installed' if item.get('installed') else 'available'})"
         )
-        return ToolResult(data=info, llm_summary=summary)
+        return sdk.ok(item, llm_summary=summary)
 
-    def _installed(self, pm) -> ToolResult:
-        items = pm.installed_packages()
-        lines = [f"{item['id']} [{item['family']}]" + (" [helper]" if item.get("helper") else "") for item in items]
-        summary = f"{len(items)} installed file(s):\n" + "\n".join(lines) if lines else "No packages installed."
-        return ToolResult(data={"items": items}, llm_summary=summary)
-
-    # ── mutating actions (approval-gated) ────────────────────────────────
-
-    def _install(self, pm, context, root_dir, target) -> ToolResult:
-        if not target:
-            return ToolResult.failed("'target' is required for install.")
-        plan = pm.build_install_plan(root_dir, target)
-        detail = "Files:\n" + "\n".join(f"  {f.path}" for f in plan.files)
-        if plan.pip_packages:
-            detail += "\nPython packages (pip install):\n" + "\n".join(f"  {p}" for p in plan.pip_packages)
-        if not self._approved(context, f"Install package '{target}'", detail):
-            return self._denied(context, f"install of '{target}'")
-        result = pm.execute_install_plan(plan, context)
-        return ToolResult(
-            data={"lines": result.lines},
-            llm_summary=result.text() + "\n\nNewly installed tools/commands become available on your next turn.",
+    def _installed(self, sdk):
+        items = list(sdk.plugins.list(source="installed") or [])
+        lines = [f"{item.get('id')} [{item.get('family', 'unknown')}]" for item in items]
+        summary = (
+            f"{len(items)} installed file(s):\n" + "\n".join(lines)
+            if lines else "No packages installed."
         )
+        return sdk.ok({"items": items}, llm_summary=summary)
 
-    def _uninstall(self, pm, context, root_dir, target) -> ToolResult:
-        if not target:
-            return ToolResult.failed("'target' is required for uninstall.")
-        plan = pm.build_uninstall_plan(target, root_dir=root_dir)
-        detail = "Files to remove:\n" + "\n".join(f"  {rel}" for rel in plan.remove_files)
-        if plan.pip_packages:
-            detail += "\nPython packages to pip-uninstall:\n" + "\n".join(f"  {p}" for p in plan.pip_packages)
-        if not self._approved(context, f"Uninstall package '{target}'", detail):
-            return self._denied(context, f"uninstall of '{target}'")
-        result = pm.execute_uninstall_plan(plan, context)
-        return ToolResult(data={"lines": result.lines}, llm_summary=result.text())
-
-    def _update(self, pm, context, root_dir) -> ToolResult:
-        outdated = pm.outdated_packages(root_dir)
-        if not outdated:
-            return ToolResult(llm_summary="All installed packages are up to date.")
-        detail = "Files with store updates:\n" + "\n".join(f"  {rel}" for rel in outdated)
-        if not self._approved(context, f"Update {len(outdated)} installed package file(s)", detail):
-            return self._denied(context, "package update")
-        result = pm.update_packages(root_dir, context)
-        return ToolResult(data={"lines": result.lines}, llm_summary=result.text())
-
-    # ── helpers ──────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _approved(context, title: str, detail: str) -> bool:
-        approve = getattr(context, "approve_command", None)
-        if approve is None:
-            return False  # no live session to ask — treat as deny
-        try:
-            return bool(approve(title, detail))
-        except Exception as e:
-            logger.error(f"Approval callback failed: {e}")
-            return False
-
-    @staticmethod
-    def _denied(context, what: str) -> ToolResult:
-        reason = getattr(context, "approval_denial_reason", "") or "User denied the request."
-        return ToolResult.failed(
-            f"{reason} The {what} was not performed. STOP — do not retry. Ask the user how to proceed."
-        )
-
-
-def _default_root():
-    from paths import ROOT_DIR
-    return ROOT_DIR
+    def _mutate(self, sdk, action, target):
+        if action != "update" and not target:
+            return sdk.fail(f"'target' is required for {action}.")
+        if action == "install":
+            output = sdk.plugins.install(target)
+        elif action == "uninstall":
+            output = sdk.plugins.uninstall(target)
+        else:
+            output = sdk.plugins.update()
+        text = str(output or f"Package {action} completed.")
+        if action == "install":
+            text += "\n\nNew tools and commands become available on the next turn."
+        return sdk.ok({"output": output}, llm_summary=text)

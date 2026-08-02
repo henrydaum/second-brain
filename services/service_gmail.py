@@ -1,438 +1,358 @@
+"""Persistent Gmail API service.
+
+OAuth credentials, refresh state, and Google client objects stay inside this
+service's isolated subprocess. Callers reach only the declared exports and
+receive JSON-shaped values. User-provided ``credentials.json`` and the saved
+Google token established by ``service_drive`` lives at
+``workspace/drive/token.json``. Gmail reuses it when it already carries the
+needed scope, and upgrades it through OAuth when it does not. The legacy
+``gmail_token.json`` is read only as a one-time migration source.
 """
-Gmail Service.
-
-Handles OAuth 2.0 authentication and provides the Gmail API service object.
-Follows the standard service interface so it integrates with the services dict.
-
-Usage:
-    gmail = context.services.get("gmail")
-    gmail.load()   # opens browser for OAuth if no valid token
-    client = gmail.get_client()
-    messages = gmail.fetch_inbox(max_results=20)
-    message  = gmail.get_message(message_id)
-    gmail.send_message(to, subject, body)
-    gmail.mark_read(message_id)
-    gmail.unload()
-
-Credentials (stored in DATA_DIR):
-    - credentials.json  — OAuth client secret (user provides once)
-    - gmail_token.json  — OAuth refresh token (auto-generated)
-
-Scope: https://www.googleapis.com/auth/gmail.modify
-(read, send, modify labels — needed to mark as read/unread)
-"""
-
 
 dependencies_files = []
-dependencies_pip = ['google-api-python-client', 'google-auth-oauthlib', 'requests']
+dependencies_pip = [
+    "google-api-python-client", "google-auth-oauthlib", "google-auth-httplib2",
+]
 
-import logging
-from plugins.BaseService import BaseService
-from paths import DATA_DIR
+import base64
+import json
+import mimetypes
+import re
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formatdate
+import email.encoders
 
-logger = logging.getLogger("GmailService")
+from guest.bases import BaseService
+
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
+]
+
+
+def _exists(sdk, path):
+    try:
+        return bool(sdk.fs.list(path))
+    except sdk.Failed:
+        return False
 
 
 class GmailService(BaseService):
-    """Gmail service."""
+    """Authenticate once and expose bounded Gmail operations."""
+
     name = "gmail"
-    model_name = "gmail"
-    shared = False  # get_client() returns a fresh HTTP transport per call
+    description = "Read, send, and label mail through Gmail OAuth."
+    # Box calls are serialized, so one credential/client instance is safer
+    # and avoids repeating the OAuth flow for different callers.
+    shared = True
+    timeout = 300
+    requests = ["paths.get", "fs.read", "fs.write", "fs.read_bytes", "fs.list"]
+    exports = [
+        "list_labels", "modify_labels", "get_self_address", "fetch_inbox",
+        "search", "get_message", "mark_read", "mark_unread", "send_message",
+        "reply_to",
+    ]
 
     def __init__(self):
-        """Initialize the Gmail service."""
-        super().__init__()
-        self._creds = None
-        self.service = None  # backward compat
-        self._self_address = None
-        self._labels_cache: list[dict] | None = None
+        self.creds = None
+        self.client = None
+        self.self_address = ""
+        self.labels_cache = None
+        self.token_path = ""
 
-    def _load(self) -> bool:
-        """Internal helper to load Gmail service."""
-        if not self._is_connected():
-            logger.warning("[Gmail] No internet — cannot authenticate.")
-            return False
-
+    def start(self, sdk):
+        """Load or create OAuth credentials and build the Gmail client."""
         try:
             from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
             from google_auth_oauthlib.flow import InstalledAppFlow
             from googleapiclient.discovery import build
-        except ImportError:
-            logger.error(
-                "[Gmail] Missing libraries: "
-                "pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib"
-            )
+        except ImportError as error:
+            raise RuntimeError(
+                "Missing Gmail libraries. Reinstall the Gmail bundle: " + str(error))
+
+        data = sdk.paths.get("data")
+        credentials_path = sdk.path.join(data, "credentials.json")
+        self.token_path = sdk.path.join(
+            sdk.paths.get("workspace"), "drive", "token.json")
+        legacy_gmail_token = sdk.path.join(data, "gmail_token.json")
+        try:
+            client_config = json.loads(sdk.fs.read(credentials_path))
+        except (sdk.Failed, TypeError, ValueError) as error:
+            sdk.log(f"Gmail credentials unavailable at {credentials_path}: {error}",
+                    level="error")
             return False
 
-        cred_path = DATA_DIR / "credentials.json"
-        if not cred_path.exists():
-            logger.error(f"[Gmail] No credentials.json at {cred_path}")
-            return False
-
-        SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-        token_path = DATA_DIR / "gmail_token.json"
         creds = None
-
-        if token_path.exists():
-            try:
-                creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-            except Exception as e:
-                logger.debug(f"Token load failed, will re-auth: {e}")
+        stored = (self.token_path if _exists(sdk, self.token_path)
+                  else legacy_gmail_token if _exists(sdk, legacy_gmail_token)
+                  else None)
+        token = {}
+        try:
+            token = json.loads(sdk.fs.read(stored)) if stored else {}
+            creds = Credentials.from_authorized_user_info(token, SCOPES)
+        except (sdk.Failed, TypeError, ValueError):
+            pass
 
         try:
-            if not creds or not creds.valid:
+            recorded_scopes = token.get("scopes") or []
+            if isinstance(recorded_scopes, str):
+                recorded_scopes = recorded_scopes.split()
+            has_scopes = bool(
+                creds and all(scope in recorded_scopes for scope in SCOPES))
+            if not creds or not creds.valid or not has_scopes:
                 if creds and creds.expired and creds.refresh_token:
-                    logger.info("[Gmail] Refreshing expired token...")
+                    sdk.log("refreshing Gmail OAuth token")
                     creds.refresh(Request())
-                else:
-                    logger.info("[Gmail] Opening browser for OAuth consent...")
-                    flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), SCOPES)
+                if not creds.valid or not creds.has_scopes(SCOPES):
+                    sdk.log("opening browser for Gmail OAuth consent")
+                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
                     creds = flow.run_local_server(port=0)
-                with open(token_path, "w") as f:
-                    f.write(creds.to_json())
-
-            self._creds = creds
-            self.service = build("gmail", "v1", credentials=creds, cache_discovery=False)
-            self.loaded = True
+                sdk.fs.write(self.token_path, creds.to_json())
+            elif stored != self.token_path:
+                sdk.fs.write(self.token_path, creds.to_json())
+            self.creds = creds
+            self.client = build(
+                "gmail", "v1", credentials=creds, cache_discovery=False)
             return True
-
-        except Exception as e:
-            logger.error(f"[Gmail] Authentication failed: {e}")
+        except Exception as error:
+            sdk.log(f"Gmail authentication failed: {error}", level="error")
+            self.creds = None
+            self.client = None
             return False
 
-    def get_client(self):
-        """Return a fresh Gmail API client. Thread-safe."""
-        if not self.loaded or not self._creds:
-            return None
+    def stop(self, sdk):
+        self.creds = None
+        self.client = None
+        self.self_address = ""
+        self.labels_cache = None
+
+    def _ready(self, sdk):
+        if not self.creds or not self.client:
+            return False
         try:
             from google.auth.transport.requests import Request
-            from googleapiclient.discovery import build
-            if self._creds.expired and self._creds.refresh_token:
-                self._creds.refresh(Request())
-            return build("gmail", "v1", credentials=self._creds, cache_discovery=False)
-        except Exception as e:
-            logger.error(f"[Gmail] get_client failed: {e}")
-            return None
+            if self.creds.expired and self.creds.refresh_token:
+                self.creds.refresh(Request())
+                sdk.fs.write(self.token_path, self.creds.to_json())
+            return True
+        except Exception as error:
+            sdk.log(f"Gmail token refresh failed: {error}", level="error")
+            return False
 
-    def unload(self):
-        """Handle unload."""
-        self._creds = None
-        self.service = None
-        self._self_address = None
-        self._labels_cache = None
-        self.loaded = False
-        logger.info("[Gmail] Service unloaded.")
-
-    def list_labels(self, force_refresh: bool = False) -> list[dict]:
-        """Return Gmail labels as [{id, name, type}]. Cached on the instance."""
-        if self._labels_cache is not None and not force_refresh:
-            return self._labels_cache
-        client = self.get_client()
-        if not client:
+    def list_labels(self, sdk, force_refresh=False):
+        if self.labels_cache is not None and not force_refresh:
+            return self.labels_cache
+        if not self._ready(sdk):
             return []
         try:
-            resp = client.users().labels().list(userId="me").execute()
-            self._labels_cache = [
-                {"id": l.get("id", ""), "name": l.get("name", ""), "type": l.get("type", "user")}
-                for l in resp.get("labels", [])
+            response = self.client.users().labels().list(userId="me").execute()
+            self.labels_cache = [
+                {"id": label.get("id", ""), "name": label.get("name", ""),
+                 "type": label.get("type", "user")}
+                for label in response.get("labels", [])
             ]
-            return self._labels_cache
-        except Exception as e:
-            logger.error(f"[Gmail] list_labels failed: {e}")
+            return self.labels_cache
+        except Exception as error:
+            sdk.log(f"Gmail list_labels failed: {error}", level="error")
             return []
 
-    def modify_labels(self, message_id: str, add_ids: list[str], remove_ids: list[str]) -> bool:
-        """Public wrapper around _modify_labels for label add/remove operations."""
-        return self._modify_labels(message_id, add_ids, remove_ids)
+    def modify_labels(self, sdk, message_id, add_ids=None, remove_ids=None):
+        return self._modify_labels(sdk, message_id, add_ids or [], remove_ids or [])
 
-    def get_self_address(self) -> str:
-        """Return the authenticated Google account's email address (cached)."""
-        if self._self_address:
-            return self._self_address
-        client = self.get_client()
-        if not client:
+    def get_self_address(self, sdk):
+        if self.self_address:
+            return self.self_address
+        if not self._ready(sdk):
             return ""
         try:
-            profile = client.users().getProfile(userId="me").execute()
-            self._self_address = (profile.get("emailAddress") or "").strip()
-            return self._self_address
-        except Exception as e:
-            logger.error(f"[Gmail] getProfile failed: {e}")
+            profile = self.client.users().getProfile(userId="me").execute()
+            self.self_address = str(profile.get("emailAddress") or "").strip()
+            return self.self_address
+        except Exception as error:
+            sdk.log(f"Gmail getProfile failed: {error}", level="error")
             return ""
 
-    # ── Inbox access ──────────────────────────────────────────────────────────
-
-    def fetch_inbox(self, max_results: int = 50, label: str = "INBOX") -> list[dict]:
-        """Fetch message summaries from a label. Leaves messages UNREAD."""
-        client = self.get_client()
-        if not client:
+    def fetch_inbox(self, sdk, max_results=50, label="INBOX"):
+        if not self._ready(sdk):
             return []
         try:
-            results = (
-                client.users()
-                .messages()
-                .list(userId="me", labelIds=label, maxResults=max_results)
-                .execute()
-            )
-            messages = results.get("messages", [])
-            return [self._summarize(client.users().messages().get(
-                userId="me", id=m["id"], format="metadata").execute())
-                for m in messages]
-        except Exception as e:
-            logger.error(f"[Gmail] fetch_inbox failed: {e}")
+            found = self.client.users().messages().list(
+                userId="me", labelIds=[label],
+                maxResults=_limit(max_results)).execute().get("messages", [])
+            return [self._summary(self._get(message["id"], "metadata"))
+                    for message in found]
+        except Exception as error:
+            sdk.log(f"Gmail fetch_inbox failed: {error}", level="error")
             return []
 
-    def search(self, query: str, max_results: int = 50) -> list[dict]:
-        """Search Gmail with a raw query (e.g. 'is:unread', 'from:foo@bar')."""
-        client = self.get_client()
-        if not client:
+    def search(self, sdk, query, max_results=50):
+        if not self._ready(sdk):
             return []
         try:
-            results = (
-                client.users()
-                .messages()
-                .list(userId="me", q=query, maxResults=max_results)
-                .execute()
-            )
-            messages = results.get("messages", [])
-            return [self._summarize(client.users().messages().get(
-                userId="me", id=m["id"], format="metadata").execute())
-                for m in messages]
-        except Exception as e:
-            logger.error(f"[Gmail] search failed for {query!r}: {e}")
+            found = self.client.users().messages().list(
+                userId="me", q=str(query or ""),
+                maxResults=_limit(max_results)).execute().get("messages", [])
+            return [self._summary(self._get(message["id"], "metadata"))
+                    for message in found]
+        except Exception as error:
+            sdk.log(f"Gmail search failed: {error}", level="error")
             return []
 
-    def fetch_inbox_aliased(self, alias_address: str, max_results: int = 50) -> list[dict]:
-        """Fetch messages addressed to a Gmail alias (to:alias@…)."""
-        return self.search(f'to:"{alias_address}"', max_results=max_results)
-
-    def get_message(self, message_id: str) -> dict | None:
-        """Fetch full message metadata + body."""
-        client = self.get_client()
-        if not client:
+    def get_message(self, sdk, message_id):
+        if not self._ready(sdk):
             return None
         try:
-            msg = client.users().messages().get(
-                userId="me", id=message_id, format="full").execute()
-            return self._parse_message(msg)
-        except Exception as e:
-            logger.error(f"[Gmail] get_message failed for {message_id}: {e}")
+            return self._parse(self._get(message_id, "full"))
+        except Exception as error:
+            sdk.log(f"Gmail get_message failed for {message_id}: {error}",
+                    level="error")
             return None
 
-    def mark_read(self, message_id: str) -> bool:
-        """Handle mark read."""
-        return self._modify_labels(message_id, add=[], remove=["UNREAD"])
+    def mark_read(self, sdk, message_id):
+        return self._modify_labels(sdk, message_id, [], ["UNREAD"])
 
-    def mark_unread(self, message_id: str) -> bool:
-        """Handle mark unread."""
-        return self._modify_labels(message_id, add=["UNREAD"], remove=[])
+    def mark_unread(self, sdk, message_id):
+        return self._modify_labels(sdk, message_id, ["UNREAD"], [])
 
-    # ── Sending ───────────────────────────────────────────────────────────────
-
-    def send_message(self, to: str, subject: str, body: str,
-                     cc: str = "", attachments: list[str] | None = None,
-                     from_address: str = None) -> str | None:
-        """Send an email. Returns sent message ID or None."""
-        client = self.get_client()
-        if not client:
+    def send_message(self, sdk, to, subject, body, cc="", attachments=None,
+                     from_address=None):
+        if not self._ready(sdk):
             return None
         try:
-            import base64
-            import mimetypes
-            import os
-            from email.mime.multipart import MIMEMultipart
-            from email.mime.text import MIMEText
-            from email.mime.audio import MIMEAudio
-            from email.mime.image import MIMEImage
-            from email.utils import formatdate
-
-            msg = MIMEMultipart()
-            msg["To"] = to
-            msg["Subject"] = subject
-            msg["From"] = from_address or "me"
-            msg["Date"] = formatdate(localtime=True)
-            if cc:
-                msg["Cc"] = cc
-            msg.attach(MIMEText(body, "plain"))
-
-            _attach_files(msg, attachments)
-
-            encoded = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-            sent = client.users().messages().send(
-                userId="me", body={"raw": encoded}).execute()
-            logger.info(f"[Gmail] Sent {sent['id']} to {to} with {len(attachments or [])} attachment(s)")
-            return sent["id"]
-        except Exception as e:
-            logger.error(f"[Gmail] send_message failed: {e}")
+            message = _message(to, subject, body, cc, from_address)
+            _attach_files(sdk, message, attachments or [])
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            sent = self.client.users().messages().send(
+                userId="me", body={"raw": raw}).execute()
+            sdk.log(f"sent Gmail message {sent.get('id')} to {to}")
+            return sent.get("id")
+        except Exception as error:
+            sdk.log(f"Gmail send_message failed: {error}", level="error")
             return None
 
-    def reply_to(self, message_id: str, body: str,
-                 subject_prefix: str = "Re: ", attachments: list[str] | None = None,
-                 from_address: str = None) -> str | None:
-        """Reply to a message in the same thread."""
-        client = self.get_client()
-        if not client:
+    def reply_to(self, sdk, message_id, body, attachments=None,
+                 from_address=None):
+        original = self.get_message(sdk, message_id)
+        if not original or not self._ready(sdk):
             return None
         try:
-            original = self.get_message(message_id)
-            if not original:
-                return None
-
-            from_email = original.get("sender", "")
-            if "<" in from_email:
-                from_email = from_email.split("<")[1].rstrip(">")
-
-            thread_id = original.get("thread_id", "")
+            recipient = _address(original.get("sender", ""))
             subject = original.get("subject", "")
-            if not subject.startswith("Re: ") and not subject.startswith("Fwd: "):
-                subject = subject_prefix + subject
-
-            msg_id_header = original.get("message_id_header", "") or f"<{message_id}>"
-            references = original.get("references", "")
-
-            import base64
-            from email.mime.multipart import MIMEMultipart
-            from email.mime.text import MIMEText
-            from email.utils import formatdate
-
-            msg = MIMEMultipart()
-            msg["To"] = from_email
-            msg["Subject"] = subject
-            msg["From"] = from_address or "me"
-            msg["Date"] = formatdate(localtime=True)
-            if msg_id_header:
-                msg["In-Reply-To"] = msg_id_header
-                msg["References"] = f"{references} {msg_id_header}".strip()
-            msg.attach(MIMEText(body, "plain"))
-
-            _attach_files(msg, attachments)
-
-            encoded = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-            sent = client.users().messages().send(
-                userId="me",
-                body={"raw": encoded, "threadId": thread_id}
-            ).execute()
-            logger.info(f"[Gmail] Replied in thread {thread_id} with {len(attachments or [])} attachment(s)")
-            return sent["id"]
-        except Exception as e:
-            logger.error(f"[Gmail] reply_to failed: {e}")
+            if not subject.lower().startswith(("re: ", "fwd: ")):
+                subject = "Re: " + subject
+            message = _message(recipient, subject, body, "", from_address)
+            header = original.get("message_id_header") or f"<{message_id}>"
+            message["In-Reply-To"] = header
+            message["References"] = (
+                f"{original.get('references', '')} {header}".strip())
+            _attach_files(sdk, message, attachments or [])
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            sent = self.client.users().messages().send(
+                userId="me", body={"raw": raw,
+                                   "threadId": original.get("thread_id")}).execute()
+            return sent.get("id")
+        except Exception as error:
+            sdk.log(f"Gmail reply_to failed: {error}", level="error")
             return None
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    def _get(self, message_id, format_name):
+        return self.client.users().messages().get(
+            userId="me", id=message_id, format=format_name).execute()
 
-    @staticmethod
-    def _is_connected() -> bool:
-        """Return whether connected."""
-        try:
-            import requests
-            requests.head("https://www.google.com", timeout=3)
-            return True
-        except Exception:
-            return False
-
-    def _modify_labels(self, message_id: str, add: list, remove: list) -> bool:
-        """Internal helper to handle modify labels."""
-        client = self.get_client()
-        if not client:
+    def _modify_labels(self, sdk, message_id, add, remove):
+        if not self._ready(sdk):
             return False
         try:
-            client.users().messages().modify(
+            self.client.users().messages().modify(
                 userId="me", id=message_id,
-                body={"addLabelIds": add, "removeLabelIds": remove}
-            ).execute()
+                body={"addLabelIds": list(add),
+                      "removeLabelIds": list(remove)}).execute()
             return True
-        except Exception as e:
-            logger.error(f"[Gmail] _modify_labels failed for {message_id}: {e}")
+        except Exception as error:
+            sdk.log(f"Gmail label update failed for {message_id}: {error}",
+                    level="error")
             return False
 
     @staticmethod
-    def _header(headers: dict, name: str) -> str:
-        """Internal helper to handle header."""
-        return headers.get(name, "")
-
-    def _summarize(self, msg: dict) -> dict:
-        """Internal helper to handle summarize."""
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    def _summary(message):
+        headers = _headers(message)
         return {
-            "message_id": msg["id"],
-            "thread_id": msg["threadId"],
-            "subject": self._header(headers, "Subject"),
-            "sender": self._header(headers, "From"),
-            "received_at": int(msg.get("internalDate", 0)) / 1000.0,
-            "snippet": msg.get("snippet", ""),
-            "is_read": "UNREAD" not in msg.get("labelIds", []),
-            "labels": msg.get("labelIds", []),
+            "message_id": message.get("id", ""),
+            "thread_id": message.get("threadId", ""),
+            "subject": headers.get("Subject", ""),
+            "sender": headers.get("From", ""),
+            "received_at": int(message.get("internalDate", 0)) / 1000.0,
+            "snippet": message.get("snippet", ""),
+            "is_read": "UNREAD" not in message.get("labelIds", []),
+            "labels": message.get("labelIds", []),
         }
 
-    def _parse_message(self, msg: dict) -> dict:
-        """Internal helper to parse message."""
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        body_plain, body_html = self._body_parts(msg["payload"])
-
+    @staticmethod
+    def _parse(message):
+        headers = _headers(message)
+        plain, html = _body_parts(message.get("payload") or {})
         return {
-            "message_id": msg["id"],
-            "thread_id": msg["threadId"],
-            "subject": self._header(headers, "Subject"),
-            "sender": self._header(headers, "From"),
-            "recipients": self._header(headers, "To"),
-            "cc": self._header(headers, "Cc"),
-            "body_plain": body_plain,
-            "body_html": body_html,
-            "received_at": int(msg.get("internalDate", 0)) / 1000.0,
-            "is_read": "UNREAD" not in msg.get("labelIds", []),
-            "labels": msg.get("labelIds", []),
-            "message_id_header": self._header(headers, "Message-ID"),
-            "references": self._header(headers, "References"),
+            **GmailService._summary(message),
+            "recipients": headers.get("To", ""), "cc": headers.get("Cc", ""),
+            "body_plain": plain, "body_html": html,
+            "message_id_header": headers.get("Message-ID", ""),
+            "references": headers.get("References", ""),
         }
 
-    def _body_parts(self, part: dict) -> tuple[str, str]:
-        """Internal helper to handle body parts."""
-        import base64
-        plain = html = ""
-        data = part.get("body", {}).get("data")
-        if data:
-            decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-            plain = decoded if part.get("mimeType") == "text/plain" else ""
-            html = decoded if part.get("mimeType") == "text/html" else ""
-        for child in part.get("parts", []):
-            child_plain, child_html = self._body_parts(child)
-            plain, html = plain or child_plain, html or child_html
-        return plain, html
+
+def _limit(value):
+    try:
+        return max(1, min(int(value), 100))
+    except (TypeError, ValueError):
+        return 20
 
 
-def _attach_files(msg, attachments):
-    """Internal helper to handle attach files."""
-    if not attachments:
-        return
-    import mimetypes
-    import os
-    from email.mime.audio import MIMEAudio
-    from email.mime.image import MIMEImage
-    from email.mime.base import MIMEBase
-    import email.encoders
+def _headers(message):
+    return {item.get("name", ""): item.get("value", "")
+            for item in (message.get("payload") or {}).get("headers", [])}
+
+
+def _body_parts(part):
+    plain = html = ""
+    data = (part.get("body") or {}).get("data")
+    if data:
+        decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+        plain = decoded if part.get("mimeType") == "text/plain" else ""
+        html = decoded if part.get("mimeType") == "text/html" else ""
+    for child in part.get("parts", []):
+        child_plain, child_html = _body_parts(child)
+        plain, html = plain or child_plain, html or child_html
+    return plain, html
+
+
+def _message(to, subject, body, cc, from_address):
+    message = MIMEMultipart()
+    message["To"] = str(to)
+    message["Subject"] = str(subject)
+    message["From"] = from_address or "me"
+    message["Date"] = formatdate(localtime=True)
+    if cc:
+        message["Cc"] = str(cc)
+    message.attach(MIMEText(str(body), "plain"))
+    return message
+
+
+def _attach_files(sdk, message, attachments):
     for path in attachments:
-        if not os.path.isfile(path):
-            logger.warning(f"[Gmail] Attachment not found, skipping: {path}")
-            continue
-        content_type, _ = mimetypes.guess_type(path)
-        if content_type is None:
-            content_type = "application/octet-stream"
-        with open(path, "rb") as f:
-            data = f.read()
-        filename = os.path.basename(path)
-        if content_type.startswith("image/"):
-            part = MIMEImage(data, name=filename)
-        elif content_type.startswith("audio/"):
-            part = MIMEAudio(data, name=filename)
-        else:
-            part = MIMEBase("application", "octet-stream")
-            part.set_payload(data)
-            email.encoders.encode_base64(part)
-        part.add_header("Content-Disposition", "attachment", filename=filename)
-        msg.attach(part)
+        data = sdk.fs.read_bytes(path)
+        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        main_type, sub_type = content_type.split("/", 1)
+        part = MIMEBase(main_type, sub_type)
+        part.set_payload(data)
+        email.encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment",
+                        filename=sdk.path.name(path))
+        message.attach(part)
 
 
-def build_services(config: dict) -> dict:
-    """Build services."""
-    return {"gmail": GmailService()}
+def _address(header):
+    match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", header or "")
+    return match.group(0) if match else str(header or "")

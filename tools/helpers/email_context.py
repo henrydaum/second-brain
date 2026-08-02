@@ -1,13 +1,28 @@
-"""Tool plugin for email context."""
+"""Shared, SDK-only email access guards."""
 
 dependencies_files = []
 dependencies_pip = []
 
-def is_main_conversation(context) -> bool:
-    """Return whether main conversation."""
-    runtime, key = getattr(context, "runtime", None), getattr(context, "session_key", None)
-    session = getattr(runtime, "sessions", {}).get(key) if runtime and key else None
-    cid = getattr(session, "conversation_id", None)
-    db = getattr(context, "db", None) or getattr(runtime, "db", None)
-    row = db.get_conversation(cid) if db and cid else None
-    return ((row or {}).get("category") or "").strip() in {"", "Main"}
+
+def allowed_addresses(sdk):
+    raw = sdk.config.read("ai_email_addresses") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(value).strip() for value in raw if str(value).strip()]
+
+
+def is_main_conversation(sdk):
+    session = sdk.session.get() or {}
+    conversation_id = session.get("conversation_id")
+    if not conversation_id:
+        return True
+    row = (sdk.conv.read(conversation_id) or {}).get("conversation") or {}
+    return str(row.get("category") or "").strip() in {"", "Main"}
+
+
+def message_involves(message, addresses):
+    haystack = " ".join([
+        message.get("sender", ""), message.get("recipients", ""),
+        message.get("cc", ""),
+    ]).lower()
+    return any(address.lower() in haystack for address in addresses)
