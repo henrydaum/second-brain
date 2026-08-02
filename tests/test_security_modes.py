@@ -728,24 +728,37 @@ def new_command():
     return module
 
 
-def test_new_names_the_mode_it_reset(new_command):
+def test_new_says_the_mode_the_new_conversation_is_in(new_command):
     """The silent reset that cost an afternoon.
 
     A mode belongs to the conversation it was set in, so ``/new`` returns you
     to ``ask`` — and the person who typed ``/mode lockdown`` has no reason to
     re-check. The next thing they see is an approval dialog for something they
-    believed would be refused outright.
+    believed would be refused outright. Stating the mode is what breaks that.
+
+    It used to also name what it *reset from* (``_mode_line``, dropped in
+    393e3be); the line states the mode plainly now, the same way the restore
+    message does. Pinned as the mode being *read from the session* rather than
+    assumed, which is the half that has to keep working.
     """
-    line = new_command._mode_line(LOCKDOWN, ASK)
-    assert line.startswith(ASK)
-    assert "reset" in line and LOCKDOWN in line
-    assert "/mode lockdown" in line, "say how to get it back"
+    from types import SimpleNamespace
+
+    class _Sdk:
+        Failed = RuntimeError
+        session = SimpleNamespace(get=lambda: {"mode": LOCKDOWN})
+
+    assert new_command._mode(_Sdk()) == LOCKDOWN
 
 
-def test_new_stays_quiet_when_nothing_was_reset(new_command):
-    """No lecture when there is nothing to warn about."""
-    assert new_command._mode_line(ASK, ASK) == ASK
-    assert new_command._mode_line(YOLO, YOLO) == YOLO
+def test_new_falls_back_to_the_default_when_the_mode_cannot_be_read(new_command):
+    """A command that cannot ask must not claim a mode nobody set."""
+    from types import SimpleNamespace
+
+    class _Sdk:
+        Failed = RuntimeError
+        session = SimpleNamespace(get=lambda: None)
+
+    assert new_command._mode(_Sdk()) == ASK
 
 
 def test_restoring_a_conversation_says_the_permission_mode(tmp_path):
