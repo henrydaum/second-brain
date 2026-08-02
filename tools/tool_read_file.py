@@ -8,11 +8,41 @@ Sandboxed: the read is an ``fs.read`` Request, so the kernel decides what may
 be read (and refuses the config file and the database outright, whatever the
 path says). Nothing here asks permission — reads are classified safe, and
 always were.
+
+**One door for every file type**, because the agent should not have to know
+what kind of file it is pointing at before it may look:
+
+- image, audio, video — staged as an attachment, so the model *sees* it
+- text — read as text, which is the path with offset/limit/line numbers
+- a document that is not text at all (pdf, docx, xlsx) — handed to a parser
+
+Only the middle one ever worked. ``fs.read`` on a PDF returned decoded binary
+noise, and an image had no route to the model at all.
+
+Two details about how the last branch decides. It is **not** the extension's
+modality: ``parse_pdf`` registers ``.pdf`` as "text" and so does ``parse_text``
+for ``.py``, so the registry cannot tell a document from a source file — both
+are "something produces text from this". And it is not a hardcoded list of
+document extensions, which would drift from whatever is actually installed.
+It is the *bytes*: ``fs.read`` decodes with ``errors="replace"``, so a file
+that comes back full of replacement characters has just said it is not text.
+Asking a parser only then costs nothing on the common path and stays correct
+as parser packages come and go.
+
+Reading text is deliberately still ``fs.read`` rather than the parser, even
+though ``parse_text`` would answer: it applies ``clean_text`` and a char cap,
+and ``edit_file``'s exact-replacement gate needs what is actually on disk.
+
+Nothing here asks whether the model can read a modality. If it cannot, the
+kernel substitutes the file's parsed text and failing that a line naming where
+the file is — and a check in here could only get it wrong, since a box cannot
+see which brain the session resolved to.
 """
 
 dependencies_files = ['tools/helpers/file_reads.py']
 dependencies_pip = []
 requests = ["fs.read", "fs.list", "paths.get",
+            "parse.modality", "parse.file", "session.add_attachment",
             "session.state_get", "session.state_set"]
 
 from guest.bases import BaseTool
@@ -23,14 +53,61 @@ from .file_reads import record_read
 
 MAX_CHARS = 20_000
 
+# A staged file's bytes reach the backend over the wire, which caps a message
+# at 16 MB. Refusing here names the file and the size; letting it through fails
+# inside the model call, where the report blames the provider.
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+# Modalities the model ingests directly. Everything else is on its way to text.
+NATIVE_MODALITIES = ("image", "audio", "video")
+
+# Above this share of undecodable characters, the file is not text. A real
+# UTF-8 file has none of these; a latin-1 one has a scattering, which is why
+# this is a ratio rather than "any". NUL is decisive on its own — text files
+# essentially never carry one and binary container formats nearly always do.
+BINARY_RATIO = 0.05
+
+# U+FFFD, named rather than pasted: the character this looks for is exactly
+# the one a bad encoding round trip mangles, and a source file is no place to
+# depend on that going well.
+REPLACEMENT = chr(0xFFFD)
+
+
+def _looks_binary(content: str) -> bool:
+    """Whether ``fs.read`` just handed back a decoded binary file."""
+    if not content:
+        return False
+    if "\x00" in content:
+        return True
+    return content.count(REPLACEMENT) / len(content) > BINARY_RATIO
+
+
+def _size(sdk, path) -> int | None:
+    """Byte size, or None when it cannot be determined.
+
+    ``fs.list`` pointed at a file answers for that file alone — the same idiom
+    ``file_reads`` stats one path with.
+    """
+    try:
+        entries = sdk.fs.list(path, details=True)
+    except sdk.Failed:
+        return None
+    for entry in entries or []:
+        if not entry.get("is_dir"):
+            return entry.get("size")
+    return None
+
 
 class ReadFile(BaseTool):
     """Read file."""
     name = "read_file"
     description = (
-        "Read a text file by path. Use this when you need the exact contents of "
+        "Read any file by path. Use this when you need the exact contents of "
         "source code, templates, docs, or sandbox plugins. Paths may be absolute "
-        "or relative to the project root."
+        "or relative to the project root. Images, audio and video are attached "
+        "to your next message so you can look at them directly; documents such "
+        "as PDFs and spreadsheets come back as extracted text. The "
+        "offset/limit/line_numbers options apply to text files."
     )
     parameters = {
         "type": "object",
@@ -78,12 +155,19 @@ class ReadFile(BaseTool):
 
         target = sdk.path.absolute(raw_path, base=sdk.paths.get("project"))
 
+        modality = sdk.parse.modality(sdk.path.suffix(target))
+        if modality in NATIVE_MODALITIES:
+            return self._attach(sdk, target, modality)
+
         try:
             content = sdk.fs.read(target)
         except sdk.Denied as refused:
             return sdk.fail(str(refused))
         except sdk.Failed as failed:
             return sdk.fail(f"Could not read {target}: {failed.error}")
+
+        if _looks_binary(content):
+            return self._parse(sdk, target)
 
         lines = content.splitlines()
         if sdk.path.suffix(target) == ".log":
@@ -117,3 +201,63 @@ class ReadFile(BaseTool):
         # Mark the file as seen for edit_file's read-before-edit gate.
         record_read(sdk, target)
         return sdk.ok(None, llm_summary=content)
+
+    def _attach(self, sdk, target, modality):
+        """Put the file in front of the model rather than describing it."""
+        size = _size(sdk, target)
+        if size is None:
+            return sdk.fail(f"Could not read {target}.")
+        if size > MAX_ATTACHMENT_BYTES:
+            mb = size / (1024 * 1024)
+            return sdk.fail(
+                f"{sdk.path.name(target)} is {mb:.1f} MB, over the "
+                f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit for a file "
+                "the model can be shown."
+            )
+
+        try:
+            sdk.session.add_attachment(target)
+        except sdk.Failed as failed:
+            return sdk.fail(f"Could not attach {target}: {failed.error}")
+
+        return sdk.ok(None, llm_summary=(
+            f"Attached {sdk.path.name(target)} ({modality}) to your next "
+            "message. Look at it, then continue."
+        ))
+
+    def _parse(self, sdk, target):
+        """Extract text from a file that turned out not to be text.
+
+        No ``record_read`` here: the read-before-edit gate exists so an edit
+        replaces text the agent has actually seen, and extracted text is not
+        what is on disk. Editing a PDF by string replacement is not a thing
+        the gate should bless.
+        """
+        name = sdk.path.name(target)
+        suffix = sdk.path.suffix(target) or "this type"
+        try:
+            text = sdk.parse.file(target)
+        except sdk.Failed as failed:
+            return sdk.fail(
+                f"{name} is not a text file, and it could not be parsed into "
+                f"text: {failed.error}. Installing a parser package for "
+                f"{suffix} may help — see /packages."
+            )
+
+        text = str(text or "").strip()
+        if not text:
+            return sdk.fail(
+                f"{name} is not a text file, and parsing it produced no text. "
+                "It may be empty, or hold only content the parser for "
+                f"{suffix} does not extract."
+            )
+
+        note = ""
+        if len(text) > MAX_CHARS:
+            text = text[:MAX_CHARS]
+            note = f"\n\n... (output capped at {MAX_CHARS} chars)"
+
+        return sdk.ok(None, llm_summary=(
+            f"{name} is not text; extracted its contents instead:"
+            f"\n\n{text}{note}"
+        ))
