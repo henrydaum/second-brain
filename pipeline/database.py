@@ -145,6 +145,13 @@ class Database:
 		# critical for the dispatch loop reading while workers write results.
 		"""Internal helper to handle setup."""
 		self.conn.execute("PRAGMA journal_mode=WAL")
+		# Every commit fsyncs under the default (FULL), and this database is
+		# committed on a great many small writes — the action ledger above all.
+		# Under WAL, NORMAL syncs at checkpoints instead: a power cut can cost
+		# the last transactions and can never corrupt the file, which is the
+		# right trade for a local-first app whose most frequent writer is a
+		# flight recorder.
+		self.conn.execute("PRAGMA synchronous=NORMAL")
 		# Negative value = KB. -50000 ≈ 50 MB page cache (default is ~2 MB).
 		self.conn.execute("PRAGMA cache_size=-50000")
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE). Must run

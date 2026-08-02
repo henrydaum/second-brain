@@ -47,7 +47,7 @@ from .guest.requests import Result
 from .guest.sdk import SDK
 from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
-from .runner_subprocess import (GUEST_ROOT, fault_result, send, service_until,
+from .runner_subprocess import (fault_result, send, service_until,
                                 subprocess_for)
 from .watchdog import HARD_CEILING, TICK, WATCHDOG, overdue as is_overdue
 
@@ -425,7 +425,7 @@ class SubprocessBox(PersistentBox):
               timeout: float = DEFAULT_START_TIMEOUT) -> Result:
         """Spawn the child, load the target, and wait for it to stand by."""
         self._interpreter = interpreter
-        self.proc = subprocess_for(str(GUEST_ROOT))
+        self.proc = subprocess_for()
         deadline = clamp_timeout(timeout)
 
         # Same reasoning as ``_call``: a guest whose ``start`` is waiting on

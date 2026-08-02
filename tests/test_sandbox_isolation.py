@@ -58,6 +58,28 @@ def test_the_tree_decides_isolation(root, tree, expected):
 def test_an_unknown_path_fails_closed():
     """"I do not know what this is" has exactly one safe answer."""
     assert tree_of("C:/somewhere/else/tool_x.py") == UNKNOWN
+
+
+def test_retargeting_the_layout_still_moves_isolation(monkeypatch, tmp_path):
+    """``trees.locate`` memoizes the resolved tree paths, and this is what
+    keeps that honest.
+
+    Resolving a path is a filesystem call, and doing it per tree per lookup was
+    most of the cost of deciding whether a plugin may run in-process. The memo
+    is keyed on the identity of ``trees.TREES`` because that tuple is what gets
+    replaced when the layout moves. A stale one would answer with the *old*
+    tree — which is not a slow answer but a wrong one, and wrong in the
+    direction that runs contained code unmediated."""
+    roots = retarget_trees(monkeypatch, tmp_path)
+    moved = _write(Path(roots["bundled"]) / "tools" / "tool_sample.py")
+    assert tree_of(moved) == KERNEL
+    assert required_isolation(moved, None) == IN_PROCESS
+
+    # And back: monkeypatch restores the original tuple, so the same path is
+    # now in no tree at all and fails closed.
+    monkeypatch.undo()
+    assert tree_of(moved) == UNKNOWN
+    assert required_isolation(moved, None) == SUBPROCESS
     assert required_isolation("C:/somewhere/else/tool_x.py", None) == SUBPROCESS
 
 

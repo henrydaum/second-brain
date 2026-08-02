@@ -96,11 +96,24 @@ def sandbox_sink(db):
     refused, is kept regardless of type — a denied read is a real event even
     though the read itself would not have been.
 
+    ``llm.delta`` is the one *write* held to the same rule, and it is the
+    worse case: a streaming backend sends one per token, so a single reply
+    wrote thousands of rows, each an INSERT and a commit under the database's
+    one lock — serializing the whole database against the model at fifty to a
+    hundred round trips a second. It buys nothing either, since the call and
+    the enact are already recorded and this is only the model's own output
+    kept a character at a time. It is dropped here rather than added to
+    ``READ_ONLY``, which says what it holds: things that read rather than
+    change. What the sink drops is the sink's question.
+
     Built here rather than in the sandbox because it is the sandbox's *origin*
     on a kernel table; ``sandbox/`` stays ignorant of the database, and the
     composition root hands this in like it hands in the approver.
     """
-    from sandbox.guest.requests import READ_ONLY
+    from sandbox.guest.requests import LLM_DELTA, READ_ONLY
+
+    #: Reads, plus the one write too frequent to keep.
+    unrecorded = READ_ONLY | {LLM_DELTA}
 
     def record(chain, request, decision, result) -> None:
         """Append one serviced Request. Never raises; never blocks a turn."""
@@ -109,7 +122,7 @@ def sandbox_sink(db):
             return
         try:
             ok = bool(getattr(result, "ok", False))
-            if request.type in READ_ONLY and ok and decision.safe:
+            if request.type in unrecorded and ok and decision.safe:
                 return
             write(
                 origin=SANDBOX_ORIGIN,

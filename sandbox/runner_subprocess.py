@@ -17,6 +17,7 @@ this is the production shape anyway.
 from __future__ import annotations
 
 import logging
+import queue
 import subprocess
 import sys
 import threading
@@ -27,6 +28,7 @@ from .guest import protocol
 from .guest.faults import clamp
 from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
+from .watchdog import WATCHDOG
 from .guest.codes import (ERROR_GUEST_EXITED, ERROR_GUEST_FAULT,
                          ERROR_INVALID_ARGUMENT, ERROR_TIMEOUT)
 from .guest.requests import Request, Result
@@ -52,7 +54,6 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
                       box: str = "", box_root: str | None = None,
                       extra_roots: list | None = None,
                       parsers: list | None = None,
-                      root_dir: str | None = None,
                       execution: Execution | None = None,
                       on_proc=None, method: str = "run",
                       digest: str = "") -> Result:
@@ -65,9 +66,8 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
     if execution is None:
         execution = Execution(name=name, chain=(chain or Chain()).push(name))
     deadline = clamp_timeout(timeout)
-    root = root_dir or str(GUEST_ROOT)
 
-    proc = subprocess_for(root)
+    proc = subprocess_for()
     if on_proc is not None:
         # Hand the process out so a caller can kill a background run. A
         # cancelled execution stops being *serviced*, but only closing the
@@ -76,7 +76,7 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
 
     killed = threading.Event()
 
-    def _watchdog():
+    def _overdue():
         """Stop a runaway. A process, unlike a thread, can actually be killed."""
         killed.set()
         interpreter.cancel(execution)
@@ -85,9 +85,14 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
         except OSError:
             pass
 
-    timer = threading.Timer(deadline, _watchdog)
-    timer.daemon = True
-    timer.start()
+    # Watched rather than timed, for the reason the resident path already is:
+    # the deadline counts *guest* execution, and this was the last place still
+    # counting wall clock. A child waiting five minutes inside ``sdk.ui.ask``
+    # is not overdue — the kernel is the one taking the time — yet it was
+    # killed at its declared thirty seconds and the report blamed the plugin,
+    # which is exactly the failure ``watchdog.overdue`` exists to prevent. It
+    # also spares a ``threading.Timer`` per run.
+    ticket = WATCHDOG.watch(execution, deadline, _overdue)
     started = time.perf_counter()
 
     try:
@@ -112,14 +117,51 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
                                   code=ERROR_INVALID_ARGUMENT)
         return _pump(interpreter, execution, proc, killed, deadline, start)
     finally:
-        timer.cancel()
+        WATCHDOG.release(ticket)
         _reap(proc)
         logger.debug("%s (subprocess) finished in %.1fms", name,
                      (time.perf_counter() - started) * 1000)
 
 
-def subprocess_for(root: str):
-    """Spawn a guest child rooted at ``sandbox/``.
+# ──────────────────────────────────────────────────────────────────────
+# Pre-warming.
+#
+# A child costs ~25 ms of interpreter start plus ~45 ms importing ``guest``,
+# and *none* of that depends on what it will be asked to run: the module, the
+# entry point and the resource ceilings all arrive in the START message, and
+# ``guest.child`` applies the limits only after reading it. So a child parked
+# on that read is byte-identical to one spawned a moment ago — same imports,
+# same limits at the same moment, same isolation — and handing one out changes
+# nothing about the boundary, only when the waiting happened.
+#
+# That 70 ms was paid on every isolated tool call and on every service,
+# frontend and model box the app opens.
+#
+# The semaphore *is* the backpressure: it starts at :data:`PREWARM` and is
+# released once per child taken, so exactly one is made per one used and the
+# filler thread blocks at no cost in between. A polling top-up loop would be
+# the same idle churn this pass exists to remove.
+# ──────────────────────────────────────────────────────────────────────
+
+#: How many children to keep parked. Two idle interpreters, ~30 MB, which
+#: covers a tool call landing while a service is still loading. Not a setting:
+#: there is nothing here a person could usefully tune against.
+PREWARM = 2
+
+_warm: queue.Queue = queue.Queue()
+_demand = threading.Semaphore(PREWARM)
+_filler: threading.Thread | None = None
+_filler_lock = threading.Lock()
+#: Bumped to retire whoever is filling — by :func:`drain`, and by a restart.
+#: A filler holds the era it was born with and stops the moment the two
+#: disagree, which is the only question it ever has to ask: *am I still the
+#: current one?* A separate stop flag would be a second answer to that, and
+#: two guards for one question drift.
+_era = 0
+
+
+def _spawn():
+    """Start one guest child rooted at ``sandbox/``.
 
     stderr is deliberately inherited rather than piped: a pipe nobody drains
     fills its buffer and blocks the child forever. The child's own prints go
@@ -128,8 +170,107 @@ def subprocess_for(root: str):
     return subprocess.Popen(
         [sys.executable, "-m", CHILD_MODULE],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
-        cwd=root,
+        cwd=str(GUEST_ROOT),
     )
+
+
+def _fill_forever(era: int, demand: threading.Semaphore):
+    """Keep the pool topped up, one child per child taken.
+
+    The era is checked on *both* sides of the spawn, not just before it.
+    Spawning takes ~70 ms and ``drain`` can land inside that window, so a
+    filler that only looked on the way in would park one last child in a queue
+    that had already been emptied — an orphaned process surviving shutdown,
+    which is the one thing pre-warming must not introduce.
+    """
+    while True:
+        demand.acquire()
+        if era != _era:
+            return
+        try:
+            child = _spawn()
+        except Exception:
+            # The demand token is spent and nothing was made, so the pool
+            # simply runs shallower until the next lease releases another.
+            # Whoever needed a child still gets one — cold.
+            logger.exception("could not pre-warm a guest child")
+            continue
+        if era != _era:
+            _reap(child)
+            return
+        _warm.put(child)
+
+
+def _ensure_filler() -> None:
+    """Start the filler on first use; never start a second.
+
+    Lazily, because importing this module must not spawn processes: the kernel
+    smoke checks, the plugin tooling and most of the suite never subprocess
+    anything. Boot primes the pool by itself — the first box start pays cold
+    and every one after it is warm.
+
+    A restart gets a *fresh* ``_demand``. The old counter is at whatever
+    ``drain`` left it — usually nothing — so reusing it would leave a filler
+    with no reason to build anything until a lease happened to release one,
+    and pre-warming would look alive while quietly doing nothing.
+    """
+    global _filler, _demand, _era
+    with _filler_lock:
+        if _filler is not None and _filler.is_alive():
+            return
+        _era += 1
+        _demand = threading.Semaphore(PREWARM)
+        _filler = threading.Thread(target=_fill_forever,
+                                   args=(_era, _demand),
+                                   daemon=True, name="sandbox-prewarm")
+        _filler.start()
+
+
+def subprocess_for():
+    """A guest child, ready for its START message.
+
+    Parked children are taken in preference to new ones. A child that died
+    while waiting is discarded and the next tried; with none left we spawn,
+    so the worst case here is exactly the behaviour before there was a pool.
+    """
+    _ensure_filler()
+    while True:
+        try:
+            proc = _warm.get_nowait()
+        except queue.Empty:
+            return _spawn()
+        _demand.release()             # replace whatever we took out
+        if proc.poll() is None:
+            return proc
+        _reap(proc)
+
+
+def drain() -> None:
+    """Stop pre-warming and end whatever is parked.
+
+    Called from ``Sandbox.shutdown``, which is already the one place that
+    guarantees no child outlives the app. Safe to call twice, and a later
+    ``subprocess_for`` starts a fresh filler rather than silently going cold
+    forever — which is what tests need.
+
+    The filler is *joined* before the queue is emptied, and that order is the
+    whole correctness of this function: it is what makes "the queue is empty"
+    mean "nothing more is coming" rather than "nothing has arrived yet".
+    """
+    global _filler, _era
+    with _filler_lock:
+        _era += 1                     # retires whoever is filling
+        filler, _filler = _filler, None
+        waking = _demand              # the counter *that* filler waits on
+    waking.release()                  # wake it so it can notice
+    if filler is not None and filler is not threading.current_thread():
+        filler.join(timeout=30.0)
+    while True:
+        try:
+            proc = _warm.get_nowait()
+        except queue.Empty:
+            return
+        _reap(proc)
 
 
 def send(proc, message: dict) -> bool:

@@ -171,6 +171,35 @@ def test_a_runaway_is_actually_killed(interp):
     assert elapsed < 15.0
 
 
+def test_waiting_on_the_kernel_is_not_charged_to_the_guest():
+    """A deadline measures *guest* execution, and this runner was the last
+    place still measuring wall clock.
+
+    The child here does nothing slow: it makes one unsafe Request and waits
+    while a person reads the dialog. That wait belongs to the kernel — it is
+    the kernel that has not answered yet — so charging it killed every
+    subprocess plugin that asked anything, at its declared timeout, and the
+    report blamed the plugin. The identical code in-process was never killed,
+    which is the asymmetry ``watchdog.overdue`` exists to remove.
+
+    Its twin is ``test_a_runaway_is_actually_killed`` above: code that is
+    genuinely spinning still runs out its deadline."""
+    def slow_approver(chain, request, decision):
+        """A dialog somebody takes their time over."""
+        time.sleep(2.5)
+        return False
+
+    interp = Interpreter(approve=slow_approver)
+    try:
+        result = run_in_subprocess(interp, str(FIXTURE), "attempt_egress",
+                                   name="patient", timeout=1.0)
+    finally:
+        interp.shutdown()
+
+    assert result.ok, result.error
+    assert result.data["denied"] is True
+
+
 def test_missing_function_faults_cleanly(interp):
     """A bad entry point is reported, not hung on."""
     result = run_in_subprocess(interp, str(FIXTURE), "no_such_function",

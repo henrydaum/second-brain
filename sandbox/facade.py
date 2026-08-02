@@ -43,6 +43,7 @@ from .guest.requests import Result
 from .interpreter import Execution, Interpreter
 from .policy import Chain, chain_session
 from .runner import run_in_process
+from .runner_subprocess import drain as drain_prewarmed
 from .runner_subprocess import run_in_subprocess
 from .validator import validate_file
 
@@ -570,7 +571,9 @@ class Sandbox:
         """Cancel background runs and close every resident box.
 
         Without this a restart leaves orphaned processes behind, which is the
-        whole reason the sandbox tracks what it opened.
+        whole reason the sandbox tracks what it opened — pre-warmed children
+        included, since one waiting for a START that will never come is an
+        orphan like any other.
         """
         with self._lock:
             runs, self._runs = list(self._runs), []
@@ -593,3 +596,8 @@ class Sandbox:
                 logger.exception("failed to close box %s", name)
         self._pool.shutdown(wait=False)
         self.interpreter.shutdown()
+        # Last, deliberately. Everything above can still lease a child —
+        # closing a resident box may restart one — and a drain that ran first
+        # would be undone by the next lease, which starts a fresh filler.
+        # Nothing can ask for one past this line.
+        drain_prewarmed()

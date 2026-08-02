@@ -273,6 +273,30 @@ def test_polling_reads_are_not_recorded_but_denials_are(tmp_path):
     assert rows[0]["error_code"] == "denied"
 
 
+def test_streamed_tokens_are_not_recorded(tmp_path):
+    """A streaming backend sends one ``llm.delta`` per token, and each row was
+    an INSERT and a commit under the database's one lock — so a single reply
+    wrote thousands of them and serialized the whole database against the
+    model. It buys nothing: the call and the enact are already recorded, and
+    this is only the model's own output kept a character at a time.
+
+    Asserted alongside a *refused* delta, because the drop is about volume and
+    never about the type: anything the kernel refused is still an event."""
+    from runtime.ledger import SANDBOX_ORIGIN
+
+    db, record = _sink(tmp_path)
+    chain = Chain(root="user").push("llm_litellm")
+
+    for word in ("Hello", " there", "!"):
+        record(chain, Request("llm.delta", {"token": "t", "text": word}),
+               Decision(SAFE, "llm.delta"), Result(data=None))
+    record(chain, Request("llm.delta", {"token": "stolen", "text": "x"}),
+           Decision(UNSAFE, "no sink"), Result.refusal("no such token"))
+
+    rows = db.get_ledger_rows(origin=SANDBOX_ORIGIN)
+    assert [r["ok"] for r in rows] == [0]
+
+
 def test_a_coded_failure_reaches_the_ledger_as_its_code(tmp_path):
     """The sink records what the Result says, not a guess from its message."""
     from runtime.ledger import SANDBOX_ORIGIN

@@ -179,37 +179,59 @@ class Located(NamedTuple):
     rel: Path
 
 
-def _ordered_trees() -> tuple[Tree, ...]:
-    """Local trees, deepest path first.
+#: ``_ordered_trees``' answer, and the ``TREES`` it was computed from.
+_ordered: tuple[tuple[Tree, Path], ...] = ()
+_ordered_for: tuple[Tree, ...] | None = None
+
+
+def _ordered_trees() -> tuple[tuple[Tree, Path], ...]:
+    """Local trees with their resolved paths, deepest first.
 
     Ordering is load-bearing rather than cosmetic: a checkout with DATA_DIR
     inside it puts one tree under another, and the more specific must answer
     first or every workspace file reads as a bundled one. Computed from the
     resolved paths so it holds however the two roots are configured.
+
+    Resolving is why this is memoized. A tree root is fixed for the life of
+    the process, but this was recomputing every one of them on every call —
+    and ``locate`` then resolved them *again*, once per tree it tried. On
+    Windows each ``resolve`` is a real filesystem call, so placing one file
+    cost eighteen of them, and ``required_isolation`` asks twice per plugin
+    load. That was 79% of the cost of validating a tool before running it.
+
+    Keyed on the identity of ``TREES`` because that tuple is the one thing in
+    this module that gets *replaced* — a test pointing the layout at a
+    tmp_path swaps it wholesale and monkeypatch puts the original object back
+    afterwards, so an identity check invalidates in both directions.
     """
-    def depth(tree: Tree) -> int:
-        try:
-            return len(tree.path.resolve().parts)
-        except (OSError, ValueError, AttributeError):
-            return 0
-    return tuple(sorted((t for t in TREES if t.local), key=depth, reverse=True))
-
-
-def _relative(path, root) -> Path | None:
-    """``path`` relative to ``root``, or None if it is not inside it."""
-    try:
-        return Path(path).resolve().relative_to(Path(root).resolve())
-    except (ValueError, OSError, TypeError):
-        return None
+    global _ordered, _ordered_for
+    if _ordered_for is not TREES:
+        found = []
+        for candidate in TREES:
+            if not candidate.local:
+                continue
+            try:
+                found.append((candidate, candidate.path.resolve()))
+            except (OSError, ValueError):
+                found.append((candidate, candidate.path))
+        _ordered = tuple(sorted(found, key=lambda pair: len(pair[1].parts),
+                                reverse=True))
+        _ordered_for = TREES
+    return _ordered
 
 
 def locate(path) -> Located | None:
     """Place a file in the layout, or None if it is outside every local tree."""
     if not path:
         return None
-    for tree in _ordered_trees():
-        rel = _relative(path, tree.path)
-        if rel is None:
+    try:
+        target = Path(path).resolve()
+    except (OSError, ValueError, TypeError):
+        return None
+    for tree, root_path in _ordered_trees():
+        try:
+            rel = target.relative_to(root_path)
+        except ValueError:
             continue
         head = rel.parts[0] if rel.parts else ""
         root = roots_by_name.get(head)

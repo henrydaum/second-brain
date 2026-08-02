@@ -350,7 +350,15 @@ def main() -> int:
     except protocol.ProtocolError as exc:
         sys.stderr.write(f"sandbox child: bad start message: {exc}\n")
         return 2
-    if start is None or start.get("kind") != protocol.START:
+    if start is None:
+        # End of stream before anybody spoke. This is how a *pre-warmed* child
+        # ends: the host parks children ready for a START that may never come,
+        # and closes the pipe on shutdown. Silence is the whole point — stderr
+        # is inherited, so a line here is a line in the user's console every
+        # time the app exits. An abnormally dead parent looks the same from
+        # here and is equally not worth reporting to somebody quitting.
+        return 0
+    if start.get("kind") != protocol.START:
         sys.stderr.write("sandbox child: expected a start message\n")
         return 2
 

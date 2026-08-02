@@ -757,3 +757,70 @@ def test_an_approval_that_lands_after_cancellation_does_not_take_effect(
         it.shutdown()
 
     assert ran == [], "the handler ran for a caller that had already given up"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Pre-warming: the same child, waited for earlier.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_prewarmed_child_is_an_ordinary_child(interp, tmp_path):
+    """Everything a box may do arrives in its START message, and the child
+    applies its resource ceilings only after reading one — so a child parked
+    on that read is byte-identical to one spawned a moment ago.
+
+    Run twice: the first pays cold and primes the pool, the second is served
+    from it. Two identical answers is the whole claim."""
+    target = tmp_path / "f.txt"
+    target.write_text("a b c", encoding="utf-8")
+
+    answers = [
+        run_in_subprocess(interp, str(SCRIPT), "summarize", name="s",
+                          box=f"prewarm_{attempt}",
+                          kwargs={"path": str(target)}, timeout=30)
+        for attempt in range(2)
+    ]
+    assert all(answer.ok for answer in answers), answers[-1].error
+    assert [answer.data["words"] for answer in answers] == [3, 3]
+
+
+def test_draining_leaves_nothing_parked():
+    """The one failure mode pre-warming could introduce is an orphan.
+
+    ``drain`` joins the filler *before* emptying the queue, and that order is
+    the whole of it: spawning takes ~70 ms and a drain landing inside that
+    window would otherwise park one last child in a queue already emptied —
+    a process surviving shutdown, which is exactly what ``Sandbox.shutdown``
+    exists to prevent."""
+    from sandbox import runner_subprocess as rs
+
+    rs.subprocess_for().kill()               # start the filler, spend a child
+    time.sleep(0.05)                         # drain mid-spawn, the hard case
+    rs.drain()
+
+    assert rs._warm.qsize() == 0
+    assert rs._filler is None
+
+
+def test_draining_the_pool_does_not_end_pre_warming():
+    """``Sandbox.shutdown`` drains, and a suite goes on running afterwards.
+
+    A drain that left pre-warming dead would fail nothing — every later call
+    would simply spawn cold forever — so it is pinned rather than trusted.
+    That covers the stop flag *and* the demand counter: a fresh filler reusing
+    the drained one would have no reason to build anything until a lease
+    happened to release a token, which looks alive and is not."""
+    from sandbox import runner_subprocess as rs
+
+    rs.drain()
+    proc = rs.subprocess_for()               # restarts the filler
+    try:
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+    deadline = time.monotonic() + 10.0
+    while rs._warm.qsize() < rs.PREWARM and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert rs._warm.qsize() == rs.PREWARM, "the pool never re-warmed"
+    rs.drain()
