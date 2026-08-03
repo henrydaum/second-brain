@@ -171,11 +171,23 @@ class _SentenceTransformerEmbedder:
         """
         return {
             "model_name": self.model_name,
-            "dim": (self.model.get_sentence_embedding_dimension()
-                    if self.model is not None else 0),
+            "dim": self._dim(),
             "device": self.device,
             "loaded": self.model is not None,
         }
+
+    def _dim(self):
+        """Vector width, across the sentence-transformers rename.
+
+        ``get_sentence_embedding_dimension`` was renamed to
+        ``get_embedding_dimension`` and now warns. Prefer the new name;
+        fall back to the old one for installs that predate it.
+        """
+        if self.model is None:
+            return 0
+        getter = (getattr(self.model, "get_embedding_dimension", None)
+                  or self.model.get_sentence_embedding_dimension)
+        return getter()
 
     def encode(self, sdk, inputs):
         """Embed a batch of strings, returning one float32 buffer per input.
