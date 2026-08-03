@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .. import walk
+from .. import provenance, walk
 from ..guest import protocol
 from ..guest.codes import ERROR_NOT_FOUND, ERROR_NOT_PERMITTED
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
@@ -651,9 +651,10 @@ def _fs_temp(ctx, args: dict) -> Result:
 
         scratch = Path(trees.tree("workspace").path) / "temp"
         scratch.mkdir(parents=True, exist_ok=True)
+        prefix = provenance.scratch_prefix()
         if args.get("directory"):
-            return Result(data=tempfile.mkdtemp(prefix="sb-box-", dir=scratch))
-        handle, path = tempfile.mkstemp(prefix="sb-box-",
+            return Result(data=tempfile.mkdtemp(prefix=prefix, dir=scratch))
+        handle, path = tempfile.mkstemp(prefix=prefix,
                                         suffix=args.get("suffix") or "",
                                         dir=scratch)
         os.close(handle)

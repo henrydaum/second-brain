@@ -165,16 +165,31 @@ class _Fs:
         return str(dst)
 
     def temp(self, directory: bool = False, suffix: str = "") -> str:
-        """Scratch space, for parsers that must hand a path to a library."""
+        """Scratch space, for parsers that must hand a path to a library.
+
+        Named after whoever asked, exactly as the ``fs.temp`` handler is, and
+        this is the copy that mattered: a parser the *kernel* calls reaches
+        this stand-in rather than the Request, so every extracted archive in
+        ``workspace/temp`` was named here. Both had to change or the folder
+        stays unreadable in the one case that fills it.
+
+        The chain is reachable even though nothing here is a Request, because
+        ``Interpreter._execute`` marks the thread for the whole handler and
+        ``parsing.parse`` runs synchronously inside it. Imported late to keep
+        this module's import graph as small as its docstring claims.
+        """
         import os
         import tempfile
+
         import trees
+        from sandbox import provenance
 
         scratch = Path(trees.tree("workspace").path) / "temp"
         scratch.mkdir(parents=True, exist_ok=True)
+        prefix = provenance.scratch_prefix()
         if directory:
-            return tempfile.mkdtemp(prefix="sb-box-", dir=scratch)
-        handle, path = tempfile.mkstemp(prefix="sb-box-", suffix=suffix,
+            return tempfile.mkdtemp(prefix=prefix, dir=scratch)
+        handle, path = tempfile.mkstemp(prefix=prefix, suffix=suffix,
                                         dir=scratch)
         os.close(handle)
         return path
