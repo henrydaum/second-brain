@@ -311,6 +311,35 @@ def test_non_literal_dependencies_are_an_error():
     assert "literal list" in _messages(report)
 
 
+def test_one_computed_leaf_does_not_silently_discard_a_schema():
+    """The expensive one. ``_literal`` is all-or-nothing, so a single computed
+    value deep inside an otherwise literal ``parameters`` dict evaluated to
+    None, the declaration was dropped, and the bridge copied nothing — leaving
+    the model offered a tool with no arguments at all while the file validated
+    clean. The failure is invisible from every side, so it has to be refused
+    where it is still cheap to fix."""
+    report = _validate(GOOD_TOOL.replace(
+        '    name = "read_notes"',
+        '    name = "read_notes"\n'
+        '    parameters = {"type": "object", "properties": '
+        '{"kind": {"enum": sorted(TYPES)}}}'))
+
+    assert not report.ok
+    assert "literal dict" in _messages(report)
+
+
+def test_a_fully_literal_schema_still_passes():
+    """The check must not cost an ordinary tool its parameters."""
+    report = _validate(GOOD_TOOL.replace(
+        '    name = "read_notes"',
+        '    name = "read_notes"\n'
+        '    parameters = {"type": "object", "properties": '
+        '{"kind": {"enum": ["a", "b"]}}}'))
+
+    assert report.ok
+    assert report.declarations["parameters"]["properties"]["kind"]["enum"] == ["a", "b"]
+
+
 def test_helper_files_skip_the_contract_check():
     """A parse_*.py helper is not a plugin and declares no class."""
     report = validate("import json\n\ndef parse(path):\n    return None\n",

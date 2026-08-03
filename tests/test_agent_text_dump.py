@@ -80,6 +80,38 @@ def test_a_computed_leaf_does_not_lose_the_whole_schema(dump):
     assert "Free text." in rendered
 
 
+def test_a_local_variable_is_not_a_declaration(dump):
+    """Walking the whole tree collected every function-local ``name``, which
+    is how ``name = (raw or '').strip()`` from a validator helper ended up
+    listed as agent-facing text."""
+    source = (
+        "class T:\n"
+        "    name = 'memory'\n"
+        "    def run(self, sdk, raw):\n"
+        "        name = (raw or '').strip()\n"
+        "        description = 'not a declaration either'\n"
+        "        return name + description\n"
+    )
+
+    found = dump.plugin_declarations(source)
+
+    assert [(name, text) for _line, name, text in found] == [("name", "memory")]
+
+
+def test_the_human_half_of_a_refusal_is_not_agent_text(dump):
+    """``Decision`` carries ``reason`` for the ledger and the model, and
+    ``say`` for the person reading the dialog. Only the first is ever shown to
+    a model, so the second belongs in the user-facing dump."""
+    found = {text for _line, _fn, text in dump.kernel_strings("sandbox/policy.py")}
+
+    # A ``reason``: the model is told this when a script is refused.
+    assert any("is not in a scripts/ directory" in text for text in found)
+    # A ``say``: "Deleted rows are not recoverable." is dialog prose, and its
+    # reason — "delete rows from {table}" — is what the model actually reads.
+    assert not any("recoverable" in text for text in found)
+    assert not any("allowed-hosts list" in text for text in found)
+
+
 def test_a_dynamic_agent_prompt_is_named_rather_than_guessed(dump):
     """Its text depends on live state; inventing one would be worse than
     saying where it is."""

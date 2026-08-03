@@ -272,6 +272,17 @@ LITERAL_LISTS = ("dependencies_files", "dependencies_pip",
                  "requires_services", "requests", "exports",
                  "trigger_channels", "subscribed_channels")
 
+# The same rule for declarations that are mappings. ``parameters`` earned this
+# the expensive way: ``tool_ask_question`` wrote ``"enum": sorted(TYPES)`` deep
+# inside an otherwise literal schema, ``_literal`` is all-or-nothing so the
+# *whole* dict evaluated to None, ``_collect_declarations`` dropped the key,
+# and the bridge had nothing to copy — so the model was offered the tool with
+# no arguments at all, and its every call failed on the required argument it
+# was never shown. The file validated clean throughout. One computed leaf is
+# enough to lose the schema, which is why the check is on the declaration
+# rather than on its type.
+LITERAL_MAPS = ("parameters", "default_jobs", "type_info")
+
 # Closed vocabularies. A typo here is silent otherwise: an unrecognised
 # lifetime reads as "unset" and the file quietly gets the default.
 ENUMS = {"lifetime": {"", "ephemeral", "persistent"}}
@@ -869,6 +880,14 @@ def _check_class(walker: _Walker, family: str, base: str, cls, known_names):
                 walker.add(ERROR, assigned[key],
                            f"{key} must be a literal list of strings — the "
                            f"kernel reads it without importing")
+
+    for key in LITERAL_MAPS:
+        if key in assigned and not isinstance(_literal(assigned[key].value), dict):
+            walker.add(ERROR, assigned[key],
+                       f"{key} must be a literal dict — the kernel reads it "
+                       f"without importing, so one computed value discards "
+                       f"the whole declaration",
+                       "literal values throughout, even nested ones")
 
     # ``requests`` is the grant an approval spends, so a typo in it is the one
     # that costs something: the misspelled Request is not in the set, and the

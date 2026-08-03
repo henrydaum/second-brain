@@ -190,6 +190,29 @@ def _logged_lines(tree: ast.AST) -> set[int]:
     return lines
 
 
+#: Keyword arguments whose value only a *person* ever reads. ``Decision``
+#: carries two strings on purpose: ``reason`` goes to the ledger and is handed
+#: to the model as the refusal, while ``say`` is the human half the approval
+#: dialog prints. Collecting both put "Deleted rows are not recoverable." in a
+#: dump of what the agent sees, which no model is ever shown.
+HUMAN_KWARGS = ("say",)
+
+
+def _kwarg_lines(tree: ast.AST, keywords: tuple[str, ...]) -> set[int]:
+    """Lines of string constants passed as one of ``keywords``."""
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg not in keywords:
+                continue
+            for child in ast.walk(keyword.value):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    lines.add(child.lineno)
+    return lines
+
+
 def _enclosing(tree: ast.AST) -> dict[int, str]:
     """Line number → enclosing function, so an entry says where it lives."""
     where: dict[int, str] = {}
@@ -212,12 +235,14 @@ def kernel_strings(relative: str) -> list[tuple[int, str, str]]:
     except SyntaxError:
         return []
     docs, logged, where = _docstrings(tree), _logged_lines(tree), _enclosing(tree)
+    human = _kwarg_lines(tree, HUMAN_KWARGS)
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         text = node.value
-        if (text in docs or node.lineno in logged or len(text) < MIN_PROSE
+        if (text in docs or node.lineno in logged or node.lineno in human
+                or len(text) < MIN_PROSE
                 or " " not in text.strip()
                 or text.strip().upper().startswith(("SELECT ", "INSERT ",
                                                     "UPDATE ", "DELETE ",
@@ -232,25 +257,36 @@ def plugin_declarations(source: str) -> list[tuple[int, str, str]]:
 
     Reads rather than imports, which is the same rule the package manager and
     the bridge follow — a store file must never be executed to be inspected.
+
+    Scoped to module level and class bodies, because that is what a
+    *declaration* is. Walking the whole tree picked up every local variable
+    that happened to be called ``name`` — ``name = (raw or "").strip()`` inside
+    a validator function is not agent-facing text, and ten of them were
+    padding the dump with entries nobody could act on.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return []
+    scopes: list[ast.AST] = [tree]
+    scopes += [node for node in tree.body if isinstance(node, ast.ClassDef)]
     found = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            for name in names:
-                if name not in PLUGIN_DECLS:
-                    continue
-                found.append((node.lineno, name, _render(_evaluate(node.value))))
-        elif isinstance(node, ast.FunctionDef) and node.name == "agent_prompt":
-            # The dynamic shape. Its text depends on live state, so the only
-            # honest thing to print is that it exists and where.
-            found.append((node.lineno, "agent_prompt",
-                          "<dynamic — computed per call; see the assembled "
-                          "prompt above for the installed result>"))
+    for scope in scopes:
+        for node in scope.body:
+            if isinstance(node, ast.Assign):
+                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                for name in names:
+                    if name not in PLUGIN_DECLS:
+                        continue
+                    found.append((node.lineno, name,
+                                  _render(_evaluate(node.value))))
+            elif (isinstance(node, ast.FunctionDef)
+                  and node.name == "agent_prompt"):
+                # The dynamic shape. Its text depends on live state, so the
+                # only honest thing to print is that it exists and where.
+                found.append((node.lineno, "agent_prompt",
+                              "<dynamic — computed per call; see the assembled "
+                              "prompt above for the installed result>"))
     return sorted(found)
 
 
