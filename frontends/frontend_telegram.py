@@ -198,6 +198,17 @@ def _command_call(name: str, args) -> str:
     return " ".join(parts)
 
 
+def _banner(mark: str, text: str, blurb: str) -> str:
+    """The progress banner's inner HTML: the call, then why it was made.
+
+    The blurb sits outside the ``<code>`` span deliberately — it is the model's
+    prose about its intent, not part of the invocation, and monospacing it
+    would read as though it were something the tool was passed.
+    """
+    body = f"{mark} <code>{html.escape(text)}</code>"
+    return f"{body} <i>{html.escape(blurb)}</i>" if blurb else body
+
+
 def _parse_approval(text: str):
     """Parse a Telegram text reply into an approval decision, or None."""
     value = (text or "").strip().lower()
@@ -1125,42 +1136,50 @@ class TelegramFrontend(BaseFrontend):
                 or "call")
         text = (_command_call(name, payload.get("args"))
                 if payload.get("kind") == "command" else name)
+        # The tool's declared `narration`, already collapsed and capped by the
+        # kernel so both events carry the identical string — the banner is
+        # edited in place, and a blurb that changed between started and
+        # finished would rewrite the line under the reader.
+        blurb = payload.get("narration") or ""
         status = payload.get("status")
         if status == "started":
-            self._await(self._send_tool_started(chat_id, key, name, text))
+            self._await(self._send_tool_started(chat_id, key, name, text, blurb))
         elif status == "progressed":
-            self._await(self._progress_tool_message(chat_id, key, name, text))
+            self._await(self._progress_tool_message(chat_id, key, name, text, blurb))
         else:
             self._await(self._finish_tool_message(
                 key, chat_id, name, text, bool(payload.get("ok")),
-                payload.get("error")))
+                payload.get("error"), blurb))
 
-    async def _send_tool_started(self, chat_id, key, name, text):
+    async def _send_tool_started(self, chat_id, key, name, text, blurb=""):
         """Create the hourglass status message for a new tool or command call."""
         sent = await self._app.bot.send_message(
-            chat_id, f"⋯ <code>{html.escape(text)}</code>",
+            chat_id, _banner("⋯", text, blurb),
             parse_mode="HTML", disable_notification=True)
-        self._tool_messages[key] = (chat_id, sent.message_id, name, text)
+        self._tool_messages[key] = (chat_id, sent.message_id, name, text, blurb)
 
-    async def _progress_tool_message(self, chat_id, key, name, text):
+    async def _progress_tool_message(self, chat_id, key, name, text, blurb=""):
         """Update the existing banner without sending a new message."""
         entry = self._tool_messages.get(key)
         if not entry:
-            return await self._send_tool_started(chat_id, key, name, text)
-        self._tool_messages[key] = (entry[0], entry[1], name, text)
+            return await self._send_tool_started(chat_id, key, name, text, blurb)
+        self._tool_messages[key] = (entry[0], entry[1], name, text, blurb)
         try:
             await self._app.bot.edit_message_text(
-                f"⋯ <code>{html.escape(text)}</code>", chat_id=entry[0],
+                _banner("⋯", text, blurb), chat_id=entry[0],
                 message_id=entry[1], parse_mode="HTML")
         except Exception:
             pass
         return None
 
-    async def _finish_tool_message(self, key, chat_id, name, text, ok, error):
+    async def _finish_tool_message(self, key, chat_id, name, text, ok, error, blurb=""):
         """Finalize the banner with success or failure text."""
         entry = self._tool_messages.pop(key, None)
         display = entry[3] if entry else text
-        body = f"{'✓' if ok else '✕'} <code>{html.escape(display)}</code>"
+        # Prefer what the started banner actually showed, so the line the
+        # reader has been looking at is the one that gets a tick.
+        shown = entry[4] if entry and len(entry) > 4 else blurb
+        body = _banner("✓" if ok else "✕", display, shown)
         if error and not ok:
             body += f" ({html.escape(str(error))})"
         if entry:
