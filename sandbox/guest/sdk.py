@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import base64
 import difflib
+import json as json_module
 # ``ntpath``/``posixpath`` rather than ``os.path``, which is one of these two
 # under a name that also drags in ``os``. The guest ships stdlib-only and
 # environment-free (pinned by tests/test_sandbox_guest_boundary.py), and these
@@ -75,7 +76,7 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        FRONTEND_CANCEL, FRONTEND_PENDING, FRONTEND_RESOLVE,
                        FRONTEND_SUBMIT,
                        FS_DELETE, FS_LIST, FS_MOVE, FS_READ, FS_READ_BYTES,
-                       FS_SEARCH, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
+                       FS_SEARCH, FS_STAT, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
                        LLM_DELTA, LLM_LIST, LLM_LOAD, LLM_PROCEED,
@@ -176,6 +177,46 @@ class _FS(_Namespace):
             args["length"] = int(length)
         return base64.b64decode(self._ask(FS_READ_BYTES, **args) or "")
 
+    def iter_bytes(self, path, chunk_size: int = 4 * 1024 * 1024,
+                   offset: int = 0, limit=None):
+        """Yield a binary file in wire-sized windows.
+
+        ``offset`` is where reading starts. ``limit`` caps the total bytes
+        yielded from there; ``None`` reads to EOF. Each window is an ordinary
+        ``fs.read_bytes`` Request.
+        """
+        chunk_size = int(chunk_size)
+        offset = int(offset)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        remaining = None if limit is None else int(limit)
+        if remaining is not None and remaining < 0:
+            raise ValueError("limit must not be negative")
+
+        while remaining is None or remaining:
+            length = (chunk_size if remaining is None
+                      else min(chunk_size, remaining))
+            chunk = self.read_bytes(path, offset=offset, length=length)
+            if not chunk:
+                break
+            yield chunk
+            offset += len(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+            if len(chunk) < length:
+                break
+
+    def stat(self, path):
+        """Return metadata for one path; raise when it is missing."""
+        return self._ask(FS_STAT, path=str(path))
+
+    def exists(self, path) -> bool:
+        """Whether a readable path exists."""
+        return self._ask(
+            FS_STAT, path=str(path), missing_ok=True) is not None
+
     def write_bytes(self, path, data, mode: str = "overwrite"):
         """Write raw bytes. ``mode="append"`` to add.
 
@@ -200,11 +241,8 @@ class _FS(_Namespace):
         ask "has this changed?" without building a glob out of a filename.
 
         **Not an existence test as written.** A missing path is a failed
-        Request, and a failed Request raises — so ``if sdk.fs.list(p):``
-        throws at exactly the moment the answer would have been "no". Wrap it
-        in ``try: ... except sdk.Failed: return False``. Ordinary SDK
-        behaviour, called out because this is the one place the failing case
-        is an answer you were expecting rather than something going wrong.
+        Request. Use :meth:`exists` when absence is the expected answer, or
+        :meth:`stat` when you need one path's metadata.
 
         Passing any of ``recursive`` / ``files_only`` / ``sort`` / ``limit``
         switches on the walking listing and changes the answer's shape to
@@ -1145,7 +1183,7 @@ class _Net(_Namespace):
     """Network Requests — always classified, never auto-safe."""
 
     def http(self, url: str, method: str = "GET", headers: dict | None = None,
-             body=None):
+             body=None, *, params=None, json=None):
         """Perform an outbound HTTP request.
 
         Secret handles may appear anywhere in the url, headers, or body; the
@@ -1155,8 +1193,33 @@ class _Net(_Namespace):
         response's ``location`` header so the new host gets its own policy
         decision.
         """
-        return self._ask(NET_HTTP, url=url, method=method,
-                         headers=headers or {}, body=body)
+        if body is not None and json is not None:
+            raise ValueError("body and json are mutually exclusive")
+        args = {"url": url, "method": method,
+                "headers": headers or {}, "body": body}
+        if params is not None:
+            args["params"] = params
+        if json is not None:
+            args["json"] = json
+        return self._ask(NET_HTTP, **args)
+
+    def http_json(self, url: str, method: str = "GET",
+                  headers: dict | None = None, body=None, *, params=None,
+                  json=None):
+        """Perform an HTTP request and decode its text body as JSON."""
+        answer = self.http(url, method=method, headers=headers, body=body,
+                           params=params, json=json) or {}
+        raw = answer.get("body", "")
+        if raw == "":
+            decoded = None
+        else:
+            try:
+                decoded = json_module.loads(raw)
+            except (TypeError, ValueError) as exc:
+                status = answer.get("status", 0)
+                raise ValueError(
+                    f"HTTP {status} response is not valid JSON: {exc}") from exc
+        return {**answer, "body": decoded}
 
 
 class _Proc(_Namespace):
@@ -1365,6 +1428,34 @@ class _Path:
         files.
         """
         return _Path._os().normcase(_Path.absolute(path))
+
+    @staticmethod
+    def as_posix(path) -> str:
+        """Render a platform path with forward-slash separators."""
+        flavour = _Path._os()
+        return str(path).replace(flavour.sep, "/")
+
+    @staticmethod
+    def relative(path, start) -> str:
+        """Render ``path`` relative to ``start`` without touching disk."""
+        return _Path._os().relpath(str(path), str(start))
+
+    @staticmethod
+    def with_suffix(path, suffix) -> str:
+        """Replace the final suffix using ``pathlib``-style validation."""
+        flavour = _Path._os()
+        raw_path = str(path)
+        final_name = flavour.basename(raw_path)
+        if not final_name or final_name in (flavour.curdir, flavour.pardir):
+            raise ValueError(f"{raw_path!r} has no final name")
+        suffix = str(suffix)
+        separators = tuple(
+            item for item in (flavour.sep, flavour.altsep) if item)
+        if suffix and (not suffix.startswith(".")
+                       or any(sep in suffix for sep in separators)):
+            raise ValueError("suffix must be empty or start with '.'")
+        root, _ = flavour.splitext(raw_path)
+        return root + suffix
 
     @staticmethod
     def within(path, root) -> bool:

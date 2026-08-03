@@ -303,6 +303,7 @@ GRANT_PHRASES = {
     "fs.write": "write files", "fs.write_bytes": "write files",
     "fs.delete": "delete files", "fs.move": "move files",
     "fs.read": "read files", "fs.read_bytes": "read files",
+    "fs.stat": "inspect files",
     "fs.list": "list folders", "fs.search": "search files",
     "env.read": "read environment variables",
     "paths.get": "look up application folders",

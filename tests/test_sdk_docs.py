@@ -186,8 +186,8 @@ def test_the_free_stdlib_list_is_accurate():
     """The document promises these need no Request."""
     promised = ("json", "re", "math", "datetime", "time", "collections",
                 "itertools", "hashlib", "base64", "csv", "email", "textwrap",
-                "statistics", "dataclasses", "typing", "croniter",
-                "cron_descriptor")
+                "statistics", "dataclasses", "typing", "tomllib",
+                "ipaddress", "zlib", "croniter", "cron_descriptor")
     for module in promised:
         report = validate(f"import {module}\n\n\ndef go(sdk):\n    return 1\n",
                           filename="scratch.py")

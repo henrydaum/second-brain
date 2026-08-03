@@ -9,10 +9,12 @@ from __future__ import annotations
 import base64
 import binascii
 import itertools
+import json
 import os
 import re
 import shlex
 import shutil
+import stat as stat_module
 import subprocess
 import tempfile
 import time
@@ -26,7 +28,8 @@ from ..guest import protocol
 from ..guest.codes import ERROR_NOT_FOUND, ERROR_NOT_PERMITTED
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
-                              FS_WRITE_BYTES, NET_HTTP, PROC_LIST, PROC_RUN,
+                              FS_STAT, FS_WRITE_BYTES, NET_HTTP, PROC_LIST,
+                              PROC_RUN,
                               PROC_START, PROC_STATUS, PROC_STOP,
                               SECRET_REVEAL, Result)
 from ..protected import is_protected, reason_for
@@ -157,6 +160,35 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
         return Result(data=base64.b64encode(chunk).decode("ascii"))
     except OSError as exc:
         return Result.failure(f"read failed: {exc}", retryable=True)
+
+
+def _fs_stat(ctx, args: dict) -> Result:
+    """Return metadata for exactly one path."""
+    raw = args.get("path")
+    if not raw:
+        return Result.failure("fs.stat requires a path")
+    path = Path(raw)
+    if (why := reason_for(path)):
+        return Result.refusal(f"{raw} is not readable: {why}",
+                              code=ERROR_NOT_PERMITTED)
+    try:
+        info = path.stat()
+        return Result(data={
+            "path": str(path),
+            "name": path.name,
+            "is_file": stat_module.S_ISREG(info.st_mode),
+            "is_dir": stat_module.S_ISDIR(info.st_mode),
+            "is_symlink": path.is_symlink(),
+            "mtime": info.st_mtime_ns,
+            "size": info.st_size,
+        })
+    except FileNotFoundError:
+        if args.get("missing_ok"):
+            return Result(data=None)
+        return Result.failure(f"no such file or directory: {raw}",
+                              code=ERROR_NOT_FOUND)
+    except OSError as exc:
+        return Result.failure(f"stat failed: {exc}", retryable=True)
 
 
 def _guard_write(*paths) -> Result | None:
@@ -643,6 +675,16 @@ def _net_http(ctx, args: dict) -> Result:
 
     lookup = lookup_from(ctx)
     url = resolve(url, lookup)
+    params = resolve(args.get("params"), lookup)
+    if params is not None:
+        try:
+            encoded = urllib.parse.urlencode(params, doseq=True)
+            parts = urllib.parse.urlsplit(url)
+            query = "&".join(part for part in (parts.query, encoded) if part)
+            url = urllib.parse.urlunsplit(
+                (parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+        except (TypeError, ValueError) as exc:
+            return Result.failure(f"net.http params are invalid: {exc}")
     # After substitution, so a handle cannot smuggle a scheme in, and before
     # anything is opened.
     scheme = urllib.parse.urlparse(url).scheme.lower()
@@ -653,6 +695,15 @@ def _net_http(ctx, args: dict) -> Result:
             f"read files with sdk.fs.read", code=ERROR_NOT_PERMITTED)
     headers = resolve(dict(args.get("headers") or {}), lookup)
     body = resolve(args.get("body"), lookup)
+    if "json" in args:
+        if body is not None:
+            return Result.failure("net.http body and json are mutually exclusive")
+        try:
+            body = json.dumps(resolve(args.get("json"), lookup))
+        except (TypeError, ValueError) as exc:
+            return Result.failure(f"net.http json is not serializable: {exc}")
+        if not any(str(name).lower() == "content-type" for name in headers):
+            headers["Content-Type"] = "application/json"
     method = (args.get("method") or "GET").upper()
 
     request = urllib.request.Request(
@@ -1016,6 +1067,7 @@ HANDLERS = {
     SECRET_REVEAL: _secret_reveal,
     FS_WRITE: _fs_write,
     FS_READ_BYTES: _fs_read_bytes,
+    FS_STAT: _fs_stat,
     FS_WRITE_BYTES: _fs_write_bytes,
     FS_LIST: _fs_list,
     FS_SEARCH: _fs_search,

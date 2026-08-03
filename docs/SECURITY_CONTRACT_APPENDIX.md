@@ -103,8 +103,9 @@ thing and stays a different thing: a person may decide what the code may not.
 | `fs.read(path)` | File contents as text | path | safe, except protected files |
 | `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch, agent workspace, or user-configured writable folders; else unsafe |
 | `fs.read_bytes(path)` | File contents as raw bytes | path | safe, except protected files |
+| `fs.stat(path)` | Metadata for one file or directory | path | safe, except protected files |
 | `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch, agent workspace, or user-configured writable folders; else unsafe |
-| `fs.list(path, pattern, details, recursive, files_only, sort, limit)` | Directory listing, glob, stat, pruning walk | path | safe |
+| `fs.list(path, pattern, details, recursive, files_only, sort, limit)` | Directory listing, glob, metadata, pruning walk | path | safe |
 | `fs.search(pattern, root, glob, regex, mode, ...)` | Content search across a tree | root path | safe; protected files skipped |
 | `fs.delete(path)` | Remove a file or tree | path | safe in scratch, agent workspace, or user-configured writable folders; else unsafe |
 | `fs.move(src, dst)` | Copy, rename, replace | both paths | safe when both paths are freely writable; else unsafe |
@@ -160,13 +161,12 @@ results are therefore filtered through `is_protected` before the limit is
 applied, or the fast path would hand back exactly the config lines the slow path
 exists to withhold.
 
-`fs.list` is also the **stat**: `details=True` adds `is_dir`, `size` and
-`mtime` (`st_mtime_ns`, an int so it survives JSON exactly — compare with
-`!=`, since a file restored to an older version has also changed). Pointed at
-a *file* it answers for that one entry, which is how a plugin asks "does this
-exist, and has it changed since I looked?" without a second Request type.
-Routing that through "list the parent and filter" made callers build a glob
-out of a filename, which breaks on any name containing `[` or `*`.
+`fs.stat` is the one-path metadata Request: it adds `is_file`, `is_dir`,
+`is_symlink`, `size` and `mtime` (`st_mtime_ns`, an int so it survives JSON
+exactly — compare with `!=`, since a restored older version also changed).
+`sdk.fs.exists` uses the same Request with a missing-safe argument. `fs.list`
+still returns those core details when `details=True`, but callers no longer
+need to disguise a metadata lookup as a listing.
 
 **Protected files** (`sandbox/protected.py`) are the one place a read Request
 refuses on the path alone: `config.json`, `plugin_config.json`, and the SQLite
@@ -715,7 +715,7 @@ not Requests.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `net.http(url, method, headers, body)` | Any outbound HTTP | the URL's host | safe for a host in `net_allowed_hosts`, otherwise **unsafe** |
+| `net.http(url, method, headers, body, params, json)` | Any outbound HTTP | the URL's host | safe for a host in `net_allowed_hosts`, otherwise **unsafe** |
 
 One Request, one gate. The verb is irrelevant: a `GET` with data in the query
 string is exfiltration exactly as much as a `POST` body is, so only the

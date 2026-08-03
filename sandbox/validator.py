@@ -85,12 +85,13 @@ PURE_MODULES = {
     "bisect", "calendar", "cmath", "codecs", "collections", "colorsys",
     "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal",
     "difflib", "email", "enum", "fnmatch", "fractions", "functools",
-    "graphlib", "hashlib", "heapq", "hmac", "html", "io", "itertools", "json",
+    "graphlib", "hashlib", "heapq", "hmac", "html", "io", "ipaddress",
+    "itertools", "json",
     "keyword", "math", "mimetypes", "numbers", "operator", "posixpath",
     "pprint", "queue", "random", "re", "reprlib", "secrets", "statistics",
     "string", "struct", "textwrap", "time", "token", "tokenize", "traceback",
-    "types", "typing", "unicodedata", "urllib.parse", "uuid", "warnings",
-    "zoneinfo",
+    "tomllib", "types", "typing", "unicodedata", "urllib.parse", "uuid",
+    "warnings", "zlib", "zoneinfo",
 }
 
 # Pure third-party packages the SDK vouches for. Not stdlib, but computation

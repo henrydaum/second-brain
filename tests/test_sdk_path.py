@@ -94,6 +94,26 @@ def test_normalize_does_not_resolve_symlinks(tmp_path):
     assert path.normalize(link) != path.normalize(target)
 
 
+def test_as_posix_uses_forward_slashes():
+    raw = r"docs\notes\idea.md" if WIN else "docs/notes/idea.md"
+    assert path.as_posix(raw) == "docs/notes/idea.md"
+
+
+def test_relative_never_consults_the_current_directory():
+    assert path.relative(path.join("root", "docs", "note.md"), "root") == \
+        path.join("docs", "note.md")
+
+
+def test_with_suffix_replaces_only_the_final_suffix():
+    assert path.with_suffix(path.join("docs", "archive.tar.gz"), ".zip") == \
+        path.join("docs", "archive.tar.zip")
+    assert path.with_suffix("note.md", "") == "note"
+    with pytest.raises(ValueError):
+        path.with_suffix("note.md", "txt")
+    with pytest.raises(ValueError):
+        path.with_suffix("/", ".txt")
+
+
 def test_the_helper_reaches_nothing(tmp_path):
     """Answers do not depend on what is actually on disk."""
     absent = tmp_path / "nope" / "gone.py"

@@ -12,7 +12,7 @@ import pytest
 
 from sandbox.guest.requests import (COMMAND_CALL, DB_QUERY, DB_WRITE, FS_READ,
                                     FS_READ_BYTES, TOOL_CALL, Request)
-from sandbox.handlers.fs_net import _fs_read, _fs_read_bytes, _fs_search
+from sandbox.handlers.fs_net import _fs_read, _fs_read_bytes, _fs_search, _fs_stat
 from sandbox.handlers.kernel import (_db_define, _db_write,
                                      _session_add_attachment)
 from sandbox.policy import SAFE, UNSAFE, Chain, classify
@@ -188,6 +188,11 @@ def test_the_config_file_is_not_readable_as_a_file():
 def test_the_encoding_asked_for_is_not_a_way_around_it():
     """``fs.read_bytes`` returns the same bytes with a different wrapper."""
     assert _fs_read_bytes(None, {"path": _config_path()}).denied
+
+
+def test_stat_cannot_probe_protected_file_metadata():
+    """The dedicated metadata route keeps the same protected-path guard."""
+    assert _fs_stat(None, {"path": _config_path()}).denied
 
 
 def test_search_cannot_grep_a_protected_file():

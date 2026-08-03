@@ -38,10 +38,56 @@ class _Fs:
             with open(path, "r", encoding="latin-1") as handle:
                 return handle.read()
 
-    def read_bytes(self, path) -> bytes:
-        """Read a file as bytes — what a foreign decoder should be handed."""
+    def read_bytes(self, path, offset: int = 0, length: int = 0) -> bytes:
+        """Read all bytes or one window, matching the guest SDK."""
         with open(path, "rb") as handle:
-            return handle.read()
+            if offset:
+                handle.seek(max(0, int(offset)))
+            return handle.read(max(0, int(length))) if length else handle.read()
+
+    def iter_bytes(self, path, chunk_size: int = 4 * 1024 * 1024,
+                   offset: int = 0, limit=None):
+        """Yield a binary file in the same windows as the guest SDK."""
+        chunk_size = int(chunk_size)
+        offset = int(offset)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        remaining = None if limit is None else int(limit)
+        if remaining is not None and remaining < 0:
+            raise ValueError("limit must not be negative")
+
+        while remaining is None or remaining:
+            length = (chunk_size if remaining is None
+                      else min(chunk_size, remaining))
+            chunk = self.read_bytes(path, offset=offset, length=length)
+            if not chunk:
+                break
+            yield chunk
+            offset += len(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+            if len(chunk) < length:
+                break
+
+    def stat(self, path) -> dict:
+        """Return metadata for one path, matching the guest SDK shape."""
+        target = Path(path)
+        info = target.stat()
+        return {
+            "path": str(target),
+            "name": target.name,
+            "is_file": target.is_file(),
+            "is_dir": target.is_dir(),
+            "is_symlink": target.is_symlink(),
+            "mtime": info.st_mtime_ns,
+            "size": info.st_size,
+        }
+
+    def exists(self, path) -> bool:
+        """Whether a path exists."""
+        return Path(path).exists()
 
     def write(self, path, data, mode: str = "overwrite") -> dict:
         """Create, overwrite, or append to a file, creating parents."""

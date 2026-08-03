@@ -356,3 +356,26 @@ def test_the_kernel_stand_in_matches_the_sdk_surface():
 
     for name in ("log", "ok", "fail"):
         assert callable(getattr(KERNEL_SDK, name, None)), name
+
+
+def test_kernel_sdk_iter_bytes_matches_guest_windowing(tmp_path):
+    """A parser sees the same offset and limit behavior in either caller."""
+    from parsing.kernel_sdk import KERNEL_SDK
+
+    path = tmp_path / "media.bin"
+    path.write_bytes(b"abcdefghij")
+
+    assert list(KERNEL_SDK.fs.iter_bytes(
+        path, chunk_size=4, offset=2, limit=7)) == [b"cdef", b"ghi"]
+
+
+def test_kernel_sdk_stat_matches_guest_metadata_shape(tmp_path):
+    from parsing.kernel_sdk import KERNEL_SDK
+
+    path = tmp_path / "note.txt"
+    path.write_text("hello", encoding="utf-8")
+
+    assert set(KERNEL_SDK.fs.stat(path)) == {
+        "path", "name", "is_file", "is_dir", "is_symlink", "mtime", "size"}
+    assert KERNEL_SDK.fs.exists(path)
+    assert not KERNEL_SDK.fs.exists(tmp_path / "missing.txt")

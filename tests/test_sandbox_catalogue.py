@@ -240,7 +240,8 @@ def test_asking_a_human_needs_a_human():
 def test_reads_stay_broad():
     """Free reads are safe because the exits are gated, not because they
     are harmless."""
-    for kind in (R.FS_READ, R.FS_LIST, R.DB_QUERY, R.CONV_READ, R.LEDGER_READ):
+    for kind in (R.FS_READ, R.FS_STAT, R.FS_LIST, R.DB_QUERY, R.CONV_READ,
+                 R.LEDGER_READ):
         assert classify(Request(kind, {"path": "x", "sql": "select 1"}),
                         Chain()).safe, kind
 

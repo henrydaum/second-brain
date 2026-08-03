@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from sandbox import walk
-from sandbox.handlers.fs_net import _fs_list, _fs_search
+from sandbox.handlers.fs_net import _fs_list, _fs_search, _fs_stat
 
 
 @pytest.fixture
@@ -44,6 +44,48 @@ def test_list_of_a_single_file_still_answers_for_itself(tree):
     """Pointing fs.list at a file is how a plugin asks 'has this changed?'."""
     result = _fs_list(None, {"path": str(tree / "a.py"), "details": True})
     assert [entry["name"] for entry in result.data] == ["a.py"]
+
+
+def test_stat_answers_one_path_without_a_listing(tree):
+    path = tree / "a.py"
+    result = _fs_stat(None, {"path": str(path)})
+
+    assert result.ok
+    assert result.data == {
+        "path": str(path), "name": "a.py", "is_file": True,
+        "is_dir": False, "is_symlink": False,
+        "mtime": path.stat().st_mtime_ns, "size": path.stat().st_size,
+    }
+
+
+def test_stat_missing_is_a_failure_or_none_when_expected(tree):
+    missing = str(tree / "missing.txt")
+    failed = _fs_stat(None, {"path": missing})
+    allowed = _fs_stat(None, {"path": missing, "missing_ok": True})
+
+    assert not failed.ok and failed.code == "not_found"
+    assert allowed.ok and allowed.data is None
+
+
+def test_sdk_stat_and_exists_share_the_stat_request(tree):
+    from sandbox.guest.sdk import SDK
+
+    class Channel:
+        def __init__(self):
+            self.requests = []
+
+        def send(self, request):
+            self.requests.append(request)
+            return _fs_stat(None, request.args)
+
+    channel = Channel()
+    sdk = SDK(channel)
+    path = tree / "a.py"
+
+    assert sdk.fs.stat(path)["size"] == path.stat().st_size
+    assert sdk.fs.exists(path)
+    assert not sdk.fs.exists(tree / "missing.txt")
+    assert {request.type for request in channel.requests} == {"fs.stat"}
 
 
 def test_search_without_extras_returns_substring_hits(tree):

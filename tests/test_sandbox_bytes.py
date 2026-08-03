@@ -47,6 +47,43 @@ def test_a_payload_without_bytes_is_unchanged():
     assert protocol.pack(payload) == payload
 
 
+def test_sdk_iter_bytes_windows_and_limits_reads():
+    """The convenience loop stays lazy and uses ordinary read Requests."""
+    import base64
+
+    from sandbox.guest.requests import Result
+    from sandbox.guest.sdk import SDK
+
+    payload = b"abcdefghij"
+
+    class Channel:
+        def __init__(self):
+            self.windows = []
+
+        def send(self, request):
+            offset = request.args.get("offset", 0)
+            length = request.args.get("length", 0)
+            self.windows.append((offset, length))
+            chunk = payload[offset:offset + length]
+            return Result(data=base64.b64encode(chunk).decode("ascii"))
+
+    channel = Channel()
+    chunks = list(SDK(channel).fs.iter_bytes(
+        "media.bin", chunk_size=4, offset=2, limit=7))
+
+    assert chunks == [b"cdef", b"ghi"]
+    assert channel.windows == [(2, 4), (6, 3)]
+
+
+def test_sdk_iter_bytes_rejects_invalid_windows():
+    from sandbox.guest.sdk import SDK
+
+    sdk = SDK(None)
+    for kwargs in ({"chunk_size": 0}, {"offset": -1}, {"limit": -1}):
+        with pytest.raises(ValueError):
+            list(sdk.fs.iter_bytes("media.bin", **kwargs))
+
+
 def test_a_dict_carrying_the_tag_among_other_keys_is_not_decoded():
     """Only a *lone* tag is an encoding; anything else is somebody's data.
 

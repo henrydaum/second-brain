@@ -127,6 +127,14 @@ def test_urllib_parse_is_pure_but_urllib_request_is_not():
         "import json", "import urllib.request")).ok
 
 
+def test_common_in_memory_stdlib_is_free():
+    """Parsing, address arithmetic and compression perform no effects."""
+    for module in ("tomllib", "ipaddress", "zlib"):
+        report = _validate(GOOD_TOOL.replace(
+            "import json", f"import {module}"))
+        assert report.ok and not report.disclaimed, report.render()
+
+
 def test_effect_methods_are_caught():
     """Path is fine for building paths, not for touching them."""
     report = _validate(GOOD_TOOL.replace(

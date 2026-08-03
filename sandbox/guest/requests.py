@@ -25,6 +25,7 @@ FS_WRITE = "fs.write"
 # survive both a thread boundary and a pipe unchanged.
 FS_READ_BYTES = "fs.read_bytes"
 FS_WRITE_BYTES = "fs.write_bytes"
+FS_STAT = "fs.stat"
 FS_LIST = "fs.list"
 FS_SEARCH = "fs.search"
 FS_DELETE = "fs.delete"
@@ -225,7 +226,7 @@ APP_STOP = "app.stop"
 
 
 ALL_TYPES = {
-    FS_READ, FS_WRITE, FS_READ_BYTES, FS_WRITE_BYTES,
+    FS_READ, FS_WRITE, FS_READ_BYTES, FS_WRITE_BYTES, FS_STAT,
     FS_LIST, FS_SEARCH, FS_DELETE, FS_MOVE, FS_TEMP,
     DB_QUERY, DB_WRITE, DB_DEFINE,
     CONV_CREATE, CONV_READ, CONV_LIST, CONV_APPEND, CONV_SET_TITLE,
@@ -261,7 +262,7 @@ ALL_TYPES = {
 # Requests that read rather than change. The policy function leans on this,
 # and so does anything asking whether a chain has done anything yet.
 READ_ONLY = {
-    FS_READ, FS_READ_BYTES, FS_LIST, FS_SEARCH,
+    FS_READ, FS_READ_BYTES, FS_STAT, FS_LIST, FS_SEARCH,
     DB_QUERY, CONV_READ, CONV_LIST, SESSION_GET,
     SESSION_LIST, SESSION_STATE_GET, CONFIG_READ, PATH_GET, USER_READ, USER_LIST,
     PLUGIN_LIST, PLUGIN_DESCRIBE, PLUGIN_VALIDATE,

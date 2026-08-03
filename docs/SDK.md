@@ -238,13 +238,15 @@ Each namespace is exactly one Request family, so `sdk.fs.read` *is* the
 sdk.fs.read(path)                          # -> str
 sdk.fs.write(path, data, mode="overwrite") # mode="append" to add
 sdk.fs.read_bytes(path, offset=0, length=0)  # -> bytes; anything non-text
+sdk.fs.iter_bytes(path, chunk_size=4 * 1024 * 1024,
+                  offset=0, limit=None)      # -> lazy byte chunks
 sdk.fs.write_bytes(path, data, mode="overwrite")
+sdk.fs.stat(path)                           # -> {path, name, is_file, is_dir,
+                                            #     is_symlink, size, mtime}
+sdk.fs.exists(path)                         # -> bool
 sdk.fs.list(path, pattern="*")             # -> [str]
 sdk.fs.list(path, details=True)            # -> [{path, name, is_dir, size, mtime}]
-                                           # point it at a *file* for just that
-                                           # one entry — this is how you ask
-                                           # "has it changed?"
-                                           # mtime is st_mtime_ns; compare with !=
+                                           # directory entry metadata
 sdk.fs.list(path, recursive=True, files_only=True,
             sort="mtime", limit=100)       # -> {root, entries, truncated,
                                            #     scan_truncated}
@@ -257,29 +259,15 @@ sdk.fs.move(src, dst, copy=False)
 sdk.fs.temp(directory=False, suffix="")    # workspace/temp scratch; always allowed
 ```
 
-**Testing whether a path exists.** There is no `sdk.fs.exists`, and
-`sdk.fs.list` is not one in disguise: a missing path is a *failed* Request,
-and a failed Request raises. So `if sdk.fs.list(p):` does not answer the
-question — it throws the moment the answer would have been "no", which is the
-only time you were asking. Catch it:
+`sdk.fs.stat` inspects exactly one file or directory and raises when it is
+missing. `sdk.fs.exists` uses the same `fs.stat` Request but turns that expected
+missing case into `False`; denials and real I/O failures still raise.
 
 ```python
-def exists(sdk, path) -> bool:
-    """Whether a path is there."""
-    try:
-        return bool(sdk.fs.list(path))
-    except sdk.Failed:
-        return False
-```
-
-This is the shape every Request has — the value or a raise (see **Failure**
-above) — and it is not special to `fs.list`. It is called out here because
-this is the one place where the failing case is a perfectly ordinary answer
-you were expecting, rather than something going wrong.
-
-```python
-sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body,
-                                           #     headers}
+sdk.net.http(url, method="GET", headers=None, body=None,
+             params=None, json=None)       # -> {status, body, headers}
+sdk.net.http_json(url, method="GET", headers=None, body=None,
+                  params=None, json=None)  # same, with parsed JSON body
 
 sdk.proc.run(argv, timeout=120.0, cwd=None, shell=None)   # -> {code, stdout,
                                            #     stderr, command}
@@ -316,6 +304,12 @@ rather than a failure — check `status` the way you would for a 200. That is
 deliberate: a 429's body is where an API tells you which limit you hit and for
 how long, and only a request that got no reply at all (DNS, refused, timed out)
 raises. `body` is decoded text; there is no binary download.
+
+`params` URL-encodes query values, including repeated list values. `json`
+encodes a request body and supplies `Content-Type: application/json` unless
+you supplied one; it cannot be combined with `body`. Use `http_json` when the
+response should be decoded too. It keeps the same envelope and replaces its
+text `body` with the parsed value; an empty body becomes `None`.
 
 Redirects are also ordinary answers and are **not followed automatically**.
 Read the 3xx response's `headers["location"]` and make another `sdk.net.http`
@@ -369,21 +363,12 @@ or an archive. Base64 on the wire is the SDK's problem, not yours — you hand
 over `bytes` and get `bytes` back.
 
 One *answer* has to fit in one wire message, so a whole-file `read_bytes` is
-capped around 11 MB and says so. `offset`/`length` are the way past it: ask for
-successive windows and join them. A short read means you reached the end, so
-the loop terminates without a size you had to fetch first.
+capped around 11 MB and says so. `iter_bytes` makes the successive windowed
+Requests for you and stops at EOF. Join it when the whole file genuinely needs
+to be in memory, or process each chunk as it arrives:
 
 ```python
-chunks, offset = [], 0
-while True:
-    chunk = sdk.fs.read_bytes(path, offset=offset, length=4 * 1024 * 1024)
-    if not chunk:
-        break
-    chunks.append(chunk)
-    offset += len(chunk)
-    if len(chunk) < 4 * 1024 * 1024:
-        break
-data = b"".join(chunks)
+data = b"".join(sdk.fs.iter_bytes(path))
 ```
 
 **`list` and `search` each have two shapes**, and passing any of the extra
@@ -778,7 +763,8 @@ class Chat(BaseFrontend):
         return True
 
     def poll(self, sdk):
-        updates = sdk.net.http(f"https://api.example.com/updates?after={self._cursor}")
+        updates = sdk.net.http_json(
+            "https://api.example.com/updates", params={"after": self._cursor})
         for update in updates["body"]["items"]:
             self._cursor = update["id"]
             sdk.frontend.submit_text(f"chat:{update['room']}", update["text"])
@@ -1089,6 +1075,9 @@ sdk.path.parent(p); sdk.path.name(p); sdk.path.stem(p); sdk.path.suffix(p)
 sdk.path.absolute(p, base=sdk.paths.get("project"))
 sdk.path.within(p, root)          # containment, separator-aware
 sdk.path.normalize(p)             # canonical key for comparing two paths
+sdk.path.as_posix(p)              # forward slashes for display and APIs
+sdk.path.relative(p, root)        # textual relative path; never reads disk
+sdk.path.with_suffix(p, ".json")  # replace the final suffix
 ```
 
 `sdk.path` exists because you cannot import `pathlib` or `os.path` — both
@@ -1108,8 +1097,8 @@ namespaces. The plural one crosses the boundary; the singular one does not.
 
 Plus the pure standard library — `json`, `re`, `math`, `datetime`, `time`,
 `collections`, `itertools`, `hashlib`, `base64`, `csv`, `email`, `textwrap`,
-`statistics`, `dataclasses`, `typing`, and friends. `croniter` and
-`cron_descriptor` are available too.
+`statistics`, `dataclasses`, `typing`, `tomllib`, `ipaddress`, `zlib`, and
+friends. `croniter` and `cron_descriptor` are available too.
 
 **The test for what needs a Request:** does it touch disk, network, clock, or
 process? If no, just write it.

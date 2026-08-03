@@ -479,7 +479,7 @@ ALWAYS_UNSAFE = {
 
 # Requests that narrow capability, or only ever affect this execution.
 ALWAYS_SAFE = {
-    R.SELF_RESPOND, R.FS_TEMP, R.FS_READ, R.FS_READ_BYTES,
+    R.SELF_RESPOND, R.FS_TEMP, R.FS_READ, R.FS_READ_BYTES, R.FS_STAT,
     R.FS_LIST, R.FS_SEARCH,
     R.DB_QUERY, R.DB_DEFINE,
     R.CONV_READ, R.CONV_LIST, R.CONV_CREATE, R.CONV_APPEND,

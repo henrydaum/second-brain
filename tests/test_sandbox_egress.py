@@ -134,11 +134,15 @@ class _Handler(BaseHTTPRequestHandler):
     """Answers 200 on /ok and 429 with an explanation everywhere else."""
 
     redirect_hits = 0
+    last_path = ""
+    last_body = b""
+    last_content_type = ""
 
     def log_message(self, *args):
         return
 
     def do_GET(self):
+        type(self).last_path = self.path
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/redirect-target")
@@ -159,11 +163,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        type(self).last_body = self.rfile.read(length)
+        type(self).last_content_type = self.headers.get("Content-Type") or ""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
 
 @pytest.fixture
 def server():
     """A local HTTP server, so these tests need no network."""
     _Handler.redirect_hits = 0
+    _Handler.last_path = ""
+    _Handler.last_body = b""
+    _Handler.last_content_type = ""
     httpd = TCPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -179,6 +195,93 @@ def test_a_reply_carries_status_body_and_headers(server):
     # Lowercased, because HTTP header names are case-insensitive and a caller
     # comparing them should not have to guess which case it got.
     assert result.data["headers"]["x-trace"] == "abc123"
+
+
+def test_params_merge_with_the_existing_query(server):
+    result = _net_http(None, {
+        "url": f"{server}/ok?fixed=1#section",
+        "params": {"q": "hello world", "tag": ["a", "b"]},
+    })
+
+    assert result.ok
+    assert _Handler.last_path == "/ok?fixed=1&q=hello+world&tag=a&tag=b"
+
+
+def test_json_is_encoded_and_gets_a_content_type(server):
+    result = _net_http(None, {
+        "url": f"{server}/send", "method": "POST",
+        "json": {"room": "general", "on": True},
+    })
+
+    assert result.ok
+    assert json.loads(_Handler.last_body) == {"room": "general", "on": True}
+    assert _Handler.last_content_type == "application/json"
+
+
+def test_json_respects_an_explicit_content_type(server):
+    result = _net_http(None, {
+        "url": f"{server}/send", "method": "POST",
+        "headers": {"content-type": "application/problem+json"},
+        "json": {"problem": True},
+    })
+
+    assert result.ok
+    assert _Handler.last_content_type == "application/problem+json"
+
+
+def test_guest_http_options_are_additive_and_json_decoding_is_opt_in():
+    from sandbox.guest.requests import Result
+    from sandbox.guest.sdk import SDK
+
+    class Channel:
+        def __init__(self):
+            self.requests = []
+
+        def send(self, request):
+            self.requests.append(request)
+            return Result(data={"status": 200, "headers": {},
+                                "body": '{"items":[1,2]}'})
+
+    channel = Channel()
+    sdk = SDK(channel)
+    plain = sdk.net.http("https://example.test")
+    structured = sdk.net.http_json(
+        "https://example.test", params={"after": 3}, json={"ok": True})
+
+    assert plain["body"] == '{"items":[1,2]}'
+    assert structured["body"] == {"items": [1, 2]}
+    assert channel.requests[0].args == {
+        "url": "https://example.test", "method": "GET",
+        "headers": {}, "body": None}
+    assert channel.requests[1].args["params"] == {"after": 3}
+    assert channel.requests[1].args["json"] == {"ok": True}
+
+
+def test_guest_http_rejects_two_request_bodies():
+    from sandbox.guest.sdk import SDK
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        SDK(None).net.http("https://example.test", body="x", json={"x": 1})
+
+
+def test_http_json_handles_empty_and_malformed_bodies():
+    from sandbox.guest.requests import Result
+    from sandbox.guest.sdk import SDK
+
+    class Channel:
+        body = ""
+
+        def send(self, request):
+            return Result(data={"status": 204, "headers": {},
+                                "body": self.body})
+
+    channel = Channel()
+    sdk = SDK(channel)
+    assert sdk.net.http_json("https://example.test")["body"] is None
+
+    channel.body = "not json"
+    with pytest.raises(ValueError, match="HTTP 204"):
+        sdk.net.http_json("https://example.test")
 
 
 def test_an_error_status_is_an_answer_not_a_failure(server):

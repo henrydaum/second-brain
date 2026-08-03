@@ -206,7 +206,7 @@ class Chat(BaseFrontend):
 
     def poll(self, sdk):
         """Take whatever is waiting and hand it over. Must return promptly."""
-        updates = sdk.net.http(
+        updates = sdk.net.http_json(
             "https://chat.example.com/updates",
             params={"after": self._cursor, "timeout": 20},
             headers={"Authorization": f"Bearer {self._token}"},
