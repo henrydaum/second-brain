@@ -94,29 +94,19 @@ class Validate(BaseTool):
             f"""## Writing and running your own code
 You can write code into {sandbox_root}/ and run it, without asking permission for either. That is not a loophole: everything under that tree runs in a subprocess and cannot act, only ask. Every effect it performs — disk, network, database, process — is a separate request the kernel judges on its own. So writing code changes what you can *ask for*; it never changes what you are allowed to *affect*.
 
-There are two things you can write, and the difference is whether the kernel has to register it.
+Two kinds, and the difference is whether the kernel has to register it. **Scripts** are run once by path — the Scripts section of these instructions covers them, and they are what to reach for first. **A plugin** is a capability the kernel registers and calls by name: a tool, task, service, command or frontend. Write one when the thing should still be there tomorrow. It goes in {sandbox_root}/<family>/ with the required prefix — tool_foo.py in {sandbox_root}/tools/, command_foo.py in {sandbox_root}/commands/, and so on.
 
-**A script** is a file of `sdk` code you run once. No base class, no declarations, just functions that take `sdk`. Put it in {sandbox_root}/scripts/ and run it with run_script. Use this for anything you would otherwise have reached for the shell to do.
+Whichever you write, your code cannot act — it can only ask. Anything touching disk, network, clock or process goes through the `sdk` object every entry point receives: `sdk.fs.read(path)`, not `open(path)`; `sdk.log(...)`, not `logging`; `sdk.db.query(...)`, not a cursor. Requests return their value and raise on failure, so the code reads as straight-line Python.
 
-**A plugin** is a capability the kernel registers and calls: a tool, task, service, command or frontend. Write it into {sandbox_root}/<family>/ with the required prefix — tool_foo.py in {sandbox_root}/tools/, command_foo.py in {sandbox_root}/commands/, and so on. Write one when the thing should still be there tomorrow and be callable by name.
-
-The one thing to understand before writing either: your code cannot act, it can only ask. Anything touching disk, network, clock or process goes through the `sdk` object every entry point receives — `sdk.fs.read(path)`, not `open(path)`; `sdk.log(...)`, not `logging`; `sdk.db.query(...)`, not a cursor. Requests return their value and raise on failure, so the code reads as straight-line Python.
-
-Workflow:
-1. Understand the intended behavior. Ask clarifying questions when a missing decision would materially change the design.
-2. Read docs/SDK.md — it is the reference for what `sdk` can do, and its examples are executed by the test suite, so they are correct.
-3. For a plugin, read the matching file in templates/ (tool_template.py, command_template.py, ...) for a worked example of the family.
-4. Write the file into the correct directory.
-5. Call validate(path=...) after every edit. Fix what it reports and call it again until it says the file conforms.
-6. A conforming plugin loads automatically as soon as it is saved. A conforming script is ready to run.
+Workflow: read docs/SDK.md (its examples are executed by the test suite, so they are correct), then the matching templates/ file for the family, then write the file and call validate(path=...) after every edit until it says the file conforms. Ask clarifying questions first when a missing decision would materially change the design. A conforming plugin loads as soon as it is saved.
 
 Rules that are enforced rather than suggested, so code breaking one will not load:
 - Import a base class from `guest.bases` — `from guest.bases import BaseTool`. Never import kernel modules (runtime, config, plugins, state_machine, agent, pipeline, events, paths): a box cannot see them.
 - No `os`, `sys`, `pathlib`, `subprocess`, `requests`, `open()` or `logging`. Each has an sdk equivalent; `sdk.path.*` covers path arithmetic.
-- Exactly one plugin class per file, with a unique `name`. A script has no class at all — and must not be named with a family prefix, or it will be judged as a plugin and refused.
-- Declarations (`name`, `requests`, `exports`, `hooks`, ...) are read from the source without running it, so they must be plain literals.
+- Exactly one plugin class per file, with a unique `name`. A script has no class at all, and must not carry a family prefix or it is judged as a plugin and refused.
+- Declarations (`name`, `requests`, `parameters`, `exports`, `hooks`, ...) are read from the source without running it, so they must be plain literals throughout — one computed value discards the whole declaration.
 
-Code importing a library that is not in the standard library still works — declare it in `dependencies_pip` — but the kernel will run that file in a separate process, because it cannot see what the library does. For a script it also means the user is asked before each run, so keep scripts to the standard library and the SDK when you can. validate tells you when this applies.
+A library outside the standard library still works — declare it in `dependencies_pip` — but the kernel runs that file in a separate process, because it cannot see what the library does. validate tells you when this applies.
 
 ## What is in your tree
 {_drafts(sdk, sandbox_root)}"""

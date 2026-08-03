@@ -82,24 +82,24 @@ class RunScript(BaseTool):
         scripts = sdk.paths.get("scripts")
         sep = "\\" if "\\" in scripts else "/"
         return (
-            f"""## Scripts
-Write a script when you need to *do* something rather than build a capability: read a hundred files and summarize them, reshape some data, call an API in a loop, clean up a directory. Write it into the scripts directory and run it with run_script.
+            f"""## Scripts — reach for these first
+A script is a file of `sdk` code you run with run_script. Write one whenever the work is expressible in Python: read a hundred files and summarize them, reshape some data, call an API in a loop, clean up a directory.
+
+**Prefer a script over run_command.** Both do real work on this machine, but a shell command is a process the kernel cannot see into, so it interrupts the user for approval *every single time*; a script is contained, so each effect inside it is judged on its own and nothing interrupts anyone. Keep to the standard library and `sdk` and you will never be stopped — the only script that interrupts anybody is one importing an outside library, and then the user is told which library and why.
 
 **Write it to this exact directory, by absolute path:**
 
     {scripts}
 
-So a script called `tidy.py` is written to `{scripts}{sep}tidy.py` — spell that whole path out when you create the file and again when you call run_script. A relative filename lands wherever the process happens to be sitting, which is the project root, not here; that is not the scripts directory, so the run is *refused* rather than asked about, and you have left a stray file behind. Nothing else about the file says it is a script — the directory is the entire declaration.
+So `tidy.py` goes to `{scripts}{sep}tidy.py` — spell the whole path out when you create the file and again when you call run_script. The directory is the entire declaration: nothing else marks a file as a script, and one written anywhere else is *refused* rather than asked about, leaving a stray file behind. A relative filename lands wherever the process happens to be sitting, which is the project root, not here.
 
-A script is a plain file with functions that take `sdk`:
+A script is plain functions that take `sdk`:
 
     def main(sdk, limit=10):
         rows = sdk.db.query("SELECT title FROM conversations LIMIT ?", [limit])
         return [r["title"] for r in rows]
 
-Whatever `main` returns comes back to you. Call validate(path=...) first — a script that does not conform will be refused rather than run.
-
-Reach for this instead of run_command. Both end up doing work on this machine, but a shell command is a process the kernel cannot see into, so it asks the user every single time; a script is contained, so it does not ask at all. The only script that interrupts anyone is one importing a library outside the standard library, and then the user is told which library and why. Keep to the standard library and the `sdk` and you will never be stopped.
+Whatever `main` returns comes back to you. Call validate(path=...) first — a script that does not conform is refused rather than run. If the work needs longer than the default deadline, declare `timeout = 600` at module scope.
 
 Scripts persist, and that is useful — improve one across conversations rather than rewriting it each time. Pass delete_after=true only when the work is genuinely single-use.
 
