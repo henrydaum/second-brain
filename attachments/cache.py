@@ -13,6 +13,18 @@ pipeline (extract_text, chunk, embed, OCR, lexical index).
 It sits inside the agent's own tree (``DATA_DIR/workspace/attachments``), which
 is what lets the agent work on what it was handed without a dialog per verb —
 see :func:`trees.attachment_cache`.
+
+**The sync default draws a provenance line, using folder membership to do it.**
+Only inbound files are meant to be indexed; the rest of the workspace is code
+the agent wrote and is better served by ``fs.search`` than by embeddings. That
+was structurally true while :func:`save` was the only thing that could write
+here, and since the move it is a convention — the agent may now write to this
+folder, and whatever it leaves would be indexed as though a person had sent it.
+Nothing does, so this is a note rather than a bug. If something ever should,
+mark provenance on the ``files`` row at insert and have the watcher skip
+workspace files it did not record; do not widen the sync to the whole tree,
+which would index every ``fs.temp`` staging file (real suffix, so the name
+filters miss it) once on the way in and ghost it on the way out.
 """
 
 import logging
