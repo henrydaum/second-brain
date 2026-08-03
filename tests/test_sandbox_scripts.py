@@ -53,6 +53,65 @@ def clean_boxes():
         unload_box(name)
 
 
+# ── how long a script may take ────────────────────────────────────────
+
+def test_a_script_declares_its_own_deadline(sb, tree):
+    """A script has no class, so its declarations are module-level.
+
+    Undeclared it gets the ordinary default, which is deliberately modest and
+    still short for the work scripts are actually reached for — a crawl that
+    fans out subagents does real computation between waits, and *cumulative*
+    CPU across a long run is what breaches a deadline like this. ``box`` is
+    already declared this way, so nothing new is being invented here; what was
+    missing was anybody knowing it worked, which is why it is pinned rather
+    than left to ``_prepare``.
+
+    The clamp is the point of the last case: a plugin may ask for a longer
+    leash, it does not get to grant itself one.
+    """
+    from sandbox.interpreter import (DEFAULT_TIMEOUT_SECONDS,
+                                     MAX_TIMEOUT_SECONDS, clamp_timeout)
+
+    def deadline(extra):
+        """The seconds the runner would actually enforce."""
+        _, _, opts = sb._prepare(str(write(tree, extra=extra)))
+        return clamp_timeout(opts["timeout"])
+
+    assert deadline("") == DEFAULT_TIMEOUT_SECONDS
+    assert deadline("timeout = 300") == 300.0
+    assert deadline("timeout = 5000") == MAX_TIMEOUT_SECONDS
+
+
+BURNER = '''\
+{extra}
+
+def main(sdk):
+    """Burn CPU: running time, which is what a deadline measures."""
+    import time
+    end = time.monotonic() + 3
+    while time.monotonic() < end:
+        pass
+    return "finished"
+'''
+
+
+def test_a_declared_deadline_is_what_the_runner_enforces(sb, tree):
+    """Resolution is not enforcement, and only one of them is the promise.
+
+    Declared small so it bites in a second: the default is far longer, so a
+    script that dies after 1s can only have died on the number it declared.
+    The reverse case — a long declaration outliving the default — is the same
+    wiring read from the other end and would cost the suite a minute to say so.
+    """
+    path = tree / "scripts" / "tally.py"
+    path.write_text(BURNER.format(extra="timeout = 1"), encoding="utf-8")
+
+    result = sb.run(str(path), "main", chain=Chain(root="user"))
+
+    assert not result.ok
+    assert "timed out after 1.0s" in result.error
+
+
 # ── what makes a script a script ──────────────────────────────────────
 
 def test_a_scripts_directory_is_what_declares_one(tree):

@@ -1369,6 +1369,26 @@ is a *service* and one that wants an hour is a *task*, and both are approved
 where a commitment outliving a turn should be answered for. Note the 600s
 `watchdog.HARD_CEILING` bounds ephemeral runs only.
 
+**A script declares its deadline at module scope**, `timeout = 600`, exactly
+as it declares `box` — `validator._collect_declarations` reads module-level
+assignments, and `facade.inspect` falls back to them for a file with no plugin
+class, so this worked from the day scripts existed and simply appeared in no
+template, no doc and no test. That is the whole failure worth recording: the
+capability was real, nobody could find it, and the natural conclusion from
+reading `sdk.scripts.run` — which takes no `timeout` argument — was that 
+scripts could not ask for one.
+
+Two numbers bound a run and only one is declarable. The declared deadline is
+**running** time (`Execution.running_for` discounts time blocked on the kernel)
+and is clamped by `MAX_TIMEOUT_SECONDS`; `HARD_CEILING` is **wall** clock and
+is not declarable at all. So ten minutes elapsed is the real ceiling on a
+script however it spends them, which is the honest reason the "one that wants
+an hour is a task" line above still holds: a subagent crawl that fans out
+wider than `max_concurrent_subagents` waits in waves of
+`subagent_timeout_seconds` (300 by default, 3600 by config) and can exceed the
+wall ceiling without ever exceeding its deadline. Raising the declared timeout
+does not help that case, and the ceiling is deliberately global.
+
 `handlers/kernel._script_run` waits in slices rather than blocking, because
 cancellation reaches code that is *making* Requests and this handler makes
 none while it waits. `provenance.Caller` carries the calling `Execution` for

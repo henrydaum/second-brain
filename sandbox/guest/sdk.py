@@ -1219,6 +1219,12 @@ class _Scripts(_Namespace):
     The exception is a script importing a library the validator cannot see
     inside. That is asked about, and the library is named — it is the one part
     of a script whose effects do not come back as Requests.
+
+    A script gets 60s by default and may declare more at module scope
+    (``timeout = 600``), the same way it declares ``box``. That measures
+    *running* time — waiting on the kernel is not charged — and the kernel
+    clamps it at 600s, with a separate 600s wall-clock ceiling bounding the run
+    however it spends the time.
     """
 
     def run(self, path: str, entry: str = "main", *, wait: bool = True,

@@ -47,7 +47,16 @@ logger = logging.getLogger("Sandbox")
 # self-evolving agent may change what it can ask for, but not what it is
 # authorized to affect.)
 MAX_TIMEOUT_SECONDS = 600.0
-DEFAULT_TIMEOUT_SECONDS = 30.0
+
+#: What anything that declares nothing gets. Sixty rather than thirty because
+#: this is a deadline on *running* time — waiting on the kernel is discounted —
+#: so the only thing it ever cuts short is code genuinely computing, and thirty
+#: seconds of computation is a low bar for the work scripts and tasks are
+#: actually reached for. The cost of raising it is that a hung box takes twice
+#: as long to report, which is bounded and visible; the cost of leaving it low
+#: is honest work killed with the report blaming the plugin, which is the
+#: failure this file's history is mostly about.
+DEFAULT_TIMEOUT_SECONDS = 60.0
 
 # Handlers block, and several of them block for a long time on purpose:
 # ``ui.ask`` waits five minutes for a person, ``proc.run`` two for a command,
@@ -296,7 +305,7 @@ class Interpreter:
             return
         # Bracketed in the same accounting a handler is, and for the same
         # reason: the guest is waiting on us. A dialog may sit for
-        # DIALOG_TIMEOUT (300s) while the default deadline is 30s, so charging
+        # DIALOG_TIMEOUT (300s), far longer than any default deadline, so charging
         # it to the guest killed every unsafe Request a person read carefully —
         # the tool reported a timeout blaming the plugin for a question the
         # user had not answered yet.

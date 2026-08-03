@@ -2,8 +2,11 @@
 SCRIPT TEMPLATE
 ===============
 Not every piece of sandboxed code is a plugin. A script is the other shape: a
-file of functions that take `sdk`, with no base class and no declarations.
-Reference for authoring one; not imported by the running system.
+file of functions that take `sdk`, with no base class and nothing that
+registers it. Reference for authoring one; not imported by the running system.
+
+It is not quite true that a script declares nothing: `box` and `timeout` are
+read from module scope, and both are covered below.
 
 Use a script for one-off computation, scratch work, analysis, or anything the
 kernel does not need to register and schedule. If nothing has to *find* your
@@ -68,7 +71,28 @@ find it later. If you need something kept, you need a service or a persistent
 box, not a global.
 
 A script cannot end itself except by returning. `sdk.respond(value)` is an
-early exit; timeouts and shutdown are the kernel's decision, not yours.
+early exit; shutdown is the kernel's decision, not yours.
+
+
+HOW LONG YOU GET
+----------------
+60 seconds by default. Declare more at module scope, the same way you declare
+`box`:
+
+    timeout = 600
+
+Two things about that number are worth knowing before you pick one.
+
+It measures *running* time, not elapsed time. Waiting on the kernel does not
+count against it — a script blocked for four minutes inside `sdk.proc.run` or
+`sdk.agent.spawn` is charged nothing for the wait. What it measures is your own
+computation, and it accumulates across the whole run, so a long loop doing a
+little work per iteration is what actually breaches it.
+
+It is a request, not a grant: the kernel clamps at 600s, so declaring 5000 gets
+you 600. And a separate wall-clock ceiling of 600s bounds every run however it
+spends the time, blocked or not. So ten minutes of elapsed time is the real
+limit on a script, and work that needs longer than that wants to be a task.
 
 
 HELPER FILES AND BOXES
