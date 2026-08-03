@@ -81,15 +81,13 @@ def build_prompt_sections(
         config=config or {}, scope=scope, profile_name=profile_name,
         frontend_name=frontend_name,
     )
+    populations = _in_scope(r, services, orchestrator, commands,
+                            command_filter, frontend)
     semi = [
         _environment(),
         _tool_catalog(r),
         _command_catalog(commands, command_filter),
-        _collect(_visible_tools_for_prompt(r), pctx),
-        _collect(_loaded_services_for_prompt(services), pctx),
-        _collect(_tasks_for_prompt(orchestrator), pctx),
-        _collect(_visible_commands_for_prompt(commands, command_filter), pctx),
-        _collect([frontend] if frontend is not None else [], pctx),
+        _collect(populations, pctx, live=False),
     ]
     dynamic = [
         "Runtime-generated context (see 'Runtime Context' in the static prompt): "
@@ -104,6 +102,7 @@ def build_prompt_sections(
         _filesystem_access(config),
         _sync_dirs(config),
         _agent_memory(),
+        _collect(populations, pctx, live=True),
         _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
         notification_suffix,
@@ -125,22 +124,53 @@ def _section(title: str, content: str) -> str:
     return f"[{title}]\n{content.strip()}"
 
 
-def _collect(plugins, ctx: PromptContext) -> str:
-    """Join non-empty ``agent_prompt`` contributions from in-scope plugins.
+def _in_scope(registry, services, orchestrator, commands, command_filter,
+              frontend) -> list:
+    """Every plugin whose guidance belongs in this prompt, in reading order.
+
+    Enumerated once and collected twice — the two shapes land in different
+    blocks (see ``_collect``), and the populations are the same either way.
+    """
+    return [
+        *_visible_tools_for_prompt(registry),
+        *_loaded_services_for_prompt(services),
+        *_tasks_for_prompt(orchestrator),
+        *_visible_commands_for_prompt(commands, command_filter),
+        *([frontend] if frontend is not None else []),
+    ]
+
+
+def _collect(plugins, ctx: PromptContext, *, live: bool) -> str:
+    """Join ``agent_prompt`` contributions of one shape from in-scope plugins.
 
     One name, two shapes. A plugin with nothing conditional to say declares a
     plain string (``agent_prompt = "..."``), which the loader reads by AST and
-    copies onto the adapter for free; one that needs the session declares a
-    method taking the context. Accepting both here is what lets those be the
-    same name — and it is load-bearing rather than merely tidy, because a
-    string shadowing a method would otherwise raise ``TypeError`` into the
-    ``except`` below and the guidance would vanish with no symptom at all.
+    copies onto the adapter for free; one whose text depends on live state
+    declares a method taking the context. Accepting both under one name is
+    load-bearing rather than merely tidy, because a string shadowing a method
+    would otherwise raise ``TypeError`` into the ``except`` below and the
+    guidance would vanish with no symptom at all.
+
+    ``live`` is which shape to take, and it decides *where the text lands*. A
+    string is fixed at load, so it belongs in the semi-stable block inside the
+    cacheable position-0 prefix. A method exists precisely because its answer
+    moves — the installed store's script listing, its table list — so leaving
+    it in that prefix would mean every refresh rewrites the one message
+    providers cache across a conversation. It goes in the dynamic block with
+    the kernel's own live state, which is exactly the argument ``_mode_suffix``
+    makes for itself in ``runtime/runtime_config.py``.
+
+    No declaration is needed to tell the two apart: the native bases declare
+    ``agent_prompt: str = ""`` and the bridge attaches a bound method only when
+    the guest actually wrote one, so ``callable`` is already an exact answer.
     """
     parts = []
     for plugin in plugins:
         try:
             raw = getattr(plugin, "agent_prompt", "")
-            text = ((raw(ctx) if callable(raw) else raw) or "").strip()
+            if callable(raw) != live:
+                continue
+            text = ((raw(ctx) if live else raw) or "").strip()
         except Exception:
             text = ""
         if text:

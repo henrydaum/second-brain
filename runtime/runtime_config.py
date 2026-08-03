@@ -280,9 +280,12 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         Empty in ``ask``, which is the default and needs no saying. Lazy and
         in the dynamic section for the same reason as the two above — but here
         it is load-bearing rather than merely tidy: the mode changes *within* a
-        conversation, so text baked into the cacheable prefix, or into a
-        plugin's ``agent_prompt`` (read once per plugin load), would go stale
-        the moment somebody typed ``/mode``.
+        conversation, so text baked into the cacheable prefix would go stale the
+        moment somebody typed ``/mode``. A plugin's live ``agent_prompt`` now
+        lands in this same section and refreshes on the same cadence, but the
+        mode still does not belong to one: it is kernel state, and a safety
+        surface that stops working when a package is uninstalled is worse than
+        none.
 
         Worth telling it at all because a refusal it cannot explain is a
         refusal it retries. An agent that knows it is in lockdown reports the

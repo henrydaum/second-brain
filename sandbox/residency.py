@@ -38,7 +38,8 @@ import types
 from pathlib import Path
 
 from .bridge import (NOT_CARRIED, _box_prompt, _build, _cached_prompt,
-                     _defines, _make_response, _prompt_method, get_sandbox)
+                     _defines, _make_response, _prompt_method, forget_prompt,
+                     get_sandbox)
 from .policy import Chain
 
 logger = logging.getLogger("Sandbox")
@@ -381,10 +382,10 @@ def _service_adapter(
         """Open the resident box. Its start() runs inside."""
         self._poll_stop.clear()
         # A residency's prompt text is only knowable while it is resident, so
-        # the cache is scoped to one lifetime rather than to the adapter. Asked
+        # the cache is scoped to one lifetime as well as to the epoch. Asked
         # before load, the answer is "nothing" — and that must not be the answer
-        # forever after.
-        self._prompt_text = None
+        # forever after, however still the world has been since.
+        forget_prompt(self)
         try:
             box = residency.join(name, Chain(root=f"service:{name}"))
         except Exception as exc:
@@ -421,7 +422,7 @@ def _service_adapter(
     def unload(self):
         """Close the box and step away from every doorway and channel."""
         self.loaded = False
-        self._prompt_text = None
+        forget_prompt(self)
         self._poll_stop.set()
         thread, self._poll_thread = self._poll_thread, None
         if (
@@ -541,7 +542,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         base.__init__(self)
         self._sandbox_box = None
         self._token = ""
-        self._prompt_text = None
+        forget_prompt(self)
         self._stopping = threading.Event()
         self._shutdown_event = shutdown_event
 
@@ -658,7 +659,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         # Scoped to one residency, for the reason ``_load`` gives: asked while
         # the box is shut, the honest answer is "nothing", and it must not
         # outlive the shutdown that made it true.
-        self._prompt_text = None
+        forget_prompt(self)
         box, self._sandbox_box = self._sandbox_box, None
         if box is not None and box.alive:
             try:

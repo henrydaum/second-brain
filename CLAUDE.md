@@ -452,10 +452,49 @@ or in `docs/SDK.md`.
 The two cannot simply become a method, because the string form is not a
 convenience: it is *read by AST at load* and copied onto the adapter, so a
 static contribution costs no box call, while a dynamic one costs a real call
-into the guest (cached until the plugin reloads — see `_cached_prompt`). So
-`_collect` accepts either, and that tolerance is load-bearing rather than
-tidy: a string shadowing a method raises `TypeError` into `_collect`'s
-`except`, and the guidance would vanish with **no symptom at all**.
+into the guest. So `_collect` accepts either, and that tolerance is
+load-bearing rather than tidy: a string shadowing a method raises `TypeError`
+into `_collect`'s `except`, and the guidance would vanish with **no symptom at
+all**.
+
+**The shape is the declaration, and it decides two things.** Nothing needs a
+`dynamic_agent_prompt` flag: the bridge reads the AST (`_prompt_method`) and the
+native bases declare `agent_prompt: str = ""`, so `callable()` is already an
+exact answer. Writing a method *is* the statement that the text moves.
+
+*Where it lands.* A string is settled at load, so it belongs in the semi-stable
+block inside the cacheable position-0 message. A method exists because its
+answer changes, so it goes in the dynamic `[SYSTEM CONTEXT UPDATE]` block with
+the kernel's own live state — exactly the argument `_mode_suffix` already makes
+for itself. Left in the prefix, every refresh would rewrite the one message
+providers cache across a conversation, so fixing staleness would have cost a
+cache miss on every later call of the turn. `_collect` takes a `live` flag and
+`_in_scope` enumerates the populations once for both passes.
+
+*How often it is recomputed.* `_collect` runs on every **LLM call**, not once
+per turn, and for an ephemeral family every call into the guest is a fresh box —
+so `_cached_prompt` caches. It used to cache *forever*, which made the method
+shape a lie: a tool listing the scripts directory went on describing it as it
+stood when the adapter was built, including for the file the agent had just
+written. `sandbox/epoch.py` resolves both halves — one counter, bumped in
+`Interpreter._settle` when a Request that *changed* something succeeds, and the
+cache is stamped with it. A read-only stretch (read, search, think, call the
+model again — most of a turn) costs zero recomputes; one `fs.write` costs
+exactly one.
+
+Two things about that counter are load-bearing. **`llm.delta` is excluded**: it
+is a write and is *not* in `READ_ONLY`, but a streaming backend sends one per
+token, so counting them would invalidate everything on every call and silently
+undo the caching — the ledger's sandbox sink excludes it from recording for the
+same shape of reason and draws the line the same way. And **refusals do not
+count**, or `lockdown` would recompute every live prompt on every denial. It is
+global rather than per-`Request.family` on purpose: nothing declares which
+family a prompt method reads, so scoping would mean inferring the dependency,
+and over-invalidating costs one box call while under-invalidating is silently
+wrong. The lifetime resets in `residency.py` sit on top (`forget_prompt`, which
+clears text and stamp together — clearing only the text leaves the stamp
+matching): a residency's prompt is only knowable while its box is open, which
+is a question about the box rather than about the world.
 
 `_collect` and `bridge._prompt_method` answered to the old `agent_prompt_for`
 for as long as any *loadable* plugin still wrote it. That is now nothing — the

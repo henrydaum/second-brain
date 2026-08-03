@@ -519,9 +519,11 @@ def test_a_live_session_binds_auto_approve_to_its_mode(tmp_path):
 
 
 def test_the_agent_is_told_the_mode_through_the_dynamic_prompt(tmp_path):
-    """Not via ``agent_prompt`` (cached per plugin load) and not via
-    ``system_prompt_extras`` (persisted) — both go stale against a mode that
-    changes within a conversation and resets structurally."""
+    """Not via ``agent_prompt`` (a plugin's, and the mode is the kernel's) and
+    not via ``system_prompt_extras`` (persisted) — the mode changes within a
+    conversation and resets structurally, and a store package is the wrong
+    owner for a safety surface that must not stop working when it is
+    uninstalled."""
     from runtime.runtime_config import session_system_prompt
     from tests.support import make_runtime
 

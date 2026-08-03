@@ -128,3 +128,67 @@ def test_session_prompt_names_the_profile_pinned_llm(tmp_path):
     prompt = session_system_prompt(rt, session)()
     dynamic = prompt[1]["content"]
     assert "minimax/MiniMax-M3" in dynamic.split("Current model:")[1].splitlines()[0]
+
+
+# ────────────────────────────────────────────────────────────────────
+# Which block a plugin's guidance lands in
+# ────────────────────────────────────────────────────────────────────
+
+
+def _prompting_tools():
+    """Two tools contributing the same guidance in the two allowed shapes."""
+    fixed = SimpleNamespace(name="fixed", description="", parameters={},
+                            agent_prompt="GUIDANCE-FROM-A-STRING")
+    live = SimpleNamespace(name="live", description="", parameters={},
+                           agent_prompt=lambda ctx: "GUIDANCE-FROM-A-METHOD")
+    return fixed, live
+
+
+def _sections_with(tools):
+    """Build a prompt whose only in-scope plugins are these tools."""
+    from agent.system_prompt import build_prompt_sections
+
+    registry = SimpleNamespace(_visible_tools=lambda: list(tools), tools={})
+    return build_prompt_sections(None, None, registry, {})
+
+
+def test_a_fixed_contribution_stays_in_the_cacheable_prefix(data_dir):
+    """A string is settled at load, so it belongs in the position-0 message.
+
+    That message is the one providers cache across a conversation; text that
+    cannot change has no reason to leave it.
+    """
+    fixed, _ = _prompting_tools()
+    system, dynamic = _sections_with([fixed])
+
+    assert "GUIDANCE-FROM-A-STRING" in system["content"]
+    assert "GUIDANCE-FROM-A-STRING" not in dynamic["content"]
+
+
+def test_a_live_contribution_rides_in_the_dynamic_block(data_dir):
+    """A method exists because its answer moves — so it must not sit in the prefix.
+
+    Left in the position-0 message, every refresh would rewrite the one thing
+    the provider caches, and the fix for staleness would cost a cache miss on
+    every subsequent call of the conversation. This is the same argument
+    ``_mode_suffix`` makes for itself in ``runtime/runtime_config.py``.
+    """
+    _, live = _prompting_tools()
+    system, dynamic = _sections_with([live])
+
+    assert "GUIDANCE-FROM-A-METHOD" in dynamic["content"]
+    assert "GUIDANCE-FROM-A-METHOD" not in system["content"]
+
+
+def test_both_shapes_are_collected_when_both_are_present(data_dir):
+    """The partition splits the populations; it must not drop half of them.
+
+    Enumerating in-scope plugins once and collecting twice is the kind of
+    refactor where one shape silently stops arriving — the exact failure mode
+    ``_collect``'s tolerance of two shapes exists to prevent.
+    """
+    fixed, live = _prompting_tools()
+    system, dynamic = _sections_with([fixed, live])
+
+    assert "GUIDANCE-FROM-A-STRING" in system["content"]
+    assert "GUIDANCE-FROM-A-METHOD" in dynamic["content"]

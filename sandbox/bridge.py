@@ -43,7 +43,7 @@ import logging
 import types
 from pathlib import Path
 
-from . import provenance
+from . import epoch, provenance
 from .approval import describe_grant
 from .facade import Sandbox
 from .policy import Chain
@@ -557,24 +557,44 @@ def _box_prompt(plugin, name: str, method: str = "agent_prompt") -> str:
     return result.data or ""
 
 
-def _cached_prompt(plugin, produce) -> str:
-    """A plugin's system-prompt contribution, computed once.
+def forget_prompt(plugin) -> None:
+    """Drop a plugin's cached prompt contribution outright.
 
-    ``_collect`` in ``agent/system_prompt.py`` runs per turn for every in-scope
-    plugin, and for an ephemeral family every call into the guest is a *fresh
-    box* — so forwarding this uncached would cost a subprocess spawn per
-    migrated tool per turn. Caching is safe because the guest contract already
-    demands it: ``agent_prompt`` is documented as cheap, stable and landing in
-    a cacheable block.
+    For the *lifetime* resets in ``residency.py``, which are a different
+    question from the epoch's: a residency's prompt is only knowable while the
+    box is open, so opening or closing one invalidates it however still the
+    world has been.
 
-    Nothing invalidates the cache, on purpose. A changed file goes through
-    ``PluginWatcher``, which rebuilds the adapter — so a new instance is what a
-    new answer arrives on, and an adapter that outlives the edit is one nothing
-    reloaded.
+    One function because the cache is two attributes that must move together —
+    clearing only ``_prompt_text`` leaves the stamp matching, and
+    ``_cached_prompt`` would answer "" from a residency that is now loaded.
     """
-    cached = getattr(plugin, "_prompt_text", None)
-    if cached is not None:
-        return cached
+    plugin._prompt_text = None
+    plugin._prompt_epoch = None
+
+
+def _cached_prompt(plugin, produce) -> str:
+    """A plugin's system-prompt contribution, recomputed when the world moves.
+
+    ``_collect`` in ``agent/system_prompt.py`` runs on every *LLM call*, not
+    once per turn, and for an ephemeral family every call into the guest is a
+    *fresh box* — so forwarding this uncached would cost a module import, or a
+    subprocess spawn for anything foreign, per migrated plugin per iteration.
+
+    The cache used to be permanent, which made the other half wrong: a method
+    shape exists precisely because its text reads live state, so a tool that
+    lists the scripts directory went on describing the directory as it stood
+    when the adapter was built. ``epoch`` is what resolves the two — it ticks
+    only when sandboxed code *changed* something, so a read-only stretch reuses
+    the text for free and a single ``fs.write`` costs exactly one recompute.
+
+    The lifetime resets in ``residency.py`` stay on top of this: a residency's
+    prompt is only knowable while it is resident, which is a question about the
+    box rather than about the world.
+    """
+    now = epoch.value()
+    if getattr(plugin, "_prompt_epoch", None) == now:
+        return getattr(plugin, "_prompt_text", "") or ""
     try:
         text = produce() or ""
     except Exception:
@@ -582,6 +602,10 @@ def _cached_prompt(plugin, produce) -> str:
                          getattr(plugin, "name", "?"))
         text = ""
     plugin._prompt_text = text
+    # Stamped with the epoch read *before* producing: anything that changed
+    # while we were asking has to be seen next time, and a prompt method that
+    # writes would otherwise cache a stamp its own effect already invalidated.
+    plugin._prompt_epoch = now
     return text
 
 

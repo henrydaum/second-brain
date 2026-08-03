@@ -19,7 +19,7 @@ import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
 from guest.loader import unload_box
-from sandbox import Sandbox
+from sandbox import Sandbox, epoch
 from sandbox.bridge import adapt, configure, family_of
 from sandbox.validator import ERROR, validate_file
 
@@ -899,9 +899,11 @@ def test_a_prompt_contribution_is_bridged(tmp_path, box):
         text = instance.agent_prompt(SimpleNamespace(config={}, scope=None))
         assert text.startswith("## Scripts")
         assert "scripts" in text
-        # Computed once: ``_collect`` runs every turn, and for an ephemeral
-        # family every call is a fresh box.
+        # Cached against the epoch: ``_collect`` runs on every LLM call, and
+        # for an ephemeral family every call is a fresh box. The stamp is what
+        # the reuse turns on — ``_prompt_text`` alone no longer says anything.
         assert instance._prompt_text == text
+        assert instance._prompt_epoch == epoch.value()
     finally:
         unload_box("tool_advisor")
 
@@ -924,7 +926,9 @@ def test_a_plugin_that_contributes_nothing_keeps_the_base_default(tmp_path,
 
     assert instance.agent_prompt == ""
     assert not callable(instance.agent_prompt)
-    assert _collect([instance], SimpleNamespace(config={})) == ""
+    ctx = SimpleNamespace(config={})
+    assert _collect([instance], ctx, live=False) == ""
+    assert _collect([instance], ctx, live=True) == ""
 
 
 def test_the_old_prompt_spelling_contributes_nothing(tmp_path, box):
@@ -945,8 +949,10 @@ def test_the_old_prompt_spelling_contributes_nothing(tmp_path, box):
                                     "def agent_prompt_for(self, sdk)")
     module = adapt(_write(tmp_path, "tool_advisor.py", source))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    ctx = SimpleNamespace(config={}, scope=None)
     try:
-        assert _collect([instance], SimpleNamespace(config={}, scope=None)) == ""
+        assert _collect([instance], ctx, live=False) == ""
+        assert _collect([instance], ctx, live=True) == ""
     finally:
         unload_box("tool_advisor")
 
@@ -968,11 +974,161 @@ def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
     module = adapt(_write(tmp_path, "tool_word_count.py", source))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
 
+    ctx = SimpleNamespace(config={})
     assert instance.agent_prompt == "## Words\nCount them."
-    assert _collect([instance], SimpleNamespace(config={})) == "## Words\nCount them."
+    assert _collect([instance], ctx, live=False) == "## Words\nCount them."
+    # And it stays in the cacheable prefix: a fixed string has no reason to
+    # ride in the dynamic block, which is where the *live* shape goes.
+    assert _collect([instance], ctx, live=True) == ""
     # No residency was opened, and no per-instance cache was written: the
     # forwarding path was never entered.
     assert getattr(instance, "_prompt_text", None) is None
+    assert getattr(instance, "_prompt_epoch", None) is None
+
+
+# ────────────────────────────────────────────────────────────────────
+# When a live contribution is recomputed
+# ────────────────────────────────────────────────────────────────────
+
+
+def _counting_plugin():
+    """A stand-in plugin plus the number of times its prompt was produced."""
+    plugin = SimpleNamespace(name="counter")
+    calls = []
+
+    def produce():
+        """Stand in for the box call a real live prompt would cost."""
+        calls.append(1)
+        return f"answer {len(calls)}"
+
+    return plugin, calls, produce
+
+
+def test_a_live_prompt_is_not_recomputed_while_nothing_changes():
+    """The read-only stretch is most of a turn, and it must be free.
+
+    ``_collect`` runs on every LLM call, not once per turn, and for an
+    ephemeral family every call is a fresh box — a module import at least, a
+    subprocess spawn for anything foreign. An agent that reads, searches and
+    thinks across ten iterations changed nothing, so it should pay once.
+    """
+    from sandbox.bridge import _cached_prompt
+
+    plugin, calls, produce = _counting_plugin()
+    for _ in range(10):
+        assert _cached_prompt(plugin, produce) == "answer 1"
+    assert len(calls) == 1
+
+
+def test_an_effect_makes_a_live_prompt_recompute_once():
+    """And exactly once — the bump is a change signal, not a disable switch.
+
+    This is the bug the epoch exists for: the cache used to be permanent, so a
+    tool listing the scripts directory went on describing it as it stood when
+    the adapter was built, including for the file the agent had just written.
+    """
+    from sandbox.bridge import _cached_prompt
+
+    plugin, calls, produce = _counting_plugin()
+    assert _cached_prompt(plugin, produce) == "answer 1"
+
+    epoch.bump()
+    assert _cached_prompt(plugin, produce) == "answer 2"
+    assert _cached_prompt(plugin, produce) == "answer 2"
+    assert len(calls) == 2
+
+
+def test_an_emptied_contribution_expires_with_the_epoch():
+    """"" is a real answer and was cached forever; now it expires like any other.
+
+    Worth stating because the reuse test is ``is not None`` on the text: a
+    plugin that legitimately had nothing to say once would otherwise be silent
+    for the life of the adapter.
+    """
+    from sandbox.bridge import _cached_prompt
+
+    plugin = SimpleNamespace(name="quiet")
+    assert _cached_prompt(plugin, lambda: "") == ""
+    epoch.bump()
+    assert _cached_prompt(plugin, lambda: "something to say") == "something to say"
+
+
+def test_a_lifetime_reset_beats_a_still_world():
+    """``forget_prompt`` answers a question the epoch cannot.
+
+    A residency's prompt is only knowable while its box is open, so loading one
+    invalidates however still the world has been. The two attributes move
+    together deliberately: clearing only the text leaves the stamp matching,
+    and the reader would answer "" from a service that is now loaded.
+    """
+    from sandbox.bridge import _cached_prompt, forget_prompt
+
+    plugin, calls, produce = _counting_plugin()
+    assert _cached_prompt(plugin, produce) == "answer 1"
+
+    forget_prompt(plugin)
+    assert _cached_prompt(plugin, produce) == "answer 2"
+    assert len(calls) == 2
+
+
+def test_reads_do_not_tick_the_counter_and_effects_do():
+    """The whole distinction, asked of the predicate ``_settle`` calls."""
+    from guest.requests import DB_QUERY, FS_READ, FS_WRITE, Request, Result
+
+    ok = Result(ok=True)
+    assert not epoch.counts(Request(FS_READ, {}), ok)
+    assert not epoch.counts(Request(DB_QUERY, {}), ok)
+    assert epoch.counts(Request(FS_WRITE, {}), ok)
+
+
+def test_a_streamed_token_does_not_tick_the_counter():
+    """``llm.delta`` is a write, and excluding it is load-bearing.
+
+    A streaming backend sends one per token, so counting them would invalidate
+    every live prompt on every call and quietly undo the caching entirely — the
+    failure has no symptom beyond being slow, which is why it is pinned rather
+    than left to the reading of ``READ_ONLY``. The ledger's sandbox sink draws
+    the same line for the same reason.
+    """
+    from guest.requests import LLM_DELTA, READ_ONLY, Request, Result
+
+    assert LLM_DELTA not in READ_ONLY          # it really is a write
+    assert LLM_DELTA in epoch.UNCOUNTED        # and it really is excluded
+    assert not epoch.counts(Request(LLM_DELTA, {}), Result(ok=True))
+
+
+def test_settling_an_effect_ticks_the_counter():
+    """The wiring, not the predicate.
+
+    ``epoch.counts`` agreeing about ``fs.write`` proves nothing if nobody calls
+    it, and a missing bump has no symptom at all — every live prompt simply
+    goes back to being permanent, which is the bug this replaced.
+    """
+    from sandbox.interpreter import Execution, Interpreter
+    from sandbox.policy import SAFE, Chain, Decision
+    from guest.requests import FS_READ, FS_WRITE, Request, Result
+
+    interp = Interpreter()
+    execution = Execution(name="t", chain=Chain(root="user"))
+    allowed = Decision(level=SAFE, reason="test")
+
+    before = epoch.value()
+    interp._settle(execution, Request(FS_READ, {}), allowed, Result(ok=True))
+    assert epoch.value() == before, "a read changed nothing"
+
+    interp._settle(execution, Request(FS_WRITE, {}), allowed, Result(ok=True))
+    assert epoch.value() == before + 1
+
+
+def test_a_refused_effect_does_not_tick_the_counter():
+    """Nothing ran, so nothing changed.
+
+    Under ``lockdown`` every denial would otherwise force a recompute of every
+    live prompt in scope — the mode that does the least work causing the most.
+    """
+    from guest.requests import FS_WRITE, Request, Result
+
+    assert not epoch.counts(Request(FS_WRITE, {}), Result.refusal("not permitted"))
 
 
 @pytest.mark.parametrize("filename, source, base_module, base_name", [

@@ -153,12 +153,19 @@ class RecentNotes(BaseTool):
         depends on something only the running system knows.
 
         Same name as the string form on purpose — the collector accepts
-        either. This one is a real call into your box, so the kernel caches
-        the result until your plugin reloads. Keep it cheap and keep it
-        stable, and reach for the string form whenever you can.
+        either. This one is a real call into your box, so it is cached until
+        something in the system *changes*: reads are free, and any effect
+        anywhere invalidates it before the next model call. So the count below
+        is genuinely live — a conversation started this turn is reflected on
+        the agent's next call, which is the only reason to prefer this shape.
+
+        Keep it cheap: it runs on the turn thread. And never perform an effect
+        here — you would invalidate your own cache and recompute forever.
         """
+        rows = sdk.db.query("SELECT COUNT(*) AS n FROM my_conversations")
         return (f"## Recent notes\n"
-                f"Conversations live under {sdk.paths.get('data')}.")
+                f"recent_notes lists this user's conversations "
+                f"({rows[0]['n']} so far), newest first.")
 
     def run(self, sdk, limit=10):
         """Query the current user's conversations, newest first."""

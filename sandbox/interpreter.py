@@ -30,7 +30,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from . import provenance
+from . import epoch, provenance
 from .guest import protocol
 from .handlers import HANDLERS
 from .policy import Chain, Decision, classify
@@ -391,12 +391,25 @@ class Interpreter:
 
     def _settle(self, execution: Execution, request: Request,
                 decision: Decision, result: Result):
-        """Record the Request and resume the waiting code."""
+        """Record the Request, note whether it changed anything, and resume.
+
+        The epoch bump sits here for the reason the ledger sink does: this is
+        the one funnel every serviced Request passes through, so a single
+        counter can speak for the whole sandbox. Its own guard, because an
+        observer must never break a Request — ``epoch.bump`` cannot realistically
+        raise, but neither could the ledger write, and the cost of being wrong
+        is a plugin's effect failing for a bookkeeping reason.
+        """
         if self._record is not None:
             try:
                 self._record(execution.chain, request, decision, result)
             except Exception:
                 logger.exception("ledger write failed")
+        try:
+            if epoch.counts(request, result):
+                epoch.bump()
+        except Exception:
+            logger.exception("epoch bump failed")
         execution.inbox.put(result)
 
     # ──────────────────────────────────────────────────────────────

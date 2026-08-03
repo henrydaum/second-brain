@@ -1190,10 +1190,22 @@ class Scripts(BaseTool):
         return f"## Scripts\nThey go in {sdk.paths.get('scripts')}."
 ```
 
-Prefer the string. It is read from your file without importing it and costs
-nothing; the method is a real call into your box, so the result is cached until
-your plugin reloads. Either way it lands in a cacheable prompt block, so keep
-it cheap, keep it stable, and do not make Requests you could avoid.
+Prefer the string. It is read from your file without importing it, costs
+nothing, and lands in the cacheable block at the top of the prompt.
+
+The method is a real call into your box, so it is cached — but only until
+something changes. Any effect performed anywhere in the sandbox (a write, an
+install, a config change; reads do not count) invalidates it, and the next
+model call recomputes it. So a listing you build from `sdk.fs.list` is allowed
+to be genuinely live: a file the agent writes this turn shows up on the next
+call, which is the point of the shape. A live contribution rides in the dynamic
+block at the tail of the prompt rather than in the cacheable prefix, so
+refreshing it costs nothing beyond your own call.
+
+Keep it cheap anyway — it runs on the turn thread, and an agent that reads and
+thinks for ten iterations without changing anything should pay for it once.
+Never perform an *effect* from `agent_prompt`: you would invalidate your own
+cache and recompute on every call, forever.
 
 Write markdown with an `##` heading, and write it for the weakest model you
 expect to run — it is competing for attention with everything else in the
