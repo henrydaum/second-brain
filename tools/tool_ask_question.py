@@ -18,7 +18,13 @@ requests = ["ui.ask"]
 
 from guest.bases import BaseTool
 
-TYPES = {"string", "integer", "int", "number", "boolean", "array", "object"}
+#: Sorted, and spelled out again inside ``parameters`` below rather than
+#: computed into it. A declaration is read by AST and never executed, so
+#: ``"enum": sorted(TYPES)`` is not a literal — ``validator._literal`` returns
+#: None for the whole ``parameters`` dict and the bridge copies nothing, which
+#: left the model being offered this tool with *no arguments at all* and no
+#: warning anywhere. Keep both lists literal; the test below pins them equal.
+TYPES = ["array", "boolean", "int", "integer", "number", "object", "string"]
 
 DEFAULT_TIMEOUT = 300
 MAX_TIMEOUT = 3600
@@ -36,7 +42,7 @@ class AskQuestion(BaseTool):
         "properties": {
             "question": {"type": "string", "description": "Question to show the user."},
             "title": {"type": "string", "description": "Short dialog title. Defaults to 'Question for you'."},
-            "type": {"type": "string", "enum": sorted(TYPES), "description": "Expected answer type. Defaults to string."},
+            "type": {"type": "string", "enum": ["array", "boolean", "int", "integer", "number", "object", "string"], "description": "Expected answer type. Defaults to string."},
             "enum": {"type": "array", "items": {"type": "string"}, "description": "Allowed choices as plain non-empty strings. If provided, the answer must be one of these values."},
             "default": {"description": "Default value for optional blank answers."},
             "required": {"type": "boolean", "description": "Whether an answer is required. Defaults to true."},
@@ -57,7 +63,7 @@ class AskQuestion(BaseTool):
 
         answer_type = (kwargs.get("type") or "string").strip().lower()
         if answer_type not in TYPES:
-            return sdk.fail(f"type must be one of: {', '.join(sorted(TYPES))}.")
+            return sdk.fail(f"type must be one of: {', '.join(TYPES)}.")
 
         try:
             timeout = min(max(int(kwargs.get("timeout", DEFAULT_TIMEOUT)), 1),
