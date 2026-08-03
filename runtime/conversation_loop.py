@@ -1497,7 +1497,12 @@ class ConversationLoop:
                 self.on_tool_start(name, call_id, args)
             except TypeError:
                 self.on_tool_start(name)
-        return name, call_id
+        # The narration rides the returned tuple so the *finished* status can
+        # carry it too. A frontend that overwrites its started line in place (the
+        # REPL does) would otherwise lose the blurb the moment the tool returned,
+        # and the readable scrollback is the whole point of the declaration.
+        narration = args.get("narration") if isinstance(args, dict) else None
+        return name, call_id, narration
 
     def _tool_finished(self, started, result=None, error: str | None = None):
         """Internal helper to handle tool finished.
@@ -1510,8 +1515,8 @@ class ConversationLoop:
         """
         if not started or not self.on_tool_result or self._cancelled():
             return
-        name, call_id = started
+        name, call_id, narration = started
         try:
-            self.on_tool_result(name, call_id, result, error)
+            self.on_tool_result(name, call_id, result, error, narration)
         except TypeError:
             self.on_tool_result(name, (getattr(result, "data", None) or {}).get("result") if result else None)

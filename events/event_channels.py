@@ -139,7 +139,8 @@ Payload:
     session_key: str
     call_id:     str
     tool_name:   str
-    args:        dict"""
+    args:        dict — includes "narration" when the tool declared that
+                 reserved parameter and the model filled it in"""
 
 TOOL_CALL_FINISHED = "tool_call_finished"
 """The agent finished a tool call.
@@ -148,7 +149,10 @@ Payload:
     call_id:     str
     tool_name:   str
     ok:          bool
-    error:       str (optional)"""
+    error:       str (optional)
+    narration:   str (optional) — repeated from the started event, because a
+                 frontend that overwrites its status line in place no longer
+                 has the started payload to read it from"""
 
 COMMAND_CALL_STARTED = "command_call_started"
 """The runtime started a slash command.

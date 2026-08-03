@@ -165,13 +165,28 @@ class ReplFrontend(BaseFrontend):
             sdk.console.write(delta, end="")
 
     @staticmethod
+    def _narration(payload):
+        """The tool's own words about why it was called, if it declared them.
+
+        Reserved parameter name: the model fills it, the kernel strips it before
+        the tool runs, and it arrives inside ``args`` on the started event and at
+        the top level on the finished one (which has no ``args``).
+        """
+        text = payload.get("narration") or (payload.get("args") or {}).get("narration")
+        text = " ".join(str(text).split()) if text else ""
+        if not text:
+            return ""
+        return f" *{text[:77]}...*" if len(text) > 80 else f" *{text}*"
+
+    @staticmethod
     def _tool_status(sdk, payload):
         name = payload.get("tool_name") or payload.get("command_name") or "call"
+        blurb = ReplFrontend._narration(payload)
         if payload.get("status") == "started":
-            sdk.console.write(f"\n⋯ {name}...", end="")
+            sdk.console.write(f"\n⋯ {name}{blurb}...", end="")
         elif payload.get("status") == "finished":
             mark = "✓" if payload.get("ok") else "✕"
-            sdk.console.write(f"\r{mark} {name}   ")
+            sdk.console.write(f"\r{mark} {name}{blurb}   ")
 
     @staticmethod
     def _hints(field):

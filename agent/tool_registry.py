@@ -68,6 +68,20 @@ class ToolRegistry:
         """
         session_key = kwargs.pop("_session_key", None)
         user_initiated = bool(kwargs.pop("_user_initiated", False))
+        # ``narration`` is a reserved parameter name: a tool declares it in its
+        # schema so the model can say *why* it is calling, and the kernel renders
+        # that beside the status line. The tool never receives it — the kernel
+        # owns the rendering, and tool signatures are explicit by house style
+        # (``def run(self, sdk, url)``), so an unstripped kwarg is a TypeError in
+        # every tool that declares one.
+        #
+        # This pop is the single point covering native *and* sandboxed tools: it
+        # is upstream of the bridge's ``run_tool`` -> ``_forward`` -> the guest's
+        # ``run(sdk, **kwargs)``. It mutates the fresh dict built by the ``**args``
+        # unpack in ``runtime_config.tool_specs_for``, not the ``content["args"]`` the
+        # conversation loop holds — so the status payload and the history row keep
+        # the narration and only the call loses it.
+        kwargs.pop("narration", None)
         with self._lock:
             tool = self.tools.get(tool_name)
         if tool is None:

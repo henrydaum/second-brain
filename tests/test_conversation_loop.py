@@ -1080,3 +1080,100 @@ def test_a_prompt_becomes_one_user_message(monkeypatch):
         AGENT_COMPLETE, SimpleNamespace(config={}), {"prompt": "hello"})
 
     assert seen == [[{"role": "user", "content": "hello"}]]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The reserved ``narration`` parameter
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_declared_narration_never_reaches_the_tool():
+    """The kernel owns the rendering, so ``run`` must not receive the argument.
+
+    Tool signatures are explicit by house style, so an unstripped kwarg is a
+    ``TypeError`` — which ``ToolRegistry.call`` catches and reports as
+    ``ToolResult.failed``. That reads exactly like a bug in the tool, which is
+    why this is pinned rather than trusted.
+    """
+    from agent.tool_registry import ToolRegistry
+    from plugins.native.tool import BaseTool
+
+    seen = {}
+
+    class _Narrating(BaseTool):
+        """A tool that declares the reserved name."""
+
+        name = "narrating"
+        description = "Runs a command."
+        parameters = {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "narration": {"type": "string"},
+            },
+            "required": ["command"],
+        }
+
+        def run(self, context, command):
+            """Note the signature: no ``narration``."""
+            seen["command"] = command
+            return ToolResult(llm_summary="ok")
+
+    registry = ToolRegistry(None, {})
+    registry.register(_Narrating())
+
+    result = registry.call("narrating", command="git status",
+                           narration="checking what changed")
+
+    assert result.success, result.error
+    assert seen == {"command": "git status"}
+
+
+def test_the_narration_reaches_both_status_events():
+    """Started *and* finished, because a frontend may overwrite in place.
+
+    The REPL redraws its status line with ``\r``, so a narration that only
+    rode the started event would vanish the moment the tool returned — and the
+    readable scrollback is the entire point of the declaration. That failure is
+    invisible (the started line renders correctly), so it is asserted here.
+    """
+    started, finished = [], []
+    tools = {"echo": CallableSpec("echo", handler=lambda cs, actor, args: ToolResult(llm_summary="ok"))}
+    cs = _agent_state(tools=tools)
+    schema = {"type": "function", "function": {"name": "echo", "parameters": {}}}
+    llm = _FakeLLM([
+        _response(content="", tool_calls=[{
+            "id": "c1", "name": "echo",
+            "arguments": '{"text": "ping", "narration": "saying hello"}',
+        }]),
+        _response(content="Done."),
+    ])
+    loop = ConversationLoop(
+        llm, _FakeRegistry([schema]), {}, "prompt",
+        on_tool_start=lambda name, call_id, args: started.append(args),
+        on_tool_result=lambda name, call_id, result, error, narration: finished.append(narration),
+    )
+
+    loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+
+    assert started == [{"text": "ping", "narration": "saying hello"}]
+    assert finished == ["saying hello"]
+
+
+def test_a_tool_that_declares_no_narration_carries_none():
+    """The common case stays exactly as it was: no key, no blurb, no cost."""
+    finished = []
+    tools = {"echo": CallableSpec("echo", handler=lambda cs, actor, args: ToolResult(llm_summary="ok"))}
+    cs = _agent_state(tools=tools)
+    schema = {"type": "function", "function": {"name": "echo", "parameters": {}}}
+    llm = _FakeLLM([
+        _response(content="", tool_calls=[{"id": "c1", "name": "echo", "arguments": '{"text": "ping"}'}]),
+        _response(content="Done."),
+    ])
+    loop = ConversationLoop(
+        llm, _FakeRegistry([schema]), {}, "prompt",
+        on_tool_result=lambda name, call_id, result, error, narration: finished.append(narration),
+    )
+
+    loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+
+    assert finished == [None]

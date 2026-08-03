@@ -1132,6 +1132,42 @@ class Indexer(BaseTool):
 Declarations are **intent**. The kernel reads them without importing your file,
 resolves them, and clamps them. Asking for a longer timeout does not grant one.
 
+### `narration`, a reserved parameter name
+
+A tool call renders in the chat as `⋯ tool_name`. When the arguments do not say
+*why* you were called, declare a `narration` property and the model's own words
+render beside the name:
+
+```python
+class RunCommand(BaseTool):
+    name = "run_command"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "The command to run."},
+            "narration": {
+                "type": "string",
+                "description": "A few words on what you are doing and why, "
+                               "shown to the user. E.g. 'checking what "
+                               "changed since the last commit'.",
+            },
+        },
+        "required": ["command"],
+    }
+
+    def run(self, sdk, command):        # note: no `narration` parameter
+        """Run it."""
+        return sdk.proc.run(command, shell=True)
+```
+
+Three things to know. It is **optional** — leave it out of `required` so a model
+that skips it is not an error. The kernel **strips it** before calling you, so
+`run` never receives it and must not accept it. And it is **not free**: the
+narration stays in the conversation history and is re-sent on every later call of
+the turn, so declare it where the intent is genuinely invisible from the
+arguments (running a command, editing a file) and skip it where the arguments
+already say everything (reading a named path).
+
 `requests` is the exception that goes the other way: it does not grant, it
 *limits*. When a command declares `require_approval = True` and the user says
 yes, that single approval covers exactly the Request types listed here —

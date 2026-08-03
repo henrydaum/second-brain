@@ -273,11 +273,11 @@ def test_a_cancelled_turn_renders_no_tool_status():
     seen = []
     loop.on_tool_result = lambda *a: seen.append(a)
 
-    loop._tool_finished(("edit_file", "t1"), result=None, error="killed")
+    loop._tool_finished(("edit_file", "t1", None), result=None, error="killed")
     assert seen == []
 
     session.cancel_event.clear()
-    loop._tool_finished(("edit_file", "t1"), result=None, error="killed")
+    loop._tool_finished(("edit_file", "t1", None), result=None, error="killed")
     assert len(seen) == 1
 
 

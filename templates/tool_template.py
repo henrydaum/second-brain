@@ -194,9 +194,27 @@ class FetchPage(BaseTool):
         "Fetch a URL and return its body. Use when the user gives a specific "
         "link. Requires the user's approval on each new host."
     )
+    # `narration` is a reserved parameter name. A tool call renders as
+    # `⋯ fetch_page`, which says what is happening but not why — so declare this
+    # and the model's own words render beside it. Optional (keep it out of
+    # `required`), and the kernel strips it before calling you, which is why
+    # `run` below takes no `narration` argument and must not.
+    #
+    # It is not free: the narration stays in history and is re-sent on every
+    # later call of the turn. Declare it where the intent is invisible from the
+    # arguments — a URL, a shell command, a file edit — and skip it where the
+    # arguments already say everything.
     parameters = {
         "type": "object",
-        "properties": {"url": {"type": "string", "description": "The URL to fetch."}},
+        "properties": {
+            "url": {"type": "string", "description": "The URL to fetch."},
+            "narration": {
+                "type": "string",
+                "description": "A few words on what you are looking for and "
+                               "why, shown to the user. E.g. 'checking the "
+                               "changelog for the version they asked about'.",
+            },
+        },
         "required": ["url"],
     }
 

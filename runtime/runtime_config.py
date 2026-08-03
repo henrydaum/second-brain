@@ -460,7 +460,7 @@ def tool_callbacks(runtime, session_key: str | None):
                 "tool_name": name, "args": args or {},
             })
 
-    def finished(name, call_id="tc_unknown", result=None, error=None):
+    def finished(name, call_id="tc_unknown", result=None, error=None, narration=None):
         """Handle finished."""
         tool_result = (getattr(result, "data", None) or {}).get("result") if result else None
         ok = bool(result and getattr(result, "ok", False) and getattr(tool_result, "success", True) and not error)
@@ -468,9 +468,13 @@ def tool_callbacks(runtime, session_key: str | None):
         if runtime.on_tool_result:
             runtime.on_tool_result(name, tool_result)
         if runtime.emit_event:
+            # ``narration`` is repeated here rather than left to the started
+            # event: a frontend that overwrites its status line in place has
+            # nothing left of the started payload by the time this lands.
             runtime.emit_event(TOOL_CALL_FINISHED, {
                 "session_key": session_key, "call_id": call_id,
                 "tool_name": name, "ok": ok, "error": err,
+                "narration": narration,
             })
 
     return started, finished
