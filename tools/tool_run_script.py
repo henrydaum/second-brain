@@ -28,6 +28,12 @@ from guest.bases import BaseTool
 # A script that produces more than this wanted to write a file.
 MAX_RESULT_CHARS = 4000
 
+# How many scripts the prompt names. Past this the listing stops helping for a
+# reason tokens do not capture: a bare filename says nothing about what the
+# script does, so a long list is noise rather than a menu, and the entries
+# worth re-running are the recent ones. The rest stay one fs.list away.
+MAX_LISTED = 20
+
 
 class RunScript(BaseTool):
     """Run script."""
@@ -98,6 +104,8 @@ Reach for this instead of run_command. Both end up doing work on this machine, b
 Scripts persist, and that is useful — improve one across conversations rather than rewriting it each time. Pass delete_after=true only when the work is genuinely single-use.
 
 ## Scripts you have
+These sit in the directory above — join it to the name to get the path run_script wants. Most recently changed first.
+
 {_existing(sdk, scripts)}"""
         )
 
@@ -161,16 +169,39 @@ def _summarize(sdk, path, value, removed: str) -> str:
 
 
 def _existing(sdk, scripts) -> str:
-    """Whatever is already in the scripts directory.
+    """The most recent scripts in the scripts directory, by name.
 
     Listed in the prompt because the cheapest useful move is often to run one
     that already exists, and a script written three conversations ago is
-    invisible otherwise.
+    invisible otherwise. Bounded because this block is *dynamic*: written as a
+    method, it lands in the live context update rather than the cached prefix,
+    so it is paid on every model call and an unbounded directory listing grows
+    without ever being cached.
+
+    Names, not paths. The directory is stated verbatim a few lines above, so a
+    full absolute path per entry repeated it once per script — about six times
+    the characters to say the same thing.
+
+    Sorting happens kernel-side (``sort="mtime"``) but the cap does not: the
+    count of what was left out is worth more than the round trip it saves, and
+    the answer's own ``truncated`` flag is a bool that cannot supply it.
     """
     try:
-        entries = sdk.fs.list(scripts, pattern="*.py")
+        answer = sdk.fs.list(scripts, pattern="*.py", files_only=True,
+                             sort="mtime")
     except Exception:
+        # Never break the prompt over a listing. A missing directory is the
+        # ordinary case on a fresh install, not an error worth surfacing here.
         return "None yet."
-    found = [f"  {entry}" for entry in sorted(entries)
-             if not sdk.path.name(entry).startswith("_")]
-    return "\n".join(found) if found else "None yet."
+
+    names = [sdk.path.name(entry) for entry in (answer or {}).get("entries", [])]
+    found = [name for name in names if not name.startswith("_")]
+    if not found:
+        return "None yet."
+
+    shown = found[:MAX_LISTED]
+    lines = [f"  {name}" for name in shown]
+    if len(found) > len(shown):
+        lines.append(f"  ({len(found) - len(shown)} older not shown — "
+                     f"list the directory yourself to see them all.)")
+    return "\n".join(lines)
