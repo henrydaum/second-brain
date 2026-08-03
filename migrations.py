@@ -43,7 +43,7 @@ _HELPER_SPLITS = (
 #: ``main.pyw`` explains the removal of — there is no reading of those two
 #: numbers that is worth keeping, so it goes whatever it contains.
 #: ``memory.md`` is different: it was only ever ``touch``-ed empty at boot and
-#: was never the memory system (that is ``memory/``), but it sits in a folder
+#: was never the memory system (that is ``workspace/memory/``), but it sits in a folder
 #: where a person might reasonably have typed notes into a file by that name.
 #: So it goes only if it is still empty.
 _ORPHANS = (("memory.md", True), ("heartbeat", False))
@@ -55,6 +55,13 @@ _ORPHANS = (("memory.md", True), ("heartbeat", False))
 #: job here is to name the *old* spelling, which no live module may.
 _ATTACHMENTS_OLD = ("attachment_cache",)
 _ATTACHMENTS_NEW = ("workspace", "attachments")
+
+#: The memory folder, before and after it moved into the agent's own tree.
+#: Same restatement rule as the attachment cache above: this module names the
+#: *old* spelling, which no live module may. The new one must agree with
+#: ``agent.system_prompt._agent_memory`` and the store's memory tool.
+_MEMORY_OLD = ("memory",)
+_MEMORY_NEW = ("workspace", "memory")
 
 
 def migrate(data_dir: Path | None = None) -> list[str]:
@@ -71,6 +78,7 @@ def migrate(data_dir: Path | None = None) -> list[str]:
     done += _split_helpers(root)
     # After the rename, so the destination tree is already called ``workspace``.
     done += _move_attachment_cache(root)
+    done += _move_memory(root)
     done += _drop_orphans(root)
     return done
 
@@ -190,6 +198,62 @@ def _move_attachment_cache(root: Path) -> list[str]:
             if not moved:
                 done.append(f"removed empty {_ATTACHMENTS_OLD[0]}/")
     return done + _repoint_sync_directories(root)
+
+
+def _move_memory(root: Path) -> list[str]:
+    """Move ``memory/`` into the workspace tree.
+
+    Memory is the one thing the agent is asked to keep current about itself,
+    and it sat in a folder the agent had no standing write grant for — so
+    every save went through an approval dialog for a file the system's own
+    prompt tells it to maintain. Inside ``workspace/`` it inherits the
+    free-write grant, and ``MEMORY.md`` travels with the topics that index it.
+
+    Nothing in config names this path, so unlike the attachment cache there is
+    no second half to get wrong. Files move one at a time for the same reason:
+    ``workspace/`` already exists on anything that has booted once, and a
+    colliding topic name means two files that genuinely differ.
+    """
+    old = root.joinpath(*_MEMORY_OLD)
+    if not old.is_dir():
+        return []
+
+    new = root.joinpath(*_MEMORY_NEW)
+    where = "/".join(_MEMORY_NEW)
+    done: list[str] = []
+    moved = kept = 0
+    try:
+        new.mkdir(parents=True, exist_ok=True)
+        for source in sorted(old.iterdir()):
+            if not source.is_file():
+                continue
+            target = new / source.name
+            if target.exists():
+                kept += 1
+                continue
+            source.rename(target)
+            moved += 1
+    except OSError as exc:
+        return [f"! could not finish moving {_MEMORY_OLD[0]}/: {exc}"]
+
+    if moved:
+        done.append(f"{_MEMORY_OLD[0]}/ -> {where}/ ({moved} file(s))")
+    if kept:
+        done.append(f"! {kept} file(s) left in {_MEMORY_OLD[0]}/ — "
+                    f"{where}/ already holds that name")
+        return done
+    try:
+        leftovers = [p.name for p in old.iterdir()]
+    except OSError:
+        leftovers = ["?"]
+    if leftovers:
+        done.append(f"! {_MEMORY_OLD[0]}/ still holds "
+                    f"{len(leftovers)} entry(s) that are not files")
+    else:
+        shutil.rmtree(old, ignore_errors=True)
+        if not moved:
+            done.append(f"removed empty {_MEMORY_OLD[0]}/")
+    return done
 
 
 def _repoint_sync_directories(root: Path) -> list[str]:

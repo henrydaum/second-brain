@@ -51,8 +51,15 @@ the other way, because there the agent means the file it wrote.
 **A root is declared only when the kernel itself routes it.** That is the test
 to apply before adding a ninth: it is a claim that core code needs standing
 knowledge of the folder, the same question the kernel boundary asks.
-`memory/` and `bundles/` fail it — both exist because of store packages, the
-kernel names neither, and `package_manager` keeps handling them on its own.
+`bundles/` fails it — it exists because of store packages, the kernel does not
+name it, and `package_manager` keeps handling it on its own. `workspace/memory/`
+fails it differently: the kernel *does* name it (`agent.system_prompt._agent_
+memory` inlines `MEMORY.md` into the prompt), but only ever in the one tree the
+agent writes. A root is a shape every tree holds, and a bundled or installed
+`memory/` would mean nothing. It lives inside `workspace/` so the standing
+free-write grant covers the notes the prompt asks the agent to maintain —
+outside it, every save raised a dialog for a file the system itself asked for;
+`migrations._move_memory` moves an older top-level `memory/` in at boot.
 `skills/` was a third, and is gone entirely: it was the only store package that
 was a *folder* rather than a file, which cost the package manager ~50 lines of
 bespoke handling — folder-as-package install, SKILL.md frontmatter dependency

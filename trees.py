@@ -19,8 +19,12 @@ A root is declared here **only when the kernel itself routes it**. That test
 admits ``parsers/`` and ``llm/`` (kernel registries live in ``parsing/`` and
 ``llm/``) and ``scripts/`` (``script.run``, ``isolation.is_script``,
 ``policy._classify_script``) beside the five plugin families. It excludes
-``memory/`` and ``bundles/``: both exist because of store packages, the kernel
-names neither, and the package layer keeps handling them on its own. Adding a root here is a claim that core code needs standing
+``bundles/``, which exists because of store packages and which the package
+layer keeps handling on its own. It also excludes ``workspace/memory/``, which
+the kernel *does* name — ``agent.system_prompt`` inlines its ``MEMORY.md`` —
+but only ever in the one tree the agent writes: a root is a shape every tree
+holds, and a bundled or installed ``memory/`` would mean nothing. The store's
+memory tool owns everything inside it. Adding a root here is a claim that core code needs standing
 knowledge of it — the same question CLAUDE.md asks before widening the kernel
 boundary.
 
