@@ -17,3 +17,6 @@ database.db*
 .hypothesis/
 desktop.ini
 .venv
+# Dev artifacts
+agent_text.txt
+user_text.txt
