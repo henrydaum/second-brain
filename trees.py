@@ -245,6 +245,39 @@ def tree_of(path) -> Tree | None:
     return found.tree if found else None
 
 
+def attachment_cache() -> Path:
+    """Where frontends drop files a person just handed the agent.
+
+    **Inside the agent's own tree**, not beside it. A file arriving over a
+    transport is the one kind of user data the agent is unambiguously meant to
+    work on — read it, rename it, convert it, delete it once it has been dealt
+    with — and every one of those verbs was a permission dialog while the cache
+    sat at ``DATA_DIR/attachment_cache``. ``sandbox/policy.py`` had already
+    conceded the point halfway by naming the folder a scratch root, so writes
+    were free and everything else was not; putting it under ``workspace`` makes
+    the whole grant one rule instead of a rule plus an exception.
+
+    **Not a root**, and the module docstring is the test: nothing globs this
+    folder and the kernel reaches it by name, so declaring it would put an
+    empty ``attachments/`` in ``bundled/`` and ``installed/`` claiming those
+    trees might hold one. It is the same kind of directory as
+    ``workspace/temp`` — a place inside a tree rather than a shape the layout
+    repeats.
+
+    Created here rather than in :func:`materialize`, for the same reason it is
+    not a root: the layout is one shape across trees and this belongs to
+    exactly one. Failure to create it is left to the caller's own write to
+    report — a read-only install should still boot.
+    """
+    workspace = tree("workspace")
+    path = workspace.path / "attachments"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("could not create %s", path)
+    return path
+
+
 def dirs_for(root_name: str) -> tuple[tuple[Tree, Path], ...]:
     """Every local tree's ``<root_name>/`` directory, in precedence order.
 

@@ -15,7 +15,8 @@ Each entry: (title, variable_name, description, default, type_info)
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
 
-from paths import DATA_DIR, ATTACHMENT_CACHE
+import trees
+from paths import DATA_DIR
 
 # The kernel ships Timekeeper as the lightweight event clock, but no scheduled
 # jobs. Store packages register their own jobs when they need recurring work.
@@ -25,7 +26,7 @@ SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
      "Folders to monitor for new and changed files. Sub-folders are included.",
-     [str(ATTACHMENT_CACHE)],
+     [str(trees.attachment_cache())],
      {"type": "path_list"}),
 
     ("Database Path", "db_path",

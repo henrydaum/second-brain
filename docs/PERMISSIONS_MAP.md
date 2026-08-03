@@ -22,7 +22,12 @@ Do not collapse **capability**, **isolation**, and **permission** into one idea:
 
 Filesystem writes have two standing safe destinations with different owners.
 `DATA_DIR/workspace/` is the agent's own tree: it may freely create, replace,
-move, or delete anything there. `fs_writable_dirs` is a list of **user-owned**
+move, or delete anything there — including `workspace/attachments/`, where
+files sent in through a frontend are cached, and `workspace/temp/`, which is
+scratch. The attachment cache used to sit beside the tree at
+`DATA_DIR/attachment_cache` and be listed as a scratch root of its own, which
+made saving an incoming file free and reading, moving or deleting it a dialog.
+`fs_writable_dirs` is a list of **user-owned**
 folders that the user opened to the agent. A write there needs no dialog, but
 the folder is still user data and should be changed only as the task requires.
 Second Brain source and installed packages stay protected from this list even

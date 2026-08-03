@@ -296,7 +296,7 @@ On first run, Second Brain creates its data directory (the DATA_DIR) automatical
 
 From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["timekeeper"]`; the kernel-owned LLM registry loads the default profile separately.
 
-The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline. You can add multiple folders here, and they all get synced automatically. As soon as you set a sync directory, the REPL and app.log will be flooded with task status messages. Don't worry — that's the sync working as intended. It'll stop once the sync is complete. (You can use Telegram if you prefer a cleaner chat experience.)
+The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache (`DATA_DIR/workspace/attachments`) is included by default so files sent through frontends can enter the same pipeline. It sits inside the agent's own tree deliberately: a file you hand the agent is one it can then read, convert, rename or delete without a permission dialog for each step. You can add multiple folders here, and they all get synced automatically. As soon as you set a sync directory, the REPL and app.log will be flooded with task status messages. Don't worry — that's the sync working as intended. It'll stop once the sync is complete. (You can use Telegram if you prefer a cleaner chat experience.)
 
 Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Telegram enabled):
 
@@ -304,7 +304,7 @@ Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Tel
 {
   "sync_directories": [
     "C:/Users/you/Documents",
-    "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
+    "C:/Users/you/AppData/Local/Second Brain/workspace/attachments"
   ],
   "enabled_frontends": ["repl", "telegram"],
   "autoload_services": ["timekeeper"],
@@ -465,7 +465,6 @@ Second Brain/
     ├── config.json
     ├── plugin_config.json
     ├── database.db
-    ├── attachment_cache/
     ├── memory/
     ├── workspace/          # the agent-owned, freely writable tree
     │   ├── tools/
@@ -475,7 +474,9 @@ Second Brain/
     │   ├── frontends/
     │   ├── parsers/
     │   ├── llm/
-    │   └── scripts/
+    │   ├── scripts/
+    │   ├── attachments/    # files sent in from a frontend (not a tree root)
+    │   └── temp/           # scratch (not a tree root)
     └── installed/          # the package store's tree, same shape
 ```
 

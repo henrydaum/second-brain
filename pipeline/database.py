@@ -8,7 +8,7 @@ import threading
 import time
 from contextlib import contextmanager
 
-from paths import ATTACHMENT_CACHE
+import trees
 
 from . import sql_functions
 
@@ -16,7 +16,7 @@ logger = logging.getLogger("Database")
 
 # Paths under these roots are enqueued with elevated priority so the user
 # doesn't wait behind a backlog for files they just handed the agent.
-_PRIORITY_ROOTS: tuple[str, ...] = (str(ATTACHMENT_CACHE).rstrip("\\/"),)
+_PRIORITY_ROOTS: tuple[str, ...] = (str(trees.attachment_cache()).rstrip("\\/"),)
 _HIGH_PRIORITY = 100
 _DEFAULT_PRIORITY = 0
 

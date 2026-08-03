@@ -341,7 +341,14 @@ def _filesystem_access(config: dict | None) -> str:
     The distinction is security-relevant and cannot live only in static prose:
     ``fs_writable_dirs`` is configuration, so the model needs its current value
     in the same prompt that tells it what the grant means.
+
+    The attachment cache is named as its own line even though it is inside the
+    workspace path directly above it. That it is *inside* is exactly the fact
+    worth stating: an upload used to land in a folder of its own beside the
+    tree, and a model that has to infer "so I may edit this one too" from a
+    path prefix will ask instead.
     """
+    import trees
     from paths import DATA_DIR
 
     raw = (config or {}).get("fs_writable_dirs") or []
@@ -352,6 +359,8 @@ def _filesystem_access(config: dict | None) -> str:
     lines = [
         "## Filesystem access",
         f"Agent-owned workspace (free write): {DATA_DIR / 'workspace'}",
+        f"Incoming attachments land in {trees.attachment_cache()} — inside "
+        f"the workspace, so they carry the same free-write grant.",
         "User-owned writable folders (free write only when the user's task "
         "calls for it):",
     ]

@@ -24,14 +24,12 @@ else:
 
 # The mirrored code trees are declared in ``trees.py``, which imports this
 # module. Anything wanting a tree path (``trees.WORKSPACE``, ``trees.INSTALLED``)
-# or a root inside one (``trees.dirs_for("scripts")``) asks there — the layout
-# is one table, and a path spelled in two files eventually gets spelled two
-# ways.
-
-# Attachment cache: files dropped in from frontends (e.g. Telegram).
-# Registered as a sync_directory by default so the Stage_2 pipeline indexes them.
-ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"
-ATTACHMENT_CACHE.mkdir(parents=True, exist_ok=True)
+# or a directory inside one asks there — the layout is one table, and a path
+# spelled in two files eventually gets spelled two ways.
+#
+# The attachment cache used to be ``DATA_DIR/attachment_cache`` and is declared
+# here no longer: it lives in the agent's own tree now, so it is
+# ``trees.attachment_cache()``. ``migrations.py`` moves an older one across.
 
 
 def open_file(path):

@@ -291,16 +291,20 @@ def _scratch_roots() -> list:
 
     The ``workspace`` tree is here for a different reason than the rest, and
     it is the point of the whole boundary — see :func:`_authoring_root`.
+
+    The attachment cache used to be listed here as a third root, because it
+    sat at ``DATA_DIR/attachment_cache`` and a frontend has to be able to save
+    into it. That was a grant with a seam: writing an incoming file was free
+    and *reading, moving or deleting* one was a dialog, so the folder holding
+    the file a person had just handed the agent was the folder the agent could
+    do least with. It lives under ``workspace`` now
+    (``trees.attachment_cache()``), so the entry is gone rather than moved —
+    the authoring root below already covers it, and one rule that covers a
+    case beats a rule plus an exception that happens to agree.
     """
     roots = []
     if (authoring := _authoring_root()) is not None:
         roots.append(authoring / "temp")
-    try:
-        from paths import ATTACHMENT_CACHE
-        roots.append(Path(ATTACHMENT_CACHE))
-    except Exception:
-        pass
-    if authoring is not None:
         roots.append(authoring)
     return [r for r in roots if r]
 

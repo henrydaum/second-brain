@@ -2,21 +2,24 @@
 Attachment cache.
 
 Front-door for files that arrive from frontends (e.g. Telegram) rather than
-from a user-controlled sync directory. Writes each attachment to ATTACHMENT_CACHE
-with a stable, unique filename, then runs LRU eviction to keep the folder
-under a configured size cap.
+from a user-controlled sync directory. Writes each attachment to
+``trees.attachment_cache()`` with a stable, unique filename, then runs LRU
+eviction to keep the folder under a configured size cap.
 
 The cache folder is registered as a sync_directory by default (see config_data.py),
 so the Stage_2 watcher picks up saved files and drives them through the normal
 pipeline (extract_text, chunk, embed, OCR, lexical index).
+
+It sits inside the agent's own tree (``DATA_DIR/workspace/attachments``), which
+is what lets the agent work on what it was handed without a dialog per verb —
+see :func:`trees.attachment_cache`.
 """
 
 import logging
 import re
 import time
-from pathlib import Path
 
-from paths import ATTACHMENT_CACHE
+import trees
 
 logger = logging.getLogger("AttachmentCache")
 
@@ -44,13 +47,14 @@ def save(filename_hint: str, data: bytes, size_cap_gb: float = 2.0) -> Path:
     insertion order and collisions are impossible within the same second.
     Triggers LRU eviction after writing.
     """
+    directory = trees.attachment_cache()
     ts = int(time.time())
     safe = _sanitize(filename_hint)
-    path = ATTACHMENT_CACHE / f"{ts}_{safe}"
+    path = directory / f"{ts}_{safe}"
 
     n = 1
     while path.exists():
-        path = ATTACHMENT_CACHE / f"{ts}_{n}_{safe}"
+        path = directory / f"{ts}_{n}_{safe}"
         n += 1
 
     path.write_bytes(data)
@@ -62,7 +66,10 @@ def save(filename_hint: str, data: bytes, size_cap_gb: float = 2.0) -> Path:
 
 def _evict_if_over_cap(cap_bytes: int) -> None:
     """Internal helper to handle evict if over cap."""
-    entries = [(p, p.stat()) for p in ATTACHMENT_CACHE.iterdir() if p.is_file()]
+    directory = trees.attachment_cache()
+    if not directory.is_dir():
+        return
+    entries = [(p, p.stat()) for p in directory.iterdir() if p.is_file()]
     total = sum(st.st_size for _, st in entries)
     if total <= cap_bytes:
         return
