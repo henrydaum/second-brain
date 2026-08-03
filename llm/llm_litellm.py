@@ -14,6 +14,20 @@ genuinely per-process: the imported library.
 
 dependencies_pip = ["litellm", "Pillow"]
 lifetime = "persistent"
+
+# The kernel's default per-call deadline is 60s, and this is the one plugin it
+# is wrong for. A deadline measures *running* time, discounting only what the
+# guest spends waiting on the kernel — but this box waits on a provider's
+# socket inside litellm, which is "something the guest chose to do itself" and
+# so is charged in full. Streaming does not help: `sdk.llm.delta` is a one-way
+# notice, so a box emitting tokens for two minutes accrues two minutes of
+# running time and is killed mid-answer, surfacing as
+# `box 'llm_..._0' died during '__chat__'`.
+#
+# 600 is the ceiling `clamp_timeout` will grant. Note the wall-clock
+# `watchdog.HARD_CEILING` is also 600 and is *not* declarable, so ten minutes
+# is the real limit on one model call however this is set.
+timeout = 600
 supports_streaming = True
 supports_tool_choice = True
 native_modalities = ["image", "audio", "video"]
