@@ -30,10 +30,11 @@ BACKUP_DIRNAME = "backups"
 DB_MEMBER = "database.db"
 MANIFEST_MEMBER = "manifest.json"
 # What a backup contains, relative to DATA_DIR. Missing entries are skipped.
-# attachment_cache/ (bulky, re-syncable), app.log*, heartbeat, desktop.ini
-# and backups/ itself are deliberately excluded.
+# app.log*, heartbeat, desktop.ini and backups/ itself are deliberately
+# excluded. ``memory/`` is not listed because it lives inside ``workspace/``
+# now; a pre-move DATA_DIR is migrated before anything can back it up.
 SCOPE_FILES = ("config.json", "plugin_config.json")
-SCOPE_DIRS = ("memory", "workspace", "installed")
+SCOPE_DIRS = ("workspace", "installed")
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
