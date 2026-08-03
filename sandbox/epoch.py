@@ -31,17 +31,29 @@ from __future__ import annotations
 
 import threading
 
-from .guest.requests import LLM_DELTA, READ_ONLY
+from .guest.requests import CONSOLE_WRITE, LLM_DELTA, READ_ONLY, UI_RENDER
 
-#: Requests that do not tick the counter.
+#: Showing the agent's output to a person. Writes, all three, and none of them
+#: in ``READ_ONLY`` — but **rendering is not a change**: they move text to a
+#: screen and produce no state any system prompt could read back.
 #:
-#: Reads, by definition — they change nothing. Plus ``llm.delta``, which is a
-#: *write* and is not in ``READ_ONLY``, but which a streaming backend sends once
-#: per token: thousands of bumps per reply would invalidate every cached prompt
-#: on every call and quietly undo the whole point of caching. The ledger's
-#: sandbox sink excludes it from recording for the same shape of reason and
-#: draws the line the same way (``runtime/ledger.py``).
-UNCOUNTED = READ_ONLY | {LLM_DELTA}
+#: Excluding them is load-bearing rather than tidy, because the volume is
+#: per-token. A streaming backend sends one ``llm.delta`` per token, and the
+#: frontend rendering that stream sends one ``console.write`` per token right
+#: behind it (``bundled/frontends/frontend_repl.py``). Counting either would
+#: tick thousands of times per reply, so every live ``agent_prompt`` would
+#: recompute on every model call and the caching would be undone entirely —
+#: with no symptom beyond being slow, which is why the set is named and pinned
+#: rather than left to the reading of ``READ_ONLY``.
+#:
+#: ``llm.delta`` alone was the first version of this and was not enough: the
+#: two halves of one stream arrive as different Request types, and excluding
+#: the backend's half while counting the frontend's fixed nothing.
+RENDERING = {LLM_DELTA, CONSOLE_WRITE, UI_RENDER}
+
+#: Requests that do not tick the counter: reads, which change nothing by
+#: definition, plus the rendering family above.
+UNCOUNTED = READ_ONLY | RENDERING
 
 _lock = threading.Lock()
 _epoch = 0

@@ -1081,20 +1081,56 @@ def test_reads_do_not_tick_the_counter_and_effects_do():
     assert epoch.counts(Request(FS_WRITE, {}), ok)
 
 
-def test_a_streamed_token_does_not_tick_the_counter():
-    """``llm.delta`` is a write, and excluding it is load-bearing.
+def test_showing_output_to_a_person_does_not_tick_the_counter():
+    """Rendering is a write, and excluding the whole family is load-bearing.
 
-    A streaming backend sends one per token, so counting them would invalidate
-    every live prompt on every call and quietly undo the caching entirely — the
-    failure has no symptom beyond being slow, which is why it is pinned rather
-    than left to the reading of ``READ_ONLY``. The ledger's sandbox sink draws
-    the same line for the same reason.
+    The volume is per *token*: a streaming backend sends one ``llm.delta`` each,
+    and the frontend rendering that stream sends one ``console.write`` right
+    behind it. Counting either ticks thousands of times per reply, so every live
+    prompt recomputes on every model call and the caching is undone — with no
+    symptom beyond being slow, which is why this is pinned rather than left to
+    the reading of ``READ_ONLY``.
+
+    Pinned as a family rather than as ``llm.delta`` alone because that was the
+    first version and it was not enough: the two halves of one stream arrive as
+    different Request types, and excluding the backend's while counting the
+    frontend's fixed nothing at all.
     """
-    from guest.requests import LLM_DELTA, READ_ONLY, Request, Result
+    from guest.requests import READ_ONLY, Request, Result
 
-    assert LLM_DELTA not in READ_ONLY          # it really is a write
-    assert LLM_DELTA in epoch.UNCOUNTED        # and it really is excluded
-    assert not epoch.counts(Request(LLM_DELTA, {}), Result(ok=True))
+    for kind in epoch.RENDERING:
+        assert kind not in READ_ONLY, f"{kind} really is a write"
+        assert kind in epoch.UNCOUNTED, f"{kind} must not tick"
+        assert not epoch.counts(Request(kind, {}), Result(ok=True))
+
+
+def test_a_streamed_reply_does_not_invalidate_a_live_prompt():
+    """The bug the ``RENDERING`` family exists for, stated end to end.
+
+    A hundred-token reply settles two hundred Requests — the backend's deltas
+    and the frontend's echo of them — and none of them changed anything the
+    agent could read. If any ticks, the next model call recomputes every live
+    prompt, and the interactive case (streaming, which is the default) pays a
+    box run per plugin per iteration forever.
+    """
+    from sandbox.bridge import _cached_prompt
+    from sandbox.interpreter import Execution, Interpreter
+    from sandbox.policy import SAFE, Chain, Decision
+    from guest.requests import CONSOLE_WRITE, LLM_DELTA, Request, Result
+
+    plugin, calls, produce = _counting_plugin()
+    assert _cached_prompt(plugin, produce) == "answer 1"
+
+    interp = Interpreter()
+    execution = Execution(name="t", chain=Chain(root="user"))
+    allowed = Decision(level=SAFE, reason="test")
+    for _ in range(100):
+        for kind in (LLM_DELTA, CONSOLE_WRITE):
+            interp._settle(execution, Request(kind, {"text": "x"}),
+                           allowed, Result(ok=True))
+
+    assert _cached_prompt(plugin, produce) == "answer 1"
+    assert len(calls) == 1
 
 
 def test_settling_an_effect_ticks_the_counter():
