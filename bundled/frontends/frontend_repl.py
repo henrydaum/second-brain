@@ -168,15 +168,11 @@ class ReplFrontend(BaseFrontend):
     def _narration(payload):
         """The tool's own words about why it was called, if it declared them.
 
-        Reserved parameter name: the model fills it, the kernel strips it before
-        the tool runs, and it arrives inside ``args`` on the started event and at
-        the top level on the finished one (which has no ``args``).
+        Already collapsed and capped by the kernel, which is the only place
+        that policy lives — this just styles it.
         """
-        text = payload.get("narration") or (payload.get("args") or {}).get("narration")
-        text = " ".join(str(text).split()) if text else ""
-        if not text:
-            return ""
-        return f" *{text[:77]}...*" if len(text) > 80 else f" *{text}*"
+        text = payload.get("narration") or ""
+        return f" *{text}*" if text else ""
 
     @staticmethod
     def _tool_status(sdk, payload):

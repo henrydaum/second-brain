@@ -1177,3 +1177,40 @@ def test_a_tool_that_declares_no_narration_carries_none():
     loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
 
     assert finished == [None]
+
+
+def test_both_status_events_carry_the_narration_at_the_top_level():
+    """The bug this exists for: Telegram rendered no blurb at all.
+
+    Each frontend has its own status renderer, so anything a renderer has to
+    *derive* gets derived differently in each one — or, as happened here, not
+    at all. The narration is lifted out of ``args`` and normalized once, so a
+    renderer reads one key on both events and only decides styling.
+    """
+    from runtime.runtime_config import tool_blurb, tool_callbacks
+
+    emitted = []
+    runtime = SimpleNamespace(
+        on_tool_start=None, on_tool_result=None,
+        emit_event=lambda channel, payload: emitted.append((channel, payload)))
+    started, finished = tool_callbacks(runtime, "repl:1")
+
+    started("run_command", "c1", {"command": "git status",
+                                  "narration": "checking  what\nchanged"})
+    finished("run_command", "c1", narration="checking  what\nchanged")
+
+    keys = [payload["narration"] for _, payload in emitted]
+    assert keys == ["checking what changed", "checking what changed"]
+    # ...and the verbatim call is still intact for anyone who wants it.
+    assert emitted[0][1]["args"]["narration"] == "checking  what\nchanged"
+
+
+def test_an_overlong_narration_is_capped_before_any_frontend_sees_it():
+    """Capping is policy, so it happens once rather than in each renderer."""
+    from runtime.runtime_config import tool_blurb
+
+    assert tool_blurb("  spaced   out \n words ") == "spaced out words"
+    assert tool_blurb(None) == ""
+    assert tool_blurb("") == ""
+    assert len(tool_blurb("x" * 500)) == 80
+    assert tool_blurb("x" * 500).endswith("...")

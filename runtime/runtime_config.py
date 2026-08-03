@@ -448,6 +448,19 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
     )
 
 
+def tool_blurb(raw) -> str:
+    """The declared ``narration``, normalized once for every frontend.
+
+    Collapsing whitespace and capping the length is *policy*, not styling, so
+    it belongs here rather than in each renderer: a model is perfectly capable
+    of writing a paragraph into a status line, and a frontend that forgot to
+    cap it would wrap somebody's chat. Styling stays with the frontend, which
+    is why this answers with a bare string and no markup.
+    """
+    text = " ".join(str(raw).split()) if raw else ""
+    return f"{text[:77]}..." if len(text) > 80 else text
+
+
 def tool_callbacks(runtime, session_key: str | None):
     """Handle tool callbacks."""
     def started(name, call_id="tc_unknown", args=None):
@@ -455,9 +468,16 @@ def tool_callbacks(runtime, session_key: str | None):
         if runtime.on_tool_start:
             runtime.on_tool_start(name)
         if runtime.emit_event:
+            # ``narration`` is lifted out of ``args`` to the top level so both
+            # events name it in the same place. It stays in ``args`` too, since
+            # that is the model's verbatim call — but a frontend reading it
+            # from there on one event and the top level on the other is a
+            # difference nobody remembers, and getting it wrong shows up as a
+            # blurb that renders until the tool returns and then disappears.
             runtime.emit_event(TOOL_CALL_STARTED, {
                 "session_key": session_key, "call_id": call_id,
                 "tool_name": name, "args": args or {},
+                "narration": tool_blurb((args or {}).get("narration")),
             })
 
     def finished(name, call_id="tc_unknown", result=None, error=None, narration=None):
@@ -474,7 +494,7 @@ def tool_callbacks(runtime, session_key: str | None):
             runtime.emit_event(TOOL_CALL_FINISHED, {
                 "session_key": session_key, "call_id": call_id,
                 "tool_name": name, "ok": ok, "error": err,
-                "narration": narration,
+                "narration": tool_blurb(narration),
             })
 
     return started, finished

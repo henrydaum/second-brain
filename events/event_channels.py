@@ -139,8 +139,9 @@ Payload:
     session_key: str
     call_id:     str
     tool_name:   str
-    args:        dict — includes "narration" when the tool declared that
-                 reserved parameter and the model filled it in"""
+    args:        dict — the model's verbatim call, narration included
+    narration:   str — the declared "narration" argument, collapsed and capped
+                 by ``runtime_config.tool_blurb``; "" when not declared"""
 
 TOOL_CALL_FINISHED = "tool_call_finished"
 """The agent finished a tool call.
@@ -150,7 +151,7 @@ Payload:
     tool_name:   str
     ok:          bool
     error:       str (optional)
-    narration:   str (optional) — repeated from the started event, because a
+    narration:   str — byte-identical to the started event's, because a
                  frontend that overwrites its status line in place no longer
                  has the started payload to read it from"""
 
