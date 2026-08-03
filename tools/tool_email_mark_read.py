@@ -16,6 +16,7 @@ class EmailMarkRead(BaseTool):
         "properties": {
             "message_id": {"type": "string"},
             "unread": {"type": "boolean", "default": False},
+            "narration": {"type": "string", "description": "A few words on which message and why, shown to the user beside the call. E.g. 'marking the newsletter read'."},
         },
         "required": ["message_id"],
     }

@@ -124,6 +124,14 @@ class Memory(BaseTool):
                 "type": "string",
                 "description": "One-line index hook for save/append — what this topic holds and when to read it.",
             },
+            "narration": {
+                "type": "string",
+                "description": (
+                    "A few words on what you are recording and why, shown to "
+                    "the user beside the call. E.g. 'noting their preference "
+                    "for short summaries'."
+                ),
+            },
         },
         "required": ["action", "topic"],
     }

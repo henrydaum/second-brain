@@ -38,6 +38,7 @@ class EmailCheck(BaseTool):
             "query": {"type": "string", "description": "Raw Gmail query for custom scope."},
             "limit": {"type": "integer", "default": 20},
             "include_body": {"type": "boolean", "default": False},
+            "narration": {"type": "string", "description": "A few words on what you are looking for and why, shown to the user beside the call. E.g. 'checking for the reply from the accountant'."},
         },
         "required": [],
     }

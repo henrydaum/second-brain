@@ -72,6 +72,14 @@ class RunScript(BaseTool):
                     "improving."
                 ),
             },
+            "narration": {
+                "type": "string",
+                "description": (
+                    "A few words on what the script does and why, shown to "
+                    "the user beside the call. E.g. 'tallying every note "
+                    "written since April'."
+                ),
+            },
         },
         "required": ["path"],
     }

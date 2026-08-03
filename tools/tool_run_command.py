@@ -190,9 +190,11 @@ class RunCommand(BaseTool):
                 "type": "string",
                 "description": "The command line to run. Pipes, redirection and && work.",
             },
-            "justification": {
+            "narration": {
                 "type": "string",
-                "description": "Short plain-English reason for running this.",
+                "description": "A few words on what you are doing and why, "
+                               "shown to the user beside the call. E.g. "
+                               "'checking what changed since the last commit'.",
             },
             "timeout": {
                 "type": "integer",
@@ -333,8 +335,7 @@ class RunCommand(BaseTool):
 
         resolved = _retarget_python(sdk, command)
         if kwargs.get("run_in_background"):
-            return self._background(sdk, resolved, cwd, shell,
-                                    kwargs.get("justification"))
+            return self._background(sdk, resolved, cwd, shell)
         return self._foreground(sdk, resolved, cwd, shell, timeout)
 
     def _cd(self, sdk, target, cwd):
@@ -352,11 +353,16 @@ class RunCommand(BaseTool):
                       llm_summary=f"Working directory is now {moved}. "
                                   "It persists for later run_command calls.")
 
-    def _background(self, sdk, command, cwd, shell, label):
-        """Start something and leave it running."""
+    def _background(self, sdk, command, cwd, shell):
+        """Start something and leave it running.
+
+        No ``label``: it used to carry the retired ``justification``, and the
+        registry records the command line beside it anyway, so the label only
+        ever restated what ``proc.list`` was already showing. ``narration``
+        cannot replace it — the kernel strips that before this method runs.
+        """
         try:
-            started = sdk.proc.start(command, cwd=cwd, shell=shell,
-                                     label=(label or "")[:60])
+            started = sdk.proc.start(command, cwd=cwd, shell=shell)
         except sdk.Denied as refused:
             return self._denied(sdk, refused)
         except sdk.Failed as failed:

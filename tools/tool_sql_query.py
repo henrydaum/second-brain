@@ -69,6 +69,14 @@ class SQLQuery(BaseTool):
                     "plugin-owned tables only."
                 ),
             },
+            "narration": {
+                "type": "string",
+                "description": (
+                    "A few words on what you are looking up and why, shown to "
+                    "the user beside the call. E.g. 'counting the notes written "
+                    "since April'."
+                ),
+            },
         },
         "required": ["sql"],
     }

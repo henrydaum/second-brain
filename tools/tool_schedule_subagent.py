@@ -45,6 +45,7 @@ class ScheduleSubagent(BaseTool):
             "cron": {"type": "string", "description": "Cron expression. Required for add; optional for edit."},
             "one_time": {"type": "boolean", "description": "If true, run once at the next cron match.", "default": False},
             "attachments": {"type": "array", "description": "Optional file paths to attach to each run.", "items": {"type": "string"}},
+            "narration": {"type": "string", "description": "A few words on what you are scheduling and why, shown to the user beside the call. E.g. 'setting up the nightly inbox summary'."},
         },
         "required": ["operation"],
     }

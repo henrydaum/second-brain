@@ -66,6 +66,14 @@ class WebSearch(BaseTool):
                 "type": "string",
                 "description": "Optional freshness filter for search mode such as pd, pw, pm, or py.",
             },
+            "narration": {
+                "type": "string",
+                "description": (
+                    "A few words on what you are looking for and why, shown to "
+                    "the user beside the call. E.g. 'checking today's AI "
+                    "datacenter coverage'."
+                ),
+            },
         },
         "required": ["query"],
     }

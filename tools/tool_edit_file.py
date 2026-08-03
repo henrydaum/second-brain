@@ -105,9 +105,9 @@ class EditFile(BaseTool):
             "old_text": {"type": "string", "description": "Exact text to replace."},
             "new_text": {"type": "string", "description": "Replacement text."},
             "replace_all": {"type": "boolean", "description": "Replace every occurrence instead of requiring exactly one match."},
-            "justification": {"type": "string", "description": "Short plain-English reason for the edit. Recorded in the action ledger."},
+            "narration": {"type": "string", "description": "A few words on what you are changing and why, shown to the user beside the call. E.g. 'adding the missing null check'."},
         },
-        "required": ["operation", "path", "justification"],
+        "required": ["operation", "path"],
     }
     requires_services = []
     plan_mode_safe = False
@@ -122,12 +122,9 @@ class EditFile(BaseTool):
         the model needs to be told to stop rather than retry.
         """
         op = (kwargs.get("operation") or "").strip().lower()
-        justification = (kwargs.get("justification") or "").strip()
         path, err = _resolve(sdk, kwargs.get("path", ""))
         if err:
             return sdk.fail(err)
-        if not justification:
-            return sdk.fail("A justification is required for every edit.")
 
         try:
             if op == "delete":

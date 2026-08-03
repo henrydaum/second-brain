@@ -33,6 +33,14 @@ class ManagePackages(BaseTool):
                 "type": "string",
                 "description": "Package or bundle ID; optional substring for search.",
             },
+            "narration": {
+                "type": "string",
+                "description": (
+                    "A few words on what you are installing and why, shown to "
+                    "the user beside the call. E.g. 'adding PDF parsing so I "
+                    "can read the attachment'."
+                ),
+            },
         },
         "required": ["action"],
     }

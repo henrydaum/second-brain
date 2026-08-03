@@ -46,6 +46,7 @@ class EmailSend(BaseTool):
             "to": {"type": "string"}, "cc": {"type": "string"},
             "subject": {"type": "string"}, "body": {"type": "string"},
             "attachments": {"type": "array", "items": {"type": "string"}},
+            "narration": {"type": "string", "description": "A few words on what you are sending and to whom, shown to the user beside the call. E.g. 'replying to Sarah about Thursday'."},
         },
         "required": ["body"],
     }

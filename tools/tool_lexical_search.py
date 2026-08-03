@@ -63,6 +63,14 @@ class LexicalSearch(BaseTool):
                 "type": "string",
                 "description": "Filter results to files under this folder path.",
             },
+            "narration": {
+                "type": "string",
+                "description": (
+                    "A few words on what you are looking for and why, shown to "
+                    "the user beside the call. E.g. 'finding the notes about "
+                    "the Berlin trip'."
+                ),
+            },
         },
         "required": ["query"],
     }

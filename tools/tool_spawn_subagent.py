@@ -38,6 +38,7 @@ class SpawnSubagent(BaseTool):
             "attachments": {"type": "array", "items": {"type": "string"}, "description": "Optional file paths to attach."},
             "wait": {"type": "boolean", "description": "true (default): block and return the result. false: run in the background and continue."},
             "timeout_seconds": {"type": "integer", "description": "Max seconds the agent may run before it is cancelled. Capped by the subagent_timeout_seconds setting (default 300)."},
+            "narration": {"type": "string", "description": "A few words on what you are delegating and why, shown to the user beside the call. E.g. 'sending an agent to read the three long PDFs'."},
         },
         "required": ["prompt"],
     }

@@ -58,6 +58,7 @@ class EmailModifyLabels(BaseTool):
             "message_id": {"type": "string"},
             "add": {"type": "array", "items": {"type": "string"}, "default": []},
             "remove": {"type": "array", "items": {"type": "string"}, "default": []},
+            "narration": {"type": "string", "description": "A few words on which message and why, shown to the user beside the call. E.g. 'filing the invoice under Receipts'."},
         },
         "required": ["message_id"],
     }

@@ -18,6 +18,7 @@ class SlashCommand(BaseTool):
         "properties": {
             "name": {"type": "string", "description": "Command without leading slash."},
             "args": {"type": "object", "description": "Structured command arguments."},
+            "narration": {"type": "string", "description": "A few words on what you are running and why, shown to the user beside the call. E.g. 'checking which models are configured'."},
         },
         "required": ["name"],
     }
