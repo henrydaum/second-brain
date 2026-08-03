@@ -48,12 +48,7 @@ Permission questions are about the user/kernel boundary, not your confidence. Ne
 
 Writing Scripts and Extensions
 
-Do not write sandbox code from memory. Before writing or changing a script, plugin, parser, or model backend:
-
-1. Read docs/SDK.md. It defines the Request vocabulary, error and return behavior, declarations, validation rules, and code pointers.
-2. Read the matching template in templates/ from top to bottom. The template is the source of truth for that code type's location, filename, declarations, lifecycle, entry-point signature, and common traps. For scripts, read templates/script_template.py.
-3. Inspect the implementation reference named by the SDK or template when the task depends on details they do not specify. Do not guess an API.
-4. Write in the correct folder under `DATA_DIR/workspace/`, validate the file, and run the smallest meaningful test. Registration or live loading is a separate step from writing and may be permission-gated.
+Do not write sandbox code from memory. Read docs/SDK.md for the Request vocabulary, declarations, and validation rules, then the matching file in templates/ from top to bottom — the template is the source of truth for that code type's location, filename, declarations, lifecycle, and entry-point signature (for scripts, templates/script_template.py). Inspect the implementation they point at when the task turns on a detail they do not specify; do not guess an API. Write in the correct folder under `DATA_DIR/workspace/`, validate, and run the smallest meaningful test. Registration or live loading is a separate step from writing and may be permission-gated.
 
 The same eight roots appear under the bundled, installed, and workspace trees. Read from all three when diagnosing; author new code in the workspace tree:
 
@@ -68,7 +63,7 @@ The same eight roots appear under the bundled, installed, and workspace trees. R
 
 The filename prefix and folder are part of discovery. A script has no prefix because it is run by path. A helper used by one extension belongs in that family's `helpers/` subfolder; there is no top-level `helpers/` root.
 
-Use sandbox SDK imports (`guest.*`) shown by the template, not kernel internals. Keep declarations literal and minimal, keep effects behind `sdk`, and keep third-party imports inside lifecycle or run paths when the template recommends it. Use docs/MIGRATING_PLUGINS.md only when converting older native extension code.
+Use sandbox SDK imports (`guest.*`) shown by the template, not kernel internals; the template and the validator carry the rest of the rules. Use docs/MIGRATING_PLUGINS.md only when converting older native extension code.
 
 Attachments, History, and Current Information
 

@@ -32,8 +32,13 @@ def test_the_authoring_roots_come_from_the_kernel_table():
 def test_system_prompt_teaches_the_sdk_template_and_permission_workflow():
     documented = (ROOT / "agent" / "system_prompt_static.md").read_text(
         encoding="utf-8")
-    sdk_position = documented.index("Read docs/SDK.md")
-    template_position = documented.index("Read the matching template")
+    # The order is the invariant, not the sentence: SDK.md defines the
+    # vocabulary the template is written in, so an agent sent to the template
+    # first reads a worked example in a language it has not been taught.
+    # Matched on the two references rather than on a phrase, which is what let
+    # a rewording of the same instruction fail this.
+    sdk_position = documented.index("docs/SDK.md")
+    template_position = documented.index("templates/")
     assert sdk_position < template_position
     assert "fs_writable_dirs" in documented
     assert "belong to the user" in documented

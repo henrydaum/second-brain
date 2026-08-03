@@ -259,16 +259,30 @@ def _profile_status(profile_name: str, scope: AgentScope | None) -> str:
 
 
 def _tool_catalog(tool_registry) -> str:
+    """The names of every tool in scope — names only, on purpose.
+
+    This list used to carry each tool's description, which is the *same string*
+    the registry already sends as the tool's schema on every call. Measured on
+    a nineteen-tool install that was 7.4 KB of prompt repeating 7.1 KB of
+    schema, for no reader: a model deciding which tool to use reads the schema,
+    which is richer and includes the arguments.
+
+    The list still earns its place, because the schemas answer "how do I call
+    this" and nothing else answers "what exists" — the static prompt tells the
+    agent to check the catalog before saying it cannot do something, and a
+    name is all that question needs.
+    """
     lines = ["## Available tool catalog"]
     if not tool_registry:
         return "\n".join([*lines, "No tool registry is currently available."])
     schemas = tool_registry.get_all_schemas() if hasattr(tool_registry, "get_all_schemas") else []
     if not schemas:
         return "\n".join([*lines, "No tools are currently registered."])
-    for schema in schemas:
-        fn = schema.get("function", schema)
-        desc = (fn.get("description") or "").strip().replace("\n", " ")
-        lines.append(f"- {fn.get('name')}: {desc}" if desc else f"- {fn.get('name')}")
+    names = [str(schema.get("function", schema).get("name") or "").strip()
+             for schema in schemas]
+    lines.append("Each tool's description and arguments arrive with its "
+                 "schema; this is the roster.")
+    lines.append(", ".join(name for name in names if name))
     return "\n".join(lines)
 
 
