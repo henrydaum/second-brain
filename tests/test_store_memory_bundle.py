@@ -146,6 +146,26 @@ def test_the_curator_is_also_swept_because_a_crash_emits_nothing():
     assert jobs["memory_reflect_sweep"]["cron"] == "0 * * * *"
 
 
+def test_the_curator_does_not_react_to_its_own_children():
+    """One conversation ending produced four runs, and this is why.
+
+    A subagent gets its own conversation and closes its session when it is
+    done, so every curator completion emits the same channel that spawned it.
+    Unfiltered, the curator's own transcript reads as a conversation that has
+    gone quiet — so it reflects on itself, spawns another curator, and only
+    stops when a transcript happens to fall under the message floor.
+
+    Both guards matter and they cover different paths: the session key is
+    available on the event, and the category is what the hourly sweep sees when
+    it meets a finished curator's conversation with no event to inspect.
+    """
+    from runtime.subagents import SESSION_PREFIX
+
+    source = _source_or_skip(TASK)
+    assert SESSION_PREFIX in source, "the event path must skip child sessions"
+    assert "<> 'Subagent'" in source, "the sweep path must skip child conversations"
+
+
 def test_the_watermark_is_a_table_the_task_owns():
     """The watermark is what makes reflection idempotent.
 

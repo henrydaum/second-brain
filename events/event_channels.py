@@ -340,8 +340,20 @@ out from under it. A crash emits nothing, so a consumer that must not lose work
 needs its own idempotent record of what it has already handled rather than
 treating this as exactly-once.
 
+**Subagents end conversations too, and this is the trap.** A spawned child gets
+its own conversation and closes its session when it finishes
+(``runtime/subagents.py`` ``_run``), so every subagent completion emits here.
+A consumer that *spawns* an agent in response to this channel therefore feeds
+itself: the child it started closes, that emit arrives, and the consumer reacts
+to its own work. Filter on ``session_key`` — a child's key starts with
+``spawn_subagent:`` (``subagents.is_subagent_session``) — and on the
+conversation's ``Subagent`` category for anything the sweep-style backstop
+might pick up later. The channel reports every ending on purpose rather than
+hiding the children, because "which endings count" is the consumer's question,
+not the kernel's.
+
 Payload:
-    session_key:     str
+    session_key:     str — ``spawn_subagent:<cid>`` for a child
     conversation_id: int — the one being left
     user_id:         int
     reason:          str — 'switched' | 'closed' | 'deleted'"""
