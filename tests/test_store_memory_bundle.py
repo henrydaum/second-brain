@@ -166,6 +166,26 @@ def test_the_curator_does_not_react_to_its_own_children():
     assert "<> 'Subagent'" in source, "the sweep path must skip child conversations"
 
 
+def test_installing_the_bundle_does_not_reflect_on_the_whole_archive():
+    """The watermark defaults to zero, so history reads as new.
+
+    On a fresh install every conversation ever held qualifies at once: nobody
+    has reflected on them, so every message counts as unreflected. Observed as
+    six runs draining years of conversations three at a time and writing notes
+    about work from months ago as though it had just happened.
+
+    A recency window rather than a one-off backfill guard, because it keeps
+    being true — a conversation abandoned last spring must not become a
+    candidate the day somebody opens it to read.
+    """
+    declared = _declarations(TASK)
+    keys = {entry[1] for entry in declared["config_settings"]}
+    assert "memory_reflect_max_age_hours" in keys
+
+    source = _source_or_skip(TASK)
+    assert "MAX(COALESCE(m.timestamp, 0)) >= ?" in source
+
+
 def test_the_watermark_is_a_table_the_task_owns():
     """The watermark is what makes reflection idempotent.
 
