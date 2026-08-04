@@ -1,0 +1,16 @@
+{
+  "description": "Durable memory that maintains itself. Notes relevant to what you just said are surfaced at the start of every turn, and when a conversation goes quiet a background agent reviews it and writes down anything worth keeping. Notes are ordinary markdown in your workspace, so you can read and edit them yourself. Brings the text-indexing and search chain it retrieves through, including the embedding model.",
+  "files": [
+    "services/service_embed.py",
+    "services/service_memory.py",
+    "tasks/task_chunk_text.py",
+    "tasks/task_embed_text.py",
+    "tasks/task_extract_text.py",
+    "tasks/task_lexical_index.py",
+    "tasks/task_memory_reflect.py",
+    "tools/tool_hybrid_search.py",
+    "tools/tool_lexical_search.py",
+    "tools/tool_semantic_search.py"
+  ],
+  "name": "Memory"
+}
