@@ -130,6 +130,10 @@ class MemoryReflect(BaseTask):
          "How many new messages a conversation needs before it is reflected on. "
          "Keeps browsing your history from spawning subagents.",
          4, {"type": "slider", "range": (2, 40, 38), "is_float": False}),
+        ("Memory reflection window", "memory_reflect_max_age_hours",
+         "How recently a conversation must have been active to be reflected on. "
+         "Stops a fresh install from reflecting on your entire history.",
+         24, {"type": "slider", "range": (1, 168, 167), "is_float": False}),
     ]
 
     agent_prompt = (
@@ -151,7 +155,7 @@ class MemoryReflect(BaseTask):
 
         floor = self._floor(sdk)
         busy = self._busy_conversations(sdk)
-        candidates = [row for row in self._candidates(sdk, floor)
+        candidates = [row for row in self._candidates(sdk, floor, self._cutoff(sdk))
                       if row["cid"] not in busy]
         if ended := (payload or {}).get("conversation_id"):
             candidates = [row for row in candidates
@@ -199,6 +203,28 @@ class MemoryReflect(BaseTask):
         except (sdk.Failed, TypeError, ValueError):
             return 4
 
+    def _cutoff(self, sdk):
+        """How far back a conversation may have been active and still count.
+
+        Without this, installing the bundle reflects on *everything you have
+        ever said*: the watermark defaults to zero for a conversation nobody
+        has looked at, so every message in the archive reads as new and the
+        whole history queues up three at a time. That is expensive, spawns an
+        agent per conversation, and produces notes about work from months ago
+        as though it had just happened.
+
+        A window is the right shape rather than a one-off backfill guard,
+        because it keeps being true: a conversation abandoned last spring
+        should not become a candidate the day somebody opens it to read.
+        Reopening one and adding a message makes it recent again, which is
+        exactly when it *is* worth reflecting on.
+        """
+        try:
+            hours = max(1, int(sdk.config.read("memory_reflect_max_age_hours") or 24))
+        except (sdk.Failed, TypeError, ValueError):
+            hours = 24
+        return time.time() - (hours * 3600)
+
     def _busy_conversations(self, sdk):
         """Conversations somebody is currently sitting in.
 
@@ -222,8 +248,8 @@ class MemoryReflect(BaseTask):
                 busy.add(int(cid))
         return busy
 
-    def _candidates(self, sdk, floor):
-        """Conversations with unreflected messages, oldest activity first.
+    def _candidates(self, sdk, floor, cutoff):
+        """Recently-active conversations with unreflected messages, oldest first.
 
         Subagent conversations are excluded here rather than trusted to the
         session-key check: that one only sees an event, and the sweep meets a
@@ -251,10 +277,11 @@ class MemoryReflect(BaseTask):
                AND COALESCE(c.category, '') <> 'Subagent'
              GROUP BY m.conversation_id
             HAVING new_count >= ?
+               AND MAX(COALESCE(m.timestamp, 0)) >= ?
              ORDER BY max_id ASC
         """
         try:
-            return sdk.db.query(sql, [floor], max_rows=100) or []
+            return sdk.db.query(sql, [floor, cutoff], max_rows=100) or []
         except sdk.Failed as error:
             sdk.log(f"could not look for conversations to reflect on: {error}",
                     level="warning")
