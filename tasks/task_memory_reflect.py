@@ -146,6 +146,9 @@ class MemoryReflect(BaseTask):
         run narrows to it; the hourly sweep names nothing, so the run takes
         whatever the watermark has been left holding.
         """
+        if self._is_own_child(payload):
+            return sdk.ok([])
+
         floor = self._floor(sdk)
         busy = self._busy_conversations(sdk)
         candidates = [row for row in self._candidates(sdk, floor)
@@ -169,6 +172,25 @@ class MemoryReflect(BaseTask):
         return sdk.ok(done, llm_summary=f"Reflected on {len(done)} conversation(s).")
 
     # ── deciding what to reflect on ──────────────────────────────────
+
+    def _is_own_child(self, payload):
+        """Whether this event is the curator we just spawned, finishing.
+
+        A subagent gets its own conversation and closes its session when it is
+        done, so every curator completion emits the very channel that started
+        it. Left unfiltered that is a feedback loop: the curator's own
+        transcript looks like a conversation that has gone quiet, so we reflect
+        on it, which spawns another curator, which ends, which... It terminates
+        only by luck — when a curator's transcript happens to fall under the
+        message floor — which is how one conversation ending produced four
+        runs.
+
+        The session key is the tell and it costs nothing to read. The category
+        filter in the candidate query is the other half, for conversations the
+        sweep meets later with no event to inspect.
+        """
+        return str((payload or {}).get("session_key") or "").startswith(
+            "spawn_subagent:")
 
     def _floor(self, sdk):
         """How many new messages earn a reflection."""
@@ -203,21 +225,30 @@ class MemoryReflect(BaseTask):
     def _candidates(self, sdk, floor):
         """Conversations with unreflected messages, oldest activity first.
 
-        ``conversation_messages`` is not user-scoped, so this reads it
-        directly; ``conversations`` would have to be spelled ``my_conversations``
-        and resolves to user 1 inside a task, which would quietly hide anybody
-        else's conversations rather than fail.
+        Subagent conversations are excluded here rather than trusted to the
+        session-key check: that one only sees an event, and the sweep meets a
+        finished curator's conversation with no event to inspect. A child is
+        created with ``kind = 'user'``, so the category is what separates it.
+
+        ``conversation_messages`` is not user-scoped and is read directly.
+        ``conversations`` cannot be, so this joins ``my_conversations``, which
+        resolves to user 1 inside a task — reflection is therefore scoped to
+        the base user, which is right for a single-user install and something
+        to revisit before anyone else's conversations need reflecting on.
         """
         sql = """
             SELECT m.conversation_id AS cid,
                    MAX(m.id)         AS max_id,
                    COUNT(*)          AS new_count
               FROM conversation_messages m
+              JOIN my_conversations c
+                     ON c.id = m.conversation_id
               LEFT JOIN memory_reflections r
                      ON r.conversation_id = m.conversation_id
              WHERE m.id > COALESCE(r.last_message_id, 0)
                AND LOWER(m.role) IN ('user', 'assistant')
                AND COALESCE(m.content, '') <> ''
+               AND COALESCE(c.category, '') <> 'Subagent'
              GROUP BY m.conversation_id
             HAVING new_count >= ?
              ORDER BY max_id ASC
