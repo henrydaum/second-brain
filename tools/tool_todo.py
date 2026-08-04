@@ -21,7 +21,8 @@ class Todo(BaseTool):
     description = (
         "Manage this conversation's todo checklist. Use it as your working plan on "
         "multi-step tasks: add the steps up front, mark exactly one in_progress at a "
-        "time, and complete each item as soon as it is done. Every call returns the "
+        "time, and complete each item as soon as it is done. 'clear' drops the whole "
+        "checklist when the plan is finished or abandoned. Every call returns the "
         "full current checklist."
     )
     parameters = {
@@ -29,7 +30,7 @@ class Todo(BaseTool):
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["add", "update", "complete", "remove", "list"],
+                "enum": ["add", "update", "complete", "remove", "clear", "list"],
                 "description": "Operation to perform.",
             },
             "content": {
@@ -62,7 +63,7 @@ class Todo(BaseTool):
 
     def run(self, sdk, **kwargs):
         op = str(kwargs.get("operation") or "").strip().lower()
-        if op not in {"add", "update", "complete", "remove", "list"}:
+        if op not in {"add", "update", "complete", "remove", "clear", "list"}:
             return sdk.fail(f"Unknown operation: {op}")
 
         try:
@@ -93,6 +94,10 @@ class Todo(BaseTool):
                 for text in texts:
                     items.append({"id": next_id, "content": text, "status": "pending"})
                     next_id += 1
+
+            elif op == "clear":
+                items = []
+                next_id = 1
 
             elif op in {"update", "complete", "remove"}:
                 todo_id = kwargs.get("todo_id")
