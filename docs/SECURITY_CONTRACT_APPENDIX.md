@@ -298,8 +298,8 @@ never silently filtered.
 | `session.cancel(key)` | Cancel the running turn | key | safe |
 | `session.add_attachment(path, key)` | Stage a file for the next model call | — (handler applies the read deny-list) | safe |
 | `session.set_profile(key, profile)` | Switch agent profile | profile | unsafe |
-| `session.add_prompt_extra(key, text)` | Inject system prompt text | — | unsafe |
-| `session.remove_prompt_extra(key, id)` | Withdraw injected text | — | safe |
+| `session.add_prompt_extra(text, key, slot)` | Inject system prompt text into one named overlay | `key` (which session) | **safe** for your own session; unsafe when it names another |
+| `session.remove_prompt_extra(handle, key)` | Withdraw injected text | — | safe |
 | `session.add_tool(key, name)` | Widen the agent's scope | tool name | unsafe |
 | `session.remove_tool(key, name)` | Narrow the agent's scope | tool name | safe |
 | `session.set_mode(mode, key, scope)` | How this conversation answers approvals | mode, `chain.typed_command` | **safe** for `lockdown` or a typed `/mode`; unsafe otherwise |

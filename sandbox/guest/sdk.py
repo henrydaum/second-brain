@@ -429,12 +429,18 @@ class _Session(_Namespace):
         """Narrow the agent's scope."""
         return self._ask(SESSION_REMOVE_TOOL, tool=tool, key=key)
 
-    def add_prompt(self, text: str, key: str = ""):
-        """Inject system prompt text."""
-        return self._ask(SESSION_ADD_PROMPT, text=text, key=key)
+    def add_prompt(self, text: str, key: str = "", slot: str = ""):
+        """Inject system prompt text, and answer with the slot to remove it by.
+
+        ``key`` is the session; ``slot`` is the named overlay within it, and
+        defaults to your plugin. Writing the same slot again replaces what was
+        there, so a hook that refreshes guidance every turn wants one stable
+        slot rather than a new one each time.
+        """
+        return self._ask(SESSION_ADD_PROMPT, text=text, key=key, slot=slot)
 
     def remove_prompt(self, handle, key: str = ""):
-        """Withdraw injected prompt text."""
+        """Withdraw injected prompt text, by the slot ``add_prompt`` returned."""
         return self._ask(SESSION_REMOVE_PROMPT, handle=handle, key=key)
 
     def add_attachment(self, path, key: str = ""):

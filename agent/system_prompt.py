@@ -27,6 +27,9 @@ _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
 
 SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
 
+#: How much of the agent's own ``MEMORY.md`` index is inlined into the prompt.
+MEMORY_INDEX_CAP = 4000
+
 
 @dataclass
 class PromptContext:
@@ -401,6 +404,15 @@ def _agent_memory() -> str:
         index = index_path.read_text(encoding="utf-8").strip() if index_path.exists() else ""
     except OSError:
         index = ""
+    # What the index *says* is the agent's business — it writes this file and
+    # nothing here edits it. What it may *cost* is the kernel's: this text is
+    # inlined on every call, so an index nobody pruned would grow the prompt
+    # without bound. Truncation is visible on purpose, so the agent can see
+    # that its own index has outgrown the window and prune it.
+    if len(index) > MEMORY_INDEX_CAP:
+        index = (index[:MEMORY_INDEX_CAP].rstrip()
+                 + f"\n... (index truncated at {MEMORY_INDEX_CAP} characters "
+                   "— prune MEMORY.md)")
     lines = [
         "## Memory",
         f"Index path: {index_path}",

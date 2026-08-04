@@ -684,15 +684,39 @@ def _session_set_mode(ctx, args: dict) -> Result:
     return Result(data=mode)
 
 
+def _prompt_slot(args: dict) -> str:
+    """Which named overlay this write owns.
+
+    Two keys are in play and conflating them is what broke this Request for
+    its whole life: ``key`` is the *session*, ``slot`` is the entry within
+    that session's ``system_prompt_extras``. The slot defaults to the calling
+    plugin rather than to a constant, because overlays are a dict and two
+    plugins sharing one name would silently overwrite each other — the leaf of
+    the chain is the nearest thing to "who is writing this" that the guest
+    cannot misstate.
+    """
+    if slot := str(args.get("slot") or "").strip():
+        return slot
+    from .. import provenance
+
+    caller = provenance.current()
+    chain = getattr(caller, "chain", None) if caller is not None else None
+    links = list(getattr(chain, "links", ()) or ())
+    return links[-1] if links else "sandbox"
+
+
 def _session_add_prompt(ctx, args: dict) -> Result:
     """Inject system prompt text for this session."""
     runtime = _runtime(ctx)
     adder = getattr(runtime, "add_system_prompt_extra", None)
     if (bad := _need(adder, "prompt extras")) is not None:
         return bad
-    handle = adder(args.get("key") or getattr(ctx, "session_key", None),
-                   args.get("text") or "")
-    return Result(data=handle)
+    slot = _prompt_slot(args)
+    adder(args.get("key") or getattr(ctx, "session_key", None),
+          slot, args.get("text") or "")
+    # The slot is the handle: ``remove_prompt`` needs the name back, and
+    # returning the runtime's bool told the caller nothing it could use.
+    return Result(data=slot)
 
 
 def _session_remove_prompt(ctx, args: dict) -> Result:
@@ -702,7 +726,7 @@ def _session_remove_prompt(ctx, args: dict) -> Result:
     if (bad := _need(remover, "prompt extras")) is not None:
         return bad
     remover(args.get("key") or getattr(ctx, "session_key", None),
-            args.get("handle"))
+            str(args.get("handle") or "") or _prompt_slot(args))
     return Result(data=True)
 
 

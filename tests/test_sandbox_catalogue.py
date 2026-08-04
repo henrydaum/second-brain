@@ -204,15 +204,31 @@ def test_deleting_outside_scratch_is_unsafe():
 
 def test_widening_is_unsafe_and_narrowing_is_safe():
     """The rule that runs through the whole catalogue."""
-    pairs = [
-        (R.SESSION_ADD_TOOL, R.SESSION_REMOVE_TOOL),
-        (R.SESSION_ADD_PROMPT, R.SESSION_REMOVE_PROMPT),
-    ]
-    for widen, narrow in pairs:
-        assert not classify(Request(widen, {"tool": "t", "text": "t"}),
-                            Chain()).safe, widen
-        assert classify(Request(narrow, {"tool": "t", "handle": 1}),
+    assert not classify(Request(R.SESSION_ADD_TOOL, {"tool": "t"}),
+                        Chain()).safe
+    for narrow in (R.SESSION_REMOVE_TOOL, R.SESSION_REMOVE_PROMPT):
+        assert classify(Request(narrow, {"tool": "t", "handle": "slot"}),
                         Chain()).safe, narrow
+
+
+def test_prompt_text_is_owned_by_session_not_refused_outright():
+    """Adding prompt text is not the widening ``add_tool`` is.
+
+    Any loaded plugin already contributes arbitrary prompt text through
+    ``agent_prompt`` with no dialog, so refusing the same text through this
+    Request protected nothing and made the targeted, removable spelling the
+    expensive one. What it *does* guard is the destination: another session's
+    prompt may belong to another user.
+    """
+    own = classify(Request(R.SESSION_ADD_PROMPT, {"text": "hi"}), Chain())
+    assert own.safe
+
+    chain = Chain(root="telegram:1:1:0")
+    assert classify(Request(R.SESSION_ADD_PROMPT,
+                            {"text": "hi", "key": "telegram:1:1:0"}),
+                    chain).safe
+    assert not classify(Request(R.SESSION_ADD_PROMPT,
+                                {"text": "hi", "key": "repl"}), chain).safe
 
 
 def test_self_extension_is_always_unsafe():

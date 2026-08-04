@@ -692,6 +692,11 @@ class ConversationRuntime:
                        if getattr(s, "conversation_id", None) == conversation_id]
         for session in holders:
             session.conversation_id = None
+            # The conversation has ended in the most final way available. A
+            # consumer keyed on it (reflection, summarization) has to hear that
+            # here or it waits forever for a switch that cannot come.
+            _persist.announce_conversation_ended(
+                self, session.key, conversation_id, "deleted")
         for user_id, conv in list(self._persisted_active_conv_by_user.items()):
             if conv == conversation_id:
                 self._persisted_active_conv_by_user.pop(user_id, None)

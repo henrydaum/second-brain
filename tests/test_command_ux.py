@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import state_machine  # noqa: F401  (import-order: break the runtime import cycle)
 
 from events.event_bus import bus
-from events.event_channels import SESSION_CONVERSATION_CHANGED
+from events.event_channels import (SESSION_CONVERSATION_CHANGED,
+                                   SESSION_CONVERSATION_ENDED)
 from pipeline.database import Database
 from plugins.native.frontend import BaseFrontend, FrontendCapabilities
 from runtime.conversation_runtime import ConversationRuntime
@@ -98,3 +99,70 @@ def test_load_conversation_emits_session_conversation_changed(tmp_path):
 
     assert any(p["session_key"] == "s" and p["conversation_id"] == cid
                and p["title"] == "FIFA Briefings" for p in seen)
+
+
+# ── The other half: the conversation being left ──────────────────────
+#
+# CHANGED names the conversation being switched *to*, which is what a banner
+# needs and the opposite of what anything treating a conversation as a unit of
+# work needs. These pin the three ways a session lets one go, because a
+# consumer keyed on this channel has no other way to learn that the work
+# finished — and silence is indistinguishable from "still going".
+
+def _ended(tmp_path, name, act):
+    db = Database(str(tmp_path / f"{name}.db"))
+    cid = db.create_conversation("Ended Conversation")
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.load_conversation("s", cid)
+    seen = []
+    unsub = bus.subscribe(SESSION_CONVERSATION_ENDED, seen.append)
+    try:
+        act(rt, cid)
+    finally:
+        unsub()
+    return cid, seen
+
+
+def test_starting_a_new_conversation_ends_the_old_one(tmp_path):
+    cid, seen = _ended(tmp_path, "switch",
+                       lambda rt, _cid: rt.reset_conversation("s"))
+
+    assert [p["conversation_id"] for p in seen] == [cid]
+    assert seen[0]["reason"] == "switched"
+    assert seen[0]["session_key"] == "s"
+
+
+def test_closing_a_session_ends_the_conversation_it_held(tmp_path):
+    cid, seen = _ended(tmp_path, "close",
+                       lambda rt, _cid: rt.close_session("s"))
+
+    assert [p["conversation_id"] for p in seen] == [cid]
+    assert seen[0]["reason"] == "closed"
+
+
+def test_deleting_a_conversation_ends_it_for_its_holder(tmp_path):
+    """The most final ending there is, and the one with no switch to ride on.
+
+    A consumer waiting for a switch would wait forever: the session is detached
+    in place and never moves anywhere.
+    """
+    cid, seen = _ended(tmp_path, "delete",
+                       lambda rt, c: rt.delete_conversation("s", c))
+
+    assert [p["conversation_id"] for p in seen] == [cid]
+    assert seen[0]["reason"] == "deleted"
+
+
+def test_a_session_holding_nothing_ends_nothing(tmp_path):
+    """No conversation, no event — an empty session closing is not an episode."""
+    db = Database(str(tmp_path / "empty.db"))
+    rt = ConversationRuntime(db=db, services={}, config={})
+    seen = []
+    unsub = bus.subscribe(SESSION_CONVERSATION_ENDED, seen.append)
+    try:
+        rt.close_session("s")
+        rt.reset_conversation("s")
+    finally:
+        unsub()
+
+    assert seen == []

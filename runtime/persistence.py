@@ -23,6 +23,7 @@ from events.event_bus import bus
 from events.event_channels import (
     SESSION_CLOSED,
     SESSION_CONVERSATION_CHANGED,
+    SESSION_CONVERSATION_ENDED,
     SESSION_CREATED,
     SESSION_MESSAGE,
 )
@@ -252,6 +253,12 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
         _sync_notification_mode(session)
         runtime.sessions[session_key] = session
     if existed:
+        # Before SESSION_CLOSED, because the conversation is the more specific
+        # fact: a subscriber that only cares about work finishing should not
+        # have to reconstruct which conversation a closed session was in.
+        announce_conversation_ended(
+            runtime, session_key,
+            getattr(prior, "conversation_id", None), "switched")
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
@@ -374,7 +381,8 @@ def inject_user_message(
 def close_session(runtime, session_key: str) -> bool:
     """Close session."""
     with runtime._sessions_lock:
-        existed = runtime.sessions.pop(session_key, None) is not None
+        closed = runtime.sessions.pop(session_key, None)
+        existed = closed is not None
     # Don't leave active_session_key dangling at a closed session: is_attended()
     # compares against it, so a stale pointer would mark every *other* live
     # session unattended (replies become notifications, interactive tools
@@ -382,6 +390,9 @@ def close_session(runtime, session_key: str) -> bool:
     if runtime.active_session_key == session_key:
         runtime.active_session_key = None
     if existed:
+        announce_conversation_ended(
+            runtime, session_key,
+            getattr(closed, "conversation_id", None), "closed")
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
     return existed
 
@@ -508,6 +519,34 @@ def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") 
             user_id=runtime.session_user_id(session.key),
         )
         announce_session_conversation(runtime, session)
+
+
+def announce_conversation_ended(runtime, session_key: str,
+                                conversation_id: int | None,
+                                reason: str) -> None:
+    """Emit SESSION_CONVERSATION_ENDED for the conversation being left.
+
+    The counterpart to ``announce_session_conversation``, which names the
+    conversation being switched *to* — right for a frontend redrawing "where am
+    I?", useless to anything treating a conversation as a unit of work, since
+    the id it needs is the one that just went quiet.
+
+    Called from every path where a session lets go of a conversation. Best
+    effort on purpose: a subscriber that raises must not take the switch, the
+    close, or the delete down with it.
+    """
+    if not conversation_id:
+        return
+    try:
+        bus.emit(SESSION_CONVERSATION_ENDED, {
+            "session_key": session_key,
+            "conversation_id": int(conversation_id),
+            "user_id": runtime.session_user_id(session_key),
+            "reason": reason,
+        })
+    except Exception:
+        logger.exception("SESSION_CONVERSATION_ENDED subscriber raised for %s",
+                         session_key)
 
 
 def announce_session_conversation(runtime, session: RuntimeSession) -> None:

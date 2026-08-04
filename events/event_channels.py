@@ -322,6 +322,30 @@ Payload:
     conversation_id: int
     title:           str"""
 
+SESSION_CONVERSATION_ENDED = "session_conversation_ended"
+"""A live session stopped being in a conversation — the other half of
+SESSION_CONVERSATION_CHANGED, and the one that says which conversation the
+work just finished in.
+
+CHANGED names only the conversation being switched *to*, because its
+subscribers are frontends redrawing "where am I?". Anything reasoning about a
+conversation as a *unit of work* needs the opposite: the id being left behind.
+Reflection, summarization and memory extraction all want this one — a
+conversation going quiet is a self-contained episode in a way that a calendar
+day is not.
+
+Emitted when the session switches away (``/new``, ``/clear``, loading another
+conversation), when the session closes, and when the conversation is deleted
+out from under it. A crash emits nothing, so a consumer that must not lose work
+needs its own idempotent record of what it has already handled rather than
+treating this as exactly-once.
+
+Payload:
+    session_key:     str
+    conversation_id: int — the one being left
+    user_id:         int
+    reason:          str — 'switched' | 'closed' | 'deleted'"""
+
 CONVERSATION_CHANGED = "conversation_changed"
 """The conversation *catalog* changed, as opposed to a live session (SESSION_*).
 Lets a frontend refresh a conversation list/sidebar without polling. The kernel

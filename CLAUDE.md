@@ -1567,6 +1567,30 @@ are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
 per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs).
 
+**Injecting prompt text is owned by session, not refused outright.**
+`session.add_prompt_extra` was `ALWAYS_UNSAFE`, which sounds right and was
+not — the capability it guarded is already free. Any loaded plugin puts
+arbitrary text into every prompt by declaring `agent_prompt`, and nobody is
+asked. So refusing the same text through the Request bought no safety; it only
+made the *targeted, removable, per-session* spelling the expensive one, which
+is the spelling a hook wants. It is a branch now (mechanism 3, ownership,
+aimed at a session): SAFE for the caller's own session, UNSAFE when the `key`
+argument names another — which may belong to another user, and is the one
+thing `agent_prompt` cannot do.
+
+The handler underneath had never worked. It called
+`add_system_prompt_extra(key, text)` against a three-argument method, so every
+sandboxed injection raised `TypeError` and came back as an ordinary failed
+Request — silent by nature, since guidance that never arrives looks exactly
+like a plugin with nothing to say. The Request carries two keys now: `key` is
+the *session*, `slot` is the named overlay within it, and the slot defaults to
+the calling plugin off the chain, because overlays are a dict and a constant
+default would have the second plugin quietly overwrite the first. The slot
+comes back as the handle `remove_prompt` takes. Note the overlay is persisted
+into the state marker, so a slot outlives a restart until its writer refreshes
+it; a stale line of guidance is not a permission, and the next `turn_start`
+overwrites it.
+
 **Migration tooling:** `sandbox.validator.validate_file(path).render()` is the
 whole of it — it names every line that needs converting and the Request each
 effect becomes, and `conforms.` means the file will load in a box. There were
@@ -1574,9 +1598,9 @@ once two more tools (`sandbox.migrate.plan`, a checklist the validator already
 prints; `sandbox.parity.compare`, which diffed a migrated plugin's return value
 against `git show HEAD:`). Both were deleted: nothing but their own tests ever
 called them, and parity could compare only return values, never effects, so it
-could not answer the question a migration actually raises. Templates in
-`templates/` still teach the old contract and should be migrated before any
-plugin, since they are what gets copied.
+could not answer the question a migration actually raises. Templates in `templates/` are
+migrated and `tests/test_templates.py` keeps them that way — it validates all
+nine and fails on any native-contract vocabulary, including in prose.
 
 ---
 
@@ -1819,6 +1843,20 @@ conversation title on a persistent surface; fed by the
   and removes it at unregistration, so default jobs live exactly as long as
   their task and a reinstall picks up an updated declaration. Disabling —
   not deleting — is the durable way to silence a default job.
+- **Observe a conversation finishing**: subscribe to
+  `SESSION_CONVERSATION_ENDED`, emitted when a session lets go of a
+  conversation — switched away from (`/new`, `/clear`, loading another),
+  session closed, or deleted out from under it. It is the counterpart to
+  `SESSION_CONVERSATION_CHANGED`, which names the conversation being switched
+  *to*: right for a frontend redrawing "where am I?", exactly backwards for
+  anything treating a conversation as a **unit of work**. Reflection,
+  summarization and memory extraction all want the id being left behind, and
+  before this channel existed there was no way to learn it — the payload of
+  CHANGED simply does not carry it, so a consumer had to keep its own
+  previous-conversation state and rebuild it after every restart. A crash
+  emits nothing, so anything that must not lose work still needs its own
+  idempotent record of what it has handled; this makes reflection *prompt*,
+  not exactly-once.
 - **Observe finished turns** (learn-from-outcome loops, memory writers):
   subscribe to `SESSION_TURN_COMPLETED` — emitted once per logical turn from
   the drive site, foreground and background alike, with `ok`/`cancelled`/

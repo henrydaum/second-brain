@@ -592,6 +592,60 @@ def test_starter_prompt_extra_reaches_the_model(tmp_path):
     assert "MEMOMARK-7731" in json.dumps(llm.calls[0])
 
 
+def test_the_add_prompt_request_actually_reaches_the_model(tmp_path):
+    """The sandboxed spelling of the test above, which never worked.
+
+    ``_session_add_prompt`` called ``add_system_prompt_extra(key, text)`` — two
+    arguments against a three-argument method — so every sandboxed injection
+    raised ``TypeError`` inside the handler and came back as an ordinary failed
+    Request. Nothing covered it, and the failure is silent by nature: guidance
+    that never arrives looks exactly like a plugin with nothing to say.
+    """
+    from types import SimpleNamespace
+
+    from sandbox.guest.requests import SESSION_ADD_PROMPT
+    from tests.support import call_handler
+
+    rt, session, llm = _runtime(tmp_path)
+    ctx = SimpleNamespace(runtime=rt, session_key="s", user_id=1)
+
+    result = call_handler(SESSION_ADD_PROMPT, ctx,
+                          {"text": "MEMOMARK-7731", "slot": "memory"})
+
+    assert result.ok, result.error
+    assert result.data == "memory", "the slot comes back as the remove handle"
+    assert session.system_prompt_extras["memory"] == "MEMOMARK-7731"
+
+    rt.handle_action("s", "send_text", "hello")
+    assert "MEMOMARK-7731" in json.dumps(llm.calls[0])
+
+    removed = call_handler("session.remove_prompt_extra", ctx,
+                           {"handle": result.data})
+    assert removed.ok
+    assert "memory" not in session.system_prompt_extras
+
+
+def test_two_plugins_do_not_share_one_prompt_slot(tmp_path):
+    """The slot defaults to the caller, because overlays are a dict.
+
+    A constant default would have the second plugin silently overwrite the
+    first, which is the same class of bug as the arity above: the text simply
+    stops arriving and nothing reports it.
+    """
+    from types import SimpleNamespace
+
+    from sandbox.guest.requests import SESSION_ADD_PROMPT
+    from tests.support import call_handler
+
+    rt, session, llm = _runtime(tmp_path)
+    ctx = SimpleNamespace(runtime=rt, session_key="s", user_id=1)
+
+    call_handler(SESSION_ADD_PROMPT, ctx, {"text": "from-a", "slot": "a"})
+    call_handler(SESSION_ADD_PROMPT, ctx, {"text": "from-b", "slot": "b"})
+
+    assert session.system_prompt_extras == {"a": "from-a", "b": "from-b"}
+
+
 def test_raising_starter_never_blocks_the_turn(tmp_path):
     rt, session, llm = _runtime(tmp_path, [response(content="fine.")])
 

@@ -117,14 +117,14 @@ These never produce a dialog. There is no "allow" answer.
 
 ## 5. Layers 3–4 — `classify()`
 
-111 Request types. The partition:
+112 Request types. The partition:
 
 | Set | Count | Meaning |
 |---|---|---|
-| `ALWAYS_SAFE` only | 71 | narrows capability, or affects only this execution |
+| `ALWAYS_SAFE` only | 72 | narrows capability, or affects only this execution |
 | `ALWAYS_UNSAFE` only | 16 | changes state the kernel owns, whatever the arguments |
-| argument-conditional branch | 18 | the interesting ones |
-| in a set *and* branched | 6 | `fs.temp`, `fs.delete`, `conv.delete`, `agent.schedule`, `session.add_tool`, `session.add_prompt_extra` |
+| argument-conditional branch | 19 | the interesting ones |
+| in a set *and* branched | 5 | `fs.temp`, `fs.delete`, `conv.delete`, `agent.schedule`, `session.add_tool` |
 
 Enforced at import: `_UNDECIDED` must be empty, so a new Request cannot be added
 without somebody deciding about it.

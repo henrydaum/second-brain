@@ -459,7 +459,7 @@ MAX_DEPTH = 8
 # perform without asking, whatever the arguments.
 ALWAYS_UNSAFE = {
     # Widening what the agent may do next.
-    R.SESSION_ADD_TOOL, R.SESSION_ADD_PROMPT,
+    R.SESSION_ADD_TOOL,
     # The literal subject of the LibOS quote: the agent extending itself.
     R.PLUGIN_REGISTER, R.PLUGIN_UNREGISTER, R.PLUGIN_RELOAD,
     R.PLUGIN_INSTALL, R.PLUGIN_UNINSTALL, R.PLUGIN_UPDATE,
@@ -1170,9 +1170,36 @@ def classify(request: Request, chain: Chain) -> Decision:
                         justification or "sandboxed code asks before acting",
                         say=justification)
 
+    # ── prompt overlays: mechanism 3 (ownership), aimed at a session ──
+    #
+    # This was ALWAYS_UNSAFE, which sounds right and is not, because the
+    # capability it was guarding is already available with no dialog at all:
+    # any loaded plugin puts arbitrary text into every prompt by declaring
+    # ``agent_prompt``, and nobody is asked. So refusing the same text through
+    # this Request bought no safety — it only made the *targeted*, removable,
+    # per-session spelling the expensive one, which is the spelling a hook
+    # should be using.
+    #
+    # What is genuinely new here, and stays UNSAFE, is the ``key`` argument:
+    # naming a session other than your own means writing into a prompt built
+    # for somebody else, possibly another user. That is the ownership question
+    # ``config.write`` and ``secret.reveal`` ask about settings, one subject
+    # over, and it is decided the same way — against the chain, which the
+    # guest cannot misstate.
+    #
+    # Note the overlay persists into the state marker, so a slot outlives a
+    # restart until its writer refreshes it. A stale line of guidance is not
+    # a permission, and the next ``turn_start`` overwrites it.
+    if kind == SESSION_ADD_PROMPT:
+        target = str(args.get("key") or "")
+        if not target or target == chain_session(chain):
+            return Decision(SAFE, "adds prompt text to its own session")
+        return Decision(UNSAFE, f"inject prompt text into session {target}",
+                        say="This writes into a prompt built for another "
+                            "session, which may belong to another user.")
+
     # ── unattended work gets less benefit of the doubt ────────────
-    if kind in (SESSION_ADD_TOOL, SESSION_ADD_PROMPT, AGENT_SCHEDULE,
-                CONV_DELETE):
+    if kind in (SESSION_ADD_TOOL, AGENT_SCHEDULE, CONV_DELETE):
         return Decision(UNSAFE, f"{kind} ({chain.render()})")
 
     # ── the standing answer itself ────────────────────────────────

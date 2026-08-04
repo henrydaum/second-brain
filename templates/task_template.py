@@ -35,6 +35,14 @@ Every task picks exactly one:
                       anything not per-file. Also set
                       trigger_channels = ["channel.name"].
 
+The trigger decides your entry point, and getting it wrong fails silently:
+"path" tasks implement run(self, sdk, paths) and "event" tasks implement
+run_event(self, sdk, payload). A task with the wrong one registers, subscribes,
+and is never called.
+
+trigger_channels must be a literal list. trigger_channels = [SOME_CONSTANT]
+reads as [] — it validates, registers, and subscribes to nothing.
+
 
 THE DEPENDENCY GRAPH (the part you cannot guess)
 ------------------------------------------------
@@ -142,8 +150,19 @@ class DailyDigest(BaseTask):
         },
     }
 
-    def run(self, sdk, paths):
-        """Summarize the day. Event tasks get no paths — ignore the argument."""
+    def run_event(self, sdk, payload):
+        """Summarize the day.
+
+        ``run_event``, not ``run`` — the two entry points are different jobs
+        rather than one job with an optional argument, and a ``trigger =
+        "event"`` task that implements ``run`` is never called at all. Nothing
+        reports that: the task registers, subscribes, and silently does
+        nothing every time it fires.
+
+        ``payload`` is whatever was emitted on the channel, verbatim. A
+        scheduled job supplies its declared ``payload``; a plugin emitting the
+        channel itself supplies its own.
+        """
         # Cross-kind read: word_stats is a PATH table, so this is an ambient
         # SQL join rather than a graph edge. Nothing re-runs this when
         # word_stats changes; the schedule is what drives it.

@@ -32,6 +32,38 @@ def test_index_inlined_without_reading_topic_files(data_dir):
     assert "Topic files:" not in text
 
 
+def test_a_runaway_index_cannot_grow_the_prompt_without_bound(data_dir):
+    """What the index says is the agent's business; what it costs is not.
+
+    This text is inlined on every call, so an index nobody prunes would push
+    the prompt over on its own. Truncation is visible so the agent can see
+    that its own index has outgrown the window.
+    """
+    from agent.system_prompt import MEMORY_INDEX_CAP
+
+    root = data_dir / "workspace" / "memory"
+    root.mkdir(parents=True)
+    (root / "MEMORY.md").write_text("- [x](x.md) - filler\n" * 2000,
+                                    encoding="utf-8")
+
+    text = _agent_memory()
+
+    assert len(text) < MEMORY_INDEX_CAP + 500
+    assert "prune MEMORY.md" in text
+
+
+def test_an_index_under_the_cap_is_untouched(data_dir):
+    root = data_dir / "workspace" / "memory"
+    root.mkdir(parents=True)
+    (root / "MEMORY.md").write_text("- [proj](proj.md) - the project",
+                                    encoding="utf-8")
+
+    text = _agent_memory()
+
+    assert "- [proj](proj.md) - the project" in text
+    assert "truncated" not in text
+
+
 def test_no_plugin_guidance_in_kernel_section(data_dir):
     (data_dir / "workspace" / "memory").mkdir(parents=True)
     assert "`memory` tool" not in _agent_memory()
