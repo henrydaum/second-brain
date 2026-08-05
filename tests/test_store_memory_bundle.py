@@ -270,6 +270,21 @@ def test_installing_the_bundle_does_not_reflect_on_the_whole_archive():
     assert "MAX(COALESCE(m.timestamp, 0)) >= ?" in source
 
 
+def test_a_conversation_the_agent_never_spoke_in_is_skipped():
+    """The corpus records what the agent did, so no agent means nothing to say.
+
+    The message floor does not cover this — someone can reach it without the
+    agent ever answering: messages typed at a turn that failed or was
+    cancelled, or a conversation opened only to run slash commands. The curator
+    would then be handed a transcript with no agent in it and asked what should
+    be done differently next time, which is a subagent spawned to answer an
+    unanswerable question.
+    """
+    source = _source_or_skip(TASK)
+    assert "LOWER(m.role) = 'assistant'" in source
+    assert "THEN 1 ELSE 0 END) >= 1" in source
+
+
 def test_the_watermark_is_a_table_the_task_owns():
     """The watermark is what makes reflection idempotent.
 
