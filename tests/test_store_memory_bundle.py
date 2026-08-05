@@ -139,27 +139,43 @@ def test_the_prompt_carries_situations_and_not_the_advice():
     assert '"because"' not in service
 
 
-def test_only_files_that_declare_a_situation_are_offered():
-    """The folder is synced, so everything in it can match — notes or not.
+def test_a_note_is_a_note_because_of_where_it_is():
+    """Membership is a path, which is the one thing a writer cannot fumble.
 
-    Drafts, scratch files and anything else left there are indexed like the
-    rest. Falling back to the matched *chunk* for those put a fragment with no
-    context into a list that promises situations, which is the same
-    half-a-procedure problem pointers exist to avoid.
+    Requiring a ``when`` in the frontmatter made *being a note* something the
+    writer had to restate correctly in every file, and getting it subtly wrong
+    — no fences, the key in the body — made the note silently unreachable.
+    It also needed an exception list naming every file in the folder that was
+    not a note, which grows and whose omissions are invisible.
 
-    Content and not a filename convention: a name is a second declaration that
-    can disagree with the first, and the frontmatter is the only thing that
-    decides whether a file can do the job at all.
+    Both sides have to agree on the folder name or the curator writes where
+    nothing looks.
+    """
+    service = _source_or_skip(SERVICE)
+    task = _source_or_skip(TASK)
+
+    for source, name in ((service, "service"), (task, "task")):
+        assert 'NOTES_DIRNAME = "actions"' in source, name
+
+    # Searching is scoped to it, so nothing outside can rank at all — and the
+    # exception list that scoping replaced is gone.
+    assert "folder=_notes_root(sdk)" in service
+    assert '"readme.md", "memory.md"' not in service
+
+
+def test_a_note_with_no_situation_is_reported_not_guessed_at():
+    """Inside the notes folder, a missing ``when`` is a broken note.
+
+    There is no situation to render and falling back to the matched chunk
+    would put a fragment with no context into a list that promises situations.
+    The symptom otherwise is a note that ranks well and is never once offered,
+    which is indistinguishable from having no memories.
     """
     service = _source_or_skip(SERVICE)
 
-    # The one test, and no excerpt fallback behind it.
     assert 'if situation else ""' in service
-    assert "hit.get(\"content\")" not in service, "no chunk fallback may remain"
-
-    # A folder full of near-miss files that can never be offered looks exactly
-    # like a folder with no memories, so the skips are counted out loud.
-    assert "declare no 'when'" in service
+    assert 'hit.get("content")' not in service, "no chunk fallback may remain"
+    assert "with no 'when' were skipped" in service
 
 
 def test_both_halves_of_the_used_pair_are_recorded_and_read():
