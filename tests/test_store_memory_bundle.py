@@ -121,6 +121,44 @@ def test_the_curator_sees_the_tool_calls_it_has_to_branch_on():
     assert "<> 'system'" in source, "everything but system rows belongs in it"
 
 
+def test_the_prompt_carries_situations_and_not_the_advice():
+    """Inlining the note destroys the signal the whole loop runs on.
+
+    With the advice already in the prompt there is no reason to open the file,
+    so nothing downstream can tell which notes were used — and that pair is
+    what selects the curator's job. The situation alone answers the only
+    question the prompt has to answer, which is whether a past case is this
+    one; what was tried and how it went is what the file is for.
+    """
+    service = _source_or_skip(SERVICE)
+
+    # The line is the situation and the path. Neither the action nor the
+    # outcome may be rendered into it.
+    assert 'f"- {situation}\\n  ({path})"' in service
+    assert "INLINE_CHARS" not in service
+    assert '"because"' not in service
+
+
+def test_both_halves_of_the_used_pair_are_recorded_and_read():
+    """Neither half is available alone.
+
+    The offer lives in the system prompt, which is stored nowhere — so the
+    service writes it down. The open is a read_file call, which reaches the
+    transcript because the agent had to name the path to make it. The service
+    must therefore write the log and the task must read it; either one missing
+    leaves the curator unable to tell its two jobs apart, silently.
+    """
+    service = _source_or_skip(SERVICE)
+    task = _source_or_skip(TASK)
+
+    assert "memory_retrievals" in service and "memory_retrievals" in task
+    declared = _declarations(SERVICE)["requests"]
+    assert "db.define" in declared and "db.write" in declared
+
+    # The log answers one question once; nothing else prunes this table.
+    assert "DELETE FROM memory_retrievals" in task
+
+
 def test_the_service_can_inject_and_can_search():
     """The two Requests the read half cannot work without.
 
