@@ -740,11 +740,18 @@ class _Agent(_Namespace):
         attachments=None,
         wait: bool = True,
         timeout_seconds: int | None = None,
+        profile: str | None = None,
     ):
         """Run a subagent now, in its own conversation.
 
         The prompt must be complete and self-contained: nobody will answer a
         follow-up question, and a child can use no tool that needs approval.
+
+        ``profile`` names an agent profile from the user's config, which is how
+        a child is given a *narrower* set of tools than the caller has — a
+        curator that may write notes and nothing else. Naming none inherits the
+        caller's own profile; naming one that does not exist fails rather than
+        quietly running the child unrestricted.
 
         ``wait=True`` returns the finished report::
 
@@ -759,14 +766,14 @@ class _Agent(_Namespace):
                 sdk.log(report["title"], report["text"])
 
         Either way the report is a dict with ``id``, ``conversation_id``,
-        ``title``, ``state``, ``ok``, ``text`` and ``error``. ``state`` is
-        ``running``, ``done``, ``failed`` or ``cancelled`` — and ``cancelled``
-        means the child hit its deadline and produced nothing, so there is
-        never anything to report on its behalf.
+        ``title``, ``state``, ``ok``, ``text``, ``error`` and ``profile``.
+        ``state`` is ``running``, ``done``, ``failed`` or ``cancelled`` — and
+        ``cancelled`` means the child hit its deadline and produced nothing, so
+        there is never anything to report on its behalf.
         """
         return self._ask(AGENT_SPAWN, prompt=prompt, title=title,
                          attachments=list(attachments or []), wait=wait,
-                         timeout_seconds=timeout_seconds)
+                         timeout_seconds=timeout_seconds, profile=profile)
 
     def collect(self, ids=None, timeout: float | None = None):
         """Wait for subagents and take their reports.

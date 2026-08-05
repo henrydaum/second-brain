@@ -2028,6 +2028,11 @@ def _agent_spawn(ctx, args: dict) -> Result:
     ``wait=False`` answers with a handle the caller collects later, which is
     what makes a fan-out expressible from a script. ``wait=True`` answers with
     the report and does the waiting here.
+
+    ``profile`` is an agent profile *name*, resolved kernel-side — the same
+    handle-not-the-thing move ``ModelRequest.llm`` makes. It is how a caller
+    spawns a child that may do less than it can, and it cannot widen: the
+    profiles are the user's own config.
     """
     from .. import provenance
 
@@ -2044,6 +2049,11 @@ def _agent_spawn(ctx, args: dict) -> Result:
             owner=owner,
             owner_conversation_id=owner_cid,
             user_id=int(getattr(ctx, "user_id", 1) or 1),
+            # A profile the user configured, naming tools the user installed.
+            # Choosing among them can only ever narrow what the child may do,
+            # so this needs no classification of its own — and naming an
+            # unknown one raises rather than silently running unrestricted.
+            profile=args.get("profile") or None,
         )
     except (PermissionError, ValueError, FileNotFoundError) as exc:
         return Result.failure(str(exc))

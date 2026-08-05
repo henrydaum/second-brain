@@ -1000,3 +1000,79 @@ def test_a_long_report_says_how_much_was_cut():
     notice = handle.notice()
     assert "report truncated" in notice
     assert f"{NOTICE_CAP + 500:,} chars total" in notice
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Agent profiles. A child may be given *less* than its spawner has, which is
+# what makes it safe to hand a subagent a tool that writes.
+# ──────────────────────────────────────────────────────────────────────
+
+PROFILES = {
+    "default": {"llm": "default", "whitelist_or_blacklist_tools": "blacklist",
+                "tools_list": []},
+    "memory_curator": {"llm": "default",
+                       "whitelist_or_blacklist_tools": "whitelist",
+                       "tools_list": ["memory_recall", "memory_curate"]},
+    "researcher": {"llm": "default",
+                   "whitelist_or_blacklist_tools": "whitelist",
+                   "tools_list": ["hybrid_search"]},
+}
+
+
+def profile_registry(**config):
+    """A registry whose runtime knows about profiles and records what it took."""
+    registry, runtime = registry_for(
+        config={"max_concurrent_subagents": 4, "subagent_timeout_seconds": 300,
+                "agent_profiles": PROFILES, "active_agent_profile": "default",
+                **config})
+    runtime.took: list[tuple[str, str]] = []
+    runtime.set_agent_profile = (
+        lambda key, profile: runtime.took.append((key, profile)) or True)
+    return registry, runtime
+
+
+def test_a_named_profile_reaches_the_child_and_its_report():
+    """The marker is only half of it: the session has to take the profile too,
+    because ``set_agent_profile`` is what rebuilds the tool specs the turn
+    actually calls through."""
+    registry, runtime = profile_registry()
+    handle = settle(registry, registry.spawn("curate", owner="repl",
+                                             profile="memory_curator"))
+    assert handle.profile == "memory_curator"
+    assert handle.report()["profile"] == "memory_curator"
+    assert runtime.took == [(f"{SESSION_PREFIX}{handle.conversation_id}",
+                             "memory_curator")]
+
+
+def test_an_unknown_profile_raises_rather_than_running_unrestricted():
+    """The one direction this must not fail in.
+
+    Substituting ``default`` would run the child with every tool installed
+    while the caller believed it was confined, and nothing would say so.
+    """
+    registry, _ = profile_registry()
+    with pytest.raises(ValueError, match="no agent profile named 'curator'"):
+        registry.spawn("go", owner="repl", profile="curator")
+
+
+def test_naming_no_profile_inherits_the_spawners_rather_than_default():
+    """A session pinned to a narrow profile must not spawn a wide child.
+
+    That was the old behaviour — the marker said ``default`` unconditionally —
+    and it is a widening nobody asked for.
+    """
+    registry, runtime = profile_registry()
+    parent = runtime.open_session("repl", conversation_id=7)
+    parent.profile_override = "researcher"
+    parent.frontend_name = None
+
+    handle = settle(registry, registry.spawn("go", owner="repl"))
+    assert handle.profile == "researcher"
+
+
+def test_a_spawn_with_no_spawner_session_falls_back_to_default():
+    """A scheduled job has no session to inherit from, so there is nothing to
+    read and ``default`` is the honest answer."""
+    registry, _ = profile_registry()
+    handle = settle(registry, registry.spawn("go", owner=None))
+    assert handle.profile == "default"

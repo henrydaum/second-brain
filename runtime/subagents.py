@@ -112,6 +112,11 @@ class Handle:
     # walk down it.
     depth: int = 0
     parent: str | None = None
+    # The agent profile the child drives under. Carried here as well as written
+    # into the state marker because a *reused* conversation already has a
+    # marker and must not have it overwritten — applying it to the session on
+    # open covers both paths with one line.
+    profile: str = "default"
     collected: bool = False
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
@@ -130,6 +135,9 @@ class Handle:
             "ok": self.state == DONE,
             "text": self.text,
             "error": self.error,
+            # What the child was allowed to do. A caller that asked for a
+            # restricted profile has no other way to confirm it got one.
+            "profile": self.profile,
         }
 
     def notice(self) -> str:
@@ -273,6 +281,7 @@ class SubagentRegistry:
         user_id: int = 1,
         category: str = "Subagent",
         notification_mode: str | None = "off",
+        profile: str | None = None,
     ) -> Handle:
         """Start a child and return its handle. Raises on a refusal."""
         runtime = self.runtime
@@ -310,8 +319,9 @@ class SubagentRegistry:
         except (TypeError, ValueError):
             timeout = ceiling
 
+        profile = self._profile_for(profile, owner)
         cid = self._conversation_for(conversation_id, title, category, user_id,
-                                     notification_mode)
+                                     notification_mode, profile)
         # Two guards worth keeping literal: a child must never drive the
         # conversation a person is looking at, and one conversation runs one
         # child at a time.
@@ -334,6 +344,7 @@ class SubagentRegistry:
             owner_conversation_id=owner_conversation_id,
             depth=depth,
             parent=spawner.id if spawner is not None else None,
+            profile=profile,
         )
         with self._lock:
             self._handles[handle.id] = handle
@@ -343,8 +354,46 @@ class SubagentRegistry:
         self._executor().submit(self._run, handle, prompt, paths)
         return handle
 
+    def _profile_for(self, profile: str | None, owner: str | None) -> str:
+        """Which agent profile this child runs under.
+
+        A profile is an ``AgentScope`` (``runtime/agent_scope.py``): an LLM, a
+        prompt suffix, and a tool whitelist or blacklist. Naming one is how a
+        caller spawns a *restricted* child — a curator that may write notes and
+        nothing else, a researcher that may search and not send mail.
+
+        **Naming nothing inherits the spawner's**, rather than falling back to
+        ``default``. The old literal meant a session pinned to a narrow profile
+        spawned an unrestricted child, which is a widening nobody asked for and
+        the one direction this must not fail in.
+
+        An unknown name raises. Quietly substituting ``default`` would run the
+        child with every tool installed while the caller believed it was
+        confined, and nothing anywhere would say so.
+        """
+        runtime = self.runtime
+        config = getattr(runtime, "config", None) or {}
+        profiles = config.get("agent_profiles") or {}
+        name = str(profile or "").strip()
+        if name:
+            if profiles and name not in profiles:
+                raise ValueError(
+                    f"no agent profile named {name!r} — configured profiles: "
+                    f"{', '.join(sorted(profiles)) or '(none)'}")
+            return name
+        session = (getattr(runtime, "sessions", None) or {}).get(owner)
+        if session is None:
+            return "default"
+        try:
+            from runtime.runtime_config import profile_for
+
+            return profile_for(runtime, session) or "default"
+        except Exception:
+            logger.exception("could not read the spawner's agent profile")
+            return "default"
+
     def _conversation_for(self, conversation_id, title, category, user_id,
-                          notification_mode) -> int:
+                          notification_mode, profile="default") -> int:
         """Reuse a conversation when one was named, else open a fresh one."""
         runtime = self.runtime
         db = getattr(runtime, "db", None)
@@ -359,8 +408,11 @@ class SubagentRegistry:
                                           category=category, user_id=user_id)
         if cid is None:
             raise RuntimeError("could not create a conversation for the agent")
-        marker = {"conversation_id": cid, "active_agent_profile": "default",
-                  "profile_override": "default"}
+        # The marker is how the profile reaches the child: ``open_session``
+        # loads it, and ``runtime_config.profile_for`` reads the override
+        # first, so writing it here is the whole of scoping a subagent.
+        marker = {"conversation_id": cid, "active_agent_profile": profile,
+                  "profile_override": profile}
         # notification_mode off for an interactive spawn: the child's output
         # belongs to the agent that asked for it, delivered through the report,
         # never pushed into the user's chat. A scheduled spawn keeps the
@@ -413,6 +465,7 @@ class SubagentRegistry:
                 prompt += REPORT_FRAMING
             runtime.open_session(session_key,
                                  conversation_id=handle.conversation_id)
+            self._apply_profile(handle, session_key)
             try:
                 out = runtime.iterate_agent_turn(
                     session_key, prompt,
@@ -430,6 +483,25 @@ class SubagentRegistry:
             self._finish(handle, FAILED, error=error)
             return
         self._finish(handle, DONE, text="\n".join(out.messages))
+
+    def _apply_profile(self, handle: Handle, session_key: str) -> None:
+        """Point the freshly opened session at the child's profile.
+
+        The marker already says so for a conversation this registry created,
+        but a *reused* one (a scheduled job pins its conversation and comes
+        back to it) carries whatever marker it was left with. Setting it on the
+        session covers both, and ``set_agent_profile`` is what rebuilds the
+        tool specs — without that the scope would be right in the marker and
+        wrong in the registry the turn actually calls through.
+        """
+        runtime = self.runtime
+        if not handle.profile or not hasattr(runtime, "set_agent_profile"):
+            return
+        try:
+            runtime.set_agent_profile(session_key, handle.profile)
+        except Exception:
+            logger.exception("subagent %s could not take profile %r",
+                             handle.id, handle.profile)
 
     def _finish(self, handle: Handle, state: str, *, text: str = "",
                 error: str = "") -> None:
@@ -674,6 +746,9 @@ class SubagentRegistry:
                 # A scheduled child talks to the user directly; that push is
                 # the only place its work would otherwise surface.
                 notification_mode=None,
+                # Nothing is inherited here: a scheduled spawn has no spawner
+                # session to inherit from, so an unnamed profile is ``default``.
+                profile=payload.get("profile"),
             )
         except Exception as exc:
             logger.error("scheduled subagent did not start: %s", exc)

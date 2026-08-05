@@ -1684,6 +1684,32 @@ is what `/cancel` reaches for, and `cancel_all` is the kill switch shutdown
 uses. Stopping an agent while its children keep spending money on a question
 nobody is waiting for is the worst of both.
 
+**A child may be given less than its spawner has** — `spawn(profile=...)`, an
+agent profile *name* the kernel resolves, the same handle-not-the-thing move
+`ModelRequest.llm` makes. Everything under it already existed: `agent_scope.
+load_scope` turns an `agent_profiles` entry into an LLM, a prompt suffix and a
+tool whitelist, `scoped_registry` applies it (closing a whitelist over
+`dependencies_tools`, so a scoped-in tool keeps its helpers callable), and
+`runtime_config.profile_for` reads `session.profile_override` first. The only
+missing piece was that `_conversation_for` wrote `"default"` into the child's
+state marker as a literal. It writes the resolved name now, and `_run` also
+calls `set_agent_profile` after `open_session` — the marker alone is not
+enough, because a *reused* conversation (a scheduled job pins one) already has
+a marker, and because `set_agent_profile` is what rebuilds the tool specs the
+turn actually calls through.
+
+Two properties are the point rather than the mechanism. **Naming nothing
+inherits the spawner's profile**, not `default`: the literal meant a session
+pinned to a narrow profile spawned an unrestricted child, which is a widening
+nobody asked for. And **an unknown name raises**, because quietly substituting
+`default` would run a background agent with every installed tool while the
+caller believed it was confined, and nothing anywhere would say so. Choosing
+among profiles needs no classification of its own — they are the user's own
+config, naming tools the user installed, so the choice can only narrow. The
+store's memory curator is the worked example: a `memory_curator` profile
+whitelisting four tools and not `edit_file` is what makes it safe to let an
+unattended subagent write.
+
 **A deadline measures running, not waiting.** The clock starts when a pool
 worker picks a child up, not when it was submitted: a fan-out wider than
 `max_concurrent_subagents` queues, and charging a child for the queue cancels
