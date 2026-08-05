@@ -25,14 +25,23 @@ result changes no action and is therefore not worth a file. That is the whole
 model, and everything below follows from it: a note with no action in it cannot
 change anything, so it is not a note.
 
-**The curator has two jobs, and the transcript says which one applies.** If the
-agent reached for memory and solved the problem with it, the note that helped
-earns a rewrite — it worked, so make it work harder: sharpen the situation that
-should retrieve it, tighten the action, record what the result actually was. If
-the agent solved the problem some novel way without consulting memory, that
-solution is not yet in the corpus and wants writing down. Both jobs answer the
-same question, which is whether the next agent in this situation will do better
-than this one did.
+**The curator has two jobs, and a retrieved-then-read pair says which.** A note
+the agent was shown and went on to open earns a rewrite — it worked, so make it
+work harder: sharpen the situation that retrieves it, tighten the action,
+record what the result actually was. Anything the agent worked out for itself
+is not in the corpus yet and wants writing down. Both answer one question,
+which is whether the next agent here does better than this one did.
+
+Neither half of that pair is available alone. The offer lives in the system
+prompt, which is stored nowhere, so ``service_memory`` records it; the open is
+a ``read_file`` call, which is in the transcript because the agent had to name
+the path to make it. This is also the reason the prompt carries situations and
+paths rather than the notes themselves — inline the advice and there is no
+reason to open anything, and the signal disappears.
+
+Note what the pair is *not*: a score. That a note was opened says the situation
+looked close, not that the advice was good. Only reading what happened next
+settles that, which is why a model does it and not a counter.
 
 Rewriting in place is the mechanism rather than a hazard here, because it is
 *targeted*: only notes the conversation actually exercised, edited against
@@ -80,22 +89,33 @@ belong in MEMORY.md, which you must not touch.
 Below is conversation {cid} ("{title}"), including the tool calls. Read it and
 work out what the next agent in this situation should do differently.
 
-## Which job is yours
+## Job one: improve the notes that were used
 
-**Did the agent read files from the memory folder and use them?**
+These notes were surfaced to the agent and it opened them:
 
-- **Yes** — those notes earned their place. Improve them. Open each one that
-  was used and rewrite it against what actually happened: sharpen `when` so it
-  fires on this situation too, tighten `do`/`avoid` if the advice was vague or
-  partly wrong, and record the real result in `because`. Editing in place is
-  correct here — you have evidence, which is the one thing that makes a rewrite
-  an improvement rather than a guess.
+{used}
 
-- **No** — the agent solved this without memory, so whatever worked is not in
-  the corpus yet. Write it down.
+Each one earned its place, so make it work harder. Open it and rewrite it
+against what actually happened:
 
-Both can apply. Search the folder before writing anything new: if a note
-already covers the situation, improve that note instead of adding a second one.
+- sharpen `when` so it also fires on the situation that just came up
+- tighten `do`/`avoid` if the advice was vague, incomplete, or partly wrong
+- record the real result in `because`
+
+Editing in place is correct here. You have evidence of how the note performed,
+which is the one thing that makes a rewrite an improvement rather than a guess.
+If a note was opened and turned out to be wrong or useless, say so in it — a
+note that records its own failure is worth more than one quietly left standing.
+
+## Job two: write down what is missing
+
+Whatever the agent worked out for itself, without memory, is not in the corpus
+yet. Go through the conversation for actions worth repeating or avoiding that
+no note covers, and write those.
+
+Search the folder before writing anything new. If a note already covers the
+situation, improve that one rather than adding a second — two notes about one
+situation is how a corpus stops being useful.
 
 ## What earns a note
 
@@ -346,7 +366,8 @@ class MemoryReflect(BaseTask):
             # considered — advancing stops us reconsidering them hourly.
             return True
         prompt = _PROMPT.format(root=root, cid=cid, title=self._title(sdk, cid),
-                                today=today, transcript=transcript)
+                                today=today, transcript=transcript,
+                                used=self._used_notes(sdk, cid, transcript))
         try:
             report = sdk.agent.spawn(prompt, title=f"Memory: conversation {cid}",
                                      wait=True)
@@ -359,7 +380,50 @@ class MemoryReflect(BaseTask):
                     f"{(report or {}).get('error') or 'no report'}",
                     level="warning")
             return False
+        self._forget_retrievals(sdk, cid)
         return True
+
+    def _used_notes(self, sdk, cid, transcript):
+        """Notes that were surfaced to the agent and that it then opened.
+
+        Both halves are needed and neither is available alone. The offer lives
+        only in the prompt, which is not stored anywhere, so the service
+        records it in ``memory_retrievals``. The open is a ``read_file`` call,
+        which appears in the transcript because the agent had to name the path
+        to make it — so a surfaced path appearing in the transcript at all
+        means the agent went and got it. Nothing else puts that string there:
+        the retrieval block itself never enters the conversation.
+
+        This decides which job the curator has, and nothing more. It is not a
+        score — that a note was opened says the situation looked close, not
+        that the advice was any good, and only reading what happened next can
+        settle that.
+        """
+        try:
+            rows = sdk.db.query(
+                "SELECT path FROM memory_retrievals WHERE conversation_id = ?",
+                [int(cid)], max_rows=200) or []
+        except sdk.Failed:
+            return ""
+        used = [str(r.get("path") or "") for r in rows
+                if str(r.get("path") or "") and str(r["path"]) in transcript]
+        if not used:
+            return ("None. Memory was either not surfaced or not opened, so "
+                    "nothing here has been shown to help yet.")
+        return "\n".join(f"- {path}" for path in used)
+
+    def _forget_retrievals(self, sdk, cid):
+        """Drop the retrieval log for a conversation now reflected on.
+
+        The log answers one question once. Left to accumulate it is an
+        unbounded table nothing prunes, since ``prune_expired`` only knows
+        about the kernel's own.
+        """
+        try:
+            sdk.db.write("DELETE FROM memory_retrievals WHERE conversation_id = ?",
+                         [int(cid)])
+        except sdk.Failed:
+            pass
 
     def _title(self, sdk, cid):
         """The conversation's title, for the curator's orientation only."""

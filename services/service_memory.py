@@ -8,14 +8,16 @@ result that followed, so retrieval is what makes a past result bear on a
 present decision. Facts live in ``MEMORY.md``, which the kernel inlines
 directly and nothing here touches.
 
-**Short notes go in whole; long ones become pointers.** The split is length
-rather than kind, because the cost being managed is tokens and the risk being
-managed is a truncated procedure. A note that says "when about to commit, avoid
-adding trailers" has to arrive *already true* — the moment it applies is not a
-moment anyone stops to consult memory, so a pointer would be read too late or
-not at all. A long sequence of actions is the opposite: reading it is a
-decision worth making deliberately, and injecting a matched fragment would hand
-the agent half a procedure and let it follow that half.
+**The prompt gets situations, never the notes themselves.** The only decision
+to make from the prompt is whether a past situation is the present one, and the
+situation alone answers that; what was tried and how it turned out is what the
+file is for. Injecting the advice as well was tried and had to come out — it
+grew with the corpus, truncated long notes into advice stripped of its context,
+and destroyed the one observable signal in the system. With the content already
+in the prompt there is no reason to open the file, so nothing downstream can
+tell which notes were used, and the curator needs exactly that to know whether
+it is improving an old note or writing a new one. So this service also records
+what it surfaced (``memory_retrievals``); the read is the other half.
 
 The retrieval itself is one ``hybrid_search`` call at ``turn_start``, with the
 user's own message as the query. That is deliberate on both counts. The hook
@@ -29,15 +31,13 @@ when a conversation goes quiet, and by the agent itself with ``edit_file``;
 the folder is inside the workspace, so neither needs approval.
 """
 
+import time
+
 from guest.bases import BaseService
 
-#: How much of a note to read. Notes are situation/action/result and are meant
-#: to be short; anything past this is a note that wants splitting.
+#: How much of a note to read when building its line. Only the frontmatter is
+#: wanted, and that is at the top.
 HEAD_CHARS = 2000
-
-#: Below this, a note is injected whole rather than pointed at. Set so a
-#: handful of ordinary notes cost a few hundred tokens between them.
-INLINE_CHARS = 700
 
 
 def _memory_root(sdk):
@@ -95,7 +95,7 @@ class Memory(BaseService):
     hooks = {"turn_start": "on_turn_start"}
     requests = ["paths.get", "config.read", "config.write", "conv.read",
                 "tool.call", "fs.read", "fs.list", "fs.write",
-                "session.add_prompt_extra"]
+                "db.define", "db.write", "session.add_prompt_extra"]
     dependencies_files = ["tools/tool_hybrid_search.py"]
     dependencies_pip = []
 
@@ -109,12 +109,13 @@ class Memory(BaseService):
         "## Memory\n"
         "The `memory` folder in your workspace holds **actions**: what to do, "
         "or not do, in a situation that has come up before. Each note is one "
-        "situation, the action taken, and the result that followed. Notes "
-        "matching the current message appear under 'What worked here before' — "
-        "short ones in full, longer ones as a path to read.\n"
-        "They are advice from a past situation, not instructions. Weigh "
-        "whether this situation really is that one before following them, and "
-        "read the full note when only a path was given.\n"
+        "situation, the action taken, and the result that followed.\n"
+        "Situations matching the current message are listed above under "
+        "'Situations you have been in before'. That list gives you the "
+        "situation and a path, never the advice — read the file when a "
+        "situation looks close enough to yours to be worth learning from. It "
+        "is advice from a past case, not an instruction: weigh whether this "
+        "case really is that one.\n"
         "Retrieval happens once, on the user's message. When something comes "
         "up mid-turn that feels familiar, search the folder yourself with "
         "`hybrid_search` scoped to it — cheap, and often faster than working "
@@ -134,10 +135,29 @@ class Memory(BaseService):
     )
 
     def start(self, sdk):
-        """Make sure the folder exists and the indexer can see it."""
+        """Make sure the folder exists, the indexer sees it, and the log does."""
         root = _memory_root(sdk)
         self._ensure_folder(sdk, root)
         self._ensure_indexed(sdk, root)
+        self._ensure_log(sdk)
+
+    def _ensure_log(self, sdk):
+        """The retrieval log this service owns.
+
+        Defined here rather than declared by the reflect task, because the
+        writer should own the schema: the task only reads it, and a task that
+        is not installed must not take retrieval logging down with it.
+        """
+        try:
+            sdk.db.define(
+                "CREATE TABLE IF NOT EXISTS memory_retrievals ("
+                " conversation_id INTEGER,"
+                " path TEXT,"
+                " offered_at REAL,"
+                " PRIMARY KEY (conversation_id, path))")
+        except sdk.Failed as error:
+            sdk.log(f"could not create the retrieval log: {error}",
+                    level="warning")
 
     def stop(self, sdk):
         """Nothing is held open."""
@@ -217,14 +237,43 @@ class Memory(BaseService):
         if not hits:
             return None
 
-        block = self._render(sdk, hits)
+        offered = []
+        block = self._render(sdk, hits, offered)
         if not block:
             return None
         try:
             sdk.session.add_prompt(block, key=ctx.session_key, slot="memory")
         except sdk.Failed as error:
             sdk.log(f"could not inject memory pointers: {error}", level="warning")
+        self._log_offered(sdk, ctx, offered)
         return None
+
+    def _log_offered(self, sdk, ctx, offered):
+        """Record which notes were surfaced in this conversation.
+
+        Half of a pair: the curator later checks which of these the agent went
+        on to open, and that is what tells it whether to improve an existing
+        note or write a new one. The prompt is not stored anywhere, so this is
+        the only place the offer is knowable — without it the curator can see
+        the read but never what prompted it.
+
+        Keyed on (conversation, path) so a note surfaced on twenty turns is one
+        row: the question is whether it was ever offered, not how often.
+        """
+        cid = getattr(ctx, "conversation_id", None)
+        if not (cid and offered):
+            return
+        now = time.time()
+        for path in offered:
+            try:
+                sdk.db.write(
+                    "INSERT OR REPLACE INTO memory_retrievals "
+                    "(conversation_id, path, offered_at) VALUES (?, ?, ?)",
+                    [int(cid), str(path), now])
+            except sdk.Failed as error:
+                sdk.log(f"could not record a memory retrieval: {error}",
+                        level="warning")
+                return
 
     def _latest_user_text(self, sdk, ctx):
         """The message the turn is about, which is the retrieval cue.
@@ -256,8 +305,13 @@ class Memory(BaseService):
             return []
         return [hit for hit in (results or []) if hit.get("path")]
 
-    def _render(self, sdk, hits):
-        """Build the block: short notes whole, long ones as pointers."""
+    def _render(self, sdk, hits, offered):
+        """Build the block, and record what was offered.
+
+        ``offered`` collects the paths so the caller can log them: what the
+        curator needs later is the pair "surfaced, then opened", and only this
+        half is knowable here.
+        """
         entries = []
         for hit in hits:
             path = str(hit["path"])
@@ -265,42 +319,41 @@ class Memory(BaseService):
                 continue
             if entry := self._entry(sdk, hit, path):
                 entries.append(entry)
+                offered.append(path)
         if not entries:
             return ""
-        return ("## What worked here before\n"
-                "Past situations matching this one, and what came of the "
-                "action taken. Advice, not instructions — the situation may "
-                "differ in ways that matter. Where only a path is given, read "
-                "it before relying on it.\n\n"
+        return ("## Situations you have been in before\n"
+                "These past situations matched this message. Each is a note "
+                "recording what was tried and what came of it — read one when "
+                "the situation looks close enough to yours to be worth "
+                "learning from.\n\n"
                 + "\n\n".join(entries))
 
     def _entry(self, sdk, hit, path):
-        """One note: the advice itself when it is short, a pointer when not."""
+        """One note: the situation it covers, and where to read the rest.
+
+        The situation and nothing else, because the only decision to make from
+        the prompt is whether this past situation is the present one. What was
+        attempted and how it turned out is what the agent opens the file for.
+
+        Injecting the action too was tried and had to come out. It cost tokens
+        proportional to the corpus, it truncated long notes into advice with no
+        context, and — worst — it destroyed the one observable signal in the
+        system: with the content already in the prompt there is no reason to
+        open the file, so nothing downstream can tell which notes were used.
+        The read is what tells the curator whether its job this time is to
+        improve an existing note or write a new one.
+        """
         try:
-            head = sdk.fs.read(path)[:HEAD_CHARS]
+            situation = _frontmatter(sdk.fs.read(path)[:HEAD_CHARS]).get("when")
         except sdk.Failed:
-            head = ""
-        fields = _frontmatter(head)
-        situation = fields.get("when") or ""
-        action = fields.get("do") or fields.get("avoid") or ""
-        verb = "Do" if fields.get("do") else "Avoid"
-
-        if not (situation or action):
-            # No frontmatter to read — an older note, or one written by hand.
-            # It still matched, so point at it rather than dropping it.
-            excerpt = " ".join(str(hit.get("content") or "").split())[:140]
-            return f"- {path}" + (f" — {excerpt}" if excerpt else "")
-
-        head_line = f"- **{situation or path}**"
-        if len(head) <= INLINE_CHARS:
-            parts = [head_line]
-            if action:
-                parts.append(f"  {verb}: {action}")
-            if because := fields.get("because"):
-                parts.append(f"  Because: {because}")
-            parts.append(f"  ({path})")
-            return "\n".join(parts)
-        return f"{head_line}\n  {verb}: {action}\n  Full note: {path}"
+            situation = ""
+        if situation:
+            return f"- {situation}\n  ({path})"
+        # No frontmatter — an older note, or one written by hand. It matched,
+        # so point at it rather than dropping it.
+        excerpt = " ".join(str(hit.get("content") or "").split())[:140]
+        return f"- {path}" + (f" — {excerpt}" if excerpt else "")
 
 
 _README = """# Memory
