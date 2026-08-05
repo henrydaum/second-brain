@@ -230,6 +230,44 @@ def test_the_curator_is_also_swept_because_a_crash_emits_nothing():
     assert jobs["memory_reflect_sweep"]["cron"] == "0 * * * *"
 
 
+def test_subagent_curation_is_opt_in_and_never_reaches_scheduled_ones():
+    """Three kinds of conversation, separated by the category the kernel sets.
+
+    An interactive ``sdk.agent.spawn`` files its child under ``Subagent``; a
+    scheduled one under ``Scheduled``/``Scheduled (one-time)``
+    (``runtime/subagents.py`` ``_scheduled_category``). The setting opens the
+    first and must never open the second: a scheduled job pins its conversation
+    and reuses it forever, so it has no ending to reflect on and would hand the
+    curator the same growing transcript every hour.
+    """
+    declared = _declarations(TASK)
+    keys = {entry[1] for entry in declared["config_settings"]}
+    assert "memory_reflect_include_subagents" in keys
+
+    setting = next(e for e in declared["config_settings"]
+                   if e[1] == "memory_reflect_include_subagents")
+    assert setting[3] is False, "opt-in: it costs a curator run per subagent"
+
+    source = _source_or_skip(TASK)
+    assert "NOT LIKE 'Scheduled%'" in source, "unconditional, in both modes"
+
+
+def test_the_curator_cannot_reach_its_own_output_in_either_mode():
+    """Once subagents are curated, the session-key guard cannot fire.
+
+    With subagents off, a child's event is dropped outright. With them on that
+    guard is deliberately bypassed — which is exactly when the curator's own
+    conversation becomes an ordinary candidate. The title filter is what stands
+    in the way, and it is exact rather than fragile because the task sets that
+    title itself when it spawns and matches the same constant when it queries.
+    """
+    source = _source_or_skip(TASK)
+    # Applied as a bound parameter, unconditionally — not inside the branch
+    # that the setting turns off.
+    assert "COALESCE(c.title, '') NOT LIKE ?" in source
+    assert "CURATOR_TITLE}%" in source, "the title must be the bound value"
+
+
 def test_the_curator_does_not_react_to_its_own_children():
     """One conversation ending produced four runs, and this is why.
 
