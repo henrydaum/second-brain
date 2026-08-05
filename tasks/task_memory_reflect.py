@@ -63,6 +63,13 @@ from guest.bases import BaseTask
 #: agent turn, and the sweep comes round again in an hour.
 MAX_PER_RUN = 3
 
+#: What this task titles its own children. Filtering on it is exact rather than
+#: fragile, because the task owns both ends of the string: it sets the title
+#: when it spawns and matches the same constant when it queries. Needed once
+#: subagent conversations become reflectable at all, since the curator's own
+#: conversation is a subagent conversation like any other.
+CURATOR_TITLE = "Memory curation:"
+
 #: Messages pulled into the curator's prompt, newest-last.
 MAX_MESSAGES = 400
 
@@ -201,6 +208,13 @@ class MemoryReflect(BaseTask):
          "How recently a conversation must have been active to be reflected on. "
          "Stops a fresh install from reflecting on your entire history.",
          24, {"type": "slider", "range": (1, 168, 167), "is_float": False}),
+        ("Reflect on subagents", "memory_reflect_include_subagents",
+         "Also curate memories from subagents you spawned. Their whole purpose "
+         "is often to go and find something out, so the lesson is real — but "
+         "nobody was steering, and every one costs another curator run. "
+         "Scheduled subagents are never included: they reuse one conversation "
+         "forever, so there is no ending to reflect on.",
+         False, {"type": "bool"}),
     ]
 
     agent_prompt = (
@@ -217,12 +231,14 @@ class MemoryReflect(BaseTask):
         run narrows to it; the hourly sweep names nothing, so the run takes
         whatever the watermark has been left holding.
         """
-        if self._is_own_child(payload):
+        subagents = self._include_subagents(sdk)
+        if not subagents and self._from_a_child(payload):
             return sdk.ok([])
 
         floor = self._floor(sdk)
         busy = self._busy_conversations(sdk)
-        candidates = [row for row in self._candidates(sdk, floor, self._cutoff(sdk))
+        candidates = [row for row in self._candidates(sdk, floor,
+                                                      self._cutoff(sdk), subagents)
                       if row["cid"] not in busy]
         if ended := (payload or {}).get("conversation_id"):
             candidates = [row for row in candidates
@@ -244,21 +260,37 @@ class MemoryReflect(BaseTask):
 
     # ── deciding what to reflect on ──────────────────────────────────
 
-    def _is_own_child(self, payload):
-        """Whether this event is the curator we just spawned, finishing.
+    def _include_subagents(self, sdk):
+        """Whether subagent conversations are worth curating here.
 
-        A subagent gets its own conversation and closes its session when it is
-        done, so every curator completion emits the very channel that started
-        it. Left unfiltered that is a feedback loop: the curator's own
-        transcript looks like a conversation that has gone quiet, so we reflect
-        on it, which spawns another curator, which ends, which... It terminates
-        only by luck — when a curator's transcript happens to fall under the
-        message floor — which is how one conversation ending produced four
-        runs.
+        Off by default and deliberately so. A subagent's whole purpose is often
+        to go and find something out, which makes the lesson real — but nobody
+        was steering it, so there is no user correcting a wrong turn, and every
+        included conversation costs another curator run on top of the work it
+        is reflecting on.
+        """
+        try:
+            return bool(sdk.config.read("memory_reflect_include_subagents"))
+        except sdk.Failed:
+            return False
 
-        The session key is the tell and it costs nothing to read. The category
-        filter in the candidate query is the other half, for conversations the
-        sweep meets later with no event to inspect.
+    def _from_a_child(self, payload):
+        """Whether this event is a subagent's session closing.
+
+        Every subagent gets its own conversation and closes its session when it
+        finishes, so a curator completion emits the very channel that started
+        it. Left unfiltered that is a feedback loop: the curator's transcript
+        looks like a conversation that has gone quiet, so we reflect on it,
+        spawning another curator, which ends, which... It terminated only by
+        luck — when a transcript happened to fall under the message floor —
+        which is how one conversation ending once produced four runs.
+
+        Skipping every child is the blunt form of that guard and it is the
+        right one while subagents are not being curated at all. Once they are,
+        this cannot fire, and what keeps the loop closed instead is the title
+        filter in the candidate query: exact, since the task sets that title
+        itself, and it also covers the conversations the sweep meets later with
+        no event to inspect.
         """
         return str((payload or {}).get("session_key") or "").startswith(
             "spawn_subagent:")
@@ -315,7 +347,7 @@ class MemoryReflect(BaseTask):
                 busy.add(int(cid))
         return busy
 
-    def _candidates(self, sdk, floor, cutoff):
+    def _candidates(self, sdk, floor, cutoff, subagents):
         """Recently-active conversations with unreflected messages, oldest first.
 
         **At least one assistant message is required**, and the total floor
@@ -327,10 +359,21 @@ class MemoryReflect(BaseTask):
         the curator would then be handed a transcript with no agent in it and
         asked what should be done differently next time.
 
-        Subagent conversations are excluded here rather than trusted to the
-        session-key check: that one only sees an event, and the sweep meets a
-        finished curator's conversation with no event to inspect. A child is
-        created with ``kind = 'user'``, so the category is what separates it.
+        **Three kinds of conversation are separated by category**, which the
+        kernel already sets and which is the only one of these facts that
+        survives into the database. An interactive ``sdk.agent.spawn`` files
+        its child under ``Subagent``; a scheduled one under ``Scheduled`` or
+        ``Scheduled (one-time)``. So the setting can include the first without
+        the second — and the second must always be excluded, because a
+        scheduled job pins its conversation and reuses it forever, which means
+        it never really ends and reflecting on it would re-read the same
+        growing transcript every hour.
+
+        The curator's own children are excluded by title in both modes. With
+        subagents off the session-key guard already covers the event path, but
+        the sweep has no event to inspect; with subagents on the guard cannot
+        fire at all, and this is the only thing standing between the curator
+        and its own output.
 
         ``conversation_messages`` is not user-scoped and is read directly.
         ``conversations`` cannot be, so this joins ``my_conversations``, which
@@ -338,7 +381,11 @@ class MemoryReflect(BaseTask):
         the base user, which is right for a single-user install and something
         to revisit before anyone else's conversations need reflecting on.
         """
-        sql = """
+        # A literal fragment chosen between two constants — never anything the
+        # guest or the database supplied, which is why it can be formatted in
+        # while every value stays a bound parameter.
+        exclude = "" if subagents else "\n               AND COALESCE(c.category, '') <> 'Subagent'"
+        sql = f"""
             SELECT m.conversation_id AS cid,
                    MAX(m.id)         AS max_id,
                    COUNT(*)          AS new_count
@@ -350,7 +397,8 @@ class MemoryReflect(BaseTask):
              WHERE m.id > COALESCE(r.last_message_id, 0)
                AND LOWER(m.role) IN ('user', 'assistant')
                AND COALESCE(m.content, '') <> ''
-               AND COALESCE(c.category, '') <> 'Subagent'
+               AND COALESCE(c.category, '') NOT LIKE 'Scheduled%'
+               AND COALESCE(c.title, '') NOT LIKE ?{exclude}
              GROUP BY m.conversation_id
             HAVING new_count >= ?
                AND MAX(COALESCE(m.timestamp, 0)) >= ?
@@ -359,7 +407,8 @@ class MemoryReflect(BaseTask):
              ORDER BY max_id ASC
         """
         try:
-            return sdk.db.query(sql, [floor, cutoff], max_rows=100) or []
+            return sdk.db.query(sql, [f"{CURATOR_TITLE}%", floor, cutoff],
+                                max_rows=100) or []
         except sdk.Failed as error:
             sdk.log(f"could not look for conversations to reflect on: {error}",
                     level="warning")
@@ -380,8 +429,8 @@ class MemoryReflect(BaseTask):
                                 today=today, transcript=transcript,
                                 used=self._used_notes(sdk, cid, transcript))
         try:
-            report = sdk.agent.spawn(prompt, title=f"Memory: conversation {cid}",
-                                     wait=True)
+            report = sdk.agent.spawn(
+                prompt, title=f"{CURATOR_TITLE} conversation {cid}", wait=True)
         except sdk.Failed as error:
             sdk.log(f"memory curator failed for conversation {cid}: {error}",
                     level="warning")
