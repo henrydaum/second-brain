@@ -6,10 +6,12 @@ load, are these Requests real, is the retrieval free of dialogs, can this reach
 outside the folder — and the store file is the input.
 
 The four matter together because they are two pairs, and each half is useless
-alone. Retrieval is ``service_memory`` (ranks the corpus at ``turn_start`` and
-injects descriptions) plus ``tool_memory_recall`` (opens one by name). Curation
-is ``task_memory_reflect`` (spawns a curator when a conversation ends) plus
-``tool_memory_curate`` (the only writer). What connects them is not an import
+alone. Retrieval is ``service_memory_retrieve`` (ranks the corpus at
+``turn_start`` and injects descriptions) plus ``tool_memory_recall`` (opens one
+by name). Curation is ``task_memory_reflect`` (spawns a curator when a
+conversation ends) plus ``tool_memory_curate`` (the only writer). Automatic
+half, agent-invoked half, twice over — which is what the four names say.
+What connects them is not an import
 but the *folder* and one table, so the things worth pinning are the
 declarations that decide whether any of it runs at all: the hook moment, the
 trigger channel, the default job, the shared constants, and the profile that
@@ -28,7 +30,7 @@ import pytest
 import sandbox  # noqa: F401
 from tests.support import store_source, store_worktree
 
-SERVICE = "services/service_memory.py"
+SERVICE = "services/service_memory_retrieve.py"
 TASK = "tasks/task_memory_reflect.py"
 RECALL = "tools/tool_memory_recall.py"
 CURATE = "tools/tool_memory_curate.py"
@@ -345,7 +347,7 @@ def test_retrieval_stands_at_the_one_moment_that_runs_per_turn():
     """
     declared = _declarations(SERVICE)
     assert declared["family"] == "service"
-    assert declared["name"] == "memory"
+    assert declared["name"] == "memory_retrieve"
     assert declared["hooks"] == {"turn_start": "on_turn_start"}
     # It contributes guidance but exposes no callable surface: nothing should
     # be reaching into memory through ``service.call``.

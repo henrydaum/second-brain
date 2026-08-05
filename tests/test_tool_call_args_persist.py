@@ -1,11 +1,16 @@
 """Do a tool call's arguments survive into ``conversation_messages``?
 
-The memory bundle's curator decides which of its two jobs it has by asking
-whether the agent *opened* a note that had been surfaced to it. The offer is
-recorded by ``service_memory``; the open is a ``read_file`` call, and the only
-place that is observable after the fact is the stored transcript. So the whole
-loop rests on one question this file answers: does the path the agent passed to
-a tool appear in the row that gets saved, in a form something can match on?
+Anything reading a conversation back — the memory curator's transcript, an
+audit, a replay — sees only what ``save_history_message`` wrote. So the
+question this file answers is whether the arguments the agent passed to a tool
+appear in that row at all, in a form something can match on.
+
+It was written for a loop that no longer exists: the memory bundle used to
+infer that a note had been *opened* by scanning the transcript for a
+``read_file`` call and comparing the path it named. That inference is gone —
+``tool_memory_recall`` records the fact when it happens — and the property
+survives it, because the transcript is still the only place a past tool call
+is observable and the encoding is still the trap described below.
 
 ``save_history_message`` packs an assistant message's ``tool_calls`` with
 ``json.dumps``, and the provider format carries ``arguments`` as a JSON
