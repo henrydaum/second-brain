@@ -318,6 +318,15 @@ class MemoryReflect(BaseTask):
     def _candidates(self, sdk, floor, cutoff):
         """Recently-active conversations with unreflected messages, oldest first.
 
+        **At least one assistant message is required**, and the total floor
+        does not cover it: the corpus records what the *agent* did, so a
+        conversation the agent never spoke in has no action to learn from and
+        nothing a note could say. Someone can reach the floor without that
+        happening — a few messages typed at a turn that failed or was
+        cancelled, or a conversation opened only to run slash commands — and
+        the curator would then be handed a transcript with no agent in it and
+        asked what should be done differently next time.
+
         Subagent conversations are excluded here rather than trusted to the
         session-key check: that one only sees an event, and the sweep meets a
         finished curator's conversation with no event to inspect. A child is
@@ -345,6 +354,8 @@ class MemoryReflect(BaseTask):
              GROUP BY m.conversation_id
             HAVING new_count >= ?
                AND MAX(COALESCE(m.timestamp, 0)) >= ?
+               AND SUM(CASE WHEN LOWER(m.role) = 'assistant'
+                            THEN 1 ELSE 0 END) >= 1
              ORDER BY max_id ASC
         """
         try:
