@@ -93,9 +93,10 @@ def test_all_four_agree_on_where_entries_live():
     — no fences, the key in the body — made the entry silently unreachable. A
     path cannot be subtly wrong.
 
-    Three files derive that path independently (a shared helper would put the
-    writer's code on the reader's import path), so they have to agree or one of
-    them writes where nothing looks. The task is deliberately not among them:
+    Three files derive that path independently — the two tools *could* share a
+    ``tools/helpers/`` module, but the service is another family and could not,
+    so sharing would take three copies to two rather than to one. This test is
+    what keeps them equal either way. The task is deliberately not among them:
     it reaches the corpus only through ``tool.call``, so it holds no path
     knowledge at all and cannot drift.
     """
