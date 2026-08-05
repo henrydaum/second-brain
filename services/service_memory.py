@@ -315,7 +315,11 @@ class Memory(BaseService):
         entries = []
         for hit in hits:
             path = str(hit["path"])
-            if sdk.path.name(path).lower() == "readme.md":
+            # MEMORY.md is inlined into the prompt in full by the kernel and
+            # README.md explains the folder to a person. Both live here and
+            # both get indexed, so both match; surfacing either would spend
+            # tokens pointing at something already present or irrelevant.
+            if sdk.path.name(path).lower() in ("readme.md", "memory.md"):
                 continue
             if entry := self._entry(sdk, hit, path):
                 entries.append(entry)

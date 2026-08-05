@@ -70,6 +70,14 @@ MAX_PER_RUN = 3
 #: conversation is a subagent conversation like any other.
 CURATOR_TITLE = "Memory curation:"
 
+#: Last-resort budget for ``MEMORY.md``, used only when the setting cannot be
+#: read at all. The real number is the kernel's ``memory_index_cap``: past it
+#: the index is truncated out of the prompt, so a curator told a different
+#: figure would write facts nobody ever sees. A plugin cannot import
+#: ``agent/system_prompt.py`` to ask, which is exactly why the budget is a
+#: setting and not a constant on either side.
+FALLBACK_INDEX_BUDGET = 4000
+
 #: Messages pulled into the curator's prompt, newest-last.
 MAX_MESSAGES = 400
 
@@ -160,11 +168,36 @@ matched against what a user says in some future conversation, so write it as
 the *situation* — "a PDF yields no text", "about to commit to a repo Henry
 owns" — never as a topic label.
 
+{facts}
 Transcript:
 
 {transcript}
 
 Reply with one line: what you wrote or improved, or "nothing worth keeping"."""
+
+_FACTS_JOB = """## Job three: keep MEMORY.md current
+
+`{root}/MEMORY.md` holds **facts** — things that are simply true and carry no
+action. Names, paths, which machine something runs on, how the user likes to be
+addressed, a preference with nothing to do about it. It is inlined into the
+agent's prompt in full, every turn, so it is the one place a fact is guaranteed
+to be seen without anybody going to look.
+
+Add what this conversation established. A fact belongs there when it will still
+be true next month and is not discoverable by reading the code.
+
+**It has a budget of about {budget} characters.** Past that the kernel
+truncates it and the tail is simply not in the prompt — so this job is as much
+pruning as adding. Every time you touch it: delete what has become false,
+merge duplicates, cut anything that turned out to be obvious or one-off, and
+tighten wording. If it is near the budget, something has to go before anything
+is added; choose what to lose deliberately rather than letting the truncation
+choose for you.
+
+Keep the division clean. Anything with an action in it is a note, not a fact,
+and belongs in the folder — MEMORY.md is not a place for advice.
+
+"""
 
 
 class MemoryReflect(BaseTask):
@@ -208,6 +241,11 @@ class MemoryReflect(BaseTask):
          "How recently a conversation must have been active to be reflected on. "
          "Stops a fresh install from reflecting on your entire history.",
          24, {"type": "slider", "range": (1, 168, 167), "is_float": False}),
+        ("Curate facts into MEMORY.md", "memory_reflect_curate_facts",
+         "Let the curator also add facts learned in a conversation to "
+         "MEMORY.md, and prune it to stay inside its prompt budget. Turn off "
+         "to keep that file yours alone.",
+         True, {"type": "bool"}),
         ("Reflect on subagents", "memory_reflect_include_subagents",
          "Also curate memories from subagents you spawned. Their whole purpose "
          "is often to go and find something out, so the lesson is real — but "
@@ -259,6 +297,31 @@ class MemoryReflect(BaseTask):
         return sdk.ok(done, llm_summary=f"Reflected on {len(done)} conversation(s).")
 
     # ── deciding what to reflect on ──────────────────────────────────
+
+    def _facts_job(self, sdk, root):
+        """The third job, or nothing at all.
+
+        Appended rather than woven in, so that turning it off leaves a prompt
+        with no trace of a job the curator is not allowed to do — a rule
+        stated and then contradicted is worse than one never stated.
+        """
+        try:
+            wanted = sdk.config.read("memory_reflect_curate_facts")
+        except sdk.Failed:
+            wanted = True
+        if wanted is None:
+            wanted = True
+        if not wanted:
+            return ""
+        return _FACTS_JOB.format(root=root, budget=self._index_budget(sdk))
+
+    def _index_budget(self, sdk):
+        """How much of MEMORY.md the kernel will actually inline."""
+        try:
+            return max(1, int(sdk.config.read("memory_index_cap")
+                              or FALLBACK_INDEX_BUDGET))
+        except (sdk.Failed, TypeError, ValueError):
+            return FALLBACK_INDEX_BUDGET
 
     def _include_subagents(self, sdk):
         """Whether subagent conversations are worth curating here.
@@ -427,7 +490,8 @@ class MemoryReflect(BaseTask):
             return True
         prompt = _PROMPT.format(root=root, cid=cid, title=self._title(sdk, cid),
                                 today=today, transcript=transcript,
-                                used=self._used_notes(sdk, cid, transcript))
+                                used=self._used_notes(sdk, cid, transcript),
+                                facts=self._facts_job(sdk, root))
         try:
             report = sdk.agent.spawn(
                 prompt, title=f"{CURATOR_TITLE} conversation {cid}", wait=True)
