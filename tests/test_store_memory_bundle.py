@@ -178,6 +178,37 @@ def test_a_note_with_no_situation_is_reported_not_guessed_at():
     assert "with no 'when' were skipped" in service
 
 
+def test_indexing_is_asked_for_when_somebody_is_there_to_answer():
+    """A boot-time service cannot be granted a kernel setting.
+
+    ``sync_directories`` is UNSAFE to write, and a service loading at boot has
+    no session — so the chain is unattended and the Request is *refused*, not
+    asked (``sandbox/approval.py`` step 3). Seeding from ``start`` therefore
+    did nothing but log, and the folder was never indexed: retrieval returned
+    nothing forever while every part looked healthy.
+    """
+    service = _source_or_skip(SERVICE)
+
+    assert "_maybe_seed" in service
+    # Gated on attendance, or the one attempt is spent on a subagent's turn.
+    assert 'getattr(ctx, "attended", False)' in service
+    # And not from start(), which is where it could never work.
+    start = service.split("def start(self, sdk):", 1)[1].split("def ", 1)[0]
+    assert "_ensure_indexed" not in start
+
+
+def test_the_used_pair_is_matched_against_every_message():
+    """Not against the transcript, which is trimmed to fit a prompt.
+
+    A read early in a long conversation falls off the front of the window the
+    curator is shown, and the curator would then write a duplicate instead of
+    improving the note that actually helped.
+    """
+    task = _source_or_skip(TASK)
+    assert "_tool_call_text" in task
+    assert "_used_notes(sdk, cid, row[\"max_id\"])" in task
+
+
 def test_both_halves_of_the_used_pair_are_recorded_and_read():
     """Neither half is available alone.
 
@@ -200,7 +231,7 @@ def test_both_halves_of_the_used_pair_are_recorded_and_read():
     # Matched on the filename because a stored tool call escapes separators
     # twice — see tests/test_tool_call_args_persist.py. Matching the whole
     # path works on POSIX and silently fails on Windows.
-    assert "sdk.path.name(path) in transcript" in task
+    assert "sdk.path.name(path) in evidence" in task
 
 
 def test_the_service_can_inject_and_can_search():
@@ -394,8 +425,17 @@ def test_the_watermark_is_a_table_the_task_owns():
     declared = _declarations(TASK)
     assert declared["writes"] == ["memory_reflections"]
     assert "memory_reflections" in declared["output_schema"]
-    assert "db.write" not in declared["requests"]
     assert "agent.spawn" in declared["requests"]
+
+    # The watermark itself is never written by hand — the orchestrator does it
+    # from the returned rows. ``db.write`` is declared for the retrieval log,
+    # which has no such route, and it was being *called* for that before it was
+    # declared: the list limits an approval rather than gating the call, so an
+    # undeclared Request goes through and the omission says nothing.
+    source = _source_or_skip(TASK)
+    assert "db.write" in declared["requests"]
+    assert "INSERT" not in source.upper(), (
+        "the watermark advances through the returned rows, not by hand")
 
 
 def test_the_event_task_implements_the_event_entry_point():
@@ -423,3 +463,12 @@ def test_the_bundle_lists_both_halves_and_what_they_retrieve_through():
     files = manifest["files"]
     assert files == sorted(files), "manifest files must stay sorted"
     assert {SERVICE, TASK, "tools/tool_hybrid_search.py"} <= set(files)
+
+    # The curator is an ordinary agent turn with the default profile's tools,
+    # so a bundle without file tools installs a reviewer that cannot write a
+    # note — and read_file is also what produces the used-signal its whole
+    # branch depends on. Neither failure says anything: it just never writes.
+    assert {"tools/tool_read_file.py", "tools/tool_edit_file.py"} <= set(files)
+
+    for relative in files:
+        assert (Path(worktree) / relative).exists(), relative
