@@ -390,9 +390,20 @@ class MemoryReflect(BaseTask):
         only in the prompt, which is not stored anywhere, so the service
         records it in ``memory_retrievals``. The open is a ``read_file`` call,
         which appears in the transcript because the agent had to name the path
-        to make it — so a surfaced path appearing in the transcript at all
-        means the agent went and got it. Nothing else puts that string there:
-        the retrieval block itself never enters the conversation.
+        to make it. Nothing else puts that string there: the retrieval block
+        itself never enters the conversation.
+
+        **Matched on the filename, not the path**, and that is not a shortcut.
+        A tool call is stored by packing ``arguments`` — already a JSON string
+        — inside another ``json.dumps``, so every separator is escaped twice:
+        a POSIX path survives verbatim and a Windows one becomes
+        ``Z:\\\\\\\\Second Brain\\\\\\\\...``. Substring-matching the path
+        therefore works on one platform and silently fails on the other, which
+        is the worst shape the bug could take — the curator would report
+        nothing used, forever, and look like it was working. A filename
+        carries no separators, so no amount of escaping touches it, and note
+        names are distinctive enough to identify one. Pinned by
+        ``tests/test_tool_call_args_persist.py``.
 
         This decides which job the curator has, and nothing more. It is not a
         score — that a note was opened says the situation looked close, not
@@ -405,8 +416,9 @@ class MemoryReflect(BaseTask):
                 [int(cid)], max_rows=200) or []
         except sdk.Failed:
             return ""
-        used = [str(r.get("path") or "") for r in rows
-                if str(r.get("path") or "") and str(r["path"]) in transcript]
+        used = [path for row in rows
+                if (path := str(row.get("path") or ""))
+                and sdk.path.name(path) in transcript]
         if not used:
             return ("None. Memory was either not surfaced or not opened, so "
                     "nothing here has been shown to help yet.")
