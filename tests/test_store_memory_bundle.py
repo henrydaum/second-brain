@@ -80,6 +80,47 @@ def test_retrieval_stands_at_the_one_moment_that_runs_per_turn():
     assert declared["exports"] == []
 
 
+def test_the_corpus_is_actions_and_facts_live_elsewhere():
+    """A note that names no action cannot change what anyone does.
+
+    That rule is the whole filter on what gets written: it kills the dominant
+    failure mode, which is a curator producing tidy summaries of what happened,
+    and it implements "a neutral result is not worth recording" for free —
+    a neutral result changes no action, so there is nothing to write.
+
+    Facts go in MEMORY.md, which the kernel inlines and the curator must never
+    touch. The two halves have to agree about that or the agent is told one
+    thing and the curator does another.
+    """
+    task = _source_or_skip(TASK)
+    service = _source_or_skip(SERVICE)
+
+    for source, name in ((task, "task"), (service, "service")):
+        assert "do:" in source and "avoid:" in source, name
+        assert "MEMORY.md" in source, name
+
+    assert "cannot change anything" in service
+    assert "not touch" in task or "never touches" in task
+
+    # The taxonomy that used to gate rendering is gone: a fact is a situation
+    # with a short action, so the split that matters is length, not kind.
+    assert "type: skill" not in task
+    assert "supersedes" not in task
+
+
+def test_the_curator_sees_the_tool_calls_it_has_to_branch_on():
+    """Whether the agent used memory is only visible in what it called.
+
+    The curator's two jobs are chosen by that one fact — improve the notes that
+    were used, or write down the novel solution that was reached without them.
+    A user/assistant-only transcript cannot answer it, and would silently
+    collapse both jobs into the second.
+    """
+    source = _source_or_skip(TASK)
+    assert "tool_name" in source
+    assert "<> 'system'" in source, "everything but system rows belongs in it"
+
+
 def test_the_service_can_inject_and_can_search():
     """The two Requests the read half cannot work without.
 
