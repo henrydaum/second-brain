@@ -17,6 +17,7 @@ Skips cleanly when no store ref is reachable.
 """
 
 import json
+import ntpath
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,12 @@ def _declarations(relative: str) -> dict:
 
     return validate(_source_or_skip(relative),
                     filename=Path(relative).name).declarations
+
+
+def _load_store_class(relative: str, name: str):
+    namespace = {}
+    exec(compile(_source_or_skip(relative), relative, "exec"), namespace)
+    return namespace[name]
 
 
 @pytest.mark.parametrize("relative", [SERVICE, TASK])
@@ -197,7 +204,7 @@ def test_indexing_is_asked_for_when_somebody_is_there_to_answer():
     assert "_ensure_indexed" not in start
 
 
-def test_the_used_pair_is_matched_against_every_message():
+def test_the_used_pair_is_matched_against_persisted_tool_calls():
     """Not against the transcript, which is trimmed to fit a prompt.
 
     A read early in a long conversation falls off the front of the window the
@@ -205,8 +212,9 @@ def test_the_used_pair_is_matched_against_every_message():
     improving the note that actually helped.
     """
     task = _source_or_skip(TASK)
-    assert "_tool_call_text" in task
-    assert "_used_notes(sdk, cid, row[\"max_id\"])" in task
+    assert "_read_file_calls" in task
+    assert "json.loads" in task
+    assert "opened == wanted" in task
 
 
 def test_both_halves_of_the_used_pair_are_recorded_and_read():
@@ -221,17 +229,91 @@ def test_both_halves_of_the_used_pair_are_recorded_and_read():
     service = _source_or_skip(SERVICE)
     task = _source_or_skip(TASK)
 
-    assert "memory_retrievals" in service and "memory_retrievals" in task
+    assert "memory_retrievals_v2" in service and "memory_retrievals_v2" in task
     declared = _declarations(SERVICE)["requests"]
     assert "db.define" in declared and "db.write" in declared
 
     # The log answers one question once; nothing else prunes this table.
-    assert "DELETE FROM memory_retrievals" in task
+    assert "DELETE FROM memory_retrievals_v2" in task
 
-    # Matched on the filename because a stored tool call escapes separators
-    # twice — see tests/test_tool_call_args_persist.py. Matching the whole
-    # path works on POSIX and silently fails on Windows.
-    assert "sdk.path.name(path) in evidence" in task
+    # The persisted outer tool-call JSON and inner arguments JSON are both
+    # decoded, then the exact normalized path is compared.
+    assert 'str(name or "").strip() != "read_file"' in task
+    assert "sdk.path.normalize(absolute)" in task
+
+
+def test_retrieval_offers_are_keyed_to_the_user_message():
+    service = _source_or_skip(SERVICE)
+    task = _source_or_skip(TASK)
+
+    assert "offered_message_id INTEGER" in service
+    assert "PRIMARY KEY (conversation_id, path, offered_message_id)" in service
+    assert "SELECT id, content FROM conversation_messages" in service
+    assert "message_id > offered_id" in task
+
+
+def test_reflection_transcript_starts_after_the_previous_watermark():
+    task = _source_or_skip(TASK)
+
+    assert "AS previous_id" in task
+    transcript = task.split("def _transcript", 1)[1]
+    assert "AND id > ?" in transcript
+    assert "[cid, previous_id, max_id, limit]" in transcript
+
+
+def test_only_an_exact_post_offer_read_file_call_counts_as_used():
+    memory_reflect = _load_store_class(TASK, "MemoryReflect")()
+    note = r"Z:\Project\workspace\memory\actions\retry.md"
+    packed_read = json.dumps({
+        "content": "opening the note",
+        "tool_calls": [
+            {"name": "grep", "arguments": json.dumps({"path": note})},
+            {"function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": note}),
+            }},
+        ],
+    })
+    assistant_rows = [
+        {"id": 9, "content": packed_read},  # before the offer
+        {"id": 11, "content": json.dumps({
+            "content": f"I mentioned {note}", "tool_calls": [],
+        })},
+        {"id": 12, "content": packed_read},
+    ]
+
+    class Failed(Exception):
+        pass
+
+    class FakeDB:
+        def query(self, sql, params, max_rows=None):
+            if "memory_retrievals_v2" in sql:
+                return [{"path": note, "offered_message_id": 10}]
+            after_id, max_id = int(params[1]), int(params[2])
+            return [row for row in assistant_rows
+                    if after_id < row["id"] <= max_id]
+
+    class FakePath:
+        @staticmethod
+        def absolute(path, base=""):
+            raw = path if ntpath.isabs(path) else ntpath.join(base, path)
+            return ntpath.normpath(raw)
+
+        @staticmethod
+        def normalize(path):
+            return ntpath.normcase(ntpath.normpath(path))
+
+    class FakeSDK:
+        db = FakeDB()
+        path = FakePath()
+        paths = type("Paths", (), {"get": lambda self, key: r"Z:\Project"})()
+
+    sdk = FakeSDK()
+    sdk.Failed = Failed
+    assert memory_reflect._read_file_calls(sdk, 1, 10, 20) == [
+        (12, FakePath.normalize(note)),
+    ]
+    assert memory_reflect._used_notes(sdk, 1, 0, 20) == f"- {note}"
 
 
 def test_the_service_can_inject_and_can_search():

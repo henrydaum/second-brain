@@ -73,12 +73,7 @@ def test_a_windows_path_does_not_survive_verbatim():
 
 
 def test_the_filename_survives_on_both_platforms():
-    """Which is why the curator matches on the basename.
-
-    A note's filename carries no separators, so no amount of escaping touches
-    it, and it is distinctive enough to identify the note — the corpus is the
-    agent's own and the names are written to be descriptive.
-    """
+    """Double encoding does not alter ordinary filename characters."""
     for path in ("/home/h/workspace/memory/commit_trailers.md",
                  r"Z:\Second Brain\workspace\memory\commit_trailers.md"):
         assert "commit_trailers.md" in _saved(path)["content"], path
