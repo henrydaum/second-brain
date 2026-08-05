@@ -158,6 +158,11 @@ def test_both_halves_of_the_used_pair_are_recorded_and_read():
     # The log answers one question once; nothing else prunes this table.
     assert "DELETE FROM memory_retrievals" in task
 
+    # Matched on the filename because a stored tool call escapes separators
+    # twice — see tests/test_tool_call_args_persist.py. Matching the whole
+    # path works on POSIX and silently fails on Windows.
+    assert "sdk.path.name(path) in transcript" in task
+
 
 def test_the_service_can_inject_and_can_search():
     """The two Requests the read half cannot work without.
