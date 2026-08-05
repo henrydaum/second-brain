@@ -192,7 +192,6 @@ class MemoryRetrieve(BaseService):
         """
         self._seeded = False
         self._ensure_folder(sdk, _memory_root(sdk))
-        self._migrate_actions(sdk)
         self._ensure_usage_table(sdk)
 
     def _ensure_usage_table(self, sdk):
@@ -213,6 +212,14 @@ class MemoryRetrieve(BaseService):
                 " conversation_id INTEGER,"
                 " offered_at REAL,"
                 " recalled_at REAL)")
+            # Every recall looks a pending offer up by (conversation, name),
+            # against a table that gains a row per offer forever and is pruned
+            # only of offers nobody took. Without this that is a scan, and it
+            # gets slower precisely because the design is working — the whole
+            # point of keeping recalls is to have a history to query.
+            sdk.db.define(
+                "CREATE INDEX IF NOT EXISTS memory_usage_lookup"
+                " ON memory_usage (conversation_id, name, recalled_at)")
         except sdk.Failed as error:
             sdk.log(f"could not create the memory usage table: {error}",
                     level="warning")
@@ -246,49 +253,6 @@ class MemoryRetrieve(BaseService):
         except sdk.Failed as error:
             sdk.log(f"could not create the memory folder: {error}",
                     level="warning")
-
-    def _migrate_actions(self, sdk):
-        """Fold an older ``actions/`` corpus into ``notes/``.
-
-        The previous shape was ``when:``/``do:``/``because:``. Under the
-        agentskills.io frontmatter the situation is the ``description`` — same
-        job, spec's name — and the advice and the outcome become the body,
-        which is where they always belonged: they were never rendered into the
-        prompt anyway.
-
-        Idempotent and best-effort. A file whose name is already taken in
-        ``notes/`` is left where it is rather than overwriting anything, and
-        anything unreadable is skipped with a line in the log. Nothing here is
-        worth failing a boot over.
-        """
-        root = _memory_root(sdk)
-        old = sdk.path.join(root, "actions")
-        try:
-            entries = sdk.fs.list(old, pattern="*.md", details=True) or []
-        except sdk.Failed:
-            return
-        moved = 0
-        for entry in entries:
-            if entry.get("is_dir"):
-                continue
-            source = sdk.path.join(old, entry["name"])
-            name = _slug(sdk.path.stem(entry["name"]))
-            target = sdk.path.join(root, NOTES_DIRNAME, name + ".md")
-            try:
-                sdk.fs.list(target)
-                continue  # already migrated, or a name collision — leave both
-            except sdk.Failed:
-                pass
-            try:
-                text = sdk.fs.read(source)
-                sdk.fs.write(target, _as_note(name, text))
-                sdk.fs.delete(source)
-                moved += 1
-            except sdk.Failed as error:
-                sdk.log(f"could not migrate memory note {entry['name']}: {error}",
-                        level="warning")
-        if moved:
-            sdk.log(f"migrated {moved} memory note(s) from actions/ to notes/")
 
     def _maybe_seed(self, sdk, ctx):
         """Ask, once, for the two things this suite needs a person to allow.
@@ -606,45 +570,6 @@ class MemoryRetrieve(BaseService):
         if len(description) > MAX_DESCRIPTION_CHARS:
             description = description[:MAX_DESCRIPTION_CHARS].rstrip() + "…"
         return description
-
-
-def _slug(raw):
-    """A legal entry name from an older file's stem.
-
-    The agentskills.io character set is lowercase alphanumerics and single
-    hyphens. Anything else becomes a hyphen and runs are collapsed, which is
-    lossless enough for names that were already filenames.
-    """
-    out = []
-    for char in str(raw).lower():
-        if char.isdigit() or ("a" <= char <= "z"):
-            out.append(char)
-        elif out and out[-1] != "-":
-            out.append("-")
-    return "".join(out).strip("-")[:64] or "note"
-
-
-def _as_note(name, text):
-    """An old ``when``/``do``/``because`` note in the new frontmatter."""
-    fields = _frontmatter(text)
-    body = text.lstrip()
-    if body.startswith("---") and (end := body.find("\n---", 3)) != -1:
-        body = body[end + 4:]
-    lead = []
-    if action := (fields.get("do") or fields.get("avoid")):
-        verb = "Do" if fields.get("do") else "Avoid"
-        lead.append(f"{verb}: {action}")
-    if because := fields.get("because"):
-        lead.append(f"Because: {because}")
-    head = ["---", f"name: {name}",
-            f"description: {fields.get('when') or fields.get('description') or name}"]
-    for key in ("updated", "source"):
-        if value := fields.get(key):
-            head.append(f"{key}: {value}")
-    head.append("---")
-    return ("\n".join(head) + "\n\n"
-            + ("\n".join(lead) + "\n\n" if lead else "")
-            + body.strip() + "\n")
 
 
 _README = """# Memory
