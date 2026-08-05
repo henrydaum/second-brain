@@ -38,6 +38,7 @@ class SpawnSubagent(BaseTool):
             "attachments": {"type": "array", "items": {"type": "string"}, "description": "Optional file paths to attach."},
             "wait": {"type": "boolean", "description": "true (default): block and return the result. false: run in the background and continue."},
             "timeout_seconds": {"type": "integer", "description": "Max seconds the agent may run before it is cancelled. Capped by the subagent_timeout_seconds setting (default 300)."},
+            "profile": {"type": "string", "description": "An agent profile name from the user's config, which narrows the tools the child may use. Omit to give it the same profile you have."},
             "narration": {"type": "string", "description": "A few words on what you are delegating and why, shown to the user beside the call. E.g. 'sending an agent to read the three long PDFs'."},
         },
         "required": ["prompt"],
@@ -57,7 +58,10 @@ class SpawnSubagent(BaseTool):
         "for them. Results also persist in each child's own conversation. The timeout "
         "is a hard cutoff — children that exceed it are cancelled and reported as "
         "failed, so size each prompt to finish inside the budget. Only report results "
-        "you actually received; a timed-out agent produced none.\n\n"
+        "you actually received; a timed-out agent produced none.\n"
+        "Pass a profile when the child should be able to do *less* than you — "
+        "it names one of the user's configured agent profiles and narrows the "
+        "child's tools to that profile's list. Naming none gives it yours.\n\n"
         "When you want to shape the fan-out yourself — several agents, then something "
         "done with their combined answers — write a script and use "
         "sdk.agent.spawn(wait=False) with sdk.agent.collect. That is one tool call "
@@ -82,6 +86,7 @@ class SpawnSubagent(BaseTool):
                              if str(p).strip()],
                 wait=wait,
                 timeout_seconds=kwargs.get("timeout_seconds"),
+                profile=(kwargs.get("profile") or "").strip() or None,
             )
         except sdk.Failed as refused:
             # Every refusal the kernel makes is worth reporting verbatim: no

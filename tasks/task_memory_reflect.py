@@ -1,4 +1,4 @@
-"""Curate memory notes when a conversation goes quiet.
+"""Curate memory entries when a conversation goes quiet.
 
 A conversation ending is an episodic boundary: it is one self-contained piece
 of work, which makes it a far better unit to reflect on than a calendar day.
@@ -13,48 +13,37 @@ So every conversation also carries the id of the last message already reflected
 on, and the hourly sweep asks the same question with no event at all. Between
 them: the event makes reflection prompt, the watermark makes it idempotent
 under someone flicking through their history, and the sweep makes a lost event
-recoverable rather than silently dropped. The watermark is also what gives
-"reflect only on what is new" for free when an old conversation is reopened and
-left again.
+recoverable rather than silently dropped.
 
-**The corpus is reinforcement learning without weights.** A note is a
+**The corpus is reinforcement learning without weights.** An entry is a
 situation, an action, and the result that followed — so retrieval is what makes
 a past result bear on a present decision. Actions that produced good results
 should be repeated, actions that produced bad ones avoided, and a neutral
 result changes no action and is therefore not worth a file. That is the whole
-model, and everything below follows from it: a note with no action in it cannot
-change anything, so it is not a note.
+model, and everything below follows from it: an entry with no action in it
+cannot change anything, so it is not an entry.
 
-**The curator has two jobs, and a retrieved-then-read pair says which.** A note
-the agent was shown and went on to open earns a rewrite — it worked, so make it
-work harder: sharpen the situation that retrieves it, tighten the action,
-record what the result actually was. Anything the agent worked out for itself
-is not in the corpus yet and wants writing down. Both answer one question,
-which is whether the next agent here does better than this one did.
+**The curator has two jobs, and one column says which.** ``memory_usage``
+records every entry the retrieval service offered and every one
+``tool_memory_recall`` then opened. An entry that was *taken* earns a rewrite —
+it worked, so make it work harder. Anything the agent worked out for itself is
+not in the corpus yet and wants writing down. Offered-but-not-taken is neither,
+and saying so is cheap now that it is a recorded fact rather than something
+reconstructed by parsing tool calls out of the transcript.
 
-Neither half of that pair is available alone. The offer lives in the system
-prompt, which is stored nowhere, so ``service_memory`` records it; the open is
-a ``read_file`` call, which is in the transcript because the agent had to name
-the path to make it. This is also the reason the prompt carries situations and
-paths rather than the notes themselves — inline the advice and there is no
-reason to open anything, and the signal disappears.
+Note what "taken" is *not*: a score. That an entry was opened says the
+situation looked close, not that the advice was good. Only reading what
+happened next settles that, which is why a model does it and not a counter.
 
-Note what the pair is *not*: a score. That a note was opened says the situation
-looked close, not that the advice was good. Only reading what happened next
-settles that, which is why a model does it and not a counter.
-
-Rewriting in place is the mechanism rather than a hazard here, because it is
-*targeted*: only notes the conversation actually exercised, edited against
-evidence of how they performed. That is not the wholesale re-summarisation that
-erodes a corpus.
-
-**Facts do not belong here.** Anything simply true — a name, which machine
-something runs on, a stated preference with no action attached — belongs in
-``MEMORY.md``, which the agent maintains itself and this task never touches.
-This folder is for actions and sequences of actions only.
+**The curator writes through ``memory_curate`` and has no other way to write.**
+It is spawned under the ``memory_curator`` agent profile, which whitelists four
+tools and does not include ``edit_file``; ``memory_curate`` addresses entries
+by name and derives every path itself. So a background agent nobody is watching
+cannot touch anything outside the memory folder — including ``MEMORY.md``,
+which holds facts, is inlined into every prompt by the kernel, and belongs to
+the agent the user actually talks to.
 """
 
-import json
 import time
 
 from guest.bases import BaseTask
@@ -71,20 +60,13 @@ MAX_PER_RUN = 3
 #: conversation is a subagent conversation like any other.
 CURATOR_TITLE = "Memory curation:"
 
-#: Notes live in this subfolder of the memory root, and only notes do. It is
-#: what the retrieval service searches, so membership is a path rather than a
-#: property of the file's contents — which is the one thing a writer cannot get
-#: subtly wrong. Must match ``NOTES_DIRNAME`` in ``service_memory.py``; the two
-#: are pinned equal by ``tests/test_store_memory_bundle.py``.
-NOTES_DIRNAME = "actions"
-
-#: Last-resort budget for ``MEMORY.md``, used only when the setting cannot be
-#: read at all. The real number is the kernel's ``memory_index_cap``: past it
-#: the index is truncated out of the prompt, so a curator told a different
-#: figure would write facts nobody ever sees. A plugin cannot import
-#: ``agent/system_prompt.py`` to ask, which is exactly why the budget is a
-#: setting and not a constant on either side.
-FALLBACK_INDEX_BUDGET = 4000
+#: The restricted agent profile a curator runs under. ``service_memory`` seeds
+#: it on the first attended turn — it cannot be seeded from here, because a
+#: task's chain is unattended and writing a kernel setting is refused rather
+#: than asked. The kernel refuses to spawn under a profile that does not exist,
+#: which is the behaviour that matters: a curator that cannot be restricted
+#: must not run unrestricted.
+CURATOR_PROFILE = "memory_curator"
 
 #: Messages pulled into the curator's prompt, newest-last.
 MAX_MESSAGES = 400
@@ -101,55 +83,52 @@ MAX_TOOL_CHARS = 300
 #: Total transcript budget.
 MAX_TRANSCRIPT_CHARS = 24_000
 
-_PROMPT = """You curate the memory notes at:
-{notes}
+_PROMPT = """You curate this agent's memory. Read conversation {cid} ("{title}")
+below, including its tool calls, and work out what the next agent in this
+situation should do differently.
 
-They are **actions**: what to do, or not do, in a situation that has come up
-before. Each note is one situation, one action, and the result that followed.
+Everything you write goes through the `memory_curate` tool. You address entries
+by name and it handles paths, frontmatter and dates; you cannot write anywhere
+else, and you must not try.
 
-**Every note goes in that folder and only that folder.** It is the only place
-searched, so a note written anywhere else will never be found again. The rest
-of `{root}` is for things that are not notes.
+## Job one: improve what was used
 
-Below is conversation {cid} ("{title}"), including the tool calls. Read it and
-work out what the next agent in this situation should do differently.
-
-## Job one: improve the notes that were used
-
-These notes were surfaced to the agent and it opened them:
+These entries were surfaced to the agent and it opened them:
 
 {used}
 
-Each one earned its place, so make it work harder. Open it and rewrite it
-against what actually happened:
+Each one earned its place, so make it work harder. Read it with
+`memory_recall`, then `memory_curate update` it against what actually happened:
 
-- sharpen `when` so it also fires on the situation that just came up
-- tighten `do`/`avoid` if the advice was vague, incomplete, or partly wrong
-- record the real result in `because`
+- sharpen the description so it also fires on the situation that just came up
+- tighten the advice if it was vague, incomplete, or partly wrong
+- record the real result
 
-Editing in place is correct here. You have evidence of how the note performed,
-which is the one thing that makes a rewrite an improvement rather than a guess.
-If a note was opened and turned out to be wrong or useless, say so in it — a
-note that records its own failure is worth more than one quietly left standing.
+You have evidence of how these performed, which is the one thing that makes a
+rewrite an improvement rather than a guess. If one turned out to be wrong or
+useless, say so in it — an entry that records its own failure is worth more
+than one quietly left standing.
 
 ## Job two: write down what is missing
 
-Whatever the agent worked out for itself, without memory, is not in the corpus
-yet. Go through the conversation for actions worth repeating or avoiding that
-no note covers, and write those.
+Whatever the agent worked out for itself is not in the corpus yet. Go through
+the conversation for actions worth repeating or avoiding that no entry covers.
 
-Search the folder before writing anything new. If a note already covers the
-situation, improve that one rather than adding a second — two notes about one
-situation is how a corpus stops being useful.
+Here is everything you already have:
 
-## What earns a note
+{corpus}
+
+If one of those already covers the situation, update it rather than adding a
+second — two entries about one situation is how a corpus stops being useful.
+
+## What earns an entry
 
 One test: **will this change what an agent does?** If you cannot name the
 action, there is nothing to write.
 
-- An action that produced a good result -> a note saying to do it.
+- An action that produced a good result -> an entry saying to do it.
 - An action that produced a bad result, a trap, a correction the user made,
-  something that broke -> a note saying to avoid it, and what to do instead.
+  something that broke -> an entry saying to avoid it, and what to do instead.
   These are worth more than successes; they are what nobody writes down.
 - A neutral result changes no action. Write nothing.
 
@@ -157,64 +136,29 @@ action, there is nothing to write.
 outcome.** Never record what happened for its own sake, anything true only
 inside this conversation, or anything obvious from reading the code.
 
-## The format
+## Note or skill
 
-One file per situation, in `{notes}`, named for what it is about
-(`retry_failed_uploads.md`). Keep it short — a few lines of body is normal.
+Most of what you write is a **note**: one situation and its lesson. Use a
+**skill** when the lesson is a repeatable procedure somebody would follow step
+by step — it gets its own folder, so you can add `references/` beside it later.
 
----
-when: the situation that should bring this back
-do: the action to take
-because: what happened when it was done
-updated: {today}
-source: conversation {cid}
----
+The `description` is the field that decides whether an entry is ever seen
+again. It is matched against what a user says in some future conversation, so
+write it as the *situation* — "a PDF yields no text", "about to commit to a
+repo Henry owns" — never as a topic label.
 
-Use `avoid:` in place of `do:` when the lesson is not to do something; say what
-to do instead in the same field.
-
-`when` is the field that decides whether this note is ever seen again. It is
-matched against what a user says in some future conversation, so write it as
-the *situation* — "a PDF yields no text", "about to commit to a repo Henry
-owns" — never as a topic label.
-
-{facts}
 Transcript:
 
 {transcript}
 
 Reply with one line: what you wrote or improved, or "nothing worth keeping"."""
 
-_FACTS_JOB = """## Job three: keep MEMORY.md current
-
-`{root}/MEMORY.md` holds **facts** — things that are simply true and carry no
-action. Names, paths, which machine something runs on, how the user likes to be
-addressed, a preference with nothing to do about it. It is inlined into the
-agent's prompt in full, every turn, so it is the one place a fact is guaranteed
-to be seen without anybody going to look.
-
-Add what this conversation established. A fact belongs there when it will still
-be true next month and is not discoverable by reading the code.
-
-**It has a budget of about {budget} characters.** Past that the kernel
-truncates it and the tail is simply not in the prompt — so this job is as much
-pruning as adding. Every time you touch it: delete what has become false,
-merge duplicates, cut anything that turned out to be obvious or one-off, and
-tighten wording. If it is near the budget, something has to go before anything
-is added; choose what to lose deliberately rather than letting the truncation
-choose for you.
-
-Keep the division clean. Anything with an action in it is a note, not a fact,
-and belongs in the folder — MEMORY.md is not a place for advice.
-
-"""
-
 
 class MemoryReflect(BaseTask):
     """Reflect on conversations that have gone quiet."""
 
     name = "memory_reflect"
-    description = "Curate memory notes from conversations that have gone quiet."
+    description = "Curate memory entries from conversations that have gone quiet."
 
     trigger = "event"
     trigger_channels = ["session_conversation_ended"]
@@ -237,9 +181,12 @@ class MemoryReflect(BaseTask):
         },
     }
 
-    requests = ["db.query", "db.write", "agent.spawn", "paths.get",
+    requests = ["db.query", "db.write", "agent.spawn", "tool.call",
                 "config.read", "conv.read", "session.list", "session.get"]
-    dependencies_files = []
+    # Declared for installation, never imported: the corpus listing goes
+    # through ``tool.call``, so the curator and this task read the folder
+    # through exactly one implementation.
+    dependencies_files = ["tools/tool_memory_recall.py"]
     dependencies_pip = []
 
     config_settings = [
@@ -251,11 +198,6 @@ class MemoryReflect(BaseTask):
          "How recently a conversation must have been active to be reflected on. "
          "Stops a fresh install from reflecting on your entire history.",
          24, {"type": "slider", "range": (1, 168, 167), "is_float": False}),
-        ("Curate facts into MEMORY.md", "memory_reflect_curate_facts",
-         "Let the curator also add facts learned in a conversation to "
-         "MEMORY.md, and prune it to stay inside its prompt budget. Turn off "
-         "to keep that file yours alone.",
-         True, {"type": "bool"}),
         ("Reflect on subagents", "memory_reflect_include_subagents",
          "Also curate memories from subagents you spawned. Their whole purpose "
          "is often to go and find something out, so the lesson is real — but "
@@ -285,7 +227,7 @@ class MemoryReflect(BaseTask):
 
         floor = self._floor(sdk)
         cutoff = self._cutoff(sdk)
-        self._prune_retrievals(sdk, cutoff)
+        self._prune_usage(sdk, cutoff)
         busy = self._busy_conversations(sdk)
         candidates = [row for row in self._candidates(sdk, floor, cutoff, subagents)
                       if row["cid"] not in busy]
@@ -295,11 +237,10 @@ class MemoryReflect(BaseTask):
         if not candidates:
             return sdk.ok([])
 
-        root = sdk.path.join(sdk.paths.get("workspace"), "memory")
-        today = time.strftime("%Y-%m-%d")
+        corpus = self._corpus(sdk)
         done = []
         for row in candidates[:MAX_PER_RUN]:
-            if self._reflect(sdk, row, root, today):
+            if self._reflect(sdk, row, corpus):
                 done.append({
                     "conversation_id": row["cid"],
                     "last_message_id": row["max_id"],
@@ -308,31 +249,6 @@ class MemoryReflect(BaseTask):
         return sdk.ok(done, llm_summary=f"Reflected on {len(done)} conversation(s).")
 
     # ── deciding what to reflect on ──────────────────────────────────
-
-    def _facts_job(self, sdk, root):
-        """The third job, or nothing at all.
-
-        Appended rather than woven in, so that turning it off leaves a prompt
-        with no trace of a job the curator is not allowed to do — a rule
-        stated and then contradicted is worse than one never stated.
-        """
-        try:
-            wanted = sdk.config.read("memory_reflect_curate_facts")
-        except sdk.Failed:
-            wanted = True
-        if wanted is None:
-            wanted = True
-        if not wanted:
-            return ""
-        return _FACTS_JOB.format(root=root, budget=self._index_budget(sdk))
-
-    def _index_budget(self, sdk):
-        """How much of MEMORY.md the kernel will actually inline."""
-        try:
-            return max(1, int(sdk.config.read("memory_index_cap")
-                              or FALLBACK_INDEX_BUDGET))
-        except (sdk.Failed, TypeError, ValueError):
-            return FALLBACK_INDEX_BUDGET
 
     def _include_subagents(self, sdk):
         """Whether subagent conversations are worth curating here.
@@ -383,7 +299,7 @@ class MemoryReflect(BaseTask):
         ever said*: the watermark defaults to zero for a conversation nobody
         has looked at, so every message in the archive reads as new and the
         whole history queues up three at a time. That is expensive, spawns an
-        agent per conversation, and produces notes about work from months ago
+        agent per conversation, and produces entries about work from months ago
         as though it had just happened.
 
         A window is the right shape rather than a one-off backfill guard,
@@ -427,7 +343,7 @@ class MemoryReflect(BaseTask):
         **At least one assistant message is required**, and the total floor
         does not cover it: the corpus records what the *agent* did, so a
         conversation the agent never spoke in has no action to learn from and
-        nothing a note could say. Someone can reach the floor without that
+        nothing an entry could say. Someone can reach the floor without that
         happening — a few messages typed at a turn that failed or was
         cancelled, or a conversation opened only to run slash commands — and
         the curator would then be handed a transcript with no agent in it and
@@ -491,7 +407,7 @@ class MemoryReflect(BaseTask):
 
     # ── the curator ──────────────────────────────────────────────────
 
-    def _reflect(self, sdk, row, root, today):
+    def _reflect(self, sdk, row, corpus):
         """Run one curator subagent. True when the watermark may advance."""
         cid = int(row["cid"])
         previous_id = int(row.get("previous_id") or 0)
@@ -501,17 +417,19 @@ class MemoryReflect(BaseTask):
             # Nothing readable to reflect on, but the messages have been
             # considered — advancing stops us reconsidering them hourly.
             return True
-        prompt = _PROMPT.format(root=root,
-                                notes=sdk.path.join(root, NOTES_DIRNAME),
-                                cid=cid, title=self._title(sdk, cid),
-                                today=today, transcript=transcript,
-                                used=self._used_notes(
-                                    sdk, cid, previous_id, int(row["max_id"])),
-                                facts=self._facts_job(sdk, root))
+        prompt = _PROMPT.format(cid=cid, title=self._title(sdk, cid),
+                                transcript=transcript, corpus=corpus,
+                                used=self._used_entries(sdk, cid))
         try:
             report = sdk.agent.spawn(
-                prompt, title=f"{CURATOR_TITLE} conversation {cid}", wait=True)
+                prompt, title=f"{CURATOR_TITLE} conversation {cid}",
+                profile=CURATOR_PROFILE, wait=True)
         except sdk.Failed as error:
+            # Includes the profile not existing, which is the one failure worth
+            # not working around: the curator writes unattended, and the
+            # profile is what keeps it inside the memory folder. Returning
+            # False leaves the watermark where it is, so the next sweep retries
+            # once ``service_memory`` has had an attended turn to seed it.
             sdk.log(f"memory curator failed for conversation {cid}: {error}",
                     level="warning")
             return False
@@ -520,140 +438,74 @@ class MemoryReflect(BaseTask):
                     f"{(report or {}).get('error') or 'no report'}",
                     level="warning")
             return False
-        self._forget_retrievals(sdk, cid)
         return True
 
-    def _used_notes(self, sdk, cid, previous_id, max_id):
-        """Notes that were surfaced to the agent and that it then opened.
+    def _used_entries(self, sdk, cid):
+        """Entries this conversation was offered and actually opened.
 
-        Both halves are needed and neither is available alone. The offer lives
-        only in the prompt, which is not stored anywhere, so the service
-        records it in ``memory_retrievals_v2``. The open is a ``read_file`` call,
-        which appears in the transcript because the agent had to name the path
-        to make it. Nothing else puts that string there: the retrieval block
-        itself never enters the conversation.
+        One column, because ``tool_memory_recall`` wrote the fact down when it
+        happened. This used to be reconstructed: read every offer out of one
+        table, then scan every assistant message for a ``read_file`` tool call,
+        decode two layers of JSON, absolutize and normalize the path it named,
+        and compare — all to infer something the agent could simply have told
+        us. A dedicated recall tool is what made it tell us.
 
-        The stored assistant row is JSON whose ``arguments`` value is itself a
-        JSON string. Both layers are decoded, and only a call named
-        ``read_file`` whose normalized path exactly equals the offered path is
-        accepted. A filename in prose or in another tool call is not a read.
-
-        Matched against the *messages*, not against the transcript built for
-        the prompt. That transcript is capped at ``MAX_TRANSCRIPT_CHARS`` and
-        trimmed per message, so a read early in a long conversation falls off
-        the front of it — and the curator would conclude the note was never
-        used and write a duplicate instead of improving the one that helped.
-        The evidence has to be searched at full length even though only a
-        window of it is shown. The read must also follow the particular user
-        message that caused the offer; finding both events somewhere in the
-        same conversation is not enough.
+        An entry recalled *without* being offered counts too, and is recorded
+        the same way. The agent went looking for it, which is at least as
+        strong a signal as taking one it was handed.
 
         This decides which job the curator has, and nothing more. It is not a
-        score — that a note was opened says the situation looked close, not
+        score — that an entry was opened says the situation looked close, not
         that the advice was any good, and only reading what happened next can
         settle that.
         """
         try:
             rows = sdk.db.query(
-                "SELECT path, offered_message_id FROM memory_retrievals_v2"
-                " WHERE conversation_id = ?"
-                "   AND offered_message_id > ? AND offered_message_id <= ?",
-                [int(cid), int(previous_id), int(max_id)], max_rows=500) or []
+                "SELECT DISTINCT name FROM memory_usage"
+                " WHERE conversation_id = ? AND recalled_at IS NOT NULL"
+                " ORDER BY name", [int(cid)], max_rows=100) or []
         except sdk.Failed:
-            return ""
-        if not rows:
+            rows = []
+        names = [str(row.get("name") or "") for row in rows if row.get("name")]
+        if not names:
             return ("None. Memory was either not surfaced or not opened, so "
-                    "nothing here has been shown to help yet.")
-        calls = self._read_file_calls(
-            sdk, cid,
-            min(int(row.get("offered_message_id") or 0) for row in rows),
-            max_id,
-        )
-        used = []
-        project = sdk.paths.get("project")
-        for row in rows:
-            path = str(row.get("path") or "")
-            offered_id = int(row.get("offered_message_id") or 0)
-            wanted = (sdk.path.normalize(
-                sdk.path.absolute(path, base=project)) if path else "")
-            if wanted and any(message_id > offered_id and opened == wanted
-                              for message_id, opened in calls):
-                used.append(path)
-        if not used:
-            return ("None. Memory was either not surfaced or not opened, so "
-                    "nothing here has been shown to help yet.")
-        return "\n".join(f"- {path}" for path in dict.fromkeys(used))
+                    "nothing here has been shown to help yet — skip job one.")
+        return "\n".join(f"- {name}" for name in names)
 
-    def _read_file_calls(self, sdk, cid, after_id, max_id):
-        """Exact ``(message id, normalized path)`` read-file calls."""
-        try:
-            rows = sdk.db.query(
-                "SELECT id, content FROM conversation_messages"
-                " WHERE conversation_id = ? AND id > ? AND id <= ?"
-                "   AND LOWER(role) = 'assistant'"
-                "   AND COALESCE(content, '') <> ''",
-                [int(cid), int(after_id), int(max_id)], max_rows=500) or []
-        except sdk.Failed:
-            return []
-        found = []
-        project = sdk.paths.get("project")
-        for row in rows:
-            try:
-                packed = json.loads(str(row.get("content") or ""))
-            except (TypeError, ValueError):
-                continue
-            calls = packed.get("tool_calls") if isinstance(packed, dict) else None
-            for call in calls if isinstance(calls, list) else []:
-                function = call.get("function") if isinstance(call, dict) else None
-                function = function if isinstance(function, dict) else {}
-                name = call.get("name") or function.get("name")
-                if str(name or "").strip() != "read_file":
-                    continue
-                arguments = call.get("arguments")
-                if arguments is None:
-                    arguments = function.get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except (TypeError, ValueError):
-                        continue
-                if not isinstance(arguments, dict):
-                    continue
-                raw_path = str(arguments.get("path") or "").strip()
-                if not raw_path:
-                    continue
-                absolute = sdk.path.absolute(raw_path, base=project)
-                found.append((int(row["id"]), sdk.path.normalize(absolute)))
-        return found
+    def _corpus(self, sdk):
+        """Every entry that exists, as name and description.
 
-    def _prune_retrievals(self, sdk, cutoff):
-        """Drop retrieval rows too old to answer anything.
-
-        The log is cleared per conversation once that conversation has been
-        reflected on — but a conversation that never qualifies (under the
-        message floor, outside the window, no assistant message) is never
-        reflected on and so never cleared. Those rows would accumulate for the
-        life of the install; ``prune_expired`` only knows about kernel tables,
-        so nothing else would ever remove them. Past the reflection window they
-        cannot be read again by anybody, which makes the window the natural
-        retention line.
+        Handed to the curator whole rather than left to a search, because the
+        decision it drives — improve this one, or add another — is exactly the
+        decision a search can get wrong by missing something. A corpus small
+        enough to be useful is small enough to list.
         """
         try:
-            sdk.db.write("DELETE FROM memory_retrievals_v2 WHERE offered_at < ?",
+            entries = sdk.tools.call("memory_recall", action="list") or []
+        except sdk.Failed as error:
+            sdk.log(f"could not list memory entries: {error}", level="info")
+            return "(could not be listed)"
+        lines = [f"- {row.get('name')}"
+                 f"{' (skill)' if row.get('kind') == 'skill' else ''}"
+                 f" — {row.get('description') or '(no description)'}"
+                 for row in entries if row.get("name")]
+        return "\n".join(lines) if lines else "(nothing yet — the corpus is empty)"
+
+    def _prune_usage(self, sdk, cutoff):
+        """Drop offers nobody ever took, once they are too old to answer anything.
+
+        **Recalls are kept.** They are the record of which entries earn their
+        place, which is the input to a future pass over what nobody has used in
+        months, and clearing the table per conversation — as this did — throws
+        that away for a table that was never the problem. Offers are the
+        volume: five a turn, forever, and past the reflection window no
+        conversation can be reflected on again so nothing can ever read them.
+        Recalls are rare, small, and the data.
+        """
+        try:
+            sdk.db.write("DELETE FROM memory_usage"
+                         " WHERE recalled_at IS NULL AND offered_at < ?",
                          [float(cutoff)])
-        except sdk.Failed:
-            pass
-
-    def _forget_retrievals(self, sdk, cid):
-        """Drop the retrieval log for a conversation now reflected on.
-
-        The log answers one question once. Left to accumulate it is an
-        unbounded table nothing prunes, since ``prune_expired`` only knows
-        about the kernel's own.
-        """
-        try:
-            sdk.db.write("DELETE FROM memory_retrievals_v2 WHERE conversation_id = ?",
-                         [int(cid)])
         except sdk.Failed:
             pass
 

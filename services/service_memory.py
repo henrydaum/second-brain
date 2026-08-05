@@ -1,25 +1,26 @@
 """Automatic memory retrieval.
 
-Every turn, search the memory folder for notes relevant to what the user just
-said and put them in the prompt.
+Every turn, search the memory folder for entries relevant to what the user just
+said and put their names in the prompt.
 
-The folder holds **actions**: each note is a situation, an action, and the
-result that followed, so retrieval is what makes a past result bear on a
-present decision. Facts live in ``MEMORY.md``, which the kernel inlines
-directly and nothing here touches.
+The folder holds two kinds of entry and retrieval does not distinguish between
+them. A **note** (``notes/<name>.md``) is one situation and what to do about
+it. A **skill** (``skills/<name>/SKILL.md``) is a repeatable procedure that may
+carry its own references and scripts. Both carry agentskills.io frontmatter —
+``name`` and ``description`` — which is the whole reason they can rank in one
+list and render as one shape. Facts live in ``MEMORY.md``, which the kernel
+inlines directly and nothing in this suite touches.
 
-**The prompt gets situations, never the notes themselves.** The only decision
-to make from the prompt is whether a past situation is the present one, and the
-situation alone answers that; what was tried and how it turned out is what the
-file is for. Injecting the advice as well was tried and had to come out — it
-grew with the corpus, truncated long notes into advice stripped of its context,
-and destroyed the one observable signal in the system. With the content already
-in the prompt there is no reason to open the file, so nothing downstream can
-tell which notes were used, and the curator needs exactly that to know whether
-it is improving an old note or writing a new one. So this service also records
-what it surfaced (``memory_retrievals_v2``); the read is the other half. Each
-offer is tied to the user-message id that caused it, so a later reader can
-prove that the file was opened after it was offered.
+**The prompt gets names and descriptions, never bodies.** The only decision to
+make from the prompt is whether a past situation is the present one, and the
+description answers exactly that; what to do about it is what the entry is for.
+Injecting the body as well was tried and had to come out — it grew with the
+corpus, truncated long entries into advice stripped of its context, and
+destroyed the one observable signal in the system. With the content already in
+the prompt there is no reason to open anything, and the curator needs to know
+which entries were opened to tell whether it is improving one or writing a new
+one. So this service also records what it surfaced (``memory_usage``);
+``tool_memory_recall`` records the other half.
 
 The retrieval itself is one ``hybrid_search`` call at ``turn_start``, with the
 user's own message as the query. That is deliberate on both counts. The hook
@@ -28,24 +29,44 @@ reply, so there is no model call and no subagent here. And the user's words
 *are* the retrieval cue — rewriting them into "better" search terms costs a
 round trip to guess at something the person already said.
 
-Writing is not this service's job. Notes are written by ``task_memory_reflect``
-when a conversation goes quiet, and by the agent itself with ``edit_file``;
-the folder is inside the workspace, so neither needs approval.
+Writing is not this service's job and cannot be: only ``tool_memory_curate``
+writes entries, whether the caller is the agent mid-conversation or the curator
+subagent ``task_memory_reflect`` spawns after one ends.
 """
 
 import time
 
 from guest.bases import BaseService
 
-#: How much of a note to read when building its line. Only the frontmatter is
+#: How much of an entry to read when building its line. Only the frontmatter is
 #: wanted, and that is at the top.
 HEAD_CHARS = 2000
 
+#: How long a description may be in the prompt block. Long enough to recognise
+#: a situation, short enough that fifteen of them are not the prompt.
+MAX_DESCRIPTION_CHARS = 200
 
-#: Where situation/action/result notes live, under the memory root. Everything
-#: else in ``memory/`` — ``MEMORY.md``, the README, drafts, anything the agent
-#: leaves lying around — is outside it and therefore outside retrieval.
-NOTES_DIRNAME = "actions"
+#: Where entries live, under the memory root, and the only two places searched.
+#: Everything else in ``memory/`` — ``MEMORY.md``, the README, drafts, anything
+#: the agent leaves lying around — is outside them and therefore outside
+#: retrieval. Must match the constants in ``tool_memory_recall`` and
+#: ``tool_memory_curate``.
+MEMORY_DIRNAME = "memory"
+NOTES_DIRNAME = "notes"
+SKILLS_DIRNAME = "skills"
+
+#: The agent profile a curator subagent runs under. Seeded here because this is
+#: the only part of the suite that ever runs attended, and writing a kernel
+#: setting from an unattended chain is refused rather than asked. Must match
+#: ``CURATOR_PROFILE`` in ``task_memory_reflect``.
+CURATOR_PROFILE = "memory_curator"
+
+#: What that profile may do. Four tools, and the absence of ``edit_file`` is
+#: the point: a curator writes through ``memory_curate``, which cannot address
+#: a file outside the memory folder. ``read_file`` is for a skill's own
+#: references; ``hybrid_search`` pulls its two sub-searches in on its own,
+#: because a whitelist is closed over declared tool dependencies.
+CURATOR_TOOLS = ["memory_recall", "memory_curate", "hybrid_search", "read_file"]
 
 
 def _memory_root(sdk):
@@ -56,34 +77,33 @@ def _memory_root(sdk):
     need its own filter and the pointer block would have to be rebuilt per
     identity. Single-user installs are the case that works today.
     """
-    return sdk.path.join(sdk.paths.get("workspace"), "memory")
+    return sdk.path.join(sdk.paths.get("workspace"), MEMORY_DIRNAME)
 
 
-def _notes_root(sdk):
-    """The only folder retrieval searches.
+def _entry_dirs(sdk):
+    """The two folders that hold entries.
 
     Membership is location, not content, and that is the point. Requiring a
-    ``when`` in the frontmatter made *being a note* a property the writer had
-    to restate correctly in every file, and getting it subtly wrong — no
-    fences, the key in the body, a capital in the wrong place — made the note
-    silently unreachable. A path cannot be subtly wrong.
+    field in the frontmatter made *being an entry* a property the writer had to
+    restate correctly in every file, and getting it subtly wrong — no fences,
+    the key in the body, a capital in the wrong place — made the entry silently
+    unreachable. A path cannot be subtly wrong.
 
     It also retires an exception list. Filtering the memory root meant naming
-    every file that was not a note (``MEMORY.md``, the README), which is a list
-    that grows and whose omissions are invisible. And it moves the filter into
-    the search: a draft outside this folder never ranks, rather than ranking
-    and being read and discarded on every turn.
+    every file that was not an entry (``MEMORY.md``, the README), which is a
+    list that grows and whose omissions are invisible.
     """
-    return sdk.path.join(_memory_root(sdk), NOTES_DIRNAME)
+    root = _memory_root(sdk)
+    return (sdk.path.join(root, NOTES_DIRNAME),
+            sdk.path.join(root, SKILLS_DIRNAME))
 
 
 def _frontmatter(text):
     """Parse the leading ``---`` block into a dict, tolerating anything.
 
-    Deliberately not a YAML parser: a note is written by a language model and
+    Deliberately not a YAML parser: an entry is written by a language model and
     the failure mode that matters is a malformed block taking the whole turn
-    down. Unparseable lines are skipped, and a note with no frontmatter at all
-    is still a usable pointer — it just falls back to its excerpt.
+    down. Unparseable lines are skipped.
     """
     body = text.lstrip()
     if not body.startswith("---"):
@@ -103,8 +123,8 @@ def _unquote(value):
     """Drop wrapping quotes, and only wrapping ones.
 
     ``strip("'\\"")`` eats a trailing quote whether or not anything opened it,
-    so a situation ending in a quoted word — ``a task with trigger = "event"``
-    — silently lost its last character in the prompt.
+    so a description ending in a quoted word — ``a task with trigger =
+    "event"`` — silently lost its last character in the prompt.
     """
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         return value[1:-1]
@@ -112,59 +132,50 @@ def _unquote(value):
 
 
 class Memory(BaseService):
-    """Surface relevant memory notes at the start of every turn."""
+    """Surface relevant memory entries at the start of every turn."""
 
     name = "memory"
-    description = "Finds memory notes relevant to the current message and points the agent at them."
+    description = "Finds memory notes and skills relevant to the current message and points the agent at them."
 
     exports = []
     hooks = {"turn_start": "on_turn_start"}
     requests = ["paths.get", "config.read", "config.write",
-                "tool.call", "fs.read", "fs.list", "fs.write",
+                "tool.call", "fs.read", "fs.list", "fs.write", "fs.delete",
                 "db.define", "db.query", "db.write",
                 "session.add_prompt_extra"]
-    dependencies_files = ["tools/tool_hybrid_search.py"]
+    dependencies_files = ["tools/tool_hybrid_search.py",
+                          "tools/tool_memory_recall.py",
+                          "tools/tool_memory_curate.py"]
     dependencies_pip = []
 
     config_settings = [
         ("Memory pointers", "memory_max_pointers",
-         "How many memory notes to surface at the start of each turn. 0 disables retrieval.",
+         "How many memory entries to surface at the start of each turn. 0 disables retrieval.",
          5, {"type": "slider", "range": (0, 15, 15), "is_float": False}),
     ]
 
     agent_prompt = (
         "## Memory\n"
-        "`memory/actions/` in your workspace holds **actions**: what to do, or "
-        "not do, in a situation that has come up before. Each note is one "
-        "situation, the action taken, and the result that followed. Only that "
-        "folder is searched, so a note written anywhere else is never found — "
-        "the rest of `memory/` is for things that are not notes.\n"
-        "Situations matching the current message are listed above under "
-        "'Situations you have been in before'. That list gives you the "
-        "situation and a path, never the advice — read the file when a "
-        "situation looks close enough to yours to be worth learning from. It "
-        "is advice from a past case, not an instruction: weigh whether this "
-        "case really is that one.\n"
-        "Retrieval happens once, on the user's message. When something comes "
-        "up mid-turn that feels familiar, search the folder yourself with "
-        "`hybrid_search` scoped to it — cheap, and often faster than working "
-        "it out again.\n"
-        "Write a note when you learn an action worth repeating or avoiding "
-        "and you want it to outlive this conversation; no approval is needed "
-        "inside your workspace. Keep the format: `when:` the situation that "
-        "should bring it back, written as a situation rather than a topic, "
-        "since that is what retrieval matches; `do:` or `avoid:` the action; "
-        "`because:` what actually happened. A note with no action in it "
-        "cannot change anything, so do not write one.\n"
-        "Facts, names and preferences with no action attached are not memory "
-        "notes — those go in MEMORY.md, which is yours to maintain and is "
-        "already in this prompt.\n"
+        "`memory/` in your workspace holds what you have learned: `notes/` for "
+        "a situation and what to do about it, `skills/` for a repeatable "
+        "procedure with its own references. Only those two folders are "
+        "searched, so the rest of `memory/` is free for drafts and scratch "
+        "files.\n"
+        "Entries matching the current message are listed above under 'Things "
+        "you have done before'. That list gives you a name and a description, "
+        "never the entry itself — `memory_recall` one when its situation looks "
+        "close enough to yours to be worth learning from. It is advice from a "
+        "past case, not an instruction: weigh whether this case really is that "
+        "one.\n"
+        "Facts, names and preferences with no action attached are not entries "
+        "— those go in MEMORY.md, which is yours to maintain and is already in "
+        "this prompt.\n"
         "Anything you do not write down is reviewed after the conversation "
         "ends, so there is no need to record as you go."
     )
 
     def start(self, sdk):
-        """Make the folder and the log. Indexing waits for somebody to ask.
+        """Make the folders and the usage table. Indexing waits to be asked.
 
         ``sync_directories`` is a kernel setting, so writing it is UNSAFE — and
         a service loading at boot has no session, which makes the chain
@@ -177,25 +188,29 @@ class Memory(BaseService):
         """
         self._seeded = False
         self._ensure_folder(sdk, _memory_root(sdk))
-        self._ensure_log(sdk)
+        self._migrate_actions(sdk)
+        self._ensure_usage_table(sdk)
 
-    def _ensure_log(self, sdk):
-        """The retrieval log this service owns.
+    def _ensure_usage_table(self, sdk):
+        """The one table that records the life of a memory: offered, then taken.
 
-        Defined here rather than declared by the reflect task, because the
-        writer should own the schema: the task only reads it, and a task that
-        is not installed must not take retrieval logging down with it.
+        Defined here because this service is the first writer — it inserts a
+        row per offer. ``tool_memory_recall`` fills ``recalled_at`` and
+        ``task_memory_reflect`` only reads. One table rather than three answers
+        every question anyone has asked of it so far: which entries this
+        conversation actually used, and — later, when there is a pruning pass
+        — which entries nobody has used in months.
         """
         try:
             sdk.db.define(
-                "CREATE TABLE IF NOT EXISTS memory_retrievals_v2 ("
+                "CREATE TABLE IF NOT EXISTS memory_usage ("
+                " id INTEGER PRIMARY KEY,"
+                " name TEXT NOT NULL,"
                 " conversation_id INTEGER,"
-                " path TEXT,"
-                " offered_message_id INTEGER,"
                 " offered_at REAL,"
-                " PRIMARY KEY (conversation_id, path, offered_message_id))")
+                " recalled_at REAL)")
         except sdk.Failed as error:
-            sdk.log(f"could not create the retrieval log: {error}",
+            sdk.log(f"could not create the memory usage table: {error}",
                     level="warning")
 
     def stop(self, sdk):
@@ -211,11 +226,11 @@ class Memory(BaseService):
         folder that exists but explains nothing is worse than one that arrives
         with its own README, and writing the file makes the directory.
 
-        ``actions/`` is deliberately *not* pre-created. A placeholder inside it
-        would be searched like any other file there, found to have no ``when``,
-        and reported as a broken note every single turn. Writing a file creates
-        its parents, so the first note makes the folder, and searching a folder
-        that does not exist yet correctly finds nothing.
+        ``notes/`` and ``skills/`` are deliberately *not* pre-created. A
+        placeholder inside either would be searched like any other file there,
+        found to have no description, and reported as broken every single turn.
+        Writing a file creates its parents, so the first entry makes its folder,
+        and searching a folder that does not exist yet correctly finds nothing.
         """
         try:
             sdk.fs.list(root)
@@ -228,8 +243,51 @@ class Memory(BaseService):
             sdk.log(f"could not create the memory folder: {error}",
                     level="warning")
 
-    def _maybe_seed(self, sdk, ctx, root):
-        """Ask, once, for the memory folder to be indexed.
+    def _migrate_actions(self, sdk):
+        """Fold an older ``actions/`` corpus into ``notes/``.
+
+        The previous shape was ``when:``/``do:``/``because:``. Under the
+        agentskills.io frontmatter the situation is the ``description`` — same
+        job, spec's name — and the advice and the outcome become the body,
+        which is where they always belonged: they were never rendered into the
+        prompt anyway.
+
+        Idempotent and best-effort. A file whose name is already taken in
+        ``notes/`` is left where it is rather than overwriting anything, and
+        anything unreadable is skipped with a line in the log. Nothing here is
+        worth failing a boot over.
+        """
+        root = _memory_root(sdk)
+        old = sdk.path.join(root, "actions")
+        try:
+            entries = sdk.fs.list(old, pattern="*.md", details=True) or []
+        except sdk.Failed:
+            return
+        moved = 0
+        for entry in entries:
+            if entry.get("is_dir"):
+                continue
+            source = sdk.path.join(old, entry["name"])
+            name = _slug(sdk.path.stem(entry["name"]))
+            target = sdk.path.join(root, NOTES_DIRNAME, name + ".md")
+            try:
+                sdk.fs.list(target)
+                continue  # already migrated, or a name collision — leave both
+            except sdk.Failed:
+                pass
+            try:
+                text = sdk.fs.read(source)
+                sdk.fs.write(target, _as_note(name, text))
+                sdk.fs.delete(source)
+                moved += 1
+            except sdk.Failed as error:
+                sdk.log(f"could not migrate memory note {entry['name']}: {error}",
+                        level="warning")
+        if moved:
+            sdk.log(f"migrated {moved} memory note(s) from actions/ to notes/")
+
+    def _maybe_seed(self, sdk, ctx):
+        """Ask, once, for the two things this suite needs a person to allow.
 
         Only from an attended turn: an unattended one cannot draw a dialog, so
         the Request would be refused and a naive once-only flag would spend the
@@ -243,7 +301,8 @@ class Memory(BaseService):
         if self._seeded or not getattr(ctx, "attended", False):
             return
         self._seeded = True
-        self._ensure_indexed(sdk, root)
+        self._ensure_indexed(sdk, _memory_root(sdk))
+        self._ensure_curator_profile(sdk)
 
     def _ensure_indexed(self, sdk, root):
         """Add the folder to ``sync_directories`` so the pipeline indexes it."""
@@ -267,6 +326,43 @@ class Memory(BaseService):
             sdk.log(f"could not add the memory folder to sync_directories: {error}",
                     level="warning")
 
+    def _ensure_curator_profile(self, sdk):
+        """Make sure the restricted profile the curator spawns under exists.
+
+        ``task_memory_reflect`` names it and the kernel refuses to spawn under
+        a profile that is not configured — deliberately, since substituting
+        ``default`` would run a background agent with every installed tool
+        while everything looked confined. So somebody has to write it, and this
+        is the only part of the suite that ever runs where a person can answer.
+
+        Never overwritten. Once it exists it is the user's, and narrowing or
+        widening it is their business.
+        """
+        try:
+            profiles = sdk.config.read("agent_profiles") or {}
+        except sdk.Failed as error:
+            sdk.log(f"could not read agent_profiles: {error}", level="warning")
+            return
+        if not isinstance(profiles, dict) or CURATOR_PROFILE in profiles:
+            return
+        updated = dict(profiles)
+        updated[CURATOR_PROFILE] = {
+            "llm": "default",
+            "prompt_suffix": "",
+            "whitelist_or_blacklist_tools": "whitelist",
+            "tools_list": list(CURATOR_TOOLS),
+        }
+        try:
+            sdk.config.write("agent_profiles", updated)
+            sdk.log(f"added the {CURATOR_PROFILE!r} agent profile")
+        except sdk.Denied:
+            sdk.log(f"the {CURATOR_PROFILE!r} agent profile was not created — "
+                    "memory curation will not run until it exists",
+                    level="warning")
+        except sdk.Failed as error:
+            sdk.log(f"could not create the curator profile: {error}",
+                    level="warning")
+
     # ── the hook ─────────────────────────────────────────────────────
 
     def on_turn_start(self, sdk, ctx, payload):
@@ -277,7 +373,7 @@ class Memory(BaseService):
         normal state of a fresh install, and neither is a reason for a turn to
         fail.
         """
-        self._maybe_seed(sdk, ctx, _memory_root(sdk))
+        self._maybe_seed(sdk, ctx)
         try:
             limit = int(sdk.config.read("memory_max_pointers") or 0)
         except (sdk.Failed, TypeError, ValueError):
@@ -285,10 +381,9 @@ class Memory(BaseService):
         if limit <= 0:
             return None
 
-        user_message = self._latest_user_message(sdk, ctx)
-        if not user_message:
+        query = self._latest_user_message(sdk, ctx)
+        if not query:
             return None
-        message_id, query = user_message
 
         hits = self._search(sdk, query, limit)
         if not hits:
@@ -302,44 +397,40 @@ class Memory(BaseService):
             sdk.session.add_prompt(block, key=ctx.session_key, slot="memory")
         except sdk.Failed as error:
             # Nothing was shown, so nothing was offered. Recording it anyway
-            # would tell the curator a note had been surfaced and ignored when
-            # the agent never saw it — a false negative in the one pair its
-            # branch is chosen by.
+            # would tell the curator an entry had been surfaced and ignored
+            # when the agent never saw it — a false negative in the one pair
+            # its branch is chosen by.
             sdk.log(f"could not inject memory pointers: {error}", level="warning")
             return None
-        self._log_offered(sdk, ctx, offered, message_id)
+        self._log_offered(sdk, ctx, offered)
         return None
 
-    def _log_offered(self, sdk, ctx, offered, message_id):
-        """Record which notes were surfaced in this conversation.
+    def _log_offered(self, sdk, ctx, offered):
+        """Record which entries were surfaced in this conversation.
 
-        Half of a pair: the curator later checks which of these the agent went
-        on to open, and that is what tells it whether to improve an existing
-        note or write a new one. The prompt is not stored anywhere, so this is
-        the only place the offer is knowable — without it the curator can see
-        the read but never what prompted it.
-
-        Keyed on (conversation, path, user message). The message id lets the
-        curator require a later exact ``read_file`` call for this offer.
+        Half of a pair: ``tool_memory_recall`` fills in ``recalled_at`` if the
+        agent goes on to open one, and that is what tells the curator whether
+        to improve an existing entry or write a new one. The prompt is not
+        stored anywhere, so this is the only place the offer is knowable —
+        without it a recall can be seen but never what prompted it.
         """
         cid = getattr(ctx, "conversation_id", None)
         if not (cid and offered):
             return
         now = time.time()
-        for path in offered:
+        for name in offered:
             try:
                 sdk.db.write(
-                    "INSERT OR REPLACE INTO memory_retrievals_v2 "
-                    "(conversation_id, path, offered_message_id, offered_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    [int(cid), str(path), int(message_id), now])
+                    "INSERT INTO memory_usage"
+                    " (name, conversation_id, offered_at, recalled_at)"
+                    " VALUES (?, ?, ?, NULL)", [str(name), int(cid), now])
             except sdk.Failed as error:
-                sdk.log(f"could not record a memory retrieval: {error}",
+                sdk.log(f"could not record a memory offer: {error}",
                         level="warning")
                 return
 
     def _latest_user_message(self, sdk, ctx):
-        """The id and text of the message the turn is about.
+        """The text of the message the turn is about.
 
         One row. ``sdk.conv.read`` would have been the obvious call and is the
         wrong one here: it answers with the *entire* conversation, so a long
@@ -355,7 +446,7 @@ class Memory(BaseService):
             return ""
         try:
             rows = sdk.db.query(
-                "SELECT id, content FROM conversation_messages"
+                "SELECT content FROM conversation_messages"
                 " WHERE conversation_id = ? AND LOWER(role) = 'user'"
                 "   AND COALESCE(content, '') <> ''"
                 " ORDER BY id DESC LIMIT 1", [int(cid)], max_rows=1)
@@ -363,124 +454,236 @@ class Memory(BaseService):
             return ""
         if not rows:
             return ""
-        text = str(rows[0].get("content") or "").strip()[:2000]
-        message_id = rows[0].get("id")
-        if not (message_id and text):
-            return None
-        return int(message_id), text
+        return str(rows[0].get("content") or "").strip()[:2000]
 
     def _search(self, sdk, query, limit):
-        """One hybrid search, scoped to the memory folder."""
+        """One hybrid search, scoped to the memory folder.
+
+        Scoped to the *root* rather than to each entry folder in turn, because
+        ``hybrid_search`` takes one prefix and two calls would mean ranking
+        notes against notes and skills against skills — which is exactly the
+        separation this design exists to remove. The non-entry files are
+        dropped afterwards instead, and the over-fetch is what stops
+        ``MEMORY.md`` and the README crowding real results out of the limit.
+        """
         try:
             results = sdk.tools.call("hybrid_search", query=query,
-                                     folder=_notes_root(sdk),
-                                     max_results=limit)
+                                     folder=_memory_root(sdk),
+                                     max_results=limit * 3)
         except sdk.Failed as error:
             sdk.log(f"memory search unavailable: {error}", level="info")
             return []
-        return [hit for hit in (results or []) if hit.get("path")]
+        notes_dir, skills_dir = _entry_dirs(sdk)
+        notes = sdk.path.normalize(notes_dir)
+        skills = sdk.path.normalize(skills_dir)
+        kept, seen = [], set()
+        for hit in results or []:
+            path = str(hit.get("path") or "")
+            if not path:
+                continue
+            normalized = sdk.path.normalize(path)
+            if normalized.startswith(notes):
+                entry = (sdk.path.stem(path), "note", path)
+            elif normalized.startswith(skills):
+                entry = self._skill_of(sdk, skills_dir, path)
+            else:
+                continue  # MEMORY.md, the README, a draft — not an entry
+            if entry is None or entry[0] in seen:
+                continue
+            seen.add(entry[0])
+            kept.append(entry)
+            if len(kept) >= limit:
+                break
+        return kept
+
+    def _skill_of(self, sdk, skills_dir, path):
+        """Which skill a hit inside ``skills/`` belongs to.
+
+        A skill is a folder, so its references and scripts are indexed as
+        documents in their own right and any of them can be what matched. The
+        agent should be pointed at the skill either way — its ``SKILL.md`` is
+        what says when to open the rest — so every hit under a skill folder
+        collapses onto the skill itself, and the dedupe above keeps one line.
+        """
+        relative = sdk.path.normalize(path)[len(sdk.path.normalize(skills_dir)):]
+        parts = [part for part in relative.replace("\\", "/").split("/") if part]
+        if not parts:
+            return None
+        name = parts[0]
+        return name, "skill", sdk.path.join(skills_dir, name, "SKILL.md")
 
     def _render(self, sdk, hits, offered):
         """Build the block, and record what was offered.
 
-        ``offered`` collects the paths so the caller can log them: what the
-        curator needs later is the pair "surfaced, then opened", and only this
-        half is knowable here.
+        ``offered`` collects the names so the caller can log them: what the
+        curator needs later is the pair "surfaced, then recalled", and only
+        this half is knowable here.
         """
         entries = []
         malformed = []
-        for hit in hits:
-            path = str(hit["path"])
-            if entry := self._entry(sdk, path):
-                entries.append(entry)
-                offered.append(path)
+        for name, kind, path in hits:
+            if description := self._description(sdk, path):
+                label = f"{name} (skill)" if kind == "skill" else name
+                entries.append(f"- {label} — {description}")
+                offered.append(name)
             else:
-                malformed.append(path)
+                malformed.append(name)
         if malformed:
-            # Everything here is in the notes folder, so a file with no
-            # ``when`` is a *broken note* rather than an unrelated file — a
-            # louder thing than it was when this folder held everything, and
-            # worth naming, since the symptom is a note that ranks well and is
-            # never once offered.
-            sdk.log("memory notes with no 'when' were skipped: "
-                    + ", ".join(sdk.path.name(p) for p in malformed),
-                    level="warning")
+            # Everything here is inside an entry folder, so a file with no
+            # description is a *broken entry* rather than an unrelated file,
+            # and worth naming: the symptom is otherwise an entry that ranks
+            # well and is never once offered.
+            sdk.log("memory entries with no description were skipped: "
+                    + ", ".join(malformed), level="warning")
         if not entries:
             return ""
-        return ("## Situations you have been in before\n"
-                "These past situations matched this message. Each is a note "
-                "recording what was tried and what came of it — read one when "
-                "the situation looks close enough to yours to be worth "
-                "learning from.\n\n"
-                + "\n\n".join(entries))
+        return ("## Things you have done before\n"
+                "These matched what was just said. Each is a note or skill you "
+                "wrote earlier; the description is all you get here, so "
+                "`memory_recall` the name when one looks close enough to your "
+                "situation to be worth learning from.\n\n"
+                + "\n".join(entries)
+                + self._more(sdk, len(entries)))
 
-    def _entry(self, sdk, path):
-        """One note's line, or "" for a file that is not a note.
+    def _more(self, sdk, shown):
+        """Say that the corpus is bigger than the list, when it is.
 
-        The situation and nothing else, because the only decision to make from
-        the prompt is whether this past situation is the present one. What was
-        attempted and how it turned out is what the agent opens the file for.
+        A block of five with no total reads as "this is what you have", and an
+        agent that believes it has five memories does not go looking for the
+        sixty-two others. One count turns the block from an inventory into a
+        sample.
+        """
+        total = self._corpus_size(sdk)
+        if total <= shown:
+            return ""
+        return (f"\n\nShowing {shown} of {total}. `memory_recall list` shows "
+                "them all, or search the folder with `hybrid_search`.")
 
-        Injecting the action too was tried and had to come out. It cost tokens
-        proportional to the corpus, it truncated long notes into advice with no
-        context, and — worst — it destroyed the one observable signal in the
+    def _corpus_size(self, sdk):
+        """How many entries exist at all. Two listings, no reads."""
+        notes_dir, skills_dir = _entry_dirs(sdk)
+        total = 0
+        try:
+            total += len([entry for entry
+                          in sdk.fs.list(notes_dir, pattern="*.md", details=True) or []
+                          if not entry.get("is_dir")])
+        except sdk.Failed:
+            pass
+        try:
+            total += len([entry for entry
+                          in sdk.fs.list(skills_dir, details=True) or []
+                          if entry.get("is_dir")])
+        except sdk.Failed:
+            pass
+        return total
+
+    def _description(self, sdk, path):
+        """One entry's description, or "" for a file that is not an entry.
+
+        The description and nothing else, because the only decision to make
+        from the prompt is whether this past situation is the present one. What
+        to do about it is what the agent opens the entry for.
+
+        Injecting the body too was tried and had to come out. It cost tokens
+        proportional to the corpus, it truncated long entries into advice with
+        no context, and — worst — it destroyed the one observable signal in the
         system: with the content already in the prompt there is no reason to
-        open the file, so nothing downstream can tell which notes were used.
-        The read is what tells the curator whether its job this time is to
-        improve an existing note or write a new one.
-
-        Whether a file *is* a note is decided by the folder it sits in, not by
-        this — see :func:`_notes_root`. What is left for the frontmatter is
-        whether the note can be *rendered*, and a note with no ``when`` cannot:
-        there is no situation to show, and falling back to the matched chunk
-        would put a fragment with no context into a list that promises
-        situations. That is a broken note rather than a foreign file, so the
-        caller says so out loud.
+        recall anything, and the recall is what tells the curator whether its
+        job this time is to improve an existing entry or write a new one.
         """
         try:
-            situation = _frontmatter(sdk.fs.read(path)[:HEAD_CHARS]).get("when")
+            description = _frontmatter(
+                sdk.fs.read(path)[:HEAD_CHARS]).get("description")
         except sdk.Failed:
             return ""
-        return f"- {situation}\n  ({path})" if situation else ""
+        if not description:
+            return ""
+        description = " ".join(description.split())
+        if len(description) > MAX_DESCRIPTION_CHARS:
+            description = description[:MAX_DESCRIPTION_CHARS].rstrip() + "…"
+        return description
+
+
+def _slug(raw):
+    """A legal entry name from an older file's stem.
+
+    The agentskills.io character set is lowercase alphanumerics and single
+    hyphens. Anything else becomes a hyphen and runs are collapsed, which is
+    lossless enough for names that were already filenames.
+    """
+    out = []
+    for char in str(raw).lower():
+        if char.isdigit() or ("a" <= char <= "z"):
+            out.append(char)
+        elif out and out[-1] != "-":
+            out.append("-")
+    return "".join(out).strip("-")[:64] or "note"
+
+
+def _as_note(name, text):
+    """An old ``when``/``do``/``because`` note in the new frontmatter."""
+    fields = _frontmatter(text)
+    body = text.lstrip()
+    if body.startswith("---") and (end := body.find("\n---", 3)) != -1:
+        body = body[end + 4:]
+    lead = []
+    if action := (fields.get("do") or fields.get("avoid")):
+        verb = "Do" if fields.get("do") else "Avoid"
+        lead.append(f"{verb}: {action}")
+    if because := fields.get("because"):
+        lead.append(f"Because: {because}")
+    head = ["---", f"name: {name}",
+            f"description: {fields.get('when') or fields.get('description') or name}"]
+    for key in ("updated", "source"):
+        if value := fields.get(key):
+            head.append(f"{key}: {value}")
+    head.append("---")
+    return ("\n".join(head) + "\n\n"
+            + ("\n".join(lead) + "\n\n" if lead else "")
+            + body.strip() + "\n")
 
 
 _README = """# Memory
 
-    actions/     one file per situation — searched, and the only thing that is
+    notes/       one file per situation — searched
+    skills/      one folder per procedure — searched
     MEMORY.md    facts, inlined into the agent's prompt in full
     (anything else lives here and is ignored)
 
-`actions/` holds what to do, or not do, in a situation that has come up before.
-Each note is a situation, an action, and the result that followed. A note
-outside that folder is never found, which is also what makes the folder safe to
-keep drafts and scratch files in.
+`notes/` holds what to do, or not do, in a situation that has come up before.
+`skills/` holds repeatable procedures, each in its own folder, following the
+[agentskills.io](https://agentskills.io) layout — a `SKILL.md` plus optional
+`references/`, `scripts/` and `assets/`.
+
+Both are searched together and both are found the same way: by their
+`description`, which is matched against whatever the user says in some future
+conversation. Write it as the situation that should bring the entry back, never
+as a topic label.
 
 ```
 ---
-when: A PDF yields no text, or extraction produces an empty document
-do: Check the parser is installed before assuming the file is broken
-because: Spent an hour on a corrupt-PDF theory when parser-pdf was not installed
+name: pdf-yields-no-text
+description: A PDF yields no text, or extraction produces an empty document
 updated: 2026-01-01
 source: conversation 1
 ---
+
+Do: Check the parser is installed before assuming the file is broken.
+Because: Spent an hour on a corrupt-PDF theory when parser-pdf was not
+installed.
 ```
 
-Use `avoid:` in place of `do:` when the lesson is not to do something, and say
-what to do instead in the same field.
+An entry outside those two folders is never found, which is also what makes the
+rest of this folder safe for drafts and scratch files.
 
-`when` is the field that does the work. It is matched against what the user
-says in some future conversation, so write it as the situation that should
-bring the note back, never as a topic label.
+An entry with no action in it cannot change what anyone does, so it is not an
+entry. That is the test for whether something belongs here at all. Two things
+deliberately do not: **facts** — names, paths, which machine something runs on,
+a preference with no action attached — belong in MEMORY.md, which is inlined
+into the prompt directly; and **records of what happened**, because this is not
+a journal and an entry that does not change a future decision is noise that
+makes the rest harder to find.
 
-A note with no action in it cannot change what anyone does, so it is not a note.
-That is the test for whether something belongs in `actions/` at all.
-
-Two things deliberately do not go there. **Facts** — names, paths, which machine
-something runs on, a preference with no action attached — belong in MEMORY.md,
-which is inlined into the prompt directly. And **records of what happened**:
-this is not a journal, and a note that does not change a future decision is
-noise that makes the rest harder to find.
-
-Notes are written and improved automatically after a conversation ends, but
+Entries are written and improved automatically after a conversation ends, but
 they are ordinary markdown — edit or delete them freely.
 """
