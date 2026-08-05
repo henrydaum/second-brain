@@ -313,6 +313,7 @@ class Memory(BaseService):
         half is knowable here.
         """
         entries = []
+        skipped = 0
         for hit in hits:
             path = str(hit["path"])
             # MEMORY.md is inlined into the prompt in full by the kernel and
@@ -321,9 +322,17 @@ class Memory(BaseService):
             # tokens pointing at something already present or irrelevant.
             if sdk.path.name(path).lower() in ("readme.md", "memory.md"):
                 continue
-            if entry := self._entry(sdk, hit, path):
+            if entry := self._entry(sdk, path):
                 entries.append(entry)
                 offered.append(path)
+            else:
+                skipped += 1
+        if skipped:
+            # Counted rather than silent: a folder quietly full of files that
+            # rank well and can never be offered is the one failure here that
+            # looks exactly like having no memories.
+            sdk.log(f"{skipped} file(s) matched but declare no 'when' and were "
+                    f"not offered", level="info")
         if not entries:
             return ""
         return ("## Situations you have been in before\n"
@@ -333,8 +342,8 @@ class Memory(BaseService):
                 "learning from.\n\n"
                 + "\n\n".join(entries))
 
-    def _entry(self, sdk, hit, path):
-        """One note: the situation it covers, and where to read the rest.
+    def _entry(self, sdk, path):
+        """One note's line, or "" for a file that is not a note.
 
         The situation and nothing else, because the only decision to make from
         the prompt is whether this past situation is the present one. What was
@@ -347,17 +356,27 @@ class Memory(BaseService):
         open the file, so nothing downstream can tell which notes were used.
         The read is what tells the curator whether its job this time is to
         improve an existing note or write a new one.
+
+        **A ``when`` is what makes a file a note**, and a file without one is
+        skipped rather than pointed at. The folder is synced, so everything in
+        it is indexed and can match — drafts, scratch files, whatever the agent
+        left there. Falling back to the matched *chunk* for those was worse
+        than useless: it put a fragment with no context into a list that
+        promises situations, which is the same half-a-procedure problem
+        pointers exist to avoid.
+
+        Content and not a filename convention, deliberately. A name is a second
+        declaration that can disagree with the first — ``note_x.md`` with no
+        ``when`` is unusable whatever it is called, and ``scratch.md`` with a
+        good one is a perfectly good note. The frontmatter is the only thing
+        that decides whether the file can do its job, so it is the only thing
+        that decides whether it is offered.
         """
         try:
             situation = _frontmatter(sdk.fs.read(path)[:HEAD_CHARS]).get("when")
         except sdk.Failed:
-            situation = ""
-        if situation:
-            return f"- {situation}\n  ({path})"
-        # No frontmatter — an older note, or one written by hand. It matched,
-        # so point at it rather than dropping it.
-        excerpt = " ".join(str(hit.get("content") or "").split())[:140]
-        return f"- {path}" + (f" — {excerpt}" if excerpt else "")
+            return ""
+        return f"- {situation}\n  ({path})" if situation else ""
 
 
 _README = """# Memory
