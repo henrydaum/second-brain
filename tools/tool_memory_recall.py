@@ -1,6 +1,6 @@
 """Open one memory entry by name.
 
-The agent-invoked half of retrieval. ``service_memory`` ranks the corpus at the
+The agent-invoked half of retrieval. ``service_memory_retrieve`` ranks the corpus at the
 start of every turn and puts *names and descriptions* in the prompt; this is
 what turns one of those names into the thing itself.
 
@@ -36,7 +36,7 @@ from guest.bases import BaseTool
 #: The two folders that hold entries, and the only two that are searched or
 #: read. Everything else under ``memory/`` — ``MEMORY.md``, the README, drafts,
 #: whatever the agent leaves lying around — is deliberately unreachable from
-#: here. Must match the constants in ``service_memory`` and
+#: here. Must match the constants in ``service_memory_retrieve`` and
 #: ``tool_memory_curate``; the three are pinned equal by
 #: ``tests/test_store_memory_bundle.py``.
 MEMORY_DIRNAME = "memory"
@@ -306,7 +306,7 @@ class MemoryRecall(BaseTool):
         for on its own is being used just as much as one it was handed, and
         the curator revises both on the same evidence.
 
-        Entirely best-effort. The table belongs to ``service_memory``, and a
+        Entirely best-effort. The table belongs to ``service_memory_retrieve``, and a
         half-installed suite must degrade to a memory that still reads and
         merely stops learning which entries earn their place.
         """

@@ -36,7 +36,8 @@ import time
 
 from guest.bases import BaseTool
 
-#: Must match the constants in ``service_memory`` and ``tool_memory_recall``;
+#: Must match the constants in ``service_memory_retrieve`` and
+#: ``tool_memory_recall``;
 #: the three are pinned equal by ``tests/test_store_memory_bundle.py``. The
 #: folder is what makes an entry an entry — a fact a writer cannot get subtly
 #: wrong, unlike a field it has to remember to include.

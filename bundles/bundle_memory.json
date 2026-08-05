@@ -2,7 +2,7 @@
   "description": "Durable memory that maintains itself. Notes and skills relevant to what you just said are surfaced at the start of every turn, and when a conversation goes quiet a background agent reviews it and writes down anything worth keeping. Everything is ordinary markdown in your workspace — notes in memory/notes/, agentskills.io skills in memory/skills/ — so you can read and edit it yourself. Brings the text-indexing and search chain it retrieves through, including the embedding model.",
   "files": [
     "services/service_embed.py",
-    "services/service_memory.py",
+    "services/service_memory_retrieve.py",
     "tasks/task_chunk_text.py",
     "tasks/task_embed_text.py",
     "tasks/task_extract_text.py",

@@ -1,7 +1,11 @@
-"""Automatic memory retrieval.
+"""Automatic memory retrieval — the half nobody has to ask for.
 
 Every turn, search the memory folder for entries relevant to what the user just
 said and put their names in the prompt.
+
+One of four, in two pairs, each with an automatic half and an agent-invoked
+one: ``memory_retrieve`` and ``memory_recall`` read, ``memory_reflect`` and
+``memory_curate`` write.
 
 The folder holds two kinds of entry and retrieval does not distinguish between
 them. A **note** (``notes/<name>.md``) is one situation and what to do about
@@ -131,10 +135,10 @@ def _unquote(value):
     return value
 
 
-class Memory(BaseService):
+class MemoryRetrieve(BaseService):
     """Surface relevant memory entries at the start of every turn."""
 
-    name = "memory"
+    name = "memory_retrieve"
     description = "Finds memory notes and skills relevant to the current message and points the agent at them."
 
     exports = []

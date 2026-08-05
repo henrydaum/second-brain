@@ -60,7 +60,7 @@ MAX_PER_RUN = 3
 #: conversation is a subagent conversation like any other.
 CURATOR_TITLE = "Memory curation:"
 
-#: The restricted agent profile a curator runs under. ``service_memory`` seeds
+#: The restricted agent profile a curator runs under. ``service_memory_retrieve`` seeds
 #: it on the first attended turn — it cannot be seeded from here, because a
 #: task's chain is unattended and writing a kernel setting is refused rather
 #: than asked. The kernel refuses to spawn under a profile that does not exist,
@@ -429,7 +429,7 @@ class MemoryReflect(BaseTask):
             # not working around: the curator writes unattended, and the
             # profile is what keeps it inside the memory folder. Returning
             # False leaves the watermark where it is, so the next sweep retries
-            # once ``service_memory`` has had an attended turn to seed it.
+            # once ``service_memory_retrieve`` has had an attended turn to seed it.
             sdk.log(f"memory curator failed for conversation {cid}: {error}",
                     level="warning")
             return False
