@@ -117,9 +117,10 @@ class Memory(BaseService):
 
     exports = []
     hooks = {"turn_start": "on_turn_start"}
-    requests = ["paths.get", "config.read", "config.write", "conv.read",
+    requests = ["paths.get", "config.read", "config.write",
                 "tool.call", "fs.read", "fs.list", "fs.write",
-                "db.define", "db.write", "session.add_prompt_extra"]
+                "db.define", "db.query", "db.write",
+                "session.add_prompt_extra"]
     dependencies_files = ["tools/tool_hybrid_search.py"]
     dependencies_pip = []
 
@@ -161,10 +162,19 @@ class Memory(BaseService):
     )
 
     def start(self, sdk):
-        """Make sure the folder exists, the indexer sees it, and the log does."""
-        root = _memory_root(sdk)
-        self._ensure_folder(sdk, root)
-        self._ensure_indexed(sdk, root)
+        """Make the folder and the log. Indexing waits for somebody to ask.
+
+        ``sync_directories`` is a kernel setting, so writing it is UNSAFE — and
+        a service loading at boot has no session, which makes the chain
+        unattended, which means the write is **refused outright rather than
+        asked about** (``sandbox/approval.py``, step 3). Seeding here therefore
+        did nothing at all except log a warning, and the symptom was the worst
+        available: the folder was never indexed, so retrieval returned nothing,
+        forever, while everything looked healthy. It happens on the first
+        attended turn instead, where a person is present to answer.
+        """
+        self._seeded = False
+        self._ensure_folder(sdk, _memory_root(sdk))
         self._ensure_log(sdk)
 
     def _ensure_log(self, sdk):
@@ -215,15 +225,25 @@ class Memory(BaseService):
             sdk.log(f"could not create the memory folder: {error}",
                     level="warning")
 
-    def _ensure_indexed(self, sdk, root):
-        """Add the folder to ``sync_directories`` so the pipeline indexes it.
+    def _maybe_seed(self, sdk, ctx, root):
+        """Ask, once, for the memory folder to be indexed.
 
-        This is a kernel setting rather than one this service declares, so it
-        costs one approval dialog on first load and none afterwards. It belongs
-        here rather than in the reflect task because services load at boot: if
-        seeding waited for the first reflection, a fresh install would have an
-        unindexed folder and retrieval would silently return nothing at all.
+        Only from an attended turn: an unattended one cannot draw a dialog, so
+        the Request would be refused and a naive once-only flag would spend the
+        single attempt on a subagent's turn and never try again. The attempt is
+        marked spent whatever the answer, including a refusal — asking again
+        every turn would be worse than not asking.
+
+        This does block the turn until it is answered, which is why it happens
+        once and says plainly what it is for.
         """
+        if self._seeded or not getattr(ctx, "attended", False):
+            return
+        self._seeded = True
+        self._ensure_indexed(sdk, root)
+
+    def _ensure_indexed(self, sdk, root):
+        """Add the folder to ``sync_directories`` so the pipeline indexes it."""
         try:
             existing = sdk.config.read("sync_directories") or []
         except sdk.Failed as error:
@@ -254,6 +274,7 @@ class Memory(BaseService):
         normal state of a fresh install, and neither is a reason for a turn to
         fail.
         """
+        self._maybe_seed(sdk, ctx, _memory_root(sdk))
         try:
             limit = int(sdk.config.read("memory_max_pointers") or 0)
         except (sdk.Failed, TypeError, ValueError):
@@ -276,7 +297,12 @@ class Memory(BaseService):
         try:
             sdk.session.add_prompt(block, key=ctx.session_key, slot="memory")
         except sdk.Failed as error:
+            # Nothing was shown, so nothing was offered. Recording it anyway
+            # would tell the curator a note had been surfaced and ignored when
+            # the agent never saw it — a false negative in the one pair its
+            # branch is chosen by.
             sdk.log(f"could not inject memory pointers: {error}", level="warning")
+            return None
         self._log_offered(sdk, ctx, offered)
         return None
 
@@ -310,21 +336,29 @@ class Memory(BaseService):
     def _latest_user_text(self, sdk, ctx):
         """The message the turn is about, which is the retrieval cue.
 
-        Read from the conversation rather than held between calls: the hook is
-        the only thing this service does, and a cached 'last message' would go
+        One row. ``sdk.conv.read`` would have been the obvious call and is the
+        wrong one here: it answers with the *entire* conversation, so a long
+        one crossed the wire in full, every turn, on the thread that sets the
+        latency floor for every reply — to find a single string at the end of
+        it.
+
+        Read rather than held between calls: a cached "last message" would go
         stale the moment two sessions were live.
         """
         cid = getattr(ctx, "conversation_id", None)
         if not cid:
             return ""
         try:
-            record = sdk.conv.read(cid) or {}
+            rows = sdk.db.query(
+                "SELECT content FROM conversation_messages"
+                " WHERE conversation_id = ? AND LOWER(role) = 'user'"
+                "   AND COALESCE(content, '') <> ''"
+                " ORDER BY id DESC LIMIT 1", [int(cid)], max_rows=1)
         except sdk.Failed:
             return ""
-        for message in reversed(record.get("messages") or []):
-            if str(message.get("role") or "").lower() == "user":
-                return str(message.get("content") or "").strip()[:2000]
-        return ""
+        if not rows:
+            return ""
+        return str(rows[0].get("content") or "").strip()[:2000]
 
     def _search(self, sdk, query, limit):
         """One hybrid search, scoped to the memory folder."""

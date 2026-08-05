@@ -236,8 +236,8 @@ class MemoryReflect(BaseTask):
         },
     }
 
-    requests = ["db.query", "agent.spawn", "paths.get", "config.read",
-                "conv.read", "session.list", "session.get"]
+    requests = ["db.query", "db.write", "agent.spawn", "paths.get",
+                "config.read", "conv.read", "session.list", "session.get"]
     dependencies_files = []
     dependencies_pip = []
 
@@ -283,9 +283,10 @@ class MemoryReflect(BaseTask):
             return sdk.ok([])
 
         floor = self._floor(sdk)
+        cutoff = self._cutoff(sdk)
+        self._prune_retrievals(sdk, cutoff)
         busy = self._busy_conversations(sdk)
-        candidates = [row for row in self._candidates(sdk, floor,
-                                                      self._cutoff(sdk), subagents)
+        candidates = [row for row in self._candidates(sdk, floor, cutoff, subagents)
                       if row["cid"] not in busy]
         if ended := (payload or {}).get("conversation_id"):
             candidates = [row for row in candidates
@@ -501,7 +502,7 @@ class MemoryReflect(BaseTask):
                                 notes=sdk.path.join(root, NOTES_DIRNAME),
                                 cid=cid, title=self._title(sdk, cid),
                                 today=today, transcript=transcript,
-                                used=self._used_notes(sdk, cid, transcript),
+                                used=self._used_notes(sdk, cid, row["max_id"]),
                                 facts=self._facts_job(sdk, root))
         try:
             report = sdk.agent.spawn(
@@ -518,7 +519,7 @@ class MemoryReflect(BaseTask):
         self._forget_retrievals(sdk, cid)
         return True
 
-    def _used_notes(self, sdk, cid, transcript):
+    def _used_notes(self, sdk, cid, max_id):
         """Notes that were surfaced to the agent and that it then opened.
 
         Both halves are needed and neither is available alone. The offer lives
@@ -540,6 +541,14 @@ class MemoryReflect(BaseTask):
         names are distinctive enough to identify one. Pinned by
         ``tests/test_tool_call_args_persist.py``.
 
+        Matched against the *messages*, not against the transcript built for
+        the prompt. That transcript is capped at ``MAX_TRANSCRIPT_CHARS`` and
+        trimmed per message, so a read early in a long conversation falls off
+        the front of it — and the curator would conclude the note was never
+        used and write a duplicate instead of improving the one that helped.
+        The evidence has to be searched at full length even though only a
+        window of it is shown.
+
         This decides which job the curator has, and nothing more. It is not a
         score — that a note was opened says the situation looked close, not
         that the advice was any good, and only reading what happened next can
@@ -551,13 +560,55 @@ class MemoryReflect(BaseTask):
                 [int(cid)], max_rows=200) or []
         except sdk.Failed:
             return ""
+        if not rows:
+            return ("None. Memory was either not surfaced or not opened, so "
+                    "nothing here has been shown to help yet.")
+        evidence = self._tool_call_text(sdk, cid, max_id)
         used = [path for row in rows
                 if (path := str(row.get("path") or ""))
-                and sdk.path.name(path) in transcript]
+                and sdk.path.name(path) in evidence]
         if not used:
             return ("None. Memory was either not surfaced or not opened, so "
                     "nothing here has been shown to help yet.")
         return "\n".join(f"- {path}" for path in used)
+
+    def _tool_call_text(self, sdk, cid, max_id):
+        """Every assistant message in the conversation, joined, untrimmed.
+
+        Assistant rows are where a tool call's arguments live — the kernel
+        packs them into the row's content — so this is where a path the agent
+        named shows up. Untrimmed because it is searched rather than read: no
+        model sees this string, so the only thing that matters is that nothing
+        is missing from it.
+        """
+        try:
+            rows = sdk.db.query(
+                "SELECT content FROM conversation_messages"
+                " WHERE conversation_id = ? AND id <= ?"
+                "   AND LOWER(role) = 'assistant'"
+                "   AND COALESCE(content, '') <> ''",
+                [int(cid), int(max_id)], max_rows=500) or []
+        except sdk.Failed:
+            return ""
+        return "\n".join(str(row.get("content") or "") for row in rows)
+
+    def _prune_retrievals(self, sdk, cutoff):
+        """Drop retrieval rows too old to answer anything.
+
+        The log is cleared per conversation once that conversation has been
+        reflected on — but a conversation that never qualifies (under the
+        message floor, outside the window, no assistant message) is never
+        reflected on and so never cleared. Those rows would accumulate for the
+        life of the install; ``prune_expired`` only knows about kernel tables,
+        so nothing else would ever remove them. Past the reflection window they
+        cannot be read again by anybody, which makes the window the natural
+        retention line.
+        """
+        try:
+            sdk.db.write("DELETE FROM memory_retrievals WHERE offered_at < ?",
+                         [float(cutoff)])
+        except sdk.Failed:
+            pass
 
     def _forget_retrievals(self, sdk, cid):
         """Drop the retrieval log for a conversation now reflected on.
