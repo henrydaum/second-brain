@@ -17,12 +17,32 @@ recoverable rather than silently dropped. The watermark is also what gives
 "reflect only on what is new" for free when an old conversation is reopened and
 left again.
 
-**The subagent is a curator, not a recorder.** It may write several notes, or
-none, and "none" is the common case. Where something similar already exists it
-writes a merged note that declares what it supersedes — it never rewrites an
-existing note in place, because iterative rewriting is precisely what erodes a
-corpus over time: each pass quietly drops the details the last one thought
-were minor.
+**The corpus is reinforcement learning without weights.** A note is a
+situation, an action, and the result that followed — so retrieval is what makes
+a past result bear on a present decision. Actions that produced good results
+should be repeated, actions that produced bad ones avoided, and a neutral
+result changes no action and is therefore not worth a file. That is the whole
+model, and everything below follows from it: a note with no action in it cannot
+change anything, so it is not a note.
+
+**The curator has two jobs, and the transcript says which one applies.** If the
+agent reached for memory and solved the problem with it, the note that helped
+earns a rewrite — it worked, so make it work harder: sharpen the situation that
+should retrieve it, tighten the action, record what the result actually was. If
+the agent solved the problem some novel way without consulting memory, that
+solution is not yet in the corpus and wants writing down. Both jobs answer the
+same question, which is whether the next agent in this situation will do better
+than this one did.
+
+Rewriting in place is the mechanism rather than a hazard here, because it is
+*targeted*: only notes the conversation actually exercised, edited against
+evidence of how they performed. That is not the wholesale re-summarisation that
+erodes a corpus.
+
+**Facts do not belong here.** Anything simply true — a name, which machine
+something runs on, a stated preference with no action attached — belongs in
+``MEMORY.md``, which the agent maintains itself and this task never touches.
+This folder is for actions and sequences of actions only.
 """
 
 import time
@@ -41,56 +61,83 @@ MAX_MESSAGES = 400
 #: pasted file to crowd out the rest of the conversation.
 MAX_MESSAGE_CHARS = 800
 
+#: Characters per tool result. Tighter than a message on purpose: a file read
+#: or a search result is the longest thing in a transcript and the least
+#: informative per character, but *which* tool ran is load-bearing evidence.
+MAX_TOOL_CHARS = 300
+
 #: Total transcript budget.
 MAX_TRANSCRIPT_CHARS = 24_000
 
-_PROMPT = """You are curating the memory folder at:
+_PROMPT = """You curate the memory folder at:
 {root}
 
-Below are the new messages from conversation {cid} ("{title}"). They are the
-part nobody has reflected on yet.
+It holds **actions**: what to do, or not do, in a situation that has come up
+before. Each note is one situation, one action, and the result that followed.
+Nothing else goes here — facts, names and preferences with no action attached
+belong in MEMORY.md, which you must not touch.
 
-Decide what, if anything, is worth remembering. Good candidates: a durable
-fact about the user or their systems, a preference they stated, a reusable
-procedure that worked, a lesson from something that went wrong, a decision and
-its reasoning.
+Below is conversation {cid} ("{title}"), including the tool calls. Read it and
+work out what the next agent in this situation should do differently.
 
-**Most conversations deserve nothing. Writing no notes is a correct and common
-outcome.** Do not record what happened for its own sake, anything true only
-inside this conversation, or anything already obvious from the code or the
-repository.
+## Which job is yours
 
-Before writing, search the memory folder for what is already there. If a note
-covers this ground, write a merged note and list the slugs it replaces in
-`supersedes:`. Never edit or delete an existing note in place — superseding
-leaves a trail, rewriting destroys one.
+**Did the agent read files from the memory folder and use them?**
 
-Write each note as its own file under the folder above, named by function
-(`skill_*.md`, `fact_*.md`, `pref_*.md`, or whatever fits). One idea per file;
-several files is fine. Start every file with frontmatter:
+- **Yes** — those notes earned their place. Improve them. Open each one that
+  was used and rewrite it against what actually happened: sharpen `when` so it
+  fires on this situation too, tighten `do`/`avoid` if the advice was vague or
+  partly wrong, and record the real result in `because`. Editing in place is
+  correct here — you have evidence, which is the one thing that makes a rewrite
+  an improvement rather than a guess.
+
+- **No** — the agent solved this without memory, so whatever worked is not in
+  the corpus yet. Write it down.
+
+Both can apply. Search the folder before writing anything new: if a note
+already covers the situation, improve that note instead of adding a second one.
+
+## What earns a note
+
+One test: **will this change what an agent does?** If you cannot name the
+action, there is nothing to write.
+
+- An action that produced a good result -> a note saying to do it.
+- An action that produced a bad result, a trap, a correction the user made,
+  something that broke -> a note saying to avoid it, and what to do instead.
+  These are worth more than successes; they are what nobody writes down.
+- A neutral result changes no action. Write nothing.
+
+**Most conversations deserve nothing, and writing nothing is a correct
+outcome.** Never record what happened for its own sake, anything true only
+inside this conversation, or anything obvious from reading the code.
+
+## The format
+
+One file per situation, named for what it is about (`retry_failed_uploads.md`).
+Keep it short — a few lines of body is normal.
 
 ---
-name: kebab-case-slug
-type: skill | fact | preference | summary
-description: one line — what this note holds
-when: the situation that should bring this note back
-keywords: [a, few, search, terms]
-created: {today}
+when: the situation that should bring this back
+do: the action to take
+because: what happened when it was done
 updated: {today}
 source: conversation {cid}
-supersedes: []
 ---
 
-`when` is the most important field. It is matched against what the user says
-in some future conversation, so write it as the *situation* — "a PDF yields no
-text", "the user asks about deploying" — not as a topic label.
+Use `avoid:` in place of `do:` when the lesson is not to do something; say what
+to do instead in the same field.
+
+`when` is the field that decides whether this note is ever seen again. It is
+matched against what a user says in some future conversation, so write it as
+the *situation* — "a PDF yields no text", "about to commit to a repo Henry
+owns" — never as a topic label.
 
 Transcript:
 
 {transcript}
 
-When you are done, reply with one line saying what you wrote, or "nothing
-worth keeping" if that is the answer."""
+Reply with one line: what you wrote or improved, or "nothing worth keeping"."""
 
 
 class MemoryReflect(BaseTask):
@@ -323,18 +370,27 @@ class MemoryReflect(BaseTask):
         return str((record.get("conversation") or {}).get("title") or "untitled")
 
     def _transcript(self, sdk, cid, max_id, new_count):
-        """The new messages, oldest first, capped."""
+        """The new messages, oldest first, capped — tool calls included.
+
+        The tool rows are not optional detail here, they are the evidence the
+        curator branches on: whether the agent reached for memory and used what
+        it found is visible only in what it called. A user/assistant-only
+        transcript also hides where the work actually happened, which is most
+        of what a conversation with real work in it consists of.
+        """
         sql = """
-            SELECT role, content
+            SELECT role, content, tool_name
               FROM conversation_messages
              WHERE conversation_id = ?
                AND id <= ?
-               AND LOWER(role) IN ('user', 'assistant')
+               AND LOWER(COALESCE(role, '')) <> 'system'
                AND COALESCE(content, '') <> ''
              ORDER BY id DESC
              LIMIT ?
         """
-        limit = min(max(new_count, 1), MAX_MESSAGES)
+        # Tool rows inflate the count well past the message floor, so the
+        # window is the cap rather than what the floor happened to count.
+        limit = min(max(new_count * 4, MAX_MESSAGES // 4), MAX_MESSAGES)
         try:
             rows = sdk.db.query(sql, [cid, max_id, limit], max_rows=MAX_MESSAGES)
         except sdk.Failed as error:
@@ -342,8 +398,19 @@ class MemoryReflect(BaseTask):
             return ""
         parts = []
         for row in reversed(rows or []):
-            role = str(row.get("role") or "?").upper()
-            body = " ".join(str(row.get("content") or "").split())
-            if body:
-                parts.append(f"{role}: {body[:MAX_MESSAGE_CHARS]}")
+            if line := self._line(row):
+                parts.append(line)
         return "\n\n".join(parts)[:MAX_TRANSCRIPT_CHARS]
+
+    def _line(self, row):
+        """Render one message, naming the tool when there is one."""
+        role = str(row.get("role") or "?").upper()
+        body = " ".join(str(row.get("content") or "").split())
+        if not body:
+            return ""
+        if tool := str(row.get("tool_name") or "").strip():
+            # A tool result is the longest thing in most transcripts and the
+            # least informative per character: which tool ran and roughly what
+            # came back is the whole signal.
+            return f"{role} ({tool}): {body[:MAX_TOOL_CHARS]}"
+        return f"{role}: {body[:MAX_MESSAGE_CHARS]}"

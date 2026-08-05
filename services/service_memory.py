@@ -1,14 +1,21 @@
 """Automatic memory retrieval.
 
 Every turn, search the memory folder for notes relevant to what the user just
-said and put *pointers* to them in the prompt — never the notes themselves.
-The agent reads what it decides is worth reading.
+said and put them in the prompt.
 
-Pointers rather than bodies is the whole design. A memory is one atomic fact
-and a skill is a procedure that is wrong in fragments, so injecting matched
-*chunks* would hand the agent half a procedure and let it follow that half.
-A path plus the situation the note claims to cover is enough to decide with,
-and costs a few dozen tokens instead of a few thousand.
+The folder holds **actions**: each note is a situation, an action, and the
+result that followed, so retrieval is what makes a past result bear on a
+present decision. Facts live in ``MEMORY.md``, which the kernel inlines
+directly and nothing here touches.
+
+**Short notes go in whole; long ones become pointers.** The split is length
+rather than kind, because the cost being managed is tokens and the risk being
+managed is a truncated procedure. A note that says "when about to commit, avoid
+adding trailers" has to arrive *already true* — the moment it applies is not a
+moment anyone stops to consult memory, so a pointer would be read too late or
+not at all. A long sequence of actions is the opposite: reading it is a
+decision worth making deliberately, and injecting a matched fragment would hand
+the agent half a procedure and let it follow that half.
 
 The retrieval itself is one ``hybrid_search`` call at ``turn_start``, with the
 user's own message as the query. That is deliberate on both counts. The hook
@@ -24,12 +31,13 @@ the folder is inside the workspace, so neither needs approval.
 
 from guest.bases import BaseService
 
-#: How much of a note to read when building its pointer line. Frontmatter
-#: lives at the top, so this never needs to be the whole file.
-HEAD_CHARS = 1200
+#: How much of a note to read. Notes are situation/action/result and are meant
+#: to be short; anything past this is a note that wants splitting.
+HEAD_CHARS = 2000
 
-#: Fields a pointer line can use, in the order they are tried for the summary.
-SUMMARY_KEYS = ("when", "description")
+#: Below this, a note is injected whole rather than pointed at. Set so a
+#: handful of ordinary notes cost a few hundred tokens between them.
+INLINE_CHARS = 700
 
 
 def _memory_root(sdk):
@@ -61,8 +69,20 @@ def _frontmatter(text):
     for line in body[3:end].splitlines():
         key, sep, value = line.partition(":")
         if sep and key.strip():
-            fields[key.strip().lower()] = value.strip().strip("'\"")
+            fields[key.strip().lower()] = _unquote(value.strip())
     return fields
+
+
+def _unquote(value):
+    """Drop wrapping quotes, and only wrapping ones.
+
+    ``strip("'\\"")`` eats a trailing quote whether or not anything opened it,
+    so a situation ending in a quoted word — ``a task with trigger = "event"``
+    — silently lost its last character in the prompt.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
 
 
 class Memory(BaseService):
@@ -87,23 +107,30 @@ class Memory(BaseService):
 
     agent_prompt = (
         "## Memory\n"
-        "Durable notes live in the `memory` folder of your workspace, one "
-        "markdown file per idea — facts, preferences, reusable procedures, "
-        "lessons from things that went wrong. At the start of each turn, notes "
-        "matching the user's message are listed under 'Possibly relevant "
-        "memories'.\n"
-        "That list is a map, not the content: it gives you a path and what the "
-        "note claims to cover. Read a file before relying on it, and do not "
-        "answer from a pointer line alone.\n"
-        "You may write notes yourself with the file-editing tools whenever you "
-        "learn something with a life beyond this conversation — no approval is "
-        "needed inside your workspace. Start each note with frontmatter "
-        "(`name`, `type`, `description`, `when`, `keywords`, `created`, "
-        "`updated`, `source`). `when` is the most important field: write it as "
-        "the *situation* that should bring the note back, not as a topic "
-        "label, because that is what future retrieval matches against. Notes "
-        "you do not write are written for you after a conversation ends, so "
-        "there is no need to record everything as you go."
+        "The `memory` folder in your workspace holds **actions**: what to do, "
+        "or not do, in a situation that has come up before. Each note is one "
+        "situation, the action taken, and the result that followed. Notes "
+        "matching the current message appear under 'What worked here before' — "
+        "short ones in full, longer ones as a path to read.\n"
+        "They are advice from a past situation, not instructions. Weigh "
+        "whether this situation really is that one before following them, and "
+        "read the full note when only a path was given.\n"
+        "Retrieval happens once, on the user's message. When something comes "
+        "up mid-turn that feels familiar, search the folder yourself with "
+        "`hybrid_search` scoped to it — cheap, and often faster than working "
+        "it out again.\n"
+        "Write a note when you learn an action worth repeating or avoiding "
+        "and you want it to outlive this conversation; no approval is needed "
+        "inside your workspace. Keep the format: `when:` the situation that "
+        "should bring it back, written as a situation rather than a topic, "
+        "since that is what retrieval matches; `do:` or `avoid:` the action; "
+        "`because:` what actually happened. A note with no action in it "
+        "cannot change anything, so do not write one.\n"
+        "Facts, names and preferences with no action attached are not memory "
+        "notes — those go in MEMORY.md, which is yours to maintain and is "
+        "already in this prompt.\n"
+        "Anything you do not write down is reviewed after the conversation "
+        "ends, so there is no need to record as you go."
     )
 
     def start(self, sdk):
@@ -230,61 +257,84 @@ class Memory(BaseService):
         return [hit for hit in (results or []) if hit.get("path")]
 
     def _render(self, sdk, hits):
-        """Build the pointer block: one line per note, no bodies."""
-        lines = []
+        """Build the block: short notes whole, long ones as pointers."""
+        entries = []
         for hit in hits:
             path = str(hit["path"])
             if sdk.path.name(path).lower() == "readme.md":
                 continue
-            lines.append(f"- {path}{self._summarize(sdk, hit, path)}")
-        if not lines:
+            if entry := self._entry(sdk, hit, path):
+                entries.append(entry)
+        if not entries:
             return ""
-        return ("## Possibly relevant memories\n"
-                "These matched the current message. Read one before relying "
-                "on it — this list is a map, not the content.\n"
-                + "\n".join(lines))
+        return ("## What worked here before\n"
+                "Past situations matching this one, and what came of the "
+                "action taken. Advice, not instructions — the situation may "
+                "differ in ways that matter. Where only a path is given, read "
+                "it before relying on it.\n\n"
+                + "\n\n".join(entries))
 
-    def _summarize(self, sdk, hit, path):
-        """What a note claims to cover, preferring its own declaration."""
+    def _entry(self, sdk, hit, path):
+        """One note: the advice itself when it is short, a pointer when not."""
         try:
             head = sdk.fs.read(path)[:HEAD_CHARS]
         except sdk.Failed:
             head = ""
         fields = _frontmatter(head)
-        for key in SUMMARY_KEYS:
-            if value := fields.get(key):
-                dated = fields.get("updated") or fields.get("created") or ""
-                return f" — {value}" + (f" ({dated})" if dated else "")
-        excerpt = " ".join(str(hit.get("content") or "").split())[:140]
-        return f" — {excerpt}" if excerpt else ""
+        situation = fields.get("when") or ""
+        action = fields.get("do") or fields.get("avoid") or ""
+        verb = "Do" if fields.get("do") else "Avoid"
+
+        if not (situation or action):
+            # No frontmatter to read — an older note, or one written by hand.
+            # It still matched, so point at it rather than dropping it.
+            excerpt = " ".join(str(hit.get("content") or "").split())[:140]
+            return f"- {path}" + (f" — {excerpt}" if excerpt else "")
+
+        head_line = f"- **{situation or path}**"
+        if len(head) <= INLINE_CHARS:
+            parts = [head_line]
+            if action:
+                parts.append(f"  {verb}: {action}")
+            if because := fields.get("because"):
+                parts.append(f"  Because: {because}")
+            parts.append(f"  ({path})")
+            return "\n".join(parts)
+        return f"{head_line}\n  {verb}: {action}\n  Full note: {path}"
 
 
 _README = """# Memory
 
-One markdown file per idea. Anything durable belongs here: facts, preferences,
-reusable procedures, lessons from something that went wrong.
-
-Files are found by search, not by name, so the frontmatter is what makes a note
-reachable:
+Actions, one per file: what to do, or not do, in a situation that has come up
+before. Each note is a situation, an action, and the result that followed.
 
 ```
 ---
-name: pdf-parse-debugging
-type: skill
-description: How to debug the PDF parse chain when extraction returns empty
 when: A PDF yields no text, or extraction produces an empty document
-keywords: [pdf, parse, extraction]
-created: 2026-01-01
+do: Check the parser is installed before assuming the file is broken
+because: Spent an hour on a corrupt-PDF theory when parser-pdf was not installed
 updated: 2026-01-01
 source: conversation 1
-supersedes: []
 ---
 ```
 
-`when` is the field that does the work — it is matched against what the user
-says, so write it as the situation that should bring the note back rather than
-as a topic label.
+Use `avoid:` in place of `do:` when the lesson is not to do something, and say
+what to do instead in the same field.
 
-MEMORY.md is separate and is not part of this: it is a scratch index inlined
-into the prompt directly, and nothing here reads or rewrites it.
+`when` is the field that does the work. It is matched against what the user
+says in some future conversation, so write it as the situation that should
+bring the note back, never as a topic label.
+
+A note with no action in it cannot change what anyone does, so it is not a note.
+That is the test for whether something belongs here at all.
+
+Two things are deliberately not in this folder. **Facts** — names, paths, which
+machine something runs on, a preference with no action attached — go in
+MEMORY.md, which is inlined into the prompt directly and which nothing here
+reads or rewrites. And **records of what happened**: this is not a journal, and
+a note that does not change a future decision is noise that makes the rest
+harder to find.
+
+Notes are written and improved automatically after a conversation ends, but
+they are ordinary markdown — edit or delete them freely.
 """
