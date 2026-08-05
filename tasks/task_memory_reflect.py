@@ -54,6 +54,7 @@ something runs on, a stated preference with no action attached — belongs in
 This folder is for actions and sequences of actions only.
 """
 
+import json
 import time
 
 from guest.bases import BaseTask
@@ -461,7 +462,8 @@ class MemoryReflect(BaseTask):
         sql = f"""
             SELECT m.conversation_id AS cid,
                    MAX(m.id)         AS max_id,
-                   COUNT(*)          AS new_count
+                   COUNT(*)          AS new_count,
+                   COALESCE(MAX(r.last_message_id), 0) AS previous_id
               FROM conversation_messages m
               JOIN my_conversations c
                      ON c.id = m.conversation_id
@@ -492,8 +494,9 @@ class MemoryReflect(BaseTask):
     def _reflect(self, sdk, row, root, today):
         """Run one curator subagent. True when the watermark may advance."""
         cid = int(row["cid"])
-        transcript = self._transcript(sdk, cid, int(row["max_id"]),
-                                      int(row["new_count"]))
+        previous_id = int(row.get("previous_id") or 0)
+        transcript = self._transcript(
+            sdk, cid, previous_id, int(row["max_id"]), int(row["new_count"]))
         if not transcript:
             # Nothing readable to reflect on, but the messages have been
             # considered — advancing stops us reconsidering them hourly.
@@ -502,7 +505,8 @@ class MemoryReflect(BaseTask):
                                 notes=sdk.path.join(root, NOTES_DIRNAME),
                                 cid=cid, title=self._title(sdk, cid),
                                 today=today, transcript=transcript,
-                                used=self._used_notes(sdk, cid, row["max_id"]),
+                                used=self._used_notes(
+                                    sdk, cid, previous_id, int(row["max_id"])),
                                 facts=self._facts_job(sdk, root))
         try:
             report = sdk.agent.spawn(
@@ -519,27 +523,20 @@ class MemoryReflect(BaseTask):
         self._forget_retrievals(sdk, cid)
         return True
 
-    def _used_notes(self, sdk, cid, max_id):
+    def _used_notes(self, sdk, cid, previous_id, max_id):
         """Notes that were surfaced to the agent and that it then opened.
 
         Both halves are needed and neither is available alone. The offer lives
         only in the prompt, which is not stored anywhere, so the service
-        records it in ``memory_retrievals``. The open is a ``read_file`` call,
+        records it in ``memory_retrievals_v2``. The open is a ``read_file`` call,
         which appears in the transcript because the agent had to name the path
         to make it. Nothing else puts that string there: the retrieval block
         itself never enters the conversation.
 
-        **Matched on the filename, not the path**, and that is not a shortcut.
-        A tool call is stored by packing ``arguments`` — already a JSON string
-        — inside another ``json.dumps``, so every separator is escaped twice:
-        a POSIX path survives verbatim and a Windows one becomes
-        ``Z:\\\\\\\\Second Brain\\\\\\\\...``. Substring-matching the path
-        therefore works on one platform and silently fails on the other, which
-        is the worst shape the bug could take — the curator would report
-        nothing used, forever, and look like it was working. A filename
-        carries no separators, so no amount of escaping touches it, and note
-        names are distinctive enough to identify one. Pinned by
-        ``tests/test_tool_call_args_persist.py``.
+        The stored assistant row is JSON whose ``arguments`` value is itself a
+        JSON string. Both layers are decoded, and only a call named
+        ``read_file`` whose normalized path exactly equals the offered path is
+        accepted. A filename in prose or in another tool call is not a read.
 
         Matched against the *messages*, not against the transcript built for
         the prompt. That transcript is capped at ``MAX_TRANSCRIPT_CHARS`` and
@@ -547,7 +544,9 @@ class MemoryReflect(BaseTask):
         the front of it — and the curator would conclude the note was never
         used and write a duplicate instead of improving the one that helped.
         The evidence has to be searched at full length even though only a
-        window of it is shown.
+        window of it is shown. The read must also follow the particular user
+        message that caused the offer; finding both events somewhere in the
+        same conversation is not enough.
 
         This decides which job the curator has, and nothing more. It is not a
         score — that a note was opened says the situation looked close, not
@@ -556,41 +555,76 @@ class MemoryReflect(BaseTask):
         """
         try:
             rows = sdk.db.query(
-                "SELECT path FROM memory_retrievals WHERE conversation_id = ?",
-                [int(cid)], max_rows=200) or []
+                "SELECT path, offered_message_id FROM memory_retrievals_v2"
+                " WHERE conversation_id = ?"
+                "   AND offered_message_id > ? AND offered_message_id <= ?",
+                [int(cid), int(previous_id), int(max_id)], max_rows=500) or []
         except sdk.Failed:
             return ""
         if not rows:
             return ("None. Memory was either not surfaced or not opened, so "
                     "nothing here has been shown to help yet.")
-        evidence = self._tool_call_text(sdk, cid, max_id)
-        used = [path for row in rows
-                if (path := str(row.get("path") or ""))
-                and sdk.path.name(path) in evidence]
+        calls = self._read_file_calls(
+            sdk, cid,
+            min(int(row.get("offered_message_id") or 0) for row in rows),
+            max_id,
+        )
+        used = []
+        project = sdk.paths.get("project")
+        for row in rows:
+            path = str(row.get("path") or "")
+            offered_id = int(row.get("offered_message_id") or 0)
+            wanted = (sdk.path.normalize(
+                sdk.path.absolute(path, base=project)) if path else "")
+            if wanted and any(message_id > offered_id and opened == wanted
+                              for message_id, opened in calls):
+                used.append(path)
         if not used:
             return ("None. Memory was either not surfaced or not opened, so "
                     "nothing here has been shown to help yet.")
-        return "\n".join(f"- {path}" for path in used)
+        return "\n".join(f"- {path}" for path in dict.fromkeys(used))
 
-    def _tool_call_text(self, sdk, cid, max_id):
-        """Every assistant message in the conversation, joined, untrimmed.
-
-        Assistant rows are where a tool call's arguments live — the kernel
-        packs them into the row's content — so this is where a path the agent
-        named shows up. Untrimmed because it is searched rather than read: no
-        model sees this string, so the only thing that matters is that nothing
-        is missing from it.
-        """
+    def _read_file_calls(self, sdk, cid, after_id, max_id):
+        """Exact ``(message id, normalized path)`` read-file calls."""
         try:
             rows = sdk.db.query(
-                "SELECT content FROM conversation_messages"
-                " WHERE conversation_id = ? AND id <= ?"
+                "SELECT id, content FROM conversation_messages"
+                " WHERE conversation_id = ? AND id > ? AND id <= ?"
                 "   AND LOWER(role) = 'assistant'"
                 "   AND COALESCE(content, '') <> ''",
-                [int(cid), int(max_id)], max_rows=500) or []
+                [int(cid), int(after_id), int(max_id)], max_rows=500) or []
         except sdk.Failed:
-            return ""
-        return "\n".join(str(row.get("content") or "") for row in rows)
+            return []
+        found = []
+        project = sdk.paths.get("project")
+        for row in rows:
+            try:
+                packed = json.loads(str(row.get("content") or ""))
+            except (TypeError, ValueError):
+                continue
+            calls = packed.get("tool_calls") if isinstance(packed, dict) else None
+            for call in calls if isinstance(calls, list) else []:
+                function = call.get("function") if isinstance(call, dict) else None
+                function = function if isinstance(function, dict) else {}
+                name = call.get("name") or function.get("name")
+                if str(name or "").strip() != "read_file":
+                    continue
+                arguments = call.get("arguments")
+                if arguments is None:
+                    arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except (TypeError, ValueError):
+                        continue
+                if not isinstance(arguments, dict):
+                    continue
+                raw_path = str(arguments.get("path") or "").strip()
+                if not raw_path:
+                    continue
+                absolute = sdk.path.absolute(raw_path, base=project)
+                found.append((int(row["id"]), sdk.path.normalize(absolute)))
+        return found
 
     def _prune_retrievals(self, sdk, cutoff):
         """Drop retrieval rows too old to answer anything.
@@ -605,7 +639,7 @@ class MemoryReflect(BaseTask):
         retention line.
         """
         try:
-            sdk.db.write("DELETE FROM memory_retrievals WHERE offered_at < ?",
+            sdk.db.write("DELETE FROM memory_retrievals_v2 WHERE offered_at < ?",
                          [float(cutoff)])
         except sdk.Failed:
             pass
@@ -618,7 +652,7 @@ class MemoryReflect(BaseTask):
         about the kernel's own.
         """
         try:
-            sdk.db.write("DELETE FROM memory_retrievals WHERE conversation_id = ?",
+            sdk.db.write("DELETE FROM memory_retrievals_v2 WHERE conversation_id = ?",
                          [int(cid)])
         except sdk.Failed:
             pass
@@ -631,7 +665,7 @@ class MemoryReflect(BaseTask):
             return "untitled"
         return str((record.get("conversation") or {}).get("title") or "untitled")
 
-    def _transcript(self, sdk, cid, max_id, new_count):
+    def _transcript(self, sdk, cid, previous_id, max_id, new_count):
         """The new messages, oldest first, capped — tool calls included.
 
         The tool rows are not optional detail here, they are the evidence the
@@ -644,6 +678,7 @@ class MemoryReflect(BaseTask):
             SELECT role, content, tool_name
               FROM conversation_messages
              WHERE conversation_id = ?
+               AND id > ?
                AND id <= ?
                AND LOWER(COALESCE(role, '')) <> 'system'
                AND COALESCE(content, '') <> ''
@@ -654,7 +689,8 @@ class MemoryReflect(BaseTask):
         # window is the cap rather than what the floor happened to count.
         limit = min(max(new_count * 4, MAX_MESSAGES // 4), MAX_MESSAGES)
         try:
-            rows = sdk.db.query(sql, [cid, max_id, limit], max_rows=MAX_MESSAGES)
+            rows = sdk.db.query(
+                sql, [cid, previous_id, max_id, limit], max_rows=MAX_MESSAGES)
         except sdk.Failed as error:
             sdk.log(f"could not read conversation {cid}: {error}", level="warning")
             return ""

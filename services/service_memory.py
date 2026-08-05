@@ -17,7 +17,9 @@ and destroyed the one observable signal in the system. With the content already
 in the prompt there is no reason to open the file, so nothing downstream can
 tell which notes were used, and the curator needs exactly that to know whether
 it is improving an old note or writing a new one. So this service also records
-what it surfaced (``memory_retrievals``); the read is the other half.
+what it surfaced (``memory_retrievals_v2``); the read is the other half. Each
+offer is tied to the user-message id that caused it, so a later reader can
+prove that the file was opened after it was offered.
 
 The retrieval itself is one ``hybrid_search`` call at ``turn_start``, with the
 user's own message as the query. That is deliberate on both counts. The hook
@@ -186,11 +188,12 @@ class Memory(BaseService):
         """
         try:
             sdk.db.define(
-                "CREATE TABLE IF NOT EXISTS memory_retrievals ("
+                "CREATE TABLE IF NOT EXISTS memory_retrievals_v2 ("
                 " conversation_id INTEGER,"
                 " path TEXT,"
+                " offered_message_id INTEGER,"
                 " offered_at REAL,"
-                " PRIMARY KEY (conversation_id, path))")
+                " PRIMARY KEY (conversation_id, path, offered_message_id))")
         except sdk.Failed as error:
             sdk.log(f"could not create the retrieval log: {error}",
                     level="warning")
@@ -282,9 +285,10 @@ class Memory(BaseService):
         if limit <= 0:
             return None
 
-        query = self._latest_user_text(sdk, ctx)
-        if not query:
+        user_message = self._latest_user_message(sdk, ctx)
+        if not user_message:
             return None
+        message_id, query = user_message
 
         hits = self._search(sdk, query, limit)
         if not hits:
@@ -303,10 +307,10 @@ class Memory(BaseService):
             # branch is chosen by.
             sdk.log(f"could not inject memory pointers: {error}", level="warning")
             return None
-        self._log_offered(sdk, ctx, offered)
+        self._log_offered(sdk, ctx, offered, message_id)
         return None
 
-    def _log_offered(self, sdk, ctx, offered):
+    def _log_offered(self, sdk, ctx, offered, message_id):
         """Record which notes were surfaced in this conversation.
 
         Half of a pair: the curator later checks which of these the agent went
@@ -315,8 +319,8 @@ class Memory(BaseService):
         the only place the offer is knowable — without it the curator can see
         the read but never what prompted it.
 
-        Keyed on (conversation, path) so a note surfaced on twenty turns is one
-        row: the question is whether it was ever offered, not how often.
+        Keyed on (conversation, path, user message). The message id lets the
+        curator require a later exact ``read_file`` call for this offer.
         """
         cid = getattr(ctx, "conversation_id", None)
         if not (cid and offered):
@@ -325,16 +329,17 @@ class Memory(BaseService):
         for path in offered:
             try:
                 sdk.db.write(
-                    "INSERT OR REPLACE INTO memory_retrievals "
-                    "(conversation_id, path, offered_at) VALUES (?, ?, ?)",
-                    [int(cid), str(path), now])
+                    "INSERT OR REPLACE INTO memory_retrievals_v2 "
+                    "(conversation_id, path, offered_message_id, offered_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    [int(cid), str(path), int(message_id), now])
             except sdk.Failed as error:
                 sdk.log(f"could not record a memory retrieval: {error}",
                         level="warning")
                 return
 
-    def _latest_user_text(self, sdk, ctx):
-        """The message the turn is about, which is the retrieval cue.
+    def _latest_user_message(self, sdk, ctx):
+        """The id and text of the message the turn is about.
 
         One row. ``sdk.conv.read`` would have been the obvious call and is the
         wrong one here: it answers with the *entire* conversation, so a long
@@ -350,7 +355,7 @@ class Memory(BaseService):
             return ""
         try:
             rows = sdk.db.query(
-                "SELECT content FROM conversation_messages"
+                "SELECT id, content FROM conversation_messages"
                 " WHERE conversation_id = ? AND LOWER(role) = 'user'"
                 "   AND COALESCE(content, '') <> ''"
                 " ORDER BY id DESC LIMIT 1", [int(cid)], max_rows=1)
@@ -358,7 +363,11 @@ class Memory(BaseService):
             return ""
         if not rows:
             return ""
-        return str(rows[0].get("content") or "").strip()[:2000]
+        text = str(rows[0].get("content") or "").strip()[:2000]
+        message_id = rows[0].get("id")
+        if not (message_id and text):
+            return None
+        return int(message_id), text
 
     def _search(self, sdk, query, limit):
         """One hybrid search, scoped to the memory folder."""
