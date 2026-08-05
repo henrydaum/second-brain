@@ -27,7 +27,10 @@ _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
 
 SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
 
-#: How much of the agent's own ``MEMORY.md`` index is inlined into the prompt.
+#: Fallback for ``memory_index_cap`` when there is no config to read — the
+#: setting is the source of truth (``config/config_data.py``), because anything
+#: that *curates* ``MEMORY.md`` has to know the same budget and a plugin cannot
+#: import this module to find out.
 MEMORY_INDEX_CAP = 4000
 
 
@@ -104,7 +107,7 @@ def build_prompt_sections(
         _pipeline_status(db, orchestrator),
         _filesystem_access(config),
         _sync_dirs(config),
-        _agent_memory(),
+        _agent_memory(config),
         _collect(populations, pctx, live=True),
         _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
@@ -390,7 +393,16 @@ def _filesystem_access(config: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _agent_memory() -> str:
+def _memory_index_cap(config: dict | None) -> int:
+    """The budget, from config, falling back to the constant above."""
+    try:
+        return max(1, int((config or {}).get("memory_index_cap")
+                          or MEMORY_INDEX_CAP))
+    except (TypeError, ValueError):
+        return MEMORY_INDEX_CAP
+
+
+def _agent_memory(config: dict | None = None) -> str:
     """Inline the one memory artifact the kernel owns: ``MEMORY.md``.
 
     Topic layout, validation and file operations belong to the installed
@@ -409,9 +421,10 @@ def _agent_memory() -> str:
     # inlined on every call, so an index nobody pruned would grow the prompt
     # without bound. Truncation is visible on purpose, so the agent can see
     # that its own index has outgrown the window and prune it.
-    if len(index) > MEMORY_INDEX_CAP:
-        index = (index[:MEMORY_INDEX_CAP].rstrip()
-                 + f"\n... (index truncated at {MEMORY_INDEX_CAP} characters "
+    cap = _memory_index_cap(config)
+    if len(index) > cap:
+        index = (index[:cap].rstrip()
+                 + f"\n... (index truncated at {cap} characters "
                    "— prune MEMORY.md)")
     lines = [
         "## Memory",

@@ -5,7 +5,7 @@ Topic paths, validation and enumeration belong to the store memory tool.
 
 import pytest
 
-from agent.system_prompt import _agent_memory
+from agent.system_prompt import MEMORY_INDEX_CAP, _agent_memory
 
 
 @pytest.fixture
@@ -50,6 +50,32 @@ def test_a_runaway_index_cannot_grow_the_prompt_without_bound(data_dir):
 
     assert len(text) < MEMORY_INDEX_CAP + 500
     assert "prune MEMORY.md" in text
+
+
+def test_the_cap_is_a_setting_so_a_curator_can_learn_it(data_dir):
+    """The budget has two readers and neither may hold its own copy.
+
+    Whatever curates ``MEMORY.md`` has to prune it to the same figure the
+    kernel truncates at, and a sandboxed plugin cannot import this module to
+    find out — so the number lives in config, where both sides can read it.
+    A constant on each side is the drift this arrangement exists to prevent.
+    """
+    from config.config_data import SETTINGS_DATA
+
+    declared = {entry[1]: entry[3] for entry in SETTINGS_DATA}
+    assert declared["memory_index_cap"] == MEMORY_INDEX_CAP, (
+        "the fallback constant and the declared default must agree")
+
+    root = data_dir / "workspace" / "memory"
+    root.mkdir(parents=True)
+    (root / "MEMORY.md").write_text("- fact\n" * 500, encoding="utf-8")
+
+    tight = _agent_memory({"memory_index_cap": 200})
+    loose = _agent_memory({"memory_index_cap": 3000})
+
+    assert "truncated at 200 characters" in tight
+    assert "truncated at 3000 characters" in loose
+    assert len(tight) < len(loose)
 
 
 def test_an_index_under_the_cap_is_untouched(data_dir):

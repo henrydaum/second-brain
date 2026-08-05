@@ -39,6 +39,13 @@ SETTINGS_DATA = [
      2.0,
      {"type": "slider", "range": (0.1, 20.0, 199), "is_float": True}),
 
+    ("Memory Index Cap", "memory_index_cap",
+     "How much of the agent's MEMORY.md is inlined into its prompt. Past this "
+     "the index is truncated, so anything that curates the file has to know "
+     "the budget.",
+     4000,
+     {"type": "slider", "range": (500, 20000, 39), "is_float": False}),
+
     # --- File Filtering ---
     ("Ignored Extensions", "ignored_extensions",
      "File extensions to skip during sync (JSON array, e.g. [\".tmp\", \".log\"]).",

@@ -230,6 +230,28 @@ def test_the_curator_is_also_swept_because_a_crash_emits_nothing():
     assert jobs["memory_reflect_sweep"]["cron"] == "0 * * * *"
 
 
+def test_the_facts_job_reads_the_kernel_budget_rather_than_copying_it():
+    """MEMORY.md has two readers who must agree on how long it may be.
+
+    The kernel truncates the index at ``memory_index_cap``; the curator prunes
+    to fit inside it. A constant on each side would drift the moment either
+    changed, and the failure is quiet — facts written past the cap are simply
+    never in the prompt. The task cannot import the kernel to ask, so the
+    number is config and both sides read it.
+    """
+    declared = _declarations(TASK)
+    keys = {entry[1] for entry in declared["config_settings"]}
+    assert "memory_reflect_curate_facts" in keys
+
+    setting = next(e for e in declared["config_settings"]
+                   if e[1] == "memory_reflect_curate_facts")
+    assert setting[3] is True
+
+    source = _source_or_skip(TASK)
+    assert 'sdk.config.read("memory_index_cap")' in source
+    assert "config.read" in declared["requests"]
+
+
 def test_subagent_curation_is_opt_in_and_never_reaches_scheduled_ones():
     """Three kinds of conversation, separated by the category the kernel sets.
 
