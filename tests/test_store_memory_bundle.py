@@ -139,6 +139,29 @@ def test_the_prompt_carries_situations_and_not_the_advice():
     assert '"because"' not in service
 
 
+def test_only_files_that_declare_a_situation_are_offered():
+    """The folder is synced, so everything in it can match — notes or not.
+
+    Drafts, scratch files and anything else left there are indexed like the
+    rest. Falling back to the matched *chunk* for those put a fragment with no
+    context into a list that promises situations, which is the same
+    half-a-procedure problem pointers exist to avoid.
+
+    Content and not a filename convention: a name is a second declaration that
+    can disagree with the first, and the frontmatter is the only thing that
+    decides whether a file can do the job at all.
+    """
+    service = _source_or_skip(SERVICE)
+
+    # The one test, and no excerpt fallback behind it.
+    assert 'if situation else ""' in service
+    assert "hit.get(\"content\")" not in service, "no chunk fallback may remain"
+
+    # A folder full of near-miss files that can never be offered looks exactly
+    # like a folder with no memories, so the skips are counted out loud.
+    assert "declare no 'when'" in service
+
+
 def test_both_halves_of_the_used_pair_are_recorded_and_read():
     """Neither half is available alone.
 
