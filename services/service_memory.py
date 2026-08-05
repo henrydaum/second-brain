@@ -40,6 +40,12 @@ from guest.bases import BaseService
 HEAD_CHARS = 2000
 
 
+#: Where situation/action/result notes live, under the memory root. Everything
+#: else in ``memory/`` — ``MEMORY.md``, the README, drafts, anything the agent
+#: leaves lying around — is outside it and therefore outside retrieval.
+NOTES_DIRNAME = "actions"
+
+
 def _memory_root(sdk):
     """The folder this service watches. One per install, not per user.
 
@@ -49,6 +55,24 @@ def _memory_root(sdk):
     identity. Single-user installs are the case that works today.
     """
     return sdk.path.join(sdk.paths.get("workspace"), "memory")
+
+
+def _notes_root(sdk):
+    """The only folder retrieval searches.
+
+    Membership is location, not content, and that is the point. Requiring a
+    ``when`` in the frontmatter made *being a note* a property the writer had
+    to restate correctly in every file, and getting it subtly wrong — no
+    fences, the key in the body, a capital in the wrong place — made the note
+    silently unreachable. A path cannot be subtly wrong.
+
+    It also retires an exception list. Filtering the memory root meant naming
+    every file that was not a note (``MEMORY.md``, the README), which is a list
+    that grows and whose omissions are invisible. And it moves the filter into
+    the search: a draft outside this folder never ranks, rather than ranking
+    and being read and discarded on every turn.
+    """
+    return sdk.path.join(_memory_root(sdk), NOTES_DIRNAME)
 
 
 def _frontmatter(text):
@@ -107,9 +131,11 @@ class Memory(BaseService):
 
     agent_prompt = (
         "## Memory\n"
-        "The `memory` folder in your workspace holds **actions**: what to do, "
-        "or not do, in a situation that has come up before. Each note is one "
-        "situation, the action taken, and the result that followed.\n"
+        "`memory/actions/` in your workspace holds **actions**: what to do, or "
+        "not do, in a situation that has come up before. Each note is one "
+        "situation, the action taken, and the result that followed. Only that "
+        "folder is searched, so a note written anywhere else is never found — "
+        "the rest of `memory/` is for things that are not notes.\n"
         "Situations matching the current message are listed above under "
         "'Situations you have been in before'. That list gives you the "
         "situation and a path, never the advice — read the file when a "
@@ -171,6 +197,12 @@ class Memory(BaseService):
         There is no ``fs.mkdir`` Request and there does not need to be: a
         folder that exists but explains nothing is worse than one that arrives
         with its own README, and writing the file makes the directory.
+
+        ``actions/`` is deliberately *not* pre-created. A placeholder inside it
+        would be searched like any other file there, found to have no ``when``,
+        and reported as a broken note every single turn. Writing a file creates
+        its parents, so the first note makes the folder, and searching a folder
+        that does not exist yet correctly finds nothing.
         """
         try:
             sdk.fs.list(root)
@@ -298,7 +330,7 @@ class Memory(BaseService):
         """One hybrid search, scoped to the memory folder."""
         try:
             results = sdk.tools.call("hybrid_search", query=query,
-                                     folder=_memory_root(sdk),
+                                     folder=_notes_root(sdk),
                                      max_results=limit)
         except sdk.Failed as error:
             sdk.log(f"memory search unavailable: {error}", level="info")
@@ -313,26 +345,23 @@ class Memory(BaseService):
         half is knowable here.
         """
         entries = []
-        skipped = 0
+        malformed = []
         for hit in hits:
             path = str(hit["path"])
-            # MEMORY.md is inlined into the prompt in full by the kernel and
-            # README.md explains the folder to a person. Both live here and
-            # both get indexed, so both match; surfacing either would spend
-            # tokens pointing at something already present or irrelevant.
-            if sdk.path.name(path).lower() in ("readme.md", "memory.md"):
-                continue
             if entry := self._entry(sdk, path):
                 entries.append(entry)
                 offered.append(path)
             else:
-                skipped += 1
-        if skipped:
-            # Counted rather than silent: a folder quietly full of files that
-            # rank well and can never be offered is the one failure here that
-            # looks exactly like having no memories.
-            sdk.log(f"{skipped} file(s) matched but declare no 'when' and were "
-                    f"not offered", level="info")
+                malformed.append(path)
+        if malformed:
+            # Everything here is in the notes folder, so a file with no
+            # ``when`` is a *broken note* rather than an unrelated file — a
+            # louder thing than it was when this folder held everything, and
+            # worth naming, since the symptom is a note that ranks well and is
+            # never once offered.
+            sdk.log("memory notes with no 'when' were skipped: "
+                    + ", ".join(sdk.path.name(p) for p in malformed),
+                    level="warning")
         if not entries:
             return ""
         return ("## Situations you have been in before\n"
@@ -357,20 +386,13 @@ class Memory(BaseService):
         The read is what tells the curator whether its job this time is to
         improve an existing note or write a new one.
 
-        **A ``when`` is what makes a file a note**, and a file without one is
-        skipped rather than pointed at. The folder is synced, so everything in
-        it is indexed and can match — drafts, scratch files, whatever the agent
-        left there. Falling back to the matched *chunk* for those was worse
-        than useless: it put a fragment with no context into a list that
-        promises situations, which is the same half-a-procedure problem
-        pointers exist to avoid.
-
-        Content and not a filename convention, deliberately. A name is a second
-        declaration that can disagree with the first — ``note_x.md`` with no
-        ``when`` is unusable whatever it is called, and ``scratch.md`` with a
-        good one is a perfectly good note. The frontmatter is the only thing
-        that decides whether the file can do its job, so it is the only thing
-        that decides whether it is offered.
+        Whether a file *is* a note is decided by the folder it sits in, not by
+        this — see :func:`_notes_root`. What is left for the frontmatter is
+        whether the note can be *rendered*, and a note with no ``when`` cannot:
+        there is no situation to show, and falling back to the matched chunk
+        would put a fragment with no context into a list that promises
+        situations. That is a broken note rather than a foreign file, so the
+        caller says so out loud.
         """
         try:
             situation = _frontmatter(sdk.fs.read(path)[:HEAD_CHARS]).get("when")
@@ -381,8 +403,14 @@ class Memory(BaseService):
 
 _README = """# Memory
 
-Actions, one per file: what to do, or not do, in a situation that has come up
-before. Each note is a situation, an action, and the result that followed.
+    actions/     one file per situation — searched, and the only thing that is
+    MEMORY.md    facts, inlined into the agent's prompt in full
+    (anything else lives here and is ignored)
+
+`actions/` holds what to do, or not do, in a situation that has come up before.
+Each note is a situation, an action, and the result that followed. A note
+outside that folder is never found, which is also what makes the folder safe to
+keep drafts and scratch files in.
 
 ```
 ---
@@ -402,14 +430,13 @@ says in some future conversation, so write it as the situation that should
 bring the note back, never as a topic label.
 
 A note with no action in it cannot change what anyone does, so it is not a note.
-That is the test for whether something belongs here at all.
+That is the test for whether something belongs in `actions/` at all.
 
-Two things are deliberately not in this folder. **Facts** — names, paths, which
-machine something runs on, a preference with no action attached — go in
-MEMORY.md, which is inlined into the prompt directly and which nothing here
-reads or rewrites. And **records of what happened**: this is not a journal, and
-a note that does not change a future decision is noise that makes the rest
-harder to find.
+Two things deliberately do not go there. **Facts** — names, paths, which machine
+something runs on, a preference with no action attached — belong in MEMORY.md,
+which is inlined into the prompt directly. And **records of what happened**:
+this is not a journal, and a note that does not change a future decision is
+noise that makes the rest harder to find.
 
 Notes are written and improved automatically after a conversation ends, but
 they are ordinary markdown — edit or delete them freely.

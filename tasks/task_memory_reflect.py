@@ -70,6 +70,13 @@ MAX_PER_RUN = 3
 #: conversation is a subagent conversation like any other.
 CURATOR_TITLE = "Memory curation:"
 
+#: Notes live in this subfolder of the memory root, and only notes do. It is
+#: what the retrieval service searches, so membership is a path rather than a
+#: property of the file's contents — which is the one thing a writer cannot get
+#: subtly wrong. Must match ``NOTES_DIRNAME`` in ``service_memory.py``; the two
+#: are pinned equal by ``tests/test_store_memory_bundle.py``.
+NOTES_DIRNAME = "actions"
+
 #: Last-resort budget for ``MEMORY.md``, used only when the setting cannot be
 #: read at all. The real number is the kernel's ``memory_index_cap``: past it
 #: the index is truncated out of the prompt, so a curator told a different
@@ -93,13 +100,15 @@ MAX_TOOL_CHARS = 300
 #: Total transcript budget.
 MAX_TRANSCRIPT_CHARS = 24_000
 
-_PROMPT = """You curate the memory folder at:
-{root}
+_PROMPT = """You curate the memory notes at:
+{notes}
 
-It holds **actions**: what to do, or not do, in a situation that has come up
+They are **actions**: what to do, or not do, in a situation that has come up
 before. Each note is one situation, one action, and the result that followed.
-Nothing else goes here — facts, names and preferences with no action attached
-belong in MEMORY.md, which you must not touch.
+
+**Every note goes in that folder and only that folder.** It is the only place
+searched, so a note written anywhere else will never be found again. The rest
+of `{root}` is for things that are not notes.
 
 Below is conversation {cid} ("{title}"), including the tool calls. Read it and
 work out what the next agent in this situation should do differently.
@@ -149,8 +158,8 @@ inside this conversation, or anything obvious from reading the code.
 
 ## The format
 
-One file per situation, named for what it is about (`retry_failed_uploads.md`).
-Keep it short — a few lines of body is normal.
+One file per situation, in `{notes}`, named for what it is about
+(`retry_failed_uploads.md`). Keep it short — a few lines of body is normal.
 
 ---
 when: the situation that should bring this back
@@ -488,7 +497,9 @@ class MemoryReflect(BaseTask):
             # Nothing readable to reflect on, but the messages have been
             # considered — advancing stops us reconsidering them hourly.
             return True
-        prompt = _PROMPT.format(root=root, cid=cid, title=self._title(sdk, cid),
+        prompt = _PROMPT.format(root=root,
+                                notes=sdk.path.join(root, NOTES_DIRNAME),
+                                cid=cid, title=self._title(sdk, cid),
                                 today=today, transcript=transcript,
                                 used=self._used_notes(sdk, cid, transcript),
                                 facts=self._facts_job(sdk, root))
