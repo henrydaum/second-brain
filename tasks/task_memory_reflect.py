@@ -5,15 +5,25 @@ of work, which makes it a far better unit to reflect on than a calendar day.
 So when a conversation stops being the active one, a subagent reads what
 happened and decides what — if anything — is worth keeping.
 
-**The trigger is ``session_conversation_ended``, and the watermark is what
-makes it safe to trust.** The event names the conversation being left — on a
-switch, on a session closing, on a delete — which is exactly the unit of work
-worth reflecting on. What it cannot promise is delivery: a crash emits nothing.
-So every conversation also carries the id of the last message already reflected
-on, and the hourly sweep asks the same question with no event at all. Between
-them: the event makes reflection prompt, the watermark makes it idempotent
-under someone flicking through their history, and the sweep makes a lost event
-recoverable rather than silently dropped.
+**The trigger is ``session_conversation_ended`` and nothing else.** The event
+names the conversation being left — on a switch, on a session closing, on a
+delete — which is exactly the unit of work worth reflecting on, and it fires
+for every one of them. The watermark (the id of the last message already
+reflected on) is what makes that safe: someone flicking through their history
+emits the channel repeatedly for conversations that have not changed, and the
+watermark is what turns those into no-ops.
+
+There was an hourly sweep alongside it, publishing the same channel with an
+empty payload, and it is gone. Its stated job was recovering an event lost to a
+crash, but the event covers every ordinary ending, so in practice it woke up
+twenty-four times a day to find nothing — while being a *task that spawns
+subagents*, which is the most expensive possible thing to run speculatively.
+The gap it covered is real and is now accepted: a conversation whose ending
+event was lost to a crash or a shutdown stays eligible in the watermark table
+forever and nothing asks about it again. That is one lost reflection against a
+standing hourly cost, and losing it silently is what the corpus is designed to
+tolerate — an entry that never gets written is a lesson not learned, not a
+corruption.
 
 **The corpus is reinforcement learning without weights.** An entry is a
 situation, an action, and the result that followed — so retrieval is what makes
@@ -190,13 +200,9 @@ class MemoryReflect(BaseTask):
     """
     timeout = 600
 
-    default_jobs = {
-        "memory_reflect_sweep": {
-            "channel": "session_conversation_ended",
-            "cron": "0 * * * *",
-            "payload": {},
-        },
-    }
+    # No ``default_jobs``. This task is driven by the channel above and by
+    # nothing on a clock — see the module docstring for what the retired hourly
+    # sweep was for and why its absence is affordable.
 
     requests = ["db.query", "db.write", "agent.spawn", "tool.call",
                 "config.read", "conv.read", "session.list", "session.get"]
@@ -233,10 +239,12 @@ class MemoryReflect(BaseTask):
     def run_event(self, sdk, payload):
         """Reflect on whatever has gone quiet, oldest first.
 
-        Two shapes of payload arrive here and both are handled by the same
-        query. ``session_conversation_ended`` names one conversation, so the
-        run narrows to it; the hourly sweep names nothing, so the run takes
-        whatever the watermark has been left holding.
+        ``session_conversation_ended`` names one conversation, so the run
+        narrows to it. The unnarrowed path — take whatever the watermark has
+        been left holding — is kept because it costs one line and it is what
+        anything else publishing this channel would get: a caller with a
+        conversation in mind says so, and one without means "whatever is
+        due". It was the hourly sweep's path, and the sweep is gone.
         """
         subagents = self._include_subagents(sdk)
         if not subagents and self._from_a_child(payload):
