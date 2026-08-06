@@ -30,11 +30,23 @@ the reader, not for the search.
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["paths.get", "fs.list", "fs.write", "fs.delete", "session.get"]
+requests = ["paths.get", "fs.list", "fs.write", "fs.delete", "session.get",
+            "config.read", "event.emit"]
 
 import time
 
 from guest.bases import BaseTool
+
+#: Broadcast a one-line note to whatever chat the user is actually looking at.
+#: A ``chat_message_pushed`` payload carrying no ``session_key`` goes to every
+#: live session rather than to a named one, which is exactly what is wanted
+#: here — the write happened in a session nobody is watching, so there is no
+#: session to reply *to*.
+CHAT_MESSAGE_PUSHED = "chat_message_pushed"
+
+#: What each action is called in that note. Past tense and entry-first, because
+#: the name is the only part worth scanning for.
+NOTIFY_VERB = {"create": "created", "update": "updated", "delete": "deleted"}
 
 #: Must match the constants in ``service_memory_retrieve`` and
 #: ``tool_memory_recall``;
@@ -119,6 +131,13 @@ class MemoryCurate(BaseTool):
     """Write, revise and remove memory entries."""
 
     name = "memory_curate"
+    config_settings = [
+        ("Announce memory changes", "notify_on_memory_change",
+         "Post a line to your chat whenever a background agent writes to "
+         "memory. Only fires for work you are not watching — a change you "
+         "asked for in conversation is already visible in the reply.",
+         True, {"type": "bool"}),
+    ]
     description = (
         "Create, update or delete a memory entry — a note (one situation and "
         "what to do about it) or a skill (a repeatable procedure). Entries "
@@ -257,6 +276,7 @@ class MemoryCurate(BaseTool):
 
         sdk.fs.write(path, _document(name, description, body,
                                      self._conversation(sdk)))
+        self._notify(sdk, "create", name)
         where = (" Add references/ and scripts/ beside it with your file tools."
                  if kind == "skill" else "")
         return sdk.ok(None, llm_summary=f"Wrote {kind} '{name}'.{where}")
@@ -294,6 +314,7 @@ class MemoryCurate(BaseTool):
 
         sdk.fs.write(path, _document(name, description, body,
                                      self._conversation(sdk)))
+        self._notify(sdk, "update", name)
         return sdk.ok(None, llm_summary=f"Updated {kind} '{name}'.")
 
     def _delete(self, sdk, name):
@@ -304,6 +325,7 @@ class MemoryCurate(BaseTool):
         target = (sdk.path.join(_memory_root(sdk), SKILLS_DIRNAME, name)
                   if kind == "skill" else path)
         sdk.fs.delete(target)
+        self._notify(sdk, "delete", name)
         return sdk.ok(None, llm_summary=f"Deleted {kind} '{name}'.")
 
     # ── helpers ──────────────────────────────────────────────────────
@@ -324,3 +346,64 @@ class MemoryCurate(BaseTool):
             return (sdk.session.get() or {}).get("conversation_id")
         except sdk.Failed:
             return None
+
+    # ── telling the user something happened ──────────────────────────
+
+    def _notify(self, sdk, action, name):
+        """Announce one write, when it happened somewhere nobody could see it.
+
+        The curator subagent writes to memory after a conversation ends, on a
+        session with no person attached to it. That is the whole point of it —
+        but it means the corpus the agent is retrieved *from* can change with
+        no trace anywhere the user looks, and a memory system quietly editing
+        itself is exactly the thing to be out of the loop about.
+
+        **``attended`` is the condition, not "is this a subagent".** The kernel
+        already owns that question (``runtime.is_attended``), and it is the
+        right one: a change the user asked for mid-conversation is already
+        visible in the reply, and announcing it again would be the tool talking
+        over itself. Anything else — a curator, a scheduled job, a background
+        drive — is invisible by construction. Asking the kernel also means this
+        stays correct for a concurrent multi-user frontend, which owns its own
+        attendance and would defeat any guess made from a session key.
+
+        Failing closed on both readings, and the direction matters in opposite
+        ways. An unreadable ``attended`` means *do not send*, since a spurious
+        notification in the middle of somebody's conversation is worse than a
+        missing one. An unreadable setting means *do send*, because the default
+        is on and the user has not said otherwise.
+
+        Never raises. Announcing a write must not be able to fail the write —
+        the entry is already on disk by the time this runs, so a failure here
+        would report an error for something that fully succeeded.
+        """
+        try:
+            if not self._unattended(sdk) or not self._announcing(sdk):
+                return
+            verb = NOTIFY_VERB.get(action, action)
+            sdk.events.emit(CHAT_MESSAGE_PUSHED, {
+                "message": f"Memory {verb}: {name}",
+                "title": "",
+                "kind": "note",
+                "source": "memory",
+                "source_id": self.name,
+                "sent_at": time.time(),
+            })
+        except Exception:                      # noqa: BLE001 - see docstring
+            sdk.log(f"could not announce the memory {action} of {name!r}",
+                    level="debug")
+
+    def _unattended(self, sdk):
+        """Whether this write is happening where nobody can see it."""
+        try:
+            attended = (sdk.session.get() or {}).get("attended")
+        except sdk.Failed:
+            return False
+        return attended is False
+
+    def _announcing(self, sdk):
+        """Whether the user wants to hear about it. Default on."""
+        try:
+            return bool(sdk.config.read("notify_on_memory_change") is not False)
+        except sdk.Failed:
+            return True
