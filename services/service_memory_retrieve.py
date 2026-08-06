@@ -143,8 +143,10 @@ class MemoryRetrieve(BaseService):
 
     exports = []
     hooks = {"turn_start": "on_turn_start"}
-    requests = ["paths.get", "config.read", "config.write",
-                "tool.call", "fs.read", "fs.list", "fs.write", "fs.delete",
+    # No ``config.write``: the two kernel settings this needs are seeded at
+    # install, not asked for mid-turn. See ``start``.
+    requests = ["paths.get", "config.read",
+                "tool.call", "fs.read", "fs.list", "fs.write",
                 "db.define", "db.query", "db.write",
                 "session.add_prompt_extra"]
     dependencies_files = ["tools/tool_hybrid_search.py",
@@ -179,18 +181,30 @@ class MemoryRetrieve(BaseService):
     )
 
     def start(self, sdk):
-        """Make the folders and the usage table. Indexing waits to be asked.
+        """Make the folder and the usage table. Nothing else, on purpose.
 
-        ``sync_directories`` is a kernel setting, so writing it is UNSAFE — and
-        a service loading at boot has no session, which makes the chain
-        unattended, which means the write is **refused outright rather than
-        asked about** (``sandbox/approval.py``, step 3). Seeding here therefore
-        did nothing at all except log a warning, and the symptom was the worst
-        available: the folder was never indexed, so retrieval returned nothing,
-        forever, while everything looked healthy. It happens on the first
-        attended turn instead, where a person is present to answer.
+        This service needs two kernel settings it deliberately does not try to
+        write: ``sync_directories`` must contain the memory folder or nothing
+        is indexed and retrieval stays empty forever, and ``agent_profiles``
+        must hold ``memory_curator`` or ``task_memory_reflect`` cannot spawn a
+        confined curator.
+
+        Both were attempted here and then, when that failed, from the
+        ``turn_start`` hook. Neither works, and neither should. A service has
+        no session, so its chain is unattended and an unsafe write is refused
+        rather than asked (``sandbox/approval.py`` step 3) — and making the
+        hook attended, which was tried, only moved the question to the moment
+        *furthest* from anything the user deliberately did. Typing a message is
+        consent to a reply, not to a config change.
+
+        Settings a plugin needs are an install-time concern: that is where
+        somebody chose to install it, and where the approval authorizing
+        arbitrary sandboxed code was already given. Until the package manager
+        seeds them, both are documented in the bundle description and the
+        README, and both fail loudly rather than silently — an unindexed folder
+        logs on first search, and a missing profile stops the curator with a
+        message naming it.
         """
-        self._seeded = False
         self._ensure_folder(sdk, _memory_root(sdk))
         self._ensure_usage_table(sdk)
 
@@ -254,83 +268,6 @@ class MemoryRetrieve(BaseService):
             sdk.log(f"could not create the memory folder: {error}",
                     level="warning")
 
-    def _maybe_seed(self, sdk, ctx):
-        """Ask, once, for the two things this suite needs a person to allow.
-
-        Only from an attended turn: an unattended one cannot draw a dialog, so
-        the Request would be refused and a naive once-only flag would spend the
-        single attempt on a subagent's turn and never try again. The attempt is
-        marked spent whatever the answer, including a refusal — asking again
-        every turn would be worse than not asking.
-
-        This does block the turn until it is answered, which is why it happens
-        once and says plainly what it is for.
-        """
-        if self._seeded or not getattr(ctx, "attended", False):
-            return
-        self._seeded = True
-        self._ensure_indexed(sdk, _memory_root(sdk))
-        self._ensure_curator_profile(sdk)
-
-    def _ensure_indexed(self, sdk, root):
-        """Add the folder to ``sync_directories`` so the pipeline indexes it."""
-        try:
-            existing = sdk.config.read("sync_directories") or []
-        except sdk.Failed as error:
-            sdk.log(f"could not read sync_directories: {error}", level="warning")
-            return
-        if not isinstance(existing, list):
-            existing = [existing]
-        wanted = sdk.path.normalize(root)
-        if any(sdk.path.normalize(str(entry)) == wanted for entry in existing):
-            return
-        try:
-            sdk.config.write("sync_directories", list(existing) + [root])
-            sdk.log(f"memory folder added to sync_directories: {root}")
-        except sdk.Denied:
-            sdk.log("memory folder is not indexed — retrieval will stay empty "
-                    "until sync_directories includes it", level="warning")
-        except sdk.Failed as error:
-            sdk.log(f"could not add the memory folder to sync_directories: {error}",
-                    level="warning")
-
-    def _ensure_curator_profile(self, sdk):
-        """Make sure the restricted profile the curator spawns under exists.
-
-        ``task_memory_reflect`` names it and the kernel refuses to spawn under
-        a profile that is not configured — deliberately, since substituting
-        ``default`` would run a background agent with every installed tool
-        while everything looked confined. So somebody has to write it, and this
-        is the only part of the suite that ever runs where a person can answer.
-
-        Never overwritten. Once it exists it is the user's, and narrowing or
-        widening it is their business.
-        """
-        try:
-            profiles = sdk.config.read("agent_profiles") or {}
-        except sdk.Failed as error:
-            sdk.log(f"could not read agent_profiles: {error}", level="warning")
-            return
-        if not isinstance(profiles, dict) or CURATOR_PROFILE in profiles:
-            return
-        updated = dict(profiles)
-        updated[CURATOR_PROFILE] = {
-            "llm": "default",
-            "prompt_suffix": "",
-            "whitelist_or_blacklist_tools": "whitelist",
-            "tools_list": list(CURATOR_TOOLS),
-        }
-        try:
-            sdk.config.write("agent_profiles", updated)
-            sdk.log(f"added the {CURATOR_PROFILE!r} agent profile")
-        except sdk.Denied:
-            sdk.log(f"the {CURATOR_PROFILE!r} agent profile was not created — "
-                    "memory curation will not run until it exists",
-                    level="warning")
-        except sdk.Failed as error:
-            sdk.log(f"could not create the curator profile: {error}",
-                    level="warning")
-
     # ── the hook ─────────────────────────────────────────────────────
 
     def on_turn_start(self, sdk, ctx, payload):
@@ -341,7 +278,6 @@ class MemoryRetrieve(BaseService):
         normal state of a fresh install, and neither is a reason for a turn to
         fail.
         """
-        self._maybe_seed(sdk, ctx)
         try:
             limit = int(sdk.config.read("memory_max_pointers") or 0)
         except (sdk.Failed, TypeError, ValueError):
