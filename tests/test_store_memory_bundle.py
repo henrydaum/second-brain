@@ -392,24 +392,28 @@ def test_injecting_memory_pointers_raises_no_dialog():
     assert decision.safe
 
 
-def test_indexing_is_asked_for_when_somebody_is_there_to_answer():
-    """A boot-time service cannot be granted a kernel setting.
+def test_the_service_never_writes_a_kernel_setting():
+    """It needs two and asks for neither, which is the whole lesson here.
 
-    ``sync_directories`` is UNSAFE to write, and a service loading at boot has
-    no session — so the chain is unattended and the Request is *refused*, not
-    asked (``sandbox/approval.py`` step 3). Seeding from ``start`` therefore
-    did nothing but log, and the folder was never indexed: retrieval returned
-    nothing forever while every part looked healthy.
+    ``sync_directories`` must contain the memory folder or nothing is indexed;
+    ``agent_profiles`` must hold the curator profile or no curator can spawn.
+    Both were attempted from ``start`` — refused, because a service has no
+    session and an unattended unsafe Request is refused rather than asked — and
+    then from the ``turn_start`` hook, which was made to work and then reverted
+    because it asked at the moment furthest from anything the user chose to do.
+
+    Settings a plugin needs belong to install. Until the package manager seeds
+    them, this file must not pretend otherwise: declaring ``config.write`` here
+    would be a capability it cannot successfully use.
     """
-    service = _source_or_skip(SERVICE)
+    declared = _declarations(SERVICE)
+    assert "config.write" not in declared["requests"]
+    assert "config.read" in declared["requests"], "it still reads its own"
 
-    assert "_maybe_seed" in service
-    # Gated on attendance, or the one attempt is spent on a subagent's turn.
-    assert 'getattr(ctx, "attended", False)' in service
-    # And not from start(), which is where it could never work.
-    start = service.split("def start(self, sdk):", 1)[1].split("    def ", 1)[0]
-    assert "_ensure_indexed" not in start
-    assert "_ensure_curator_profile" not in start
+    source = _source_or_skip(SERVICE)
+    for gone in ("_maybe_seed", "_ensure_indexed", "_ensure_curator_profile"):
+        assert gone not in source, gone
+    assert "sync_directories" in source, "but it still says what it needs"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -472,23 +476,25 @@ def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():
     assert {"memory_recall", "memory_curate"} <= allowed
 
 
-def test_the_profile_is_seeded_where_a_person_can_answer_for_it():
-    """Same trap as ``sync_directories``, one level up.
+def test_a_missing_curator_profile_stops_the_curator_rather_than_widening_it():
+    """Nothing in this suite can create the profile, so the failure has to be
+    loud and it has to be closed.
 
-    ``agent_profiles`` is a kernel setting, so the task cannot create the
-    profile it needs — its chain is unattended and the write is refused rather
-    than asked. The service seeds it on the first attended turn, and the task
-    fails closed until then rather than falling back to an unrestricted spawn.
+    ``agent_profiles`` is a kernel setting and no part of a plugin can write
+    one — a task's chain is unattended, and the service's attempt was removed
+    for the same reason. So until the package manager seeds settings at
+    install, the profile is created by hand, and the only thing this code owes
+    is to refuse to run without it: ``_reflect`` returns False, which leaves
+    the watermark where it is so a later sweep retries, rather than spawning an
+    unrestricted curator that can reach ``edit_file``.
     """
-    service = _source_or_skip(SERVICE)
-    assert "_ensure_curator_profile" in service
-    assert 'sdk.config.write("agent_profiles"' in service
-    assert "config.write" in _declarations(SERVICE)["requests"]
-
-    # Failing closed: no watermark advance, so the next sweep retries.
     task = _source_or_skip(TASK)
+    assert "profile=CURATOR_PROFILE" in task
+
     reflect = task.split("def _reflect", 1)[1].split("    def ", 1)[0]
     assert "return False" in reflect
+    # The kernel half — refusing the spawn outright — is
+    # ``test_an_unknown_profile_is_refused_rather_than_widened`` below.
 
 
 def test_an_unknown_profile_is_refused_rather_than_widened():
