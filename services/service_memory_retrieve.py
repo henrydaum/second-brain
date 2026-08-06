@@ -274,6 +274,8 @@ class MemoryRetrieve(BaseService):
         logs on the first search, and a missing profile stops the curator with
         a message naming it.
         """
+        # Standing misconfigurations already reported. See ``_say_once``.
+        self._said = set()
         self._ensure_folder(sdk, _memory_root(sdk))
         self._ensure_usage_table(sdk)
 
@@ -352,19 +354,32 @@ class MemoryRetrieve(BaseService):
         except (sdk.Failed, TypeError, ValueError):
             limit = 5
         if limit <= 0:
+            sdk.log("memory retrieval is disabled (memory_max_pointers is 0)",
+                    level="debug")
             return None
 
         query = self._latest_user_message(sdk, ctx)
         if not query:
+            # Ordinary at the very start of a conversation, and the one case
+            # where an empty result says nothing about the corpus at all.
+            sdk.log("memory: no user message to search on yet", level="debug")
             return None
 
         hits = self._search(sdk, query, limit)
         if not hits:
-            return None
+            return None  # _search said why
 
         offered = []
         block = self._render(sdk, hits, offered)
         if not block:
+            # Entries matched but every one rendered empty, which means their
+            # frontmatter has no description — invisible otherwise, since the
+            # symptom is an absent block either way.
+            self._say_once(
+                sdk, "no-descriptions",
+                f"memory: {len(hits)} entry(ies) matched but none could be "
+                f"described — an entry needs a 'description:' in its "
+                f"frontmatter to be offered.")
             return None
         try:
             sdk.session.add_prompt(block, key=ctx.session_key, slot="memory")
@@ -423,7 +438,12 @@ class MemoryRetrieve(BaseService):
                 " WHERE conversation_id = ? AND LOWER(role) = 'user'"
                 "   AND COALESCE(content, '') <> ''"
                 " ORDER BY id DESC LIMIT 1", [int(cid)], max_rows=1)
-        except sdk.Failed:
+        except sdk.Failed as error:
+            # Abstain, but not in silence: a database this cannot read is a
+            # different world from a conversation with nothing in it, and both
+            # used to come back as the same empty string.
+            sdk.log(f"memory: could not read conversation {cid}: {error}",
+                    level="warning")
             return ""
         if not rows:
             return ""
@@ -438,19 +458,45 @@ class MemoryRetrieve(BaseService):
         separation this design exists to remove. The non-entry files are
         dropped afterwards instead, and the over-fetch is what stops
         ``MEMORY.md`` and the README crowding real results out of the limit.
+
+        Every outcome says something, because "no memories were offered" used
+        to be reachable four different ways and looked identical from outside
+        every time. The levels split on one question: did the search *run*.
+        Nothing matching is the ordinary state of a fresh install and is
+        ``debug``; a search that could not run, or one whose hits all fell
+        outside the entry folders, is a misconfiguration nobody would otherwise
+        find, and those are said out loud.
         """
+        root = _memory_root(sdk)
         try:
             results = sdk.tools.call("hybrid_search", query=query,
-                                     folder=_memory_root(sdk),
-                                     max_results=limit * 3)
+                                     folder=root, max_results=limit * 3)
         except sdk.Failed as error:
-            sdk.log(f"memory search unavailable: {error}", level="info")
+            # Not necessarily a bug: hybrid_search ships with the indexing
+            # packages, and without them there is nothing to search. Named
+            # rather than shrugged at, because the two look the same from here.
+            # Deliberately does not name *which* piece is missing: hybrid_search
+            # may be absent, or present with both its retrievers down, and it
+            # reports which itself. Repeating a guess over its answer would be
+            # the wrong half of the message winning.
+            self._say_once(
+                sdk, "no-search",
+                f"memory retrieval is off — the search it runs on failed: "
+                f"{error}. Install the search packages, or set "
+                f"memory_max_pointers to 0 to stop trying.")
             return []
+
+        results = list(results or [])
+        if not results:
+            sdk.log(f"memory: nothing indexed under {root} matched "
+                    f"{query[:60]!r}", level="debug")
+            return []
+
         notes_dir, skills_dir = _entry_dirs(sdk)
         notes = sdk.path.normalize(notes_dir)
         skills = sdk.path.normalize(skills_dir)
-        kept, seen = [], set()
-        for hit in results or []:
+        kept, seen, outside = [], set(), []
+        for hit in results:
             path = str(hit.get("path") or "")
             if not path:
                 continue
@@ -460,14 +506,55 @@ class MemoryRetrieve(BaseService):
             elif normalized.startswith(skills):
                 entry = self._skill_of(sdk, skills_dir, path)
             else:
-                continue  # MEMORY.md, the README, a draft — not an entry
+                outside.append(path)  # MEMORY.md, the README, a draft
+                continue
             if entry is None or entry[0] in seen:
                 continue
             seen.add(entry[0])
             kept.append(entry)
             if len(kept) >= limit:
                 break
+
+        if not kept:
+            # The failure worth naming. The folder is indexed and matching, so
+            # everything upstream is working — the entries are simply not in
+            # notes/ or skills/, which is the one thing this service cannot
+            # infer and the user cannot see. A sample, because the whole list
+            # is every draft in the folder.
+            self._say_once(
+                sdk, "no-entries",
+                f"memory: {len(results)} indexed file(s) under {root} matched, "
+                f"but none are entries — an entry lives in {NOTES_DIRNAME}/ or "
+                f"{SKILLS_DIRNAME}/. Matched instead: "
+                + ", ".join(outside[:3]) + ("…" if len(outside) > 3 else ""))
+            return []
+
+        sdk.log(f"memory: {len(kept)} of {len(results)} matches are entries",
+                level="debug")
         return kept
+
+    def _say_once(self, sdk, topic, message):
+        """Log a standing misconfiguration the first time only.
+
+        This runs at the top of every turn, so a warning that repeats is a
+        warning that gets filtered out — and the conditions here are *states*
+        rather than events: nothing is installed, nothing is in the entry
+        folders. Both stay true until somebody fixes them, and neither is worth
+        saying twice. Reset per process, so a restart says it again, which is
+        the natural moment for a person to be reading the log anyway.
+
+        Self-initialising rather than trusting ``start`` to have run first: a
+        diagnostic that raises ``AttributeError`` on the path it exists to
+        explain would be the worst possible version of this.
+        """
+        said = getattr(self, "_said", None)
+        if said is None:
+            said = self._said = set()
+        if topic in said:
+            sdk.log(message, level="debug")
+            return
+        said.add(topic)
+        sdk.log(message, level="warning")
 
     def _skill_of(self, sdk, skills_dir, path):
         """Which skill a hit inside ``skills/`` belongs to.

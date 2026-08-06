@@ -81,7 +81,11 @@ class LexicalSearch(BaseTool):
         query = (kwargs.get("query") or "").strip()
         top_k = max(1, int(kwargs.get("top_k") or 5))
         sources = kwargs.get("sources") or None
-        folder = kwargs.get("folder") or None
+        # Stripped, because a folder filter is matched as a literal prefix and
+        # a path is the one argument a person hand-enters or pastes. A single
+        # trailing space turns the LIKE into one that can never match, and the
+        # result is an empty search that looks exactly like an empty corpus.
+        folder = (kwargs.get("folder") or "").strip() or None
 
         if not query:
             return sdk.fail("No query provided.")

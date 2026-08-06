@@ -143,7 +143,10 @@ class SemanticSearch(BaseTool):
         query = (kwargs.get("query") or "").strip()
         top_k = max(1, int(kwargs.get("top_k") or 5))
         requested = kwargs.get("streams") or None
-        folder = kwargs.get("folder") or None
+        # Stripped for the reason lexical_search strips it: the filter is a
+        # literal path prefix, and whitespace on a pasted path makes it match
+        # nothing while looking like an empty corpus.
+        folder = (kwargs.get("folder") or "").strip() or None
 
         if not query:
             return sdk.fail("No query provided.")

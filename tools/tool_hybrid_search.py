@@ -88,7 +88,10 @@ class HybridSearch(BaseTool):
         """Run hybrid search."""
         query = (kwargs.get("query") or "").strip()
         max_results = max(1, int(kwargs.get("max_results") or 5))
-        folder = kwargs.get("folder") or None
+        # Stripped here too, not only in the sub-tools: this is the argument
+        # the agent and /tools actually fill in, and the value it forwards
+        # should be the one it was asked about.
+        folder = (kwargs.get("folder") or "").strip() or None
         modality = kwargs.get("modality") or None
 
         if not query:
@@ -106,8 +109,9 @@ class HybridSearch(BaseTool):
             # Map modality to the corresponding semantic embedding stream
             sem_kwargs["streams"] = [modality]
 
-        all_raw = (_sub_search(sdk, "lexical_search", lex_kwargs)
-                   + _sub_search(sdk, "semantic_search", sem_kwargs))
+        lexical, lex_error = _sub_search(sdk, "lexical_search", lex_kwargs)
+        semantic, sem_error = _sub_search(sdk, "semantic_search", sem_kwargs)
+        all_raw = lexical + semantic
 
         # Filter by modality if requested (lexical search doesn't filter by
         # modality natively, so we apply the filter here after the fact)
@@ -115,7 +119,24 @@ class HybridSearch(BaseTool):
             all_raw = [r for r in all_raw if r.get("modality") == modality]
 
         if not all_raw:
+            # "No results" and "both retrievers are broken" used to be the same
+            # sentence, which made every failure downstream undiagnosable: a
+            # caller could not tell a corpus with no match from a search that
+            # never ran. Naming the ones that failed costs a clause and is the
+            # only place the information exists.
+            broken = [note for note in (lex_error, sem_error) if note]
+            if broken:
+                sdk.log(f"hybrid search ran no retriever: {'; '.join(broken)}",
+                        level="warning")
+                return sdk.fail(
+                    f'Could not search for "{query}" — {"; ".join(broken)}.')
             return sdk.ok([], llm_summary=f'No results found for "{query}".')
+
+        if lex_error or sem_error:
+            # One stream is still a useful answer, but a *ranking* built from
+            # half the evidence should say so rather than look complete.
+            sdk.log(f"hybrid search degraded: {lex_error or sem_error}",
+                    level="warning")
 
         # --- Group by stream ---
         by_stream = {}
@@ -146,21 +167,28 @@ class HybridSearch(BaseTool):
                       attachments=[d["path"] for d in flat_results])
 
 
-def _sub_search(sdk, name: str, kwargs) -> list:
-    """One sub-tool's results, or an empty list.
+def _sub_search(sdk, name: str, kwargs) -> tuple:
+    """``(results, problem)`` for one sub-tool.
 
     Either retriever may legitimately be missing — semantic search needs an
     embedder loaded, lexical search needs the FTS index built — and fusing one
     stream is still a useful answer. So a failure here degrades the ranking
     rather than failing the search, which is what the native version got from
     reading ``result.success`` off a returned envelope.
+
+    What changed is that it no longer degrades *invisibly*. This returned a
+    bare list and logged at ``debug``, so a search with both retrievers down
+    was indistinguishable from a corpus with nothing in it — from here, from
+    the caller, and from the user reading "No results found". The problem
+    string is the caller's to report; only the caller knows whether losing one
+    stream mattered.
     """
     try:
         data = sdk.tools.call(name, **kwargs)
     except sdk.Failed as failed:
         sdk.log(f"{name} unavailable: {failed.error}", level="debug")
-        return []
-    return data if isinstance(data, list) else []
+        return [], f"{name} unavailable: {failed.error}"
+    return (data if isinstance(data, list) else []), ""
 
 
 def _dedup_by_path(results):
