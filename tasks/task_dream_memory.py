@@ -73,14 +73,15 @@ class DreamMemory(BaseTask):
     writes = []
     timeout = 600
     event_payload_schema = {"type": "object", "properties": {}, "required": []}
-    default_jobs = {
-        "dream_memory": {
-            "channel": "dream_memory", "cron": "0 4 * * *", "payload": {},
-        },
-    }
+    #: The schedule this task wants to exist, created by ``on_install`` and by
+    #: nothing else. Four in the morning: it rewrites the whole memory folder
+    #: and wants to be nowhere near a conversation while it does.
+    job = {"channel": "dream_memory", "cron": "0 4 * * *", "payload": {}}
+
     requests = [
         "paths.get", "user.read", "fs.read", "fs.list", "fs.write",
         "fs.delete", "fs.move", "db.query", "config.read", "agent.complete",
+        "service.call",
     ]
     config_settings = [
         ("Memory Dream LLM Profile", "memory_dream_llm_profile",
@@ -91,6 +92,36 @@ class DreamMemory(BaseTask):
         "Nightly, dream_memory may consolidate the memory folder (MEMORY.md "
         "index + topic files) with reusable lessons and preferences."
     )
+
+    def on_install(self, sdk):
+        """Create this task's nightly schedule, once, at install.
+
+        This was a ``default_jobs`` declaration, seeded by the orchestrator at
+        every registration — so a job the user deleted was indistinguishable
+        from one never installed, and came back at the next boot. ``on_install``
+        runs only when somebody installs or updates this package, so a deletion
+        lasts until they ask for it again.
+
+        Read-then-skip: an existing job keeps whatever hour it has been moved
+        to. Raising is reported and does not undo the install.
+        """
+        try:
+            if sdk.services.call("timekeeper", "get_job", self.name) is None:
+                sdk.services.call("timekeeper", "create_job",
+                                  self.name, self.job)
+                sdk.log(f"scheduled job {self.name} created")
+        except sdk.Failed as error:
+            raise RuntimeError(
+                f"schedule {self.name!r} was not created ({error}) — this task "
+                f"will not run until one is added in /schedule") from error
+
+    def on_uninstall(self, sdk):
+        """Take the schedule with it — a job with no task fires into nothing."""
+        try:
+            sdk.services.call("timekeeper", "remove_job", self.name)
+        except sdk.Failed as error:
+            sdk.log(f"could not remove the {self.name} schedule: {error}",
+                    level="warning")
 
     def run_event(self, sdk, payload):
         """Perform one memory consolidation sweep."""

@@ -1,8 +1,8 @@
 """One-shot conversation titler.
 
-Fired by the ``update_titles`` cron job (seeded ``* * * * *`` — every
-minute — via ``default_jobs``; the sweep is one cheap SELECT and exits
-immediately when nothing is ripe). A conversation with new messages since
+Fired by the ``update_titles`` cron job, created ``* * * * *`` — every
+minute — by ``on_install``; the sweep is one cheap SELECT and exits
+immediately when nothing is ripe. A conversation with new messages since
 the last sweep is titled once it is *ripe*: the agent has replied AND
 either the first agent reply is at least ``title_delay_minutes`` old
 (default 10 — the delay buys extra context so similar openers don't
@@ -109,11 +109,13 @@ class UpdateTitles(BaseTask):
     writes = []
     timeout = 600
     event_payload_schema = {"type": "object", "properties": {}, "required": []}
-    default_jobs = {
-        "update_titles": {"channel": "update_titles", "cron": "* * * * *", "payload": {}},
-    }
+    #: The schedule this task wants to exist, created by ``on_install`` and by
+    #: nothing else. Every minute is affordable because the sweep is one cheap
+    #: SELECT that exits immediately when nothing is ripe.
+    job = {"channel": "update_titles", "cron": "* * * * *", "payload": {}}
+
     requests = ["db.query", "db.write", "conv.read", "conv.set_title",
-                "agent.complete", "event.emit", "config.read"]
+                "agent.complete", "event.emit", "config.read", "service.call"]
 
     config_settings = [
         ("Title Update LLM Profile", "title_update_llm_profile",
@@ -160,6 +162,50 @@ class UpdateTitles(BaseTask):
            SET last_title_check_message_count = ?
          WHERE id = ?
     """
+
+    def on_install(self, sdk):
+        """Create this task's schedule, once, when the package is installed.
+
+        This was a ``default_jobs`` declaration, and the orchestrator seeded it
+        at **every registration** — boot, install, hot-reload — skipping only a
+        job that existed at that moment. A job the user had deleted did not
+        exist, which is indistinguishable from one that was never installed, so
+        it came back at the next restart and wrote config to announce itself.
+        There was no way to say no; the base class even claimed the timekeeper
+        tombstoned removals, which it has never done.
+
+        ``on_install`` runs when somebody installs or updates this package and
+        at no other time, so a deletion lasts until the user asks for this
+        package again — which is the one moment re-creating it is what they
+        meant.
+
+        Read-then-skip, so an existing job keeps whatever cron it has since
+        been given. Raising is reported by ``/packages`` and does not undo the
+        install, which is the right way round: the task is installed and can be
+        scheduled by hand, and a silent failure here would leave a task that
+        simply never runs.
+        """
+        try:
+            if sdk.services.call("timekeeper", "get_job", self.name) is None:
+                sdk.services.call("timekeeper", "create_job",
+                                  self.name, self.job)
+                sdk.log(f"scheduled job {self.name} created")
+        except sdk.Failed as error:
+            raise RuntimeError(
+                f"schedule {self.name!r} was not created ({error}) — this task "
+                f"will not run until one is added in /schedule") from error
+
+    def on_uninstall(self, sdk):
+        """Take the schedule with it.
+
+        A job whose task is gone fires into nothing forever, and is the kind of
+        leftover only somebody reading ``/schedule`` would ever find.
+        """
+        try:
+            sdk.services.call("timekeeper", "remove_job", self.name)
+        except sdk.Failed as error:
+            sdk.log(f"could not remove the {self.name} schedule: {error}",
+                    level="warning")
 
     def _candidates(self, sdk) -> list:
         """Conversations with messages the sweep hasn't seen yet, as dicts.
