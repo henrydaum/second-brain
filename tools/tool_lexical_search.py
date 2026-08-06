@@ -123,12 +123,27 @@ class LexicalSearch(BaseTool):
         sql_parts.append("LIMIT ?")
         params.append(top_k)
 
+        sql = "\n".join(sql_parts)
         try:
-            rows = sdk.db.query("\n".join(sql_parts), params)
+            rows = sdk.db.query(sql, params)
         except sdk.Failed as failed:
-            # A missing lexical_index means the indexing package is not
-            # installed, which is a fact about this system rather than a bug.
-            return sdk.fail(f"Search failed: {failed.error}")
+            # Two very different failures arrive here. A missing lexical_index
+            # means the indexing package is not installed — a fact about this
+            # system, and there is nothing to retry. A *syntax* error means the
+            # query was passed through as FTS5 and is not FTS5, which only
+            # FTS5 could have told us; see ``_prepare_fts_query``. Ask again in
+            # the language we are sure of rather than reporting a parser error
+            # to somebody who was writing prose.
+            literal = _literal_fts_query(query)
+            if not _is_fts_syntax_error(failed.error) or literal == fts_query:
+                return sdk.fail(f"Search failed: {failed.error}")
+            sdk.log(f"query was not valid FTS5 ({failed.error}); searching for "
+                    f"its words instead", level="debug")
+            params[0] = literal
+            try:
+                rows = sdk.db.query(sql, params)
+            except sdk.Failed as retried:
+                return sdk.fail(f"Search failed: {retried.error}")
 
         if not rows:
             return sdk.ok([], llm_summary=f'No results found for "{query}".')
@@ -160,20 +175,45 @@ class LexicalSearch(BaseTool):
 
 
 def _prepare_fts_query(query: str) -> str:
-    """
-    Prepare a query string for FTS5 MATCH.
+    """Prepare a query string for FTS5 MATCH.
 
-    If the query contains explicit FTS5 operators (AND, OR, NOT, quotes, *),
-    pass it through as-is. Otherwise, extract alphanumeric tokens and
-    join them so FTS5 implicitly ANDs them.
+    A query carrying explicit operators is passed through, so somebody who
+    means ``"exact phrase" OR other*`` gets it. Otherwise the words are
+    extracted and joined, which FTS5 implicitly ANDs.
+
+    **The guess is unsound in one direction and that is handled at the call
+    site, not here.** Deciding whether a string is FTS5 by looking for
+    operator characters says yes to ordinary prose containing a quote or a
+    star, and the result is not a worse ranking — it is a parser error, which
+    is how ``what's the "memory" design`` came back as ``fts5: syntax error
+    near "'"``. The apostrophe never survives the token path; it only survives
+    the pass-through. Nothing here can be made to answer correctly, for the
+    same reason the shell classifier could not: what parses as FTS5 is a
+    question only FTS5 answers. So this stays a cheap guess, and a syntax
+    error is taken as its refutation and retried literally.
     """
     has_operators = any(op in query
                         for op in ['"', " AND ", " OR ", " NOT ", "*"])
     if has_operators:
         return query
 
-    tokens = re.findall(r'\w+', query.lower())
-    return " ".join(tokens)
+    return _literal_fts_query(query)
+
+
+def _literal_fts_query(query: str) -> str:
+    """The same words, with nothing left that FTS5 could read as syntax."""
+    return " ".join(re.findall(r'\w+', query.lower()))
+
+
+def _is_fts_syntax_error(message: str) -> bool:
+    """Whether a failed query was rejected by the FTS5 *parser*.
+
+    Narrow on purpose: an unindexed corpus, a missing table and a denied
+    Request must all keep reporting what they are rather than being retried
+    into a second, more confusing failure.
+    """
+    text = (message or "").lower()
+    return "fts5" in text and ("syntax error" in text or "no such column" in text)
 
 
 def _modalities(sdk, paths) -> dict:

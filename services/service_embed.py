@@ -24,6 +24,12 @@ dependencies_pip = ['numpy', 'pillow', 'sentence-transformers', 'torch']
 
 from guest.bases import BaseService
 
+#: Width of CLIP's positional embedding table, and a hard ceiling rather than a
+#: tuning knob: the text tower has exactly this many positions, so a longer
+#: sequence raises instead of degrading. Every CLIP variant sentence-
+#: transformers ships uses 77.
+_CLIP_TEXT_TOKENS = 77
+
 #: Model weights live at the **root of DATA_DIR**, one directory per model,
 #: named after it — ``DATA_DIR/BAAI_bge-small-en-v1.5``.
 #:
@@ -272,7 +278,6 @@ class ImageEmbedder(_SentenceTransformerEmbedder, BaseService):
     shared = True
     timeout = 300
     requests = ["config.read", "paths.get", "fs.list", "fs.delete"]
-    exports = ["encode", "describe"]
     exports = ["encode", "encode_text", "describe"]
     setting = "embed_image_model_name"
     fallback = "clip-ViT-B-32"
@@ -345,4 +350,44 @@ class ImageEmbedder(_SentenceTransformerEmbedder, BaseService):
         batch = [inputs] if isinstance(inputs, str) else list(inputs)
         if not batch:
             return []
-        return self._to_buffers(sdk, batch)
+        return self._to_buffers(sdk, [self._fit_text_tower(sdk, text)
+                                      for text in batch])
+
+    def _fit_text_tower(self, sdk, text):
+        """Shorten one string to something CLIP's text tower will accept.
+
+        CLIP's positional embedding table is 77 wide and the model *raises*
+        rather than truncating, so a long query does not degrade — it fails
+        outright, and what failed here was a background subagent's image
+        search that nobody was watching. Any query long enough to hit this is
+        well past the point where CLIP is doing anything with the tail anyway:
+        the text tower was trained on captions and collapses whatever it gets
+        into a single vector.
+
+        Truncation is by **token**, asked of the model's own tokenizer,
+        because that is the only counter that agrees with the thing that
+        raises. Word count is not a proxy — a path, a hash or a CJK sentence
+        can be several tokens per word — so the word split is a last-resort
+        fallback for a model whose tokenizer is not reachable, and it is
+        deliberately pessimistic.
+        """
+        limit = _CLIP_TEXT_TOKENS - 2          # BOS and EOS take one each
+        tokenizer = getattr(self.model, "tokenizer", None)
+        encode = getattr(tokenizer, "encode", None)
+        decode = getattr(tokenizer, "decode", None)
+        try:
+            tokens = encode(text, add_special_tokens=False) if encode else None
+        except Exception:                      # noqa: BLE001 - foreign library
+            tokens = None
+        if tokens is not None and decode is not None:
+            if len(tokens) <= limit:
+                return text
+            kept = decode(tokens[:limit], skip_special_tokens=True)
+        else:
+            words = text.split()
+            if len(words) <= limit // 2:
+                return text
+            kept = " ".join(words[:limit // 2])
+        sdk.log(f"query shortened to fit {self.model_name}'s "
+                f"{_CLIP_TEXT_TOKENS}-token text tower", level="debug")
+        return kept
