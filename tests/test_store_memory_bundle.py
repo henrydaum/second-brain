@@ -513,6 +513,36 @@ def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():
     allowed = set(namespace["CURATOR_TOOLS"])
     assert "edit_file" not in allowed
     assert {"memory_recall", "memory_curate"} <= allowed
+    # The list grows as the suite learns what a curator needs, and every
+    # addition is a read. Stated as a rule rather than as a fixed list, so a
+    # future writer has to be added deliberately and against this line.
+    assert not {"edit_file", "write_file", "run_command", "delete_file",
+                "spawn_subagent"} & allowed
+
+
+def test_the_bundle_ships_every_tool_the_curator_profile_names():
+    """A whitelist naming a tool nobody installed silently grants nothing.
+
+    The profile and the manifest are edited in different files, and the failure
+    is invisible from either: ``scoped_registry`` filters against what is
+    *registered*, so an uninstalled name is dropped without a word and the
+    curator simply runs without the capability its prompt describes. That is
+    the same silent-narrowing shape as the missing tools that made a curator
+    unable to search at all.
+
+    ``memory_*`` are exempt from nothing — they are in the manifest too. What
+    is exempt is any tool the closure supplies rather than the manifest, and
+    there are none: a tool that is not installed cannot be a dependency of one
+    that is.
+    """
+    namespace = {}
+    exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), namespace)
+    manifest = json.loads(_source_or_skip(BUNDLE))
+    shipped = {Path(rel).stem.split("_", 1)[1] for rel in manifest["files"]
+               if rel.startswith("tools/")}
+
+    missing = sorted(set(namespace["CURATOR_TOOLS"]) - shipped)
+    assert not missing, f"the profile names tools the bundle does not ship: {missing}"
 
 
 def test_a_missing_curator_profile_stops_the_curator_rather_than_widening_it():
