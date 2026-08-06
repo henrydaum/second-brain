@@ -82,7 +82,8 @@ class PersistentBox:
         """Whether this box can still take calls."""
         return self._alive
 
-    def call(self, method: str, *args, target: str = "", **kwargs) -> Result:
+    def call(self, method: str, *args, target: str = "",
+             for_session: str = "", **kwargs) -> Result:
         """Invoke a method and wait for its answer. Serialized per box.
 
         If a caller is on this thread — a sandboxed tool that reached us
@@ -92,13 +93,30 @@ class PersistentBox:
         world rather than the kernel's. Serialization is what makes swapping
         live state safe here; one call is in flight at a time by construction.
 
-        A call with no caller — a poll tick, a bus delivery, a hook — keeps
-        the box's own chain and context, which is right: a service acting on
-        its own initiative is not acting for anybody.
+        A call with no caller — a poll tick, a bus delivery — keeps the box's
+        own chain and context, which is right: a service acting on its own
+        initiative is not acting for anybody.
+
+        ``for_session`` is the third case, and it is a *hook*: the kernel
+        called this box at a doorway it opened **on some session's behalf**.
+        Nobody is on the thread, so there is no caller to adopt, but the
+        session is a fact the kernel holds and the box cannot learn — a
+        ``turn_start`` hook that could not name the turn it was standing in
+        wrote its prompt text to ``sessions.get(None)`` and silently reached
+        nothing.
+
+        **It moves the context and never the chain**, and that separation is
+        the whole of why it is safe. The chain answers *who is asking*, and it
+        is what decides attendance and therefore what may be approved; a
+        service acting at a doorway is still acting on its own initiative, so
+        it stays rooted at ``service:<name>``, stays unattended, and still
+        cannot raise a dialog for anything unsafe. The context answers *whose
+        world* — which session's rows, which user, which prompt — and at a
+        doorway the honest answer is the session, not the kernel's default.
 
         ``target`` names which occupant, for a box holding several services;
-        empty means the only one. It is keyword-only, and that is not a style
-        choice: the first positional here is already ``method``, and
+        empty means the only one. Both are keyword-only, and that is not a
+        style choice: the first positional here is already ``method``, and
         ``sandbox/hooks.py`` documents being bitten once by exactly that
         collision — a ``chain=`` parameter that a caller passed positionally
         and silently invoked as a method name.
@@ -131,14 +149,23 @@ class PersistentBox:
             if not self._alive:
                 return Result.failure(f"box {self.name!r} is not running")
             caller = provenance.current()
-            if caller is None:
-                return self._call(method, args, kwargs, target)
             base_chain = self.execution.chain
             base_context = self.execution.context
-            self.execution.chain = caller.chain.push(
-                self._identity(target, base_chain))
-            if caller.context is not None:
-                self.execution.context = caller.context
+            if caller is not None:
+                self.execution.chain = caller.chain.push(
+                    self._identity(target, base_chain))
+                if caller.context is not None:
+                    self.execution.context = caller.context
+            elif for_session and self._interpreter is not None:
+                # A real caller wins over this, and always: a caller is a
+                # live chain with a live world, where ``for_session`` is only
+                # the kernel saying which session it opened the doorway for.
+                lent = self._interpreter.context_for_session(for_session)
+                if lent is None:
+                    return self._call(method, args, kwargs, target)
+                self.execution.context = lent
+            else:
+                return self._call(method, args, kwargs, target)
             try:
                 return self._call(method, args, kwargs, target)
             finally:

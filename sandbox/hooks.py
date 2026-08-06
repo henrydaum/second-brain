@@ -326,8 +326,19 @@ def build_shim(service, moment: str, method: str, make_response=None):
 
         # ``handler``, not ``method``: PersistentBox.call names its own first
         # parameter ``method``, and passing one by keyword collides with it.
+        #
+        # ``for_session`` lends the box the session this doorway was opened
+        # for, which the projection below has always told the *guest* and
+        # nothing ever told the guest's *Requests*. So a hook could read
+        # ``sdk`` fields naming a session and then have every session-scoped
+        # Request answered from the kernel's default one — which is how
+        # ``session.add_prompt_extra`` came to write into ``sessions.get(None)``
+        # and return False, silently, for every turn. Context only: see
+        # ``PersistentBox.call`` for why the chain deliberately does not move.
+        projected = project_context(ctx, moment)
         result = box.call("__hook__", moment=moment, handler=method,
-                          ctx=project_context(ctx, moment),
+                          for_session=projected.get("session_key") or "",
+                          ctx=projected,
                           payload=project_payload(moment, payload))
         if not result.ok:
             logger.warning("%s hook %s.%s: %s", moment,

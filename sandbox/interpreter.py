@@ -384,6 +384,29 @@ class Interpreter:
         return (execution.context if execution.context is not None
                 else self.context)
 
+    def context_for_session(self, session_key: str):
+        """A host context belonging to one session, or ``None``.
+
+        The counterpart to :meth:`_context_for`, which answers for a box acting
+        on its own initiative and therefore builds the *kernel's* context. This
+        answers for a box the kernel has called **on a session's behalf** — a
+        hook standing at a doorway is the case — where the session is a fact
+        the kernel holds and the box has no way to learn.
+
+        It is deliberately only about the context and never about the chain.
+        Which session's rows a call reads is a different question from who is
+        asking for them, and only the second decides whether anything may be
+        approved. See ``PersistentBox.call``.
+        """
+        if not session_key or self._context_factory is None:
+            return None
+        try:
+            return self._context_factory(session_key)
+        except Exception:
+            logger.exception("could not build a context for session %s",
+                             session_key)
+            return None
+
     def set_context_factory(self, factory) -> None:
         """Install the context builder, once the kernel has parts to build from.
 

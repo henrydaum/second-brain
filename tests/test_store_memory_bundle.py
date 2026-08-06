@@ -386,10 +386,30 @@ def test_injecting_memory_pointers_raises_no_dialog():
     from sandbox.policy import CONSEQUENTIAL, classify
 
     assert SESSION_ADD_PROMPT not in CONSEQUENTIAL
+    # The chain a *hook* actually has. This test used to classify a bare
+    # ``Chain(root="repl")``, which is not what stands at a doorway, and — far
+    # worse — omitted ``key``, which is the argument the whole branch turns on.
+    # It passed for a call shape the service did not make while the real call
+    # was refused on every turn.
+    hook_chain = Chain(root="service:memory_retrieve",
+                       links=("memory_retrieve",))
     decision = classify(
         Request(SESSION_ADD_PROMPT, {"text": "pointers", "slot": "memory"}),
-        Chain(root="repl"))
-    assert decision.safe
+        hook_chain)
+    assert decision.safe, "injecting into its own session must never ask"
+
+    # And the reason the service must not name a session: from this chain,
+    # naming one is unsafe, and a hook is unattended, so it is refused outright
+    # rather than asked. The source is checked because the classification alone
+    # cannot say which of the two calls the plugin makes.
+    named = classify(
+        Request(SESSION_ADD_PROMPT,
+                {"text": "pointers", "slot": "memory", "key": "repl"}),
+        hook_chain)
+    assert not named.safe
+    source = _source_or_skip(SERVICE)
+    assert "add_prompt(block, slot=" in source, "it must not name a session"
+    assert "key=ctx.session_key" not in source
 
 
 def test_the_service_writes_its_two_kernel_settings_only_at_install():

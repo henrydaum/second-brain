@@ -567,3 +567,133 @@ def test_an_escort_swaps_by_name_and_unknown_names_are_ignored(monkeypatch):
 
     apply_model_request(request, {"llm": "does-not-exist"}, runtime)
     assert request.llm == "big"          # silently retargeting is the worst case
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A doorway is opened on a session's behalf, and the Requests must know it.
+# ──────────────────────────────────────────────────────────────────────
+
+INJECTOR = '''
+"""A service that writes prompt text from the doorway it stands at."""
+
+from guest.bases import BaseService
+
+
+class Injector(BaseService):
+    """Injects a pointer block at the start of every turn."""
+
+    name = "injector"
+    exports = ["outcome"]
+    hooks = {"turn_start": "on_start"}
+    requests = ["session.add_prompt_extra"]
+
+    def start(self, sdk):
+        self._outcome = "never ran"
+        return True
+
+    def outcome(self, sdk):
+        return self._outcome
+
+    def on_start(self, sdk, ctx, payload):
+        try:
+            sdk.session.add_prompt("## Things you have done before",
+                                   slot="memory")
+            self._outcome = "injected"
+        except sdk.Failed as error:
+            self._outcome = f"refused: {error}"
+        return None
+'''
+
+
+def _injector(tmp_path, runtime):
+    """Build, bind and load the injecting service the way discovery would."""
+    path = tmp_path / "service_injector.py"
+    path.write_text(INJECTOR, encoding="utf-8")
+    module = adapt(path)
+    assert module is not None, "the service did not bridge"
+    service = module.build_services({})["injector"]
+    service.bind_runtime(runtime=runtime)
+    assert service.load() is True
+    return service
+
+
+def test_a_hook_writes_prompt_text_into_the_session_it_stands_in(
+        tmp_path, box, runtime, registry, session):
+    """The bug this exists for, end to end rather than by classification.
+
+    A ``turn_start`` hook is opened *for* a session, but nobody is on the
+    thread, so the box kept its own context — the kernel's, whose session key
+    is ``None``. ``add_system_prompt_extra`` then did ``sessions.get(None)``,
+    returned False, and the pointer block reached nothing. Every turn, in
+    silence, with the guest's own ``ctx.session_key`` naming the session
+    correctly the whole time.
+
+    Driven through the real registry and a real box, because every layer in
+    between was individually convinced it was working: the projection carried
+    the right key, the handler had a sane fallback, and the policy branch had
+    a passing test — which classified a call shape with no ``key`` that no
+    caller makes.
+    """
+    written = {}
+    runtime.sessions = {"repl": session}
+    runtime.add_system_prompt_extra = (
+        lambda key, slot, value: written.setdefault(key, {}).update({slot: value}))
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        config={}, db=None, services={}, runtime=runtime, user_id=7,
+        session_key=session_key))
+
+    service = _injector(tmp_path, runtime)
+    try:
+        registry.start_turn(session, runtime)
+        assert service.outcome() == "injected"
+        assert written == {"repl": {"memory": "## Things you have done before"}}
+    finally:
+        service.unload()
+        unload_box("service_injector")
+
+
+def test_lending_a_session_moves_the_world_and_never_the_grant(
+        tmp_path, box, runtime, registry, session):
+    """Context, not chain — which is the whole of why this is safe to do.
+
+    Rooting a hook's chain at the session would have worked too, and would
+    have made the hook *attended*: unsafe Requests from a service acting on
+    its own initiative would start raising approval dialogs at the top of
+    every turn, which is a design that was built, shipped and deliberately
+    reverted. The chain answers who is asking and stays put; only the world
+    the answer is drawn from moves.
+    """
+    from sandbox.policy import Chain, chain_session
+
+    seen = {}
+    runtime.sessions = {"repl": session}
+    runtime.add_system_prompt_extra = lambda key, slot, value: True
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        config={}, db=None, services={}, runtime=runtime, user_id=7,
+        session_key=session_key))
+
+    service = _injector(tmp_path, runtime)
+    try:
+        held = service._sandbox_box._box
+        seen["chain"] = None
+
+        original = held._call
+
+        def watch(method, args, kwargs, target):
+            """Read the chain as it stands *during* the doorway visit."""
+            seen["chain"] = held.execution.chain
+            seen["context_session"] = getattr(
+                held.execution.context, "session_key", "<none>")
+            return original(method, args, kwargs, target)
+
+        held._call = watch
+        registry.start_turn(session, runtime)
+    finally:
+        service.unload()
+        unload_box("service_injector")
+
+    chain: Chain = seen["chain"]
+    assert seen["context_session"] == "repl", "the world moved"
+    assert chain.root == "service:injector", "the grant did not"
+    assert chain_session(chain) != "repl"
+    assert not chain.attended, "a hook must not become askable"
