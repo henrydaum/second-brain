@@ -32,6 +32,40 @@ def _priority_for(path: str) -> int:
 
 _VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+# Authorizer *action* codes, by name, for rendering a refusal in words.
+#
+# Listed explicitly rather than swept out of the ``sqlite3`` namespace, because
+# that namespace overloads the integers three ways: the authorizer's own return
+# values (SQLITE_DENY is 1) and the SQLITE_LIMIT_* configuration constants share
+# the action space. SQLITE_DELETE and SQLITE_LIMIT_VARIABLE_NUMBER are both 9,
+# so a sweep rendered a refused DELETE as "limit variable number" — a message
+# that exists to stop people guessing, confidently naming the wrong construct.
+_ACTION_NAMES = (
+	"SQLITE_CREATE_INDEX", "SQLITE_CREATE_TABLE", "SQLITE_CREATE_TEMP_INDEX",
+	"SQLITE_CREATE_TEMP_TABLE", "SQLITE_CREATE_TEMP_TRIGGER",
+	"SQLITE_CREATE_TEMP_VIEW", "SQLITE_CREATE_TRIGGER", "SQLITE_CREATE_VIEW",
+	"SQLITE_DELETE", "SQLITE_DROP_INDEX", "SQLITE_DROP_TABLE",
+	"SQLITE_DROP_TEMP_INDEX", "SQLITE_DROP_TEMP_TABLE",
+	"SQLITE_DROP_TEMP_TRIGGER", "SQLITE_DROP_TEMP_VIEW", "SQLITE_DROP_TRIGGER",
+	"SQLITE_DROP_VIEW", "SQLITE_INSERT", "SQLITE_PRAGMA", "SQLITE_READ",
+	"SQLITE_SELECT", "SQLITE_TRANSACTION", "SQLITE_UPDATE", "SQLITE_ATTACH",
+	"SQLITE_DETACH", "SQLITE_ALTER_TABLE", "SQLITE_REINDEX", "SQLITE_ANALYZE",
+	"SQLITE_CREATE_VTABLE", "SQLITE_DROP_VTABLE", "SQLITE_FUNCTION",
+	"SQLITE_SAVEPOINT", "SQLITE_RECURSIVE",
+)
+_AUTHORIZER_ACTIONS = {
+	value: name[len("SQLITE_"):].lower().replace("_", " ")
+	for name, value in ((n, getattr(sqlite3, n, None)) for n in _ACTION_NAMES)
+	if isinstance(value, int)
+}
+
+
+def _describe_action(action, arg1, arg2) -> str:
+	"""One refused authorizer action, in words a person can act on."""
+	name = _AUTHORIZER_ACTIONS.get(action, f"perform action {action}")
+	target = " ".join(str(arg) for arg in (arg1, arg2) if arg)
+	return f"{name} {target}".strip()
+
 # The base user every session falls back to when no frontend has bound an
 # identity (REPL, Telegram, background drivers). Seeded as row id 1. Identity
 # (whose data) is orthogonal to authorization (frontend_profile, what's allowed):
@@ -872,14 +906,21 @@ class Database:
 			return
 		if cls._READ_PRAGMA.fullmatch(sql or ""):
 			return
+		# Both messages name the route that *works*, because the refusal an
+		# agent cannot act on is the one it retries verbatim. Schema questions
+		# are the common case and have two ordinary-SQL answers, neither of
+		# which is obvious from a message that only says what is forbidden.
 		if normalized.startswith("pragma"):
 			raise ValueError(
 				"Only PRAGMA table_info(<table>) is available through a read; "
-				"other PRAGMAs can change database state.")
+				"other PRAGMAs can change database state. For schema "
+				"questions use ordinary SQL: SELECT name, sql FROM "
+				"sqlite_master, or SELECT * FROM pragma_table_info('<table>').")
 		raise ValueError(
 			"Only SELECT / EXPLAIN / WITH statements and read-only "
 			"PRAGMA table_info(<table>) are allowed; use db.write for a "
-			"mutation.")
+			"mutation. SELECT against sqlite_master and "
+			"pragma_table_info('<table>') both work here.")
 
 	#: PRAGMAs the authorizer lets through, and why each is safe to.
 	#:
@@ -921,10 +962,42 @@ class Database:
 
 	@contextmanager
 	def _read_guard(self):
-		"""Install the read authorizer while the caller holds ``self.lock``."""
-		self.conn.set_authorizer(self._read_authorizer)
+		"""Install the read authorizer while the caller holds ``self.lock``.
+
+		Records what was refused, and says so. SQLite's own message for this is
+		the two words "not authorized" — no statement, no construct, no hint —
+		and the construct is often **not in the query at all**: FTS5 asks for
+		``PRAGMA data_version`` from inside a virtual table, so a plain
+		``MATCH`` failed with a message naming nothing the author had written.
+		A rule nobody can act on reads as a broken database, which is exactly
+		how this one was received.
+
+		Safe to keep on the instance because every caller holds ``self.lock``
+		for the whole of the guard, so two reads can never interleave here.
+		"""
+		refused: list = []
+
+		def authorize(action, arg1, arg2, database_name, trigger_name):
+			"""Answer as ``_read_authorizer`` does, remembering any refusal."""
+			verdict = self._read_authorizer(
+				action, arg1, arg2, database_name, trigger_name)
+			if verdict != sqlite3.SQLITE_OK:
+				refused.append(_describe_action(action, arg1, arg2))
+			return verdict
+
+		self.conn.set_authorizer(authorize)
 		try:
 			yield
+		except sqlite3.DatabaseError as exc:
+			if refused and "not authorized" in str(exc).lower():
+				raise sqlite3.DatabaseError(
+					f"{exc}: this read tried to {refused[0]}. A read may use "
+					f"SELECT, EXPLAIN or WITH — including SELECT against "
+					f"sqlite_master and pragma_table_info('<table>') for "
+					f"schema questions. Anything that changes data or "
+					f"settings needs db.write."
+				) from exc
+			raise
 		finally:
 			self.conn.set_authorizer(None)
 

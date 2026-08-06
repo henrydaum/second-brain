@@ -265,6 +265,48 @@ def test_a_read_can_match_against_an_fts5_index(db):
     assert [row["path"] for row in rows] == ["/notes/a.md"]
 
 
+def test_a_refused_read_says_what_it_tried_to_do(db):
+    """SQLite's own message for this is the two words "not authorized".
+
+    No statement, no construct, no hint — and the construct is often not in
+    the query at all. That is a rule nobody can act on, which is how a working
+    guard gets read as a broken database and retried verbatim.
+
+    The CTE is the case that proves the guard is load-bearing rather than
+    decorative: it opens with WITH, so the statement-level prefix check waves
+    it through, and only the authorizer stops it being a write.
+    """
+    db.upsert_file("/notes/a.md", "a.md", ".md", "text", 100.0)
+
+    with pytest.raises(sqlite3.DatabaseError) as caught:
+        db.query_rows("WITH c AS (SELECT path FROM files) DELETE FROM files")
+
+    assert "tried to delete files" in str(caught.value)
+    assert "db.write" in str(caught.value)
+    assert db.get_all_files() == {"/notes/a.md": 100.0}
+
+
+def test_refusals_name_the_construct_and_not_a_lookalike():
+    """``sqlite3`` overloads the action integers three ways.
+
+    The authorizer's return values (SQLITE_DENY is 1) and the SQLITE_LIMIT_*
+    constants share the space with the actions — SQLITE_DELETE and
+    SQLITE_LIMIT_VARIABLE_NUMBER are both 9. Sweeping the namespace therefore
+    renders a refused DELETE as "limit variable number": a message written to
+    stop people guessing, confidently naming the wrong construct.
+    """
+    from pipeline.database import _describe_action
+
+    assert _describe_action(sqlite3.SQLITE_DELETE, "files", None) == "delete files"
+    assert _describe_action(sqlite3.SQLITE_PRAGMA, "table_list", None) == (
+        "pragma table_list")
+    # Whatever the collisions are named, nothing may resolve to one of them.
+    limits = {getattr(sqlite3, name) for name in dir(sqlite3)
+              if name.startswith("SQLITE_LIMIT_")}
+    for code in limits:
+        assert "limit" not in _describe_action(code, "", None)
+
+
 def test_data_version_stays_readable_but_unsettable(db):
     """The pragma is allowed because it is an *answer*, not a switch.
 
