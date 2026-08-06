@@ -103,6 +103,196 @@ def _helper(deps=(), pip=()):
     ).encode()
 
 
+def _hooked(method: str, name: str = "t", body: str = "return 1"):
+    """A tool declaring one lifecycle hook, so the AST pass has something to find."""
+    return (
+        "from guest.bases import BaseTool\n"
+        "class T(BaseTool):\n"
+        f"    name = {name!r}\n"
+        f"    def {method}(self, sdk):\n"
+        f"        {body}\n"
+    ).encode()
+
+
+class _RecordingSandbox:
+    """Stands in for the real box runner and remembers what it was asked to do.
+
+    The package manager's job here is *orchestration* — which files, which
+    method, in what order, and what happens when one fails. Running a real box
+    would test the facade instead, and would do it against a temp directory in
+    no known tree, where isolation deliberately fails closed. The facade's own
+    tests cover the other half.
+    """
+
+    def __init__(self, ok=True, error=""):
+        self.calls = []
+        self.ok = ok
+        self.error = error
+
+    def run(self, source, entry="", **kwargs):
+        from sandbox.guest.requests import Result
+
+        self.calls.append({"source": Path(source), "entry": entry,
+                           "exists": Path(source).exists(), **kwargs})
+        return Result(ok=self.ok, error=self.error)
+
+
+def _capture_sandbox(monkeypatch, **kwargs) -> _RecordingSandbox:
+    recorder = _RecordingSandbox(**kwargs)
+    opened = []
+    monkeypatch.setattr("sandbox.bridge.get_sandbox",
+                        lambda: opened.append(1) or recorder)
+    recorder.opened = opened
+    return recorder
+
+
+def test_install_runs_on_install_under_the_installers_identity(tmp_path, monkeypatch):
+    """The hook fires, and it fires named as the registry knows the plugin.
+
+    ``name`` becomes the run's chain link, and the chain link is what
+    ``policy._owns_setting`` matches against the setting registry. The box
+    would otherwise be called after the *file* (``tool_setup``), so a plugin
+    touching a setting it declared itself would read as a stranger to its own
+    bookkeeping — the same mismatch ``PersistentBox._identity`` fixes for
+    resident boxes.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"tools/tool_setup.py": _hooked("on_install", name="setup")}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    recorder = _capture_sandbox(monkeypatch)
+
+    result = package_manager.install_package(tmp_path, "tool_setup", _Context(tmp_path))
+
+    assert result.ok
+    assert len(recorder.calls) == 1
+    call = recorder.calls[0]
+    assert call["entry"] == "T"
+    assert call["method"] == "on_install"
+    assert call["name"] == "setup"
+    assert call["once"] is True
+    assert "Set up: tool_setup" in result.lines
+
+
+def test_a_file_declaring_no_hook_never_opens_a_box(tmp_path, monkeypatch):
+    """Every plugin *inherits* both no-ops, so asking the class would say yes.
+
+    Detection is therefore "does this class define one", by AST, and the cost
+    of a package that wants nothing is one parse per file rather than one
+    subprocess per file.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setattr(package_manager, "GitStoreBackend",
+                        lambda _root: _Backend({"tools/tool_plain.py": _tool()}))
+    recorder = _capture_sandbox(monkeypatch)
+
+    package_manager.install_package(tmp_path, "tool_plain", _Context(tmp_path))
+
+    assert recorder.calls == []
+    assert recorder.opened == [], "no sandbox was even asked for"
+
+
+def test_on_install_reruns_only_when_the_bytes_changed(tmp_path, monkeypatch):
+    """Install, update, and nothing else — decided by one existing condition.
+
+    The copy loop already tells "Already installed" (byte-identical) from
+    "Updated file", so the firing policy costs no separate bookkeeping. That
+    matters because the alternative — a marker file, or a record of what has
+    been set up — is state that can disagree with the tree.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"tools/tool_setup.py": _hooked("on_install")}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    recorder = _capture_sandbox(monkeypatch)
+
+    package_manager.install_package(tmp_path, "tool_setup", _Context(tmp_path))
+    assert len(recorder.calls) == 1
+
+    package_manager.install_package(tmp_path, "tool_setup", _Context(tmp_path))
+    assert len(recorder.calls) == 1, "byte-identical: nothing to do"
+
+    files["tools/tool_setup.py"] = _hooked("on_install", body="return 2")
+    package_manager.install_package(tmp_path, "tool_setup", _Context(tmp_path))
+    assert len(recorder.calls) == 2, "a new version may need new setup"
+
+
+def test_a_failing_on_install_still_leaves_the_package_installed(tmp_path, monkeypatch):
+    """A declined dialog is a failed Request, and the files are already down.
+
+    Rolling back a whole package because its setup step was refused would
+    punish the safe answer. The line names it instead, so the user can finish
+    the job by hand.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        package_manager, "GitStoreBackend",
+        lambda _root: _Backend({"tools/tool_setup.py": _hooked("on_install")}))
+    _capture_sandbox(monkeypatch, ok=False, error="denied: config.write")
+
+    result = package_manager.install_package(tmp_path, "tool_setup", _Context(tmp_path))
+
+    assert result.ok
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_setup.py").exists()
+    assert any("on_install failed for tool_setup" in line for line in result.lines)
+
+
+def test_on_uninstall_runs_while_the_file_is_still_there(tmp_path, monkeypatch):
+    """First step of the uninstall, and the ordering is the whole contract.
+
+    A hook cannot be loaded from a file that has been unlinked, cannot import a
+    pip package that has been removed, and cannot look itself up in a registry
+    it has been dropped from. So it runs before any of that happens.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_setup.py",
+           _hooked("on_uninstall", name="setup").decode())
+    recorder = _capture_sandbox(monkeypatch)
+
+    result = package_manager.uninstall_package("tool_setup", _Context(tmp_path))
+
+    assert result.ok
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["method"] == "on_uninstall"
+    assert recorder.calls[0]["exists"], "the file was still on disk"
+    assert not (package_manager.INSTALLED_PLUGINS / "tools" / "tool_setup.py").exists()
+    assert "Cleaned up: tool_setup" in result.lines
+
+
+def test_a_kept_dependency_is_not_torn_down(tmp_path, monkeypatch):
+    """``keep_files`` is a file somebody else still needs, so it is not going.
+
+    Firing its teardown would have one package drop another's tables on its way
+    out — the failure would surface much later, in the surviving plugin.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py",
+           _tool(deps=["tools/tool_shared.py"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_b.py",
+           _tool(deps=["tools/tool_shared.py"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_shared.py",
+           _hooked("on_uninstall", name="shared").decode())
+    recorder = _capture_sandbox(monkeypatch)
+
+    result = package_manager.uninstall_package("tool_a", _Context(tmp_path))
+
+    assert recorder.calls == []
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_shared.py").exists()
+    assert any("Kept file: tools/tool_shared.py" in line for line in result.lines)
+
+
+def test_a_failing_on_uninstall_still_removes_the_package(tmp_path, monkeypatch):
+    """The user asked for it gone. A cleanup that cannot run must not veto that."""
+    _patch_roots(monkeypatch, tmp_path)
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_setup.py",
+           _hooked("on_uninstall").decode())
+    _capture_sandbox(monkeypatch, ok=False, error="boom")
+
+    result = package_manager.uninstall_package("tool_setup", _Context(tmp_path))
+
+    assert result.ok
+    assert not (package_manager.INSTALLED_PLUGINS / "tools" / "tool_setup.py").exists()
+    assert any("on_uninstall failed for tool_setup" in line for line in result.lines)
+
+
 def test_metadata_parser_reads_class_and_module_fields():
     plugin = package_manager.read_dependency_meta(
         "tools/tool_x.py",

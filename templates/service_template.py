@@ -149,6 +149,36 @@ class Embedder(BaseService):
          "all-MiniLM-L6-v2", {"type": "text"}),
     ]
 
+    def on_install(self, sdk):
+        """Arrange what this service needs, once, when its files are installed.
+
+        Runs before this service loads, under the chain of the ``/packages``
+        command the user typed — which is the only moment a plugin can write a
+        kernel setting, because it is the only one where somebody is present to
+        be asked. Each write raises one dialog naming the setting and the
+        value; reads and SQL are free.
+
+        Read-then-skip, because this runs again on every update that changes
+        the file. A value the user has edited since is theirs.
+        """
+        cache = sdk.path.join(sdk.paths.get("workspace"), "embeddings")
+        watched = sdk.config.read("sync_directories") or []
+        if cache not in watched:
+            sdk.config.write("sync_directories", [*watched, cache])
+
+    def on_uninstall(self, sdk):
+        """Undo what belongs to this service, before its files are removed.
+
+        Still on disk, still registered, pip dependencies still installed —
+        this is the first step of the uninstall, so all three are available.
+        Raising is reported and the package goes anyway.
+
+        Note what is *not* undone: the sync entry above. A table this plugin
+        created is unambiguously its own; a folder the user has been indexing
+        for months is not, whoever put it there first.
+        """
+        sdk.db.define("DROP TABLE IF EXISTS embedder_cache")
+
     def start(self, sdk):
         """Load the model once. Return True on success."""
         self._model = None

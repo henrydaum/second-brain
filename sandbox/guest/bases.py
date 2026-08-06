@@ -101,6 +101,49 @@ class BasePlugin:
                 f"subscribed_channels")
         return self.on_event(sdk, channel, payload)
 
+    # ── administration ─────────────────────────────────────────────
+    # Two one-shot moments in a package's life. Both are optional, both are
+    # detected by AST (a class that merely *inherits* these no-ops costs
+    # nothing), and both run in an ordinary ephemeral box inside the
+    # ``/packages`` command — so every effect is a Request classified like any
+    # other. Reads and SQL are free; a config write raises one approval dialog
+    # naming the setting and the value.
+    #
+    # They exist because a declaration cannot describe what an arbitrary plugin
+    # actually did. A manifest of "these tables, these settings" is guesswork;
+    # the plugin's own code is not.
+
+    def on_install(self, sdk):
+        """Set this plugin up, once, right after its files are installed.
+
+        Runs before this package's services load, so anything arranged here is
+        in place by the time the plugin itself starts.
+
+        **Must be idempotent.** It runs again on any update that changes this
+        file, so read before writing and skip what is already done — that is
+        also what keeps it from clobbering a value the user has since edited.
+
+        Raising is reported and does not undo the install.
+        """
+        return None
+
+    def on_uninstall(self, sdk):
+        """Tear down what this plugin created, before its files are removed.
+
+        Runs as the *first* step of an uninstall: the plugin is still
+        registered, its file is still on disk and its pip dependencies are
+        still installed. Drop the tables you defined, delete your rows, remove
+        settings you declared.
+
+        Be conservative about what counts as yours. A table this plugin created
+        is unambiguous; a folder the user has been syncing for months is not,
+        even if this plugin put it there.
+
+        Raising is reported and the uninstall proceeds regardless — a failing
+        cleanup must never strand a package the user asked to remove.
+        """
+        return None
+
     # ── prompt contribution ────────────────────────────────────────
     # Guidance to add to the agent's system prompt, or "" to stay silent.
     #

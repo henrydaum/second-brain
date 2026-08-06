@@ -626,7 +626,49 @@ future store package, not kernel.
   removes only candidate files/pip packages no remaining file still declares.
   Kernel requirements are never pip-uninstalled. Bundles are cloud-only
   manifests in `origin/store` that list store-relative files and feed the same
-  resolver. Config cleanup, SQL table cleanup, and versioning are deferred.
+  resolver. Versioning is deferred.
+
+**`on_install` / `on_uninstall` are what a manifest could not be.** A package
+needs things *arranged* — a value contributed to a kernel setting, a folder
+made, a table defined — and leaves things behind when it goes. Both were
+deferred for a long time as "config cleanup, SQL table cleanup", and the reason
+they stayed deferred is that a declaration cannot describe what an arbitrary
+plugin did. A list of tables and settings is guesswork about somebody else's
+code; the plugin's own code is not. So they are two optional methods on
+`BasePlugin`, found by AST (`bridge.lifecycle_entries` — *defining* one counts,
+inheriting the base no-op does not, or every installed file would cost a box)
+and run by `package_manager._run_lifecycle` in an ordinary ephemeral box.
+
+**The timing is the authorization, and nothing about policy changed.** Both run
+inside `/packages`, so the chain is `user:command -> packages -> <plugin>`.
+Depth 2, so it inherits neither `Chain.typed_command` nor the install's
+`approved` grant — a `config.write` is UNSAFE. But the root is `user:command`,
+so the chain is **attended** and the write raises a real dialog naming the
+setting and the value, at the one moment somebody deliberately asked for this
+package. `db.define` stays SAFE, `DROP TABLE` included, which is what makes
+teardown free.
+
+That is the whole of why the two earlier attempts at install-time seeding
+failed, both silently. A service seeding from `start()` roots at
+`service:<name>` — unattended, so the unsafe write is *refused rather than
+asked*, with no dialog to notice. Moving it to a `turn_start` hook and
+manufacturing a caller (reverted, `735638f`) made it work and asked at the
+moment furthest from anything the user chose to do. Typing a message is consent
+to a reply; installing a package is consent to setting that package up.
+
+Three details are load-bearing. **`on_install` fires on a fresh install and on
+an update whose bytes changed**, decided by the condition the copy loop already
+evaluates to print "Already installed" — so the contract is *idempotent*, and
+there is no marker file that can disagree with the tree. **`on_uninstall` runs
+first**, before the config-list edits, the unlink and the pip removal, because
+a hook cannot load from a deleted file or import a library that has been
+uninstalled; and only for `plan.remove_files`, since a kept dependency is one
+somebody else still needs. **Neither can veto its operation**: a package whose
+setup was declined is still installed, a package whose cleanup failed is still
+removed. The run is named with the plugin's *declared* `name` rather than the
+file stem, because that link is what `policy._owns_setting` matches against the
+setting registry — the same identity mismatch `PersistentBox._identity` fixes
+one layer over.
 
 ## Verifying the kernel
 

@@ -720,6 +720,53 @@ Channel names are not a closed vocabulary. The kernel's are in
 listen to another plugin's, so nothing validates the string — a typo is
 silence, not an error.
 
+### Setting up and cleaning up
+
+Two optional methods bracket a package's life on the machine. Any of the five
+families may write either; both are found by AST, so a plugin that wants
+neither costs nothing.
+
+```python
+class Notes(BaseService):
+    name = "notes"
+    requests = ["paths.get", "config.read", "config.write", "db.define"]
+
+    def on_install(self, sdk):
+        folder = sdk.path.join(sdk.paths.get("workspace"), "notes")
+        watched = sdk.config.read("sync_directories") or []
+        if folder not in watched:
+            sdk.config.write("sync_directories", [*watched, folder])
+        sdk.db.define("CREATE TABLE IF NOT EXISTS notes_seen ("
+                      " id INTEGER PRIMARY KEY, path TEXT)")
+
+    def on_uninstall(self, sdk):
+        sdk.db.define("DROP TABLE IF EXISTS notes_seen")
+```
+
+`on_install` runs right after the package's files land and **before its own
+services load**, so anything it arranges is in place by the time the plugin
+starts. It runs again on any update that changes the file, so **write it
+idempotent** — read, skip what is already done, then write. That is also what
+keeps it from overwriting a value the user has since edited.
+
+`on_uninstall` runs as the *first* step of an uninstall: the file is still on
+disk, the plugin is still registered, and its pip dependencies are still
+installed. A dependency somebody else still needs is not being uninstalled and
+gets no call.
+
+Both run in an ordinary ephemeral box under the chain of the `/packages`
+command the user typed, and that is where the permissions come from. Reads and
+SQL are free — dropping a table you created needs no dialog. A **config write
+raises one approval dialog** naming the setting and the value, because the
+chain is attended: somebody is right there, having asked for this package. It
+is the only moment a plugin can write a kernel setting at all; from a
+service's own chain the same write is refused outright, with nobody to ask.
+
+Raising is reported and changes nothing else. A package whose setup was
+declined is still installed; a package whose cleanup failed is still removed.
+Be conservative about what counts as yours on the way out: a table you created
+is unambiguous, a folder the user has been syncing for months is not.
+
 ### Polling a resident plugin
 
 Services and frontends may ask the kernel to call a short `poll(self, sdk)`

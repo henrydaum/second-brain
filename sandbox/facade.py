@@ -359,26 +359,37 @@ class Sandbox:
     def run(self, source, entry: str = "", *, kwargs: dict | None = None,
             chain: Chain | None = None, name: str | None = None,
             isolated: bool | None = None, timeout: float | None = None,
-            context=None, method: str = "run") -> Result:
+            context=None, method: str = "run",
+            once: bool = False) -> Result:
         """Run once and wait for the answer. The ``wait=True`` shape."""
         run = self.start(source, entry, kwargs=kwargs, chain=chain, name=name,
                          isolated=isolated, timeout=timeout, context=context,
-                         method=method)
+                         method=method, once=once)
         return run.wait()
 
     def start(self, source, entry: str = "", *, kwargs: dict | None = None,
               chain: Chain | None = None, name: str | None = None,
               isolated: bool | None = None, timeout: float | None = None,
-              on_done=None, context=None, method: str = "run") -> Run:
+              on_done=None, context=None, method: str = "run",
+              once: bool = False) -> Run:
         """Run without waiting. The ``wait=False`` shape.
 
         The work begins immediately on a background thread and the caller
         keeps going. ``on_done`` fires with the Result when it finishes, which
         is how a spawner queues a completion notice back to its session.
+
+        ``once`` waives the persistent-lifetime refusal below. A resident
+        plugin still has one-shot moments — ``on_install``, ``on_uninstall`` —
+        and calling one named method and discarding the box is not the mistake
+        that check exists to catch.
         """
         report, spec, opts = self._prepare(source, isolated=isolated,
                                            timeout=timeout, name=name)
-        if spec.lifetime == PERSISTENT:
+        # A service or frontend adapted as a one-shot run would set up a
+        # transport and never be called again, so the default is a refusal
+        # rather than a surprise. ``once`` is the caller stating it wants one
+        # method, not the plugin.
+        if spec.lifetime == PERSISTENT and not once:
             raise BoxError(
                 f"{opts['name']} declares a persistent lifetime; open it as a "
                 f"resident box rather than running it")

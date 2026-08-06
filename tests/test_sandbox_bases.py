@@ -378,3 +378,133 @@ def test_validator_rejects_form_steps_outside_commands(
 
     assert not report.ok
     assert "FormStep is command-only" in report.render()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The two administrative moments.
+# ──────────────────────────────────────────────────────────────────────
+
+_HOOKED = (
+    "from guest.bases import BaseService\n\n\n"
+    "class Probe(BaseService):\n"
+    "    name = 'probe'\n"
+    "    description = 'probe'\n"
+    "    requests = ['paths.get']\n\n"
+    "    def start(self, sdk):\n"
+    "        return True\n\n"
+    "    def on_install(self, sdk):\n"
+    "        return 'set up ' + str(bool(sdk.paths.get('workspace')))\n"
+)
+
+
+def test_every_plugin_inherits_both_hooks_as_no_ops():
+    """Declared on ``BasePlugin`` so they are documented in one place.
+
+    A plugin with nothing to arrange writes nothing and the kernel calls
+    nothing — the base versions exist for the author reading the contract, not
+    for the package manager, which finds a hook by AST and skips a file that
+    only inherits one.
+    """
+    for base in (BaseTool, BaseTask, BaseService, BaseCommand, BaseFrontend):
+        assert base().on_install(None) is None
+        assert base().on_uninstall(None) is None
+    assert issubclass(BaseTool, BasePlugin)
+
+
+def test_lifecycle_entries_finds_a_definition_and_ignores_an_inheritance():
+    """Inheriting the no-op must not count, or every file costs a box.
+
+    All five families inherit both, so "does this class have an ``on_install``"
+    answers yes for every plugin ever written. The question has to be "does
+    this class *define* one", which is the same distinction ``_prompt_method``
+    draws for ``agent_prompt`` and for the same reason.
+    """
+    from sandbox.bridge import LIFECYCLE_METHODS, lifecycle_entries
+
+    assert LIFECYCLE_METHODS == ("on_install", "on_uninstall")
+    assert lifecycle_entries(_HOOKED, "on_install") == [("Probe", "probe")]
+    assert lifecycle_entries(_HOOKED, "on_uninstall") == []
+    assert lifecycle_entries("class Probe:\n    pass\n", "on_install") == []
+    assert lifecycle_entries("def on_install(sdk):\n    return 1\n",
+                             "on_install") == [("on_install", "")]
+    assert lifecycle_entries("class Broken(:\n", "on_install") == []
+
+
+def test_lifecycle_entries_answers_with_the_registered_name():
+    """The declared ``name``, not the class and not the file stem.
+
+    That string becomes the run's chain link, and the chain link is what
+    ``policy._owns_setting`` matches against the setting registry — which knows
+    ``probe``, never ``Probe`` or ``service_probe``. Getting it wrong makes a
+    plugin a stranger to its own settings and costs a dialog it should not see.
+    """
+    from sandbox.bridge import lifecycle_entries
+
+    [(entry, name)] = lifecycle_entries(_HOOKED, "on_install")
+    assert entry == "Probe" and name == "probe"
+    # No declaration is answered honestly rather than guessed at; the caller
+    # falls back to the box's own name.
+    assert lifecycle_entries(
+        _HOOKED.replace("    name = 'probe'\n", ""), "on_install"
+    ) == [("Probe", "")]
+
+
+def test_once_runs_one_method_of_an_otherwise_resident_plugin(tmp_path):
+    """A service is persistent, and ``on_install`` is still a single call.
+
+    The refusal exists to stop a service being *run* like a tool — adapted into
+    a one-shot that sets up a transport and is never called again. Naming one
+    method and discarding the box is a different act, so the caller says so
+    rather than the plugin declaring its way out of it.
+    """
+    from sandbox.facade import BoxError, Sandbox
+
+    plugin = tmp_path / "service_probe.py"
+    plugin.write_text(_HOOKED, encoding="utf-8")
+    assert validate_file(plugin).ok
+
+    sandbox = Sandbox()
+    try:
+        with pytest.raises(BoxError, match="persistent lifetime"):
+            sandbox.run(plugin, "Probe", method="on_install")
+
+        result = sandbox.run(plugin, "Probe", method="on_install", once=True)
+    finally:
+        sandbox.shutdown()
+
+    assert result.ok, result.error
+    assert result.data == "set up True"
+
+
+def test_an_install_hook_is_asked_about_rather_than_refused():
+    """The whole safety argument, in one classification.
+
+    A hook runs under the chain of the ``/packages`` command the person typed:
+    two links deep, so it inherits neither ``typed_command`` nor the install's
+    ``approved`` grant and a config write is unsafe — but rooted at the user,
+    so it is *attended* and the dialog can actually be drawn. Both halves
+    matter. A service writing the same setting from its own chain roots at
+    ``service:`` and is refused outright with nobody to ask, which is how two
+    earlier attempts at install-time seeding failed silently.
+
+    SQL is the other half and is deliberately free: dropping a table a plugin
+    created is what ``on_uninstall`` is mostly for, and a dialog per DROP would
+    teach people to stop reading them.
+    """
+    from guest.requests import Request
+    from sandbox.policy import Chain, classify
+
+    hook = Chain(root="user:command", links=("packages", "memory_retrieve"),
+                 approved=frozenset({"plugin.install"}))
+    assert not hook.typed_command and hook.attended
+
+    write = Request("config.write",
+                    {"key": "sync_directories", "value": ["/memory"]})
+    assert not classify(write, hook).safe
+    assert "sync_directories" in classify(write, hook).reason
+    assert classify(Request("db.define",
+                            {"ddl": "DROP TABLE IF EXISTS memory_usage"}),
+                    hook).safe
+
+    service = Chain(root="service:memory_retrieve")
+    assert not classify(write, service).safe and not service.attended

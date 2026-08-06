@@ -622,6 +622,80 @@ def _prompt_method(source: str, class_name: str) -> str:
     return "agent_prompt" if _defines(source, class_name, "agent_prompt") else ""
 
 
+#: The one-shot administrative moments a plugin may declare. Named here rather
+#: than spelled at each call site because three places have to agree on them:
+#: the guest base that documents them, the package manager that fires them, and
+#: the test that pins the pair.
+LIFECYCLE_METHODS = ("on_install", "on_uninstall")
+
+
+def lifecycle_entries(source: str, method: str) -> list:
+    """``(entry, plugin_name)`` for every definition of ``method`` in a file.
+
+    ``entry`` is what :func:`sandbox.facade.Sandbox.run` should be pointed at —
+    a plugin class, or the function itself when a file with no class defines
+    one at module scope. That second shape is free and is what lets a parser,
+    an LLM backend or a script have a lifecycle hook; none of them has a base
+    class, and none of them is reached through an adapter.
+
+    Only a class that *defines* the method counts. Every plugin inherits a
+    no-op from :class:`~guest.bases.BasePlugin`, so asking "does it have one"
+    would answer yes for all of them and cost a box per installed file. Same
+    reasoning, and the same ``_defines`` call, as :func:`_prompt_method`.
+
+    ``plugin_name`` is the class's declared ``name``, and it matters: the run's
+    chain link is what ``policy._owns_setting`` matches against the setting
+    registry, and the registry knows ``memory_retrieve`` where the box knows
+    ``service_memory_retrieve``. Without it a plugin cleaning up a setting it
+    declared itself would be a stranger to its own bookkeeping — the same
+    mismatch ``PersistentBox._identity`` exists to fix one layer over. Empty
+    when the file declares none, which leaves the caller with the box's own
+    name and is the honest answer rather than a guess.
+
+    Never imports. A syntactically broken file answers with nothing, because a
+    file that cannot be parsed cannot be run either.
+    """
+    from .validator import BASE_TO_FAMILY
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if not any(isinstance(base, ast.Name) and base.id in BASE_TO_FAMILY
+                   for base in node.bases):
+            continue
+        if any(isinstance(item, ast.FunctionDef) and item.name == method
+               for item in node.body):
+            found.append((node.name, _declared_name(node)))
+
+    if not found:
+        # Module scope only when no class claimed it — a plugin file that also
+        # happens to hold a bare function of this name means the class.
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == method:
+                found.append((method, ""))
+                break
+    return found
+
+
+def _declared_name(node) -> str:
+    """A class's literal ``name = "..."``, or "" when it declares none."""
+    for item in node.body:
+        if not isinstance(item, ast.Assign):
+            continue
+        for target in item.targets:
+            if (isinstance(target, ast.Name) and target.id == "name"
+                    and isinstance(item.value, ast.Constant)
+                    and isinstance(item.value.value, str)):
+                return item.value.value
+    return ""
+
+
 def _defines(source: str, class_name: str, method: str) -> bool:
     """Whether a class in the source defines a given method."""
     try:

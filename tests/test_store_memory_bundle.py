@@ -392,8 +392,8 @@ def test_injecting_memory_pointers_raises_no_dialog():
     assert decision.safe
 
 
-def test_the_service_never_writes_a_kernel_setting():
-    """It needs two and asks for neither, which is the whole lesson here.
+def test_the_service_writes_its_two_kernel_settings_only_at_install():
+    """It needs two settings, and there is exactly one moment it may ask.
 
     ``sync_directories`` must contain the memory folder or nothing is indexed;
     ``agent_profiles`` must hold the curator profile or no curator can spawn.
@@ -402,18 +402,37 @@ def test_the_service_never_writes_a_kernel_setting():
     then from the ``turn_start`` hook, which was made to work and then reverted
     because it asked at the moment furthest from anything the user chose to do.
 
-    Settings a plugin needs belong to install. Until the package manager seeds
-    them, this file must not pretend otherwise: declaring ``config.write`` here
-    would be a capability it cannot successfully use.
+    ``on_install`` is the moment that works: it runs under the chain of the
+    ``/packages`` command the person typed, which is attended, so the write can
+    be *asked* about instead of refused. What this pins is that the capability
+    stays there — a ``config.write`` from ``start`` or from the hook would be
+    the reverted design creeping back, and it would fail silently, which is how
+    it survived so long the first two times.
     """
+    import ast
+
     declared = _declarations(SERVICE)
-    assert "config.write" not in declared["requests"]
-    assert "config.read" in declared["requests"], "it still reads its own"
+    assert "config.write" in declared["requests"]
+    assert "config.read" in declared["requests"]
 
     source = _source_or_skip(SERVICE)
-    for gone in ("_maybe_seed", "_ensure_indexed", "_ensure_curator_profile"):
-        assert gone not in source, gone
-    assert "sync_directories" in source, "but it still says what it needs"
+    tree = ast.parse(source)
+    writers = {
+        node.name for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(isinstance(inner, ast.Attribute) and inner.attr == "write"
+                and isinstance(inner.value, ast.Attribute)
+                and inner.value.attr == "config"
+                for inner in ast.walk(node))
+    }
+    assert writers, "something has to do the seeding"
+    # Named helpers are fine; being reachable from anything but on_install is
+    # not. Nothing in the runtime path may hold this capability.
+    for banned in ("start", "stop", "on_turn_start", "on_uninstall"):
+        assert banned not in writers, f"{banned} writes config"
+
+    for method in ("on_install", "on_uninstall"):
+        assert f"def {method}(self, sdk)" in source, method
 
 
 # ──────────────────────────────────────────────────────────────────────

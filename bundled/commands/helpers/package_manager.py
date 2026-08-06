@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -38,6 +39,8 @@ EXTRA_FAMILIES = ("bundles",)
 DEPENDENCY_FIELDS = ("dependencies_files", "dependencies_pip")
 _PACKAGE_LOCK = threading.RLock()
 Progress = Callable[[str], None]
+
+logger = logging.getLogger("PackageManager")
 
 
 class PackageError(RuntimeError):
@@ -129,7 +132,7 @@ def install_package(root_dir: str | Path, target: str, context=None, *, requeste
     return execute_install_plan(build_install_plan(root_dir, target), context, progress=progress)
 
 
-def uninstall_package(target: str, context=None, cleanup_choices=None, progress: Progress | None = None, cleanup_approvals=None, root_dir: str | Path | None = None) -> PackageActionResult:
+def uninstall_package(target: str, context=None, progress: Progress | None = None, root_dir: str | Path | None = None) -> PackageActionResult:
     return execute_uninstall_plan(build_uninstall_plan(target, root_dir=root_dir), context, progress=progress)
 
 
@@ -222,6 +225,11 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
 def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
     lines: list[str] = []
     written: list[Path] = []
+    # Every file whose bytes actually landed — new or changed. A byte-identical
+    # file is already set up, so this is also what keeps ``on_install`` firing
+    # on a fresh install and on an update that changed something, and on
+    # nothing else.
+    changed: list[str] = []
     with _PACKAGE_LOCK:
         _progress(progress, "Resolving dependency plan")
         _install_python_packages(plan.pip_packages, progress)
@@ -236,10 +244,12 @@ def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | 
                         lines.append(f"Already installed: {file.path}")
                     else:
                         target.write_bytes(content)
+                        changed.append(file.path)
                         lines.append(f"Updated file: {file.path}")
                     continue
                 target.write_bytes(file.content or b"")
                 written.append(target)
+                changed.append(file.path)
                 lines.append(f"Installed file: {file.path}")
         except Exception:
             for path in reversed(written):
@@ -249,6 +259,10 @@ def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | 
         if plan.helper_rescan_needed:
             _progress(progress, "Rescanning parsers and LLM backends")
             _rescan_helpers(context, lines)
+        # Before the services load, so a plugin that arranges its own config
+        # has done it by the time it starts reading any.
+        _progress(progress, "Running package setup")
+        _run_lifecycle(changed, "on_install", lines, context)
         if context is not None:
             services = _services(plan.files)
             _set_enabled_frontends(context, add=_frontends(plan.files), remove=[], lines=lines)
@@ -341,7 +355,7 @@ def _uninstall_plan_from_candidates(target: str, candidates: set[str]) -> Uninst
     return UninstallPlan(target, remove_files, keep_files, pip_remove, kept_pip, any(_is_rescannable_helper(rel) for rel in candidates), steps)
 
 
-def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=None, progress: Progress | None = None) -> PackageActionResult:
+def execute_uninstall_plan(plan: UninstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
     # Hash installed bytes up front — after execution the files are gone.
     removed_hashes = {}
     for rel in plan.remove_files:
@@ -350,7 +364,7 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=No
         except OSError:
             removed_hashes[rel] = None
     try:
-        result = _execute_uninstall_plan(plan, context, cleanup_choices, progress)
+        result = _execute_uninstall_plan(plan, context, progress)
     except Exception as e:
         _record_package_action(context, "package_uninstall", plan.target, ok=False, error=str(e))
         raise
@@ -359,10 +373,17 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=No
     return result
 
 
-def _execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=None, progress: Progress | None = None) -> PackageActionResult:
+def _execute_uninstall_plan(plan: UninstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
     lines: list[str] = []
     with _PACKAGE_LOCK:
         _progress(progress, "Resolving dependency plan")
+        # First, while the world is still as the plugin left it: its file is
+        # on disk to load from, it is still registered, and its pip
+        # dependencies are still installed. Only what is actually going —
+        # ``plan.keep_files`` is a dependency somebody else still needs, and
+        # tearing down for that would be a package uninstalling a neighbour.
+        _progress(progress, "Running package cleanup")
+        _run_lifecycle(plan.remove_files, "on_uninstall", lines, context)
         if context is not None:
             _set_enabled_frontends(context, add=[], remove=_frontends([PlannedFile(rel) for rel in plan.remove_files]), lines=lines)
             _set_autoload_services(context, add=[], remove=_services([PlannedFile(rel) for rel in plan.remove_files]), lines=lines)
@@ -660,6 +681,82 @@ def _set_enabled_frontends(context, add: list[str], remove: list[str], lines: li
 
 def _set_autoload_services(context, add: list[str], remove: list[str], lines: list[str]) -> None:
     _set_config_list(context, "autoload_services", add, remove, "service", lines, restart=False)
+
+
+#: What a successful lifecycle hook is called in the install report. The verb
+#: has to differ per moment — "Set up" and "Cleaned up" say what happened,
+#: where a shared "Ran on_install" would make the user read a method name.
+_LIFECYCLE_LABEL = {"on_install": "Set up", "on_uninstall": "Cleaned up"}
+
+
+def _run_lifecycle(rels: list[str], method: str, lines: list[str],
+                   context=None) -> None:
+    """Run one administrative hook over the files a package operation touched.
+
+    A declaration cannot describe what an arbitrary plugin did to the system,
+    which is why the config- and table-cleanup this replaces was deferred for
+    so long. The plugin's own code can, so this runs it — in an ordinary
+    ephemeral box, where every effect is a Request classified like anybody
+    else's. Reads and SQL are free; a config write raises one approval dialog.
+
+    **The chain is the authorization.** Taken from the caller rather than
+    invented, so the run appears below the ``/packages`` command the person
+    typed: attended, so an unsafe Request can actually be *asked* about, but
+    two links deep, so it inherits neither ``Chain.typed_command`` nor the
+    install's ``approved`` grant. The context comes from the same place, and
+    that half is not optional — the reverted attempt at this passed ``None``
+    and every config write came back "config is not available in this kernel".
+
+    **Never raises, and never blocks the operation.** A package whose setup
+    was declined is still installed; a package whose cleanup failed is still
+    removed. Stranding either would be worse than the mess.
+    """
+    if not rels:
+        return
+    try:
+        from sandbox import bridge, provenance
+    except Exception:
+        logger.exception("could not reach the sandbox to run %s hooks", method)
+        return
+
+    caller = provenance.current()
+    chain = getattr(caller, "chain", None)
+    ctx = getattr(caller, "context", None) or context
+    sandbox = None
+    for rel in rels:
+        if not rel.endswith(".py"):
+            continue
+        path = _target(rel)
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # The cheap question first: an AST parse per file, and a box only for
+        # the rare file that actually declares a hook. Every plugin *inherits*
+        # both no-ops, so asking the class would open a box for all of them.
+        entries = bridge.lifecycle_entries(source, method)
+        if not entries:
+            continue
+        if sandbox is None:
+            sandbox = bridge.get_sandbox()
+        stem = PurePosixPath(rel).stem
+        for entry, plugin_name in entries:
+            try:
+                # ``name`` is the plugin's registered identity rather than the
+                # file stem, because that is what the chain link becomes and
+                # what ``policy._owns_setting`` matches — see
+                # ``bridge.lifecycle_entries``.
+                result = sandbox.run(path, entry, method=method, once=True,
+                                     name=plugin_name or None,
+                                     chain=chain, context=ctx)
+            except Exception as exc:
+                logger.exception("%s failed for %s", method, rel)
+                lines.append(f"{method} failed for {stem}: {exc}")
+                continue
+            if result.ok:
+                lines.append(f"{_LIFECYCLE_LABEL[method]}: {stem}")
+            else:
+                lines.append(f"{method} failed for {stem}: {result.error}")
 
 
 def _load_registered_services(context, names: list[str], lines: list[str]) -> None:
