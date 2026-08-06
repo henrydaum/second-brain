@@ -798,3 +798,159 @@ def test_the_manifest_names_the_four_and_lets_the_closure_do_the_rest():
 
     for relative in closure:
         assert (Path(worktree) / relative).exists(), relative
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Telling the user when memory changed under them.
+# ──────────────────────────────────────────────────────────────────────
+
+class _Failed(Exception):
+    pass
+
+
+class _Sdk:
+    """Enough SDK to drive ``_notify``. Every namespace here is one Request."""
+
+    Failed = _Failed
+
+    def __init__(self, attended=False, setting=True):
+        self._attended = attended
+        self._setting = setting
+        self.emitted = []
+        self.logs = []
+        self.session = self._Session(self)
+        self.config = self._Config(self)
+        self.events = self._Events(self)
+
+    def log(self, message, level="info"):
+        self.logs.append((level, message))
+
+    class _Session:
+        def __init__(self, sdk):
+            self._sdk = sdk
+
+        def get(self, key=None):
+            if self._sdk._attended == "unreadable":
+                raise _Failed("no runtime")
+            return {"key": "k", "attended": self._sdk._attended}
+
+    class _Config:
+        def __init__(self, sdk):
+            self._sdk = sdk
+
+        def read(self, key):
+            if self._sdk._setting == "unreadable":
+                raise _Failed("no config")
+            return self._sdk._setting
+
+    class _Events:
+        def __init__(self, sdk):
+            self._sdk = sdk
+
+        def emit(self, channel, payload=None):
+            self._sdk.emitted.append((channel, payload))
+
+
+def _curate():
+    """The real ``MemoryCurate``, loaded the way a box loads it."""
+    return _load_store_class(CURATE, "MemoryCurate")()
+
+
+def test_a_background_write_is_announced_to_the_chat():
+    """The curator writes where nobody is looking; this is the only trace."""
+    tool = _curate()
+    sdk = _Sdk(attended=False)
+
+    tool._notify(sdk, "create", "retry-failed-uploads")
+
+    assert len(sdk.emitted) == 1
+    channel, payload = sdk.emitted[0]
+    assert channel == "chat_message_pushed"
+    assert payload["message"] == "Memory created: retry-failed-uploads"
+    # No ``session_key``: the frontend reads that field to target one session
+    # and broadcasts to every live one without it. The write happened in a
+    # session with no person on it, so there is nothing to reply *to*.
+    assert "session_key" not in payload
+
+
+def test_every_action_has_its_own_word():
+    tool = _curate()
+    for action, expected in (("create", "created"), ("update", "updated"),
+                             ("delete", "deleted")):
+        sdk = _Sdk(attended=False)
+        tool._notify(sdk, action, "x")
+        assert sdk.emitted[0][1]["message"] == f"Memory {expected}: x"
+
+
+def test_a_write_the_user_watched_is_not_announced():
+    """They asked for it in conversation and the reply already says so.
+
+    ``attended`` rather than "is this a subagent" because the kernel already
+    owns that question, and a concurrent multi-user frontend can override it
+    per session — any guess made from a session key would be wrong there.
+    """
+    tool = _curate()
+    sdk = _Sdk(attended=True)
+
+    tool._notify(sdk, "create", "x")
+
+    assert sdk.emitted == []
+
+
+def test_the_setting_turns_it_off_and_defaults_on():
+    tool = _curate()
+
+    off = _Sdk(attended=False, setting=False)
+    tool._notify(off, "create", "x")
+    assert off.emitted == []
+
+    unset = _Sdk(attended=False, setting=None)
+    tool._notify(unset, "create", "x")
+    assert len(unset.emitted) == 1, "unset means default, and the default is on"
+
+
+def test_the_two_unreadable_cases_fail_in_opposite_directions():
+    """A spurious notification is worse than a missing one; a missing setting
+    is not a refusal."""
+    tool = _curate()
+
+    blind = _Sdk(attended="unreadable")
+    tool._notify(blind, "create", "x")
+    assert blind.emitted == [], "not knowing where we are means staying quiet"
+
+    no_config = _Sdk(attended=False, setting="unreadable")
+    tool._notify(no_config, "create", "x")
+    assert len(no_config.emitted) == 1, "the default is on"
+
+
+def test_announcing_can_never_fail_the_write():
+    """The entry is already on disk by the time this runs, so raising here
+    would report an error for something that fully succeeded."""
+    tool = _curate()
+    sdk = _Sdk(attended=False)
+    sdk.events.emit = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bus"))
+
+    tool._notify(sdk, "create", "x")     # must not raise
+
+    assert any(level == "debug" for level, _ in sdk.logs)
+
+
+def test_all_three_operations_announce():
+    """The helper is only worth having if every write reaches it.
+
+    Read off the source, because a missed call site is invisible from the
+    helper's own tests — the notification simply never happens for that one
+    action.
+    """
+    import ast
+
+    tree = ast.parse(_source_or_skip(CURATE))
+    for method, action in (("_create", "create"), ("_update", "update"),
+                           ("_delete", "delete")):
+        node = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == method)
+        calls = [n for n in ast.walk(node)
+                 if isinstance(n, ast.Call)
+                 and getattr(n.func, "attr", "") == "_notify"]
+        assert len(calls) == 1, f"{method} does not announce exactly once"
+        assert calls[0].args[1].value == action, f"{method} announces the wrong action"
