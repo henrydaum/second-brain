@@ -135,47 +135,8 @@ class Orchestrator:
 			# so concurrent (un)registration must be excluded here.
 			self._build_graph()
 			self.refresh_event_subscriptions()
-		self._seed_default_jobs(task)
 		logger.info(f"Registered task: {task.name}")
 		bus.emit(TASKS_CHANGED, {"name": task.name, "action": "registered"})
-
-	def _seed_default_jobs(self, task: BaseTask):
-		"""Create the task's declared default Timekeeper jobs if absent.
-
-		Runs on every registration (boot, install, hot-reload) and is
-		idempotent: existing jobs — including disabled ones — are left
-		alone. Unregistration removes them (see :meth:`unregister_task`),
-		so a task's default jobs live exactly as long as the task does.
-		"""
-		jobs = getattr(task, "default_jobs", None) or {}
-		tk = (self.services or {}).get("timekeeper")
-		if not jobs or tk is None or not hasattr(tk, "create_job"):
-			return
-		for name, job_def in jobs.items():
-			try:
-				if tk.get_job(name) is not None:
-					continue
-				tk.create_job(name, job_def)
-				logger.info(f"Seeded default scheduled job '{name}' for task '{task.name}'")
-			except Exception as e:
-				logger.warning(f"Could not seed default job '{name}' for task '{task.name}': {e}")
-
-	def _remove_default_jobs(self, task: BaseTask):
-		"""Remove the task's declared default Timekeeper jobs, if present.
-
-		The uninstall/hot-reload counterpart of :meth:`_seed_default_jobs`:
-		a re-registration reseeds from the (possibly updated) declaration,
-		so reinstalling a task picks up new default schedules."""
-		jobs = getattr(task, "default_jobs", None) or {}
-		tk = (self.services or {}).get("timekeeper")
-		if not jobs or tk is None or not hasattr(tk, "remove_job"):
-			return
-		for name in jobs:
-			try:
-				if tk.remove_job(name):
-					logger.info(f"Removed default scheduled job '{name}' of task '{task.name}'")
-			except Exception as e:
-				logger.warning(f"Could not remove default job '{name}' of task '{task.name}': {e}")
 
 	def unregister_task(self, name: str):
 		"""Remove a task from the orchestrator (used by build_plugin on delete)."""
@@ -186,7 +147,6 @@ class Orchestrator:
 				self._build_graph()
 				self.refresh_event_subscriptions()
 		if removed:
-			self._remove_default_jobs(removed)
 			logger.info(f"Unregistered task: {name}")
 			bus.emit(TASKS_CHANGED, {"name": name, "action": "unregistered"})
 

@@ -658,10 +658,26 @@ class _Services(_Namespace):
         """Loaded services, optionally with lifecycle and setting metadata."""
         return self._ask(SERVICE_LIST, details=details)
 
-    def call(self, name: str, method: str, **kwargs):
-        """Invoke an exported method. Simple data comes back, never objects."""
-        return self._ask(SERVICE_CALL, name=name, method=method,
-                         kwargs=kwargs)
+    def call(self, service: str, method: str, /, *args, **kwargs):
+        """Invoke an exported method. Simple data comes back, never objects.
+
+        ``service`` and ``method`` are **positional-only**, and that is a fix
+        rather than a style. They were ordinary parameters named ``name`` and
+        ``method``, so every export taking its own ``name`` or ``method``
+        argument was unreachable by keyword — ``call("timekeeper", "get_job",
+        name="x")`` raised *"got multiple values for argument 'name'"*, naming
+        the caller's own argument and blaming the wrong thing entirely. The
+        two positions belong to the call, not to the callee, so nothing here
+        should occupy a name the callee might want.
+
+        Positional arguments pass through for the same reason. Only ``kwargs``
+        crossed, so ``call("timekeeper", "cron_to_text", cron)`` was a
+        ``TypeError`` at the SDK — which is what ``/schedule`` had been
+        swallowing into a fallback, printing raw cron where it meant to print
+        English.
+        """
+        return self._ask(SERVICE_CALL, name=service, method=method,
+                         args=list(args), kwargs=kwargs)
 
     def load(self, name: str):
         """Load a user-managed service."""

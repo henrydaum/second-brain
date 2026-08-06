@@ -80,18 +80,24 @@ Two fields exist for the pipeline rather than for you:
 
 SHIPPING A SCHEDULE
 -------------------
-Declare `default_jobs` and the orchestrator seeds the timekeeper job when the
-task registers, and removes it when the task unregisters. A reinstall picks up
-an updated declaration. To silence one durably, disable it — do not delete it,
-or the next registration seeds it again.
+Create the timekeeper job from `on_install`, and remove it from
+`on_uninstall`. Both run inside `/packages`, once, for the package the user
+just asked for.
 
-    default_jobs = {
-        "nightly_summary": {
-            "channel": "schedule.tick.nightly",
-            "cron": "0 3 * * *",
-            "payload": {"scope": "all"},
-        },
-    }
+    job = {"channel": "schedule.tick.nightly", "cron": "0 3 * * *",
+           "payload": {"scope": "all"}}
+
+    def on_install(self, sdk):
+        if sdk.services.call("timekeeper", "get_job", self.name) is None:
+            sdk.services.call("timekeeper", "create_job", self.name, self.job)
+
+    def on_uninstall(self, sdk):
+        sdk.services.call("timekeeper", "remove_job", self.name)
+
+Read-then-skip, so a job whose cron the user has edited is left alone. This
+was a `default_jobs` declaration seeded at every registration, which meant a
+job the user deleted came back at the next boot; the declaration is now
+ignored and the validator says so. Declare `service.call`.
 
 
 The two examples below are separate tasks, shown together for contrast. A real
@@ -142,13 +148,17 @@ class DailyDigest(BaseTask):
     reads = []
     writes = ["daily_digest"]
 
-    default_jobs = {
-        "nightly_digest": {
-            "channel": "schedule.tick.nightly",
-            "cron": "0 3 * * *",
-            "payload": {},
-        },
-    }
+    job = {"channel": "schedule.tick.nightly", "cron": "0 3 * * *",
+           "payload": {}}
+
+    def on_install(self, sdk):
+        """Create the schedule, once, when this package is installed."""
+        if sdk.services.call("timekeeper", "get_job", self.name) is None:
+            sdk.services.call("timekeeper", "create_job", self.name, self.job)
+
+    def on_uninstall(self, sdk):
+        """A job whose task is gone fires into nothing forever."""
+        sdk.services.call("timekeeper", "remove_job", self.name)
 
     def run_event(self, sdk, payload):
         """Summarize the day.

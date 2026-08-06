@@ -281,7 +281,26 @@ LITERAL_LISTS = ("dependencies_files", "dependencies_pip",
 # was never shown. The file validated clean throughout. One computed leaf is
 # enough to lose the schema, which is why the check is on the declaration
 # rather than on its type.
-LITERAL_MAPS = ("parameters", "default_jobs", "type_info")
+LITERAL_MAPS = ("parameters", "type_info")
+
+#: Declarations nothing reads any more, and what to do instead. Kept as a
+#: table rather than deleted, because a plugin that still writes one is
+#: indistinguishable from one that is working — the value simply has no
+#: consumer, and the author has no way to find that out. Each is dropped from
+#: ``declarations`` and reported once at its line.
+RETIRED_DECLARATIONS = {
+    "isolation": (
+        "declares 'isolation', which is ignored",
+        "the kernel decides this from the plugin's tree: workspace/ is "
+        "always subprocessed, bundled/ always in-process, installed/ by "
+        "whether it imports a foreign library"),
+    "default_jobs": (
+        "declares 'default_jobs', which is ignored",
+        "seed the schedule from on_install instead — "
+        "sdk.services.call('timekeeper', 'create_job', name, job) — and "
+        "remove it from on_uninstall. A declaration was re-seeded on every "
+        "registration, so a job the user deleted came back at the next boot"),
+}
 
 # Closed vocabularies. A typo here is silent otherwise: an unrecognised
 # lifetime reads as "unset" and the file quietly gets the default.
@@ -1018,26 +1037,24 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
         for found_family, _base, node in classes
     ]
 
-    # ``isolation`` is dropped rather than merely unused. Everything literal
-    # gets collected here, not just the documented keys, so leaving it in
+    # Retired declarations are *dropped*, not merely unused. Everything literal
+    # gets collected here, not just the documented keys, so leaving one in
     # would put a value nothing honours within reach of anything that later
-    # goes looking — and a stale declaration that reads as authoritative is
-    # how this became a vulnerability in the first place. The author is told
-    # once, at the line, rather than left to wonder why it does nothing.
-    isolation_scopes = [module_scope,
-                        *(_assignments(node.body) for _f, _b, node in classes)]
-    for scope in isolation_scopes:
-        if (node := scope.get("isolation")) is not None:
-            walker.add(NOTE, node,
-                       "declares 'isolation', which is ignored",
-                       "the kernel decides this from the plugin's tree: "
-                       "workspace/ is always subprocessed, bundled/ "
-                       "always in-process, installed/ by whether it "
-                       "imports a foreign library")
-            break
-    declared.pop("isolation", None)
-    for entry in declared["classes"]:
-        entry.pop("isolation", None)
+    # goes looking — and a stale declaration that reads as authoritative is how
+    # ``isolation`` became a vulnerability in the first place. The author is
+    # told once, at the line, rather than left to wonder why it does nothing:
+    # a plugin whose declaration is silently ignored looks exactly like one
+    # that is working.
+    scopes = [module_scope,
+              *(_assignments(node.body) for _f, _b, node in classes)]
+    for key, (summary, detail) in RETIRED_DECLARATIONS.items():
+        for scope in scopes:
+            if (node := scope.get(key)) is not None:
+                walker.add(NOTE, node, summary, detail)
+                break
+        declared.pop(key, None)
+        for entry in declared["classes"]:
+            entry.pop(key, None)
 
     declared.setdefault("name", Path(filename).stem)
     return declared

@@ -215,7 +215,6 @@ class BaseTask(BasePlugin):
     trigger: str = "path"          # "path" | "event"
     trigger_channels: list = []
     event_payload_schema: dict = {}
-    default_jobs: dict = {}
 
     modalities: list = []
     reads: list = []               # input tables; dependencies derived

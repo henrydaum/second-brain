@@ -118,6 +118,29 @@ def test_plugin_lifecycle_rejects_paths_outside_plugin_roots(tmp_path):
     assert str(tmp_path) in result.error
 
 
+def _probe(method):
+    """Call one SDK method with placeholder arguments from its own signature.
+
+    Positional-only parameters are handled separately rather than by name:
+    ``sdk.services.call`` makes ``service`` and ``method`` positional-only so
+    they cannot collide with an export's own ``name=`` argument, and a harness
+    that passes everything by keyword cannot call it at all.
+    """
+    import inspect
+
+    positional, keyword = [], {}
+    for parameter in inspect.signature(method).parameters.values():
+        if parameter.default is not inspect.Parameter.empty:
+            continue
+        if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
+            continue
+        if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
+            positional.append("x")
+        else:
+            keyword[parameter.name] = "x"
+    method(*positional, **keyword)
+
+
 def test_the_sdk_reaches_every_wired_request():
     """A catalogue nothing can call is a catalogue that does not exist.
 
@@ -154,16 +177,7 @@ def test_the_sdk_reaches_every_wired_request():
             method = getattr(namespace, attr)
             if not inspect.isfunction(method) and not inspect.ismethod(method):
                 continue
-            signature = inspect.signature(method)
-            args = {}
-            for parameter in signature.parameters.values():
-                if parameter.default is not inspect.Parameter.empty:
-                    continue
-                if parameter.kind in (parameter.VAR_POSITIONAL,
-                                      parameter.VAR_KEYWORD):
-                    continue
-                args[parameter.name] = "x"
-            method(**args)
+            _probe(method)
 
     unreachable = set(HANDLERS) - set(sent)
     assert unreachable == set(), f"no SDK route to: {sorted(unreachable)}"
@@ -506,6 +520,52 @@ def test_service_call_respects_exports():
     assert "not exported" in refused.error
 
 
+def test_an_export_is_callable_positionally():
+    """``call(svc, method, x)`` — three positionals, which used to be a TypeError.
+
+    Only ``kwargs`` crossed the wire, so a positional argument raised at the
+    SDK before any Request was made. ``/schedule`` swallowed that into a
+    fallback and printed raw cron where it meant to print English, which is
+    why nothing noticed: the code path had never once worked.
+    """
+    class Service:
+        exports = ["describe"]
+
+        def describe(self, cron, upper=False):
+            return cron.upper() if upper else cron
+
+    ctx = type("Ctx", (), {"services": {"svc": Service()}})()
+
+    positional = call_handler(R.SERVICE_CALL, ctx, {
+        "name": "svc", "method": "describe", "args": ["0 4 * * *"]})
+    assert positional.data == "0 4 * * *"
+
+    mixed = call_handler(R.SERVICE_CALL, ctx, {
+        "name": "svc", "method": "describe",
+        "args": ["0 4 * * *"], "kwargs": {"upper": True}})
+    assert mixed.data == "0 4 * * *".upper()
+
+
+def test_the_call_positions_cannot_collide_with_the_callees_arguments():
+    """``service`` and ``method`` are positional-only, and that is the fix.
+
+    They were ordinary parameters named ``name`` and ``method``, so any export
+    taking its own ``name`` — the timekeeper's ``get_job``, ``create_job`` and
+    ``remove_job``, all three — was unreachable by keyword. The error named the
+    *caller's* argument ("got multiple values for argument 'name'") and blamed
+    the wrong thing entirely.
+    """
+    import inspect
+
+    from sandbox.guest.sdk import _Services
+
+    params = inspect.signature(_Services.call).parameters
+    assert params["service"].kind is inspect.Parameter.POSITIONAL_ONLY
+    assert params["method"].kind is inspect.Parameter.POSITIONAL_ONLY
+    assert any(p.kind is inspect.Parameter.VAR_POSITIONAL
+               for p in params.values()), "positional arguments pass through"
+
+
 def test_a_service_that_raises_fails_the_call_only():
     """One bad method is a failed Request, not a broken kernel."""
     class Service:
@@ -582,11 +642,7 @@ def test_every_namespace_is_exactly_one_request_family():
             method = getattr(namespace, attr)
             if not inspect.ismethod(method):
                 continue
-            args = {p.name: "x" for p in
-                    inspect.signature(method).parameters.values()
-                    if p.default is inspect.Parameter.empty
-                    and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
-            method(**args)
+            _probe(method)
 
     mixed = {name: families for name, families in sent.items()
              if len(families) > 1}

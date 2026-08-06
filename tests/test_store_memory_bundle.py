@@ -510,14 +510,17 @@ def test_nothing_here_runs_on_a_clock():
     not learned is not a corruption — the watermark table is still consistent —
     so the gap is accepted rather than paid for twenty-four times a day.
 
-    Stated as a test rather than simply deleted because a default job is
-    *seeded at registration*: re-declaring one would silently reappear on
-    every user's clock at their next update.
+    Stated as a test rather than simply deleted because the way a task gets a
+    schedule has since changed: it is an ``on_install`` that calls the
+    timekeeper, so adding one here would be a method rather than a declaration
+    and would not show up as a stray attribute anybody notices.
     """
-    # ``.get``, because the validator omits the key entirely rather than
-    # reporting an empty one — which is also what the orchestrator's
-    # ``getattr(task, "default_jobs", None) or {}`` expects.
-    assert not _declarations(TASK).get("default_jobs")
+    from sandbox.bridge import lifecycle_entries
+
+    assert not _declarations(TASK).get("default_jobs"), (
+        "a retired declaration; the validator drops it and nothing reads it")
+    assert not lifecycle_entries(_source_or_skip(TASK), "on_install"), (
+        "nothing here creates a timekeeper job either")
 
 
 def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():

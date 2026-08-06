@@ -112,8 +112,8 @@ whatever declared that channel fires:
 
     sdk.events.emit("schedule.tick.daily", {"source": "my_service"})
 
-Prefer a task's `default_jobs` over a thread in a service — the timekeeper
-already owns the clock.
+Prefer a task with a timekeeper job over a thread in a service — the
+timekeeper already owns the clock, and a guest may not start a thread.
 """
 
 from guest.bases import BaseService

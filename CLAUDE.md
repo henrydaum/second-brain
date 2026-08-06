@@ -1933,12 +1933,30 @@ conversation title on a persistent surface; fed by the
   priority knob is deliberately deferred until two plugins actually conflict. Every agent enact ledger row records the driving model in
   `data_json.llm` (post-escort) and doorway-forced acts carry
   `data_json.hook`.
-- **Ship a task with a schedule**: declare `default_jobs` on the task
-  (`{job_name: {"channel", "cron", "payload"}}`). The orchestrator seeds the
-  Timekeeper job at registration if absent (disabled jobs count as existing)
-  and removes it at unregistration, so default jobs live exactly as long as
-  their task and a reinstall picks up an updated declaration. Disabling —
-  not deleting — is the durable way to silence a default job.
+- **Ship a task with a schedule**: create the Timekeeper job from `on_install`
+  (`sdk.services.call("timekeeper", "create_job", self.name, self.job)`,
+  read-then-skip so an edited cron survives) and remove it from
+  `on_uninstall`. Declare `service.call`.
+
+  This was `default_jobs`, a declaration the orchestrator seeded at **every
+  registration** — boot, install, hot-reload — skipping only a job that
+  existed at that moment. A job the user deleted did not exist, which is
+  indistinguishable from one never installed, so it came back at the next
+  restart, wrote config to say so, and announced itself in chat. There was no
+  way to say no; the base class even claimed the timekeeper tombstoned
+  removals, which it never did, and the documented workaround was to disable
+  rather than delete. The failure is the same shape as install-time config
+  seeding: **an act that outlives a turn belongs at the moment somebody asked
+  for the package**, and registration is not that moment — it happens on its
+  own, repeatedly, for reasons the user never initiated. `on_install` is, and
+  it already existed.
+
+  Removal had to go with it: it was only ever the counterpart of seeding, and
+  alone it would delete a user's schedule on every hot-reload of the file.
+  `default_jobs` is now in `validator.RETIRED_DECLARATIONS` beside
+  `isolation` — dropped from `declarations` so nothing can later read it as
+  authoritative, and reported at its line, because a plugin whose schedule
+  never appears looks exactly like a plugin with no schedule.
 - **Observe a conversation finishing**: subscribe to
   `SESSION_CONVERSATION_ENDED`, emitted when a session lets go of a
   conversation — switched away from (`/new`, `/clear`, loading another),

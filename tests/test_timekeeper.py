@@ -168,7 +168,7 @@ def test_unload_stops_future_polls(timekeeper):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Task-declared default jobs (was test_default_jobs.py)
+# Registration touches no schedule (was: task-declared default jobs)
 # ────────────────────────────────────────────────────────────────────
 
 from pipeline.orchestrator import Orchestrator
@@ -195,10 +195,13 @@ class _FakeTimekeeper:
 
 
 class _SeederTask(BaseTask):
+    """Still *writes* the retired declaration, which is the point."""
+
     name = "seeder"
     trigger = "event"
     trigger_channels = ["seed.chan"]
-    default_jobs = {"seed_job": {"channel": "seed.chan", "cron": "*/15 * * * *", "payload": {}}}
+    default_jobs = {"seed_job": {"channel": "seed.chan", "cron": "*/15 * * * *",
+                                 "payload": {}}}
 
 
 def _orchestrator(tk):
@@ -210,44 +213,64 @@ def _orchestrator(tk):
     return orch
 
 
-def test_register_task_seeds_declared_default_jobs():
+def test_registering_a_task_creates_no_schedule():
+    """Seeding moved to ``on_install``, and the reason is that registration is
+    the wrong moment.
+
+    It ran at every one — boot, install, hot-reload — and skipped only a job
+    that existed right then, so a job the user had deleted was indistinguishable
+    from one never installed. It came back at the next restart, wrote config to
+    say so, and announced itself in chat. There was no way to say no.
+    ``on_install`` runs when somebody asks for the package and at no other
+    time, which is the one moment re-creating it is what they meant.
+    """
     tk = _FakeTimekeeper()
-    _orchestrator(tk).register_task(_SeederTask())
-    assert tk.created["seed_job"]["cron"] == "*/15 * * * *"
-    assert tk.created["seed_job"]["channel"] == "seed.chan"
 
-
-def test_seeding_skips_existing_jobs():
-    tk = _FakeTimekeeper(existing=["seed_job"])
     _orchestrator(tk).register_task(_SeederTask())
+
     assert tk.created == {}
+    assert tk.jobs == {}
 
 
-def test_unregister_removes_default_jobs():
-    tk = _FakeTimekeeper()
+def test_unregistering_a_task_removes_no_schedule():
+    """The other half, and it has to go with the first.
+
+    Removing at unregistration only made sense as the counterpart of seeding
+    at registration. Left alone it would delete a user's schedule on every
+    hot-reload of the file.
+    """
+    tk = _FakeTimekeeper(existing=["seed_job"])
     orch = _orchestrator(tk)
     orch.register_task(_SeederTask())
+
+    orch.unregister_task("seeder")
+
+    assert tk.removed == []
     assert "seed_job" in tk.jobs
 
-    orch.unregister_task("seeder")
 
-    assert tk.removed == ["seed_job"]
-    assert "seed_job" not in tk.jobs
+def test_the_retired_declaration_is_dropped_and_reported():
+    """A declaration nothing reads must not look like one that works.
 
+    The value is removed from ``declarations`` so nothing can later find it and
+    treat it as authoritative — the mistake ``isolation`` made — and the author
+    is told at the line, because a plugin whose schedule never appears looks
+    exactly like a plugin with no schedule.
+    """
+    from sandbox.validator import validate
 
-def test_reinstall_reseeds_updated_declaration():
-    # Uninstall + reinstall with a changed cron: the old job is removed at
-    # unregistration, so the new registration seeds the new schedule.
-    tk = _FakeTimekeeper()
-    orch = _orchestrator(tk)
-    orch.register_task(_SeederTask())
-    orch.unregister_task("seeder")
+    source = "\n".join([
+        "from guest.bases import BaseTask",
+        "class T(BaseTask):",
+        "    name = 't'",
+        "    default_jobs = {'j': {'channel': 'c', 'cron': '0 3 * * *'}}",
+    ])
+    report = validate(source, filename="task_t.py")
 
-    class _Updated(_SeederTask):
-        default_jobs = {"seed_job": {"channel": "seed.chan", "cron": "* * * * *", "payload": {}}}
-
-    orch.register_task(_Updated())
-    assert tk.jobs["seed_job"]["cron"] == "* * * * *"
+    assert "default_jobs" not in report.declarations
+    assert not any(f.level == "error" for f in report.findings), report.render()
+    assert any("default_jobs" in f.message for f in report.findings)
+    assert any("on_install" in (f.fix or "") for f in report.findings)
 
 
 def test_task_without_default_jobs_needs_no_timekeeper():

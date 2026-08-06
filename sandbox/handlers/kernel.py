@@ -1736,7 +1736,8 @@ def _service_call(ctx, args: dict) -> Result:
     if not callable(fn):
         return Result.failure(f"{name} has no method {method!r}")
     try:
-        return Result(data=fn(**(args.get("kwargs") or {})))
+        return Result(data=fn(*(args.get("args") or ()),
+                              **(args.get("kwargs") or {})))
     except Exception as exc:
         logger.exception("service_call failed")
         return Result.failure(f"{name}.{method} failed: {exc}")

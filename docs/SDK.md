@@ -531,7 +531,10 @@ sdk.tools.call(name, **kwargs)
 sdk.commands.list(details=False, visible=False)
 sdk.commands.run(name, **args)
 sdk.services.list(details=False)
-sdk.services.call(name, method, **kwargs)   # only exported methods
+sdk.services.call(service, method, *args, **kwargs)  # exported methods only
+                                          # service and method are
+                                          # positional-only, so an export may
+                                          # take its own name= without colliding
 sdk.services.load(name) / unload(name)
 sdk.plugins.list(source="registered", category="")
 sdk.plugins.describe(name)
