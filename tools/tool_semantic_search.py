@@ -23,9 +23,13 @@ has always had with FTS5.
 """
 
 
+# ``task_embed_text`` for the same reason ``lexical_search`` names its indexer:
+# it writes the vectors this ranks, and an unfilled index is indistinguishable
+# from a corpus with nothing in it.
 dependencies_files = ['services/service_embed.py',
                       'tools/helpers/SearchResult.py',
-                      'tools/tool_lexical_search.py']
+                      'tools/tool_lexical_search.py',
+                      'tasks/task_embed_text.py']
 dependencies_pip = []
 requests = ["db.query", "service.call"]
 

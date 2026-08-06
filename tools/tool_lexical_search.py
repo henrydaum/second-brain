@@ -14,7 +14,11 @@ tool beside this one now works the same way, over ``vec_cosine``.
 """
 
 
-dependencies_files = ['tools/helpers/SearchResult.py']
+# The index task is a real dependency, not a packaging convenience: this tool
+# queries an FTS table that only ``task_lexical_index`` ever fills, so without
+# it every search returns nothing and looks like an empty corpus.
+dependencies_files = ['tools/helpers/SearchResult.py',
+                      'tasks/task_lexical_index.py']
 dependencies_pip = []
 requests = ["db.query"]
 

@@ -175,9 +175,19 @@ class MemoryRetrieve(BaseService):
                 "tool.call", "fs.read", "fs.list", "fs.write",
                 "db.define", "db.query", "db.write",
                 "session.add_prompt_extra"]
+    # The first three are what retrieval and the curator *call*. The last four
+    # are what ``on_install`` writes into the ``memory_curator`` profile, and
+    # naming a tool that is not installed grants nothing and says nothing — the
+    # name is simply dropped, and the curator runs quietly narrower than the
+    # profile claims. So this is the same relationship as the others: files
+    # this plugin needs present to work as described.
     dependencies_files = ["tools/tool_hybrid_search.py",
                           "tools/tool_memory_recall.py",
-                          "tools/tool_memory_curate.py"]
+                          "tools/tool_memory_curate.py",
+                          "tools/tool_read_file.py",
+                          "tools/tool_grep.py",
+                          "tools/tool_glob.py",
+                          "tools/tool_sql_query.py"]
     dependencies_pip = []
 
     config_settings = [
