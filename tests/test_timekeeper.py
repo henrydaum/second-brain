@@ -94,7 +94,14 @@ def test_load_purges_and_persists_expired_one_time_jobs(timekeeper):
     assert sorted(service.list_jobs()) == ["cron", "future"]
     assert sorted(context.config["scheduled_jobs"]) == ["cron", "future"]
     assert sorted(saved["scheduled_jobs"]) == ["cron", "future"]
-    assert saved["other"] == "kept"
+    # And persisted to *one* file. The timekeeper writes with ``scope="plugin"``
+    # — it is this service's own state and it declares the setting — but the
+    # kernel declares it too, and a kernel declaration wins. Taking both
+    # branches wrote one value to two files and announced the change twice, and
+    # ``rehome_kernel_keys`` then moved the stray copy back at the next boot.
+    # ``other`` comes from the stubbed ``load_plugin_config``, so its absence is
+    # what says ``save_plugin_config`` was never reached.
+    assert "other" not in saved
 
 
 def test_exports_accept_positional_calls_and_persist(timekeeper):

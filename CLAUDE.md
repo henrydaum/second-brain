@@ -540,6 +540,21 @@ the difference between a microkernel and a pile of assumptions:
   an existing plugin_config entry; and `config_manager.rehome_kernel_keys`
   moves stragglers at boot, new home first so a crash costs a duplicate rather
   than the value. Check this whenever something graduates into the kernel.
+  **And the write path has to apply the same rule**, which for a long time it
+  did not: `_config_write` routed to plugin_config on `scope="plugin"` *or* on
+  the key appearing in any plugin's `config_settings`, with no kernel
+  exception — so the timekeeper's own `scheduled_jobs` (declared by both) was
+  written to two files and announced twice per change, and `rehome_kernel_keys`
+  moved the stray copy back at every boot. `config_manager.is_kernel_setting`
+  is that one rule, and it overrides the caller's `scope`: a plugin cannot
+  rehome a setting it does not own.
+- **An announcement names what a person changed, not what a file gained.**
+  `save` merges `DEFAULTS`, so the first write after a schema addition
+  persists settings nobody touched; diffing against the *file* called every one
+  of them changed, and deleting a scheduled job announced `autoload_services`
+  alongside it. The diff is against the effective previous config
+  (`{**DEFAULTS, **existing}`) — materializing a default is a change to the
+  file and to nothing else.
 - **`config/config_data.py`** — `autoload_services` trimmed to
   `["llm", "timekeeper"]` (extension services auto-load when installed);
   `enabled_frontends` → `["repl"]`;

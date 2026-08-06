@@ -1039,8 +1039,13 @@ def _config_write(ctx, args: dict) -> Result:
                 if override in renames:
                     session.profile_override = renames[override]
         config_manager.save(config)
-        if key in config_manager.plugin_setting_keys() \
-                or args.get("scope") == "plugin":
+        # ``is_kernel_setting`` first, and it overrides both the declaration
+        # and the caller's ``scope``: a key the kernel declares has one home,
+        # and taking this branch as well wrote it to a second file and
+        # announced it a second time.
+        if not config_manager.is_kernel_setting(key) \
+                and (key in config_manager.plugin_setting_keys()
+                     or args.get("scope") == "plugin"):
             plugin_config = config_manager.load_plugin_config()
             plugin_config[key] = value
             config_manager.save_plugin_config(plugin_config)

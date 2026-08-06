@@ -134,6 +134,47 @@ def test_save_preserves_existing_unrelated_values(tmp_path):
     assert on_disk["poll_interval"] == 2.0
 
 
+def _announced(monkeypatch) -> list:
+    """Every ``CONFIG_CHANGED`` key list emitted from here on."""
+    from events.event_bus import bus
+    from events.event_channels import CONFIG_CHANGED
+
+    seen: list = []
+    real = bus.emit
+    monkeypatch.setattr(bus, "emit",
+                        lambda channel, payload=None, **kw: (
+                            seen.append(sorted((payload or {}).get("keys") or []))
+                            if channel == CONFIG_CHANGED else real(channel, payload, **kw)))
+    return seen
+
+
+def test_materializing_a_default_is_not_a_change_anyone_made(tmp_path, monkeypatch):
+    """The announcement names what the user changed, not what the file gained.
+
+    ``save`` merges ``DEFAULTS``, so the first write after a schema addition
+    persists settings nobody touched. Diffing against the *file* called every
+    one of them changed, and it reached the user as
+    "⚙ Settings changed: autoload_services" for deleting a scheduled job — an
+    announcement naming a setting they had approved one unrelated write for.
+    Diffing against the effective previous config is what makes the two agree.
+    """
+    path = _cfg(tmp_path)
+    partial = {k: v for k, v in config_manager.DEFAULTS.items()
+               if k != "autoload_services"}
+    (tmp_path / "config.json").write_text(json.dumps(partial))
+    seen = _announced(monkeypatch)
+
+    config_manager.save(dict(partial), path)
+
+    assert "autoload_services" in json.loads(open(path).read()), (
+        "the file still gains the default; only the announcement changes")
+    assert seen == [[]]
+
+    partial["scheduled_jobs"] = {"nightly": {}}
+    config_manager.save(dict(partial), path)
+    assert seen[-1] == ["scheduled_jobs"], "a real change still announces"
+
+
 def test_save_excludes_plugin_config_keys_even_when_unregistered(tmp_path, monkeypatch):
     """Plugin values loaded into the runtime config from plugin_config.json (for
     plugins not yet discovered) must never be duplicated into core config.json."""
@@ -478,6 +519,61 @@ def test_config_write_rescans_watcher_settings(monkeypatch):
 
     assert result.data == "Set sync_directories = C:\\Notes"
     assert rescans == [True]
+
+
+def test_a_kernel_setting_is_written_once_however_it_is_scoped(monkeypatch):
+    """One setting, one home, one announcement.
+
+    ``_config_write`` took the plugin branch on ``scope="plugin"`` *or* on the
+    key appearing in any plugin's ``config_settings`` — and the timekeeper does
+    both for ``scheduled_jobs``, which the kernel also declares. So deleting one
+    scheduled job wrote the value to config.json and plugin_config.json and
+    announced it twice, while ``rehome_kernel_keys`` moved the stray copy back
+    at the next boot. The kernel declaration decides, and it overrides the
+    caller's own ``scope``: a plugin cannot rehome a setting it does not own.
+    """
+    from sandbox.handlers.kernel import _config_write
+
+    context, saved, _ = _context(monkeypatch)
+    plugin_saves = []
+    monkeypatch.setattr("config.config_manager.save_plugin_config",
+                        lambda values, path=None: plugin_saves.append(values))
+    monkeypatch.setattr("config.config_manager.plugin_setting_keys",
+                        lambda: {"scheduled_jobs"})
+
+    result = _config_write(context, {"key": "scheduled_jobs",
+                                     "value": {"nightly": {}},
+                                     "scope": "plugin"})
+
+    assert result.ok
+    assert saved["scheduled_jobs"] == {"nightly": {}}
+    # One save, so one announcement — each ``save*`` emits its own
+    # ``CONFIG_CHANGED``, which is why the second write was the second
+    # notification. The emit itself is pinned in
+    # ``test_materializing_a_default_is_not_a_change_anyone_made``; here
+    # ``save`` is stubbed, so the count of saves is the thing to assert.
+    assert plugin_saves == [], "a kernel setting never reaches plugin_config"
+
+
+def test_a_plugin_setting_still_reaches_plugin_config(monkeypatch):
+    """The other half of the same branch, which must keep working.
+
+    Only a *kernel* declaration wins. A setting the kernel says nothing about
+    is the plugin's, and ``scope="plugin"`` is how a service persists its own
+    state.
+    """
+    from sandbox.handlers.kernel import _config_write
+
+    context, _, _ = _context(monkeypatch)
+    plugin_saves = []
+    monkeypatch.setattr("config.config_manager.save_plugin_config",
+                        lambda values, path=None: plugin_saves.append(values))
+
+    result = _config_write(context, {"key": "demo_color_config_test",
+                                     "value": "green", "scope": "plugin"})
+
+    assert result.ok
+    assert plugin_saves == [{"demo_color_config_test": "green"}]
 
 
 def test_no_test_can_write_the_developers_real_config():

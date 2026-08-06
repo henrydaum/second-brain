@@ -182,12 +182,36 @@ def save(config: dict, path: str = None):
     with open(path, "w") as f:
         json.dump(to_save, f, indent=4)
     logger.info(f"Config saved to {path}")
-    changed = [k for k in to_save if to_save.get(k) != existing.get(k)]
+    # Compared against the *effective* previous config, not against the file.
+    # The two differ for every key that has never been written: ``to_save``
+    # merges ``DEFAULTS``, so the first save after a schema addition writes
+    # settings whose value nobody changed, and comparing to the file reported
+    # every one of them as changed. That reached the user as "⚙ Settings
+    # changed: autoload_services" for deleting a scheduled job — a setting
+    # named in an announcement they had approved one write for. Materializing a
+    # default is a change to the file and to nothing else.
+    before = {**DEFAULTS, **existing}
+    changed = [k for k in to_save if to_save.get(k) != before.get(k)]
     _record_config_save("core", changed)
     _emit_config_changed("core", changed)
 
 
 # ── Plugin config ───────────────────────────────────────────────────
+
+def is_kernel_setting(key: str) -> bool:
+    """Whether the kernel declares this setting, whoever else also does.
+
+    A kernel declaration always wins — the rule ``save`` applies when it
+    subtracts ``DEFAULTS`` from the plugin keys, stated once so the write path
+    can apply the same one. It could not, and the mismatch was visible: the
+    timekeeper writes ``scheduled_jobs`` with ``scope="plugin"`` (it is that
+    service's own state, and it declares it in ``config_settings``), the kernel
+    also declares it, and the handler took *both* branches — one value written
+    to two files, announced twice, with ``rehome_kernel_keys`` quietly moving
+    the stray copy back at every boot.
+    """
+    return key in DEFAULTS
+
 
 def plugin_setting_keys() -> set:
     """Return the set of variable_names owned by plugin config."""
