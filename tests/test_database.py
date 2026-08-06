@@ -237,6 +237,46 @@ def test_read_queries_allow_only_schema_introspection_pragmas(db):
     assert any(row["name"] == "path" for row in rows)
 
 
+def test_a_read_can_match_against_an_fts5_index(db):
+    """A full-text search is a read, and the authorizer used to think otherwise.
+
+    FTS5 asks SQLite for ``PRAGMA data_version`` from inside the virtual table
+    — nothing in the query mentions a PRAGMA — and the read authorizer denied
+    every PRAGMA but ``table_info``. So *every* ``MATCH`` failed with a bare
+    "authorization denied", which meant the store's ``lexical_search`` could
+    not run a single search from a sandboxed tool. It reported that as "no
+    results", so the keyword half of retrieval looked like an empty corpus
+    rather than a refusal, and stayed that way for a long time.
+
+    Written against a real FTS5 table rather than by asserting the pragma is
+    allowed: the bug was that a query nobody would think to check was refused,
+    so the test has to be the query.
+    """
+    db.execute_write("CREATE VIRTUAL TABLE notes_fts USING fts5(path, content)")
+    db.execute_write("INSERT INTO notes_fts (path, content)"
+                     " VALUES ('/notes/a.md', 'retry a failed upload')")
+    db.execute_write("INSERT INTO notes_fts (path, content)"
+                     " VALUES ('/notes/b.md', 'something else entirely')")
+
+    rows = db.query_rows(
+        "SELECT path FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank",
+        ["upload"])
+
+    assert [row["path"] for row in rows] == ["/notes/a.md"]
+
+
+def test_data_version_stays_readable_but_unsettable(db):
+    """The pragma is allowed because it is an *answer*, not a switch.
+
+    It reports whether another connection has committed and takes no argument,
+    so there is no form of it that changes anything. The guard still refuses
+    the statement-level route, because a plugin has no reason to ask and the
+    allowance exists for SQLite's own internals.
+    """
+    with pytest.raises(ValueError, match="PRAGMA table_info"):
+        db.query_rows("PRAGMA data_version")
+
+
 @pytest.mark.parametrize("sql", [
     "PRAGMA foreign_keys = OFF",
     "PRAGMA writable_schema = ON",

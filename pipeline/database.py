@@ -881,6 +881,24 @@ class Database:
 			"PRAGMA table_info(<table>) are allowed; use db.write for a "
 			"mutation.")
 
+	#: PRAGMAs the authorizer lets through, and why each is safe to.
+	#:
+	#: ``table_info`` is the schema inspection plugins already use, and is
+	#: additionally checked against a valid identifier below.
+	#:
+	#: ``data_version`` is not asked for by any plugin — **SQLite asks for it
+	#: itself**, from inside a virtual table. It reports whether another
+	#: connection has committed since last time, it takes no argument, and it
+	#: cannot change anything at all. Denying it broke every FTS5 ``MATCH``:
+	#: a query that never mentions a PRAGMA failed with a bare "authorization
+	#: denied", so ``lexical_search`` could not run a single search from a
+	#: sandboxed tool — and because the tool reported that as "no results",
+	#: the whole keyword half of retrieval looked like an empty corpus rather
+	#: than a refusal. Anything else in the namespace mixes reads with
+	#: mutations (``foreign_keys``, ``writable_schema``, WAL checkpoints) and
+	#: stays refused.
+	_ALLOWED_PRAGMAS = frozenset({"table_info", "data_version"})
+
 	@staticmethod
 	def _read_authorizer(action, arg1, arg2, database_name, trigger_name):
 		"""Let SQLite prove a query has no write or configuration effects."""
@@ -892,10 +910,13 @@ class Database:
 		}
 		if action in allowed:
 			return sqlite3.SQLITE_OK
-		if (action == sqlite3.SQLITE_PRAGMA
-				and str(arg1 or "").lower() == "table_info"
-				and _VALID_IDENTIFIER.fullmatch(str(arg2 or ""))):
-			return sqlite3.SQLITE_OK
+		if action == sqlite3.SQLITE_PRAGMA:
+			name = str(arg1 or "").lower()
+			if name == "data_version" and not arg2:
+				return sqlite3.SQLITE_OK
+			if (name == "table_info"
+					and _VALID_IDENTIFIER.fullmatch(str(arg2 or ""))):
+				return sqlite3.SQLITE_OK
 		return sqlite3.SQLITE_DENY
 
 	@contextmanager
