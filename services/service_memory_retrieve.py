@@ -382,7 +382,14 @@ class MemoryRetrieve(BaseService):
                 f"frontmatter to be offered.")
             return None
         try:
-            sdk.session.add_prompt(block, key=ctx.session_key, slot="memory")
+            # No ``key``: naming a session makes this "inject into *that*
+            # session", which is unsafe unless the chain already names it —
+            # and a hook's chain roots at ``service:memory_retrieve``, so it
+            # never does. It was refused outright rather than asked, every
+            # turn, in silence. Omitting it means "my own session", and the
+            # kernel lends a doorway its session, so the handler lands where
+            # this hook is actually standing.
+            sdk.session.add_prompt(block, slot="memory")
         except sdk.Failed as error:
             # Nothing was shown, so nothing was offered. Recording it anyway
             # would tell the curator an entry had been surfaced and ignored
