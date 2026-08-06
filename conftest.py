@@ -33,6 +33,59 @@ os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", str(_TEMP_ROOT))
 
 
 @pytest.fixture(autouse=True)
+def _isolate_config_files(tmp_path_factory):
+    """Point config writes at a scratch file, for every test, always.
+
+    ``config_manager.save`` resolves ``path=None`` to a module-level default,
+    and a great deal of code saves without naming a path — ``config.write``'s
+    handler, the approval dialog's "always allow", ``rehome_kernel_keys``. So
+    any test that reaches one of those writes the *developer's real config*,
+    silently and with no ledger row, because the ledger database is not wired
+    outside bootstrap.
+
+    That is not hypothetical: a hook test that exercised ``config.write``
+    end-to-end overwrote a live ``sync_directories`` with its fixture value,
+    and the damage surfaced later as a settings-changed notification in the
+    running app naming keys nobody had touched. Reading the value back is not
+    a defence either — the whole point of such a test is to write.
+
+    Autouse and session-scoped path, so it costs one directory and no test has
+    to remember. A test that genuinely wants the real file can patch these
+    back deliberately, which is a visible act rather than an omission.
+
+    Two details are not optional. The files are **created**, because a policy
+    that refuses to read the config is tested by reading it — pointed at a path
+    that does not exist, those tests get ``not_found`` instead of ``denied``
+    and pass for the wrong reason or fail for one. And
+    ``sandbox.protected.reset()`` is called on both edges, because
+    ``protected_paths`` is ``lru_cache``d and reads these same constants at
+    first call: without the reset the protected set is whatever the first test
+    to touch it happened to see, which makes a *security* check depend on test
+    ordering.
+    """
+    from config import config_manager
+    from sandbox import protected
+
+    scratch = tmp_path_factory.mktemp("config")
+    saved_core = config_manager._DEFAULT_CONFIG_PATH
+    saved_plugin = config_manager._DEFAULT_PLUGIN_CONFIG_PATH
+    core = scratch / "config.json"
+    plugin = scratch / "plugin_config.json"
+    for path in (core, plugin):
+        if not path.exists():
+            path.write_text("{}", encoding="utf-8")
+    config_manager._DEFAULT_CONFIG_PATH = str(core)
+    config_manager._DEFAULT_PLUGIN_CONFIG_PATH = str(plugin)
+    protected.reset()
+    try:
+        yield scratch
+    finally:
+        config_manager._DEFAULT_CONFIG_PATH = saved_core
+        config_manager._DEFAULT_PLUGIN_CONFIG_PATH = saved_plugin
+        protected.reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_llm_registry():
     """Empty the LLM registry around every test.
 

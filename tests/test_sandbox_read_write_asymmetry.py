@@ -168,6 +168,15 @@ def test_every_kernel_table_names_the_request_that_replaces_it():
 # ── fs.read may not reach what secret.reveal is gated on ──────────────
 
 def _config_path():
+    """Whatever ``config_manager`` currently calls the config file.
+
+    Read off the module rather than composed from ``DATA_DIR``, and that is
+    load-bearing in both directions: ``protected.protected_paths`` resolves the
+    same constant, so this asks about exactly the file the policy is protecting.
+    ``conftest`` redirects both of them together at a scratch file — which is
+    the whole point, since these tests would otherwise be probing the
+    developer's real settings to prove they cannot be read.
+    """
     from config.config_manager import _DEFAULT_CONFIG_PATH
     return _DEFAULT_CONFIG_PATH
 

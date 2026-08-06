@@ -478,3 +478,42 @@ def test_config_write_rescans_watcher_settings(monkeypatch):
 
     assert result.data == "Set sync_directories = C:\\Notes"
     assert rescans == [True]
+
+
+def test_no_test_can_write_the_developers_real_config():
+    """The guard in ``conftest`` that makes this suite safe to run.
+
+    ``config_manager.save`` resolves ``path=None`` to a module default, and
+    plenty of code saves without naming one — ``config.write``'s handler, the
+    approval dialog's "always allow". A test reaching any of those used to
+    write the real file, with no ledger row to show for it, and the damage
+    surfaced later inside the running app.
+    """
+    from pathlib import Path
+
+    from config import config_manager
+    from paths import DATA_DIR
+
+    for attribute in ("_DEFAULT_CONFIG_PATH", "_DEFAULT_PLUGIN_CONFIG_PATH"):
+        live = Path(getattr(config_manager, attribute)).resolve()
+        assert DATA_DIR.resolve() not in live.parents, (
+            f"{attribute} points into the real DATA_DIR during tests")
+
+
+def test_saving_without_a_path_lands_in_the_scratch_file():
+    """The guard has to survive the indirection, not just the constant.
+
+    Asserting on the module attribute alone would pass while ``save`` read the
+    value at import time into a default argument, which is exactly the shape
+    that would leave the hole open.
+    """
+    from pathlib import Path
+
+    from config import config_manager
+    from paths import DATA_DIR
+
+    config_manager.save({"sync_directories": ["/scratch-only"]})
+
+    written = Path(config_manager._DEFAULT_CONFIG_PATH)
+    assert written.exists()
+    assert DATA_DIR.resolve() not in written.resolve().parents
