@@ -500,20 +500,24 @@ def test_the_curator_listens_for_the_conversation_that_ended():
     assert declared["trigger_channels"] == [SESSION_CONVERSATION_ENDED]
 
 
-def test_the_curator_is_also_swept_because_a_crash_emits_nothing():
-    """The hourly job is the backstop, not a second trigger.
+def test_nothing_here_runs_on_a_clock():
+    """The event covers every ordinary ending, so a sweep finds nothing.
 
-    The event makes reflection prompt; it cannot make it reliable, because a
-    crash emits nothing at all. The sweep asks the same watermark question with
-    no event, which is what turns a lost event into a delay rather than into
-    work silently dropped.
+    There was an hourly one, declared as a backstop for an event lost to a
+    crash. The cost is what settles it: this task *spawns subagents*, so a
+    speculative wake-up is the most expensive kind there is, and it bought
+    recovery for a case that leaves exactly one reflection unwritten. A lesson
+    not learned is not a corruption — the watermark table is still consistent —
+    so the gap is accepted rather than paid for twenty-four times a day.
+
+    Stated as a test rather than simply deleted because a default job is
+    *seeded at registration*: re-declaring one would silently reappear on
+    every user's clock at their next update.
     """
-    from events.event_channels import SESSION_CONVERSATION_ENDED
-
-    jobs = _declarations(TASK)["default_jobs"]
-    assert list(jobs) == ["memory_reflect_sweep"]
-    assert jobs["memory_reflect_sweep"]["channel"] == SESSION_CONVERSATION_ENDED
-    assert jobs["memory_reflect_sweep"]["cron"] == "0 * * * *"
+    # ``.get``, because the validator omits the key entirely rather than
+    # reporting an empty one — which is also what the orchestrator's
+    # ``getattr(task, "default_jobs", None) or {}`` expects.
+    assert not _declarations(TASK).get("default_jobs")
 
 
 def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():
