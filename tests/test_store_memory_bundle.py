@@ -53,6 +53,28 @@ def _declarations(relative: str) -> dict:
                     filename=Path(relative).name).declarations
 
 
+def _install_closure() -> set[str]:
+    """Every store file installing this bundle lands, by the manager's own walk.
+
+    The manifest names the four memory plugins and nothing else; everything
+    else arrives because something in the closure declares it. Reading the
+    closure rather than the manifest is what lets uninstall be *narrow* — it
+    follows the edge backwards, so a shared dependency the bundle merely
+    reached is not the bundle's to take away — while install stays complete.
+    """
+    from bundled.commands.helpers.package_manager import read_dependency_meta
+
+    out: set[str] = set()
+    queue = list(json.loads(_source_or_skip(BUNDLE))["files"])
+    while queue:
+        rel = queue.pop()
+        if rel in out:
+            continue
+        out.add(rel)
+        queue.extend(read_dependency_meta(rel, _source_or_skip(rel)).dependencies_files)
+    return out
+
+
 def _load_store_class(relative: str, name: str):
     namespace = {}
     exec(compile(_source_or_skip(relative), relative, "exec"), namespace)
@@ -366,11 +388,13 @@ def test_the_service_can_inject_and_can_search():
     declared = _declarations(SERVICE)
     assert "session.add_prompt_extra" in declared["requests"]
     assert "tool.call" in declared["requests"]
-    assert set(declared["dependencies_files"]) == {
-        "tools/tool_hybrid_search.py",
-        "tools/tool_memory_recall.py",
-        "tools/tool_memory_curate.py",
-    }
+    # What it calls. The curator's other read tools are declared here as well,
+    # since ``on_install`` writes their names into a whitelist and a name
+    # nobody installed grants nothing — but which file supplies each is the
+    # closure's business, pinned by
+    # ``test_the_bundle_ships_every_tool_the_curator_profile_names``.
+    assert {"tools/tool_hybrid_search.py", "tools/tool_memory_recall.py",
+            "tools/tool_memory_curate.py"} <= set(declared["dependencies_files"])
 
 
 def test_injecting_memory_pointers_raises_no_dialog():
@@ -530,16 +554,15 @@ def test_the_bundle_ships_every_tool_the_curator_profile_names():
     the same silent-narrowing shape as the missing tools that made a curator
     unable to search at all.
 
-    ``memory_*`` are exempt from nothing — they are in the manifest too. What
-    is exempt is any tool the closure supplies rather than the manifest, and
-    there are none: a tool that is not installed cannot be a dependency of one
-    that is.
+    The question is asked of the *install closure*, not the manifest, because
+    the manifest deliberately names only the four memory plugins and lets
+    ``dependencies_files`` supply the rest — which is the same walk the package
+    manager does.
     """
     namespace = {}
     exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), namespace)
-    manifest = json.loads(_source_or_skip(BUNDLE))
-    shipped = {Path(rel).stem.split("_", 1)[1] for rel in manifest["files"]
-               if rel.startswith("tools/")}
+    shipped = {Path(rel).stem.split("_", 1)[1] for rel in _install_closure()
+               if rel.startswith("tools/tool_")}
 
     missing = sorted(set(namespace["CURATOR_TOOLS"]) - shipped)
     assert not missing, f"the profile names tools the bundle does not ship: {missing}"
@@ -726,8 +749,22 @@ def test_the_event_task_implements_the_event_entry_point():
 # The manifest.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_the_bundle_lists_all_four_and_what_they_retrieve_through():
-    """A bundle missing the search chain installs a memory that never recalls."""
+def test_the_manifest_names_the_four_and_lets_the_closure_do_the_rest():
+    """A manifest is what this package *is*, not what it needs on the way.
+
+    It listed all sixteen files for a while, which installed correctly and
+    uninstalled catastrophically: uninstall follows the dependency edge
+    backwards, so anything the manifest names is the bundle's to remove, and
+    naming ``service_embed`` and the four indexing tasks meant removing memory
+    tore out the machine's whole text index — plus torch — and took
+    ``read_file``, ``grep``, ``glob`` and ``sql_query`` with it.
+
+    Duplicating the closure by hand also hid seven missing declarations: with
+    the manifest supplying them, nothing ever noticed that
+    ``tool_lexical_search`` never named the task that fills the index it reads.
+    Install walks the edges either way, so the manifest carrying them bought
+    nothing and cost the ability to leave.
+    """
     worktree = store_worktree()
     if worktree is None:
         pytest.skip("no store worktree to read the manifest from")
@@ -739,15 +776,21 @@ def test_the_bundle_lists_all_four_and_what_they_retrieve_through():
     assert manifest["name"] and manifest["description"]
     files = manifest["files"]
     assert files == sorted(files), "manifest files must stay sorted"
-    assert set(SUITE) <= set(files)
-    assert "tools/tool_hybrid_search.py" in files
+    assert set(files) == set(SUITE), (
+        "the manifest is the four memory plugins; anything else they need is "
+        "reached through dependencies_files")
+
+    # Everything the bundle installs is still everything it needs, reached the
+    # way the package manager reaches it.
+    closure = _install_closure()
+    assert "tools/tool_hybrid_search.py" in closure
     # read_file is for a skill's own references, which memory_recall names but
     # deliberately does not load.
-    assert "tools/tool_read_file.py" in files
-    # And the one the curator must not have. Its absence here is not the
-    # guard — the profile is — but shipping it in this bundle would make the
-    # restriction look accidental.
-    assert "tools/tool_edit_file.py" not in files
+    assert "tools/tool_read_file.py" in closure
+    # And the one the curator must not have. Its absence is not the guard — the
+    # profile is — but pulling it in here would make the restriction look
+    # accidental.
+    assert "tools/tool_edit_file.py" not in closure
 
-    for relative in files:
+    for relative in closure:
         assert (Path(worktree) / relative).exists(), relative
