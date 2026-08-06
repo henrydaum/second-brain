@@ -621,10 +621,23 @@ future store package, not kernel.
   `DATA_DIR/installed`. The store copy always wins: a differing
   existing file is overwritten in place (no versioning yet — the store branch
   is assumed to hold the newest version); byte-identical files are skipped.
-- **Uninstall scans live trees.** Uninstall follows the installed target's
-  dependency metadata, scans built-in, sandbox, and installed plugin trees, and
-  removes only candidate files/pip packages no remaining file still declares.
-  Kernel requirements are never pip-uninstalled. Bundles are cloud-only
+- **Uninstall follows the dependency edge *backwards*.** Removing a file takes
+  everything installed that declares it in `dependencies_files`, transitively,
+  and leaves what the target itself depended on alone
+  (`_dependents_closure_from_installed`). It walked forwards for a long time,
+  which is the relation the file states but the opposite of the one the
+  question asks: uninstalling `tool_hybrid_search` took `tool_lexical_search`
+  and `tool_semantic_search` — two tools that work perfectly well alone — and
+  left `service_memory_retrieve`, which cannot run without it, installed,
+  autoloaded and failing every turn. A dependency is a claim about what I
+  need, never a claim of ownership, and nothing in the tree records which
+  files were installed for their own sake, so the forward question is not
+  answerable and is not attempted. A file the target needed stays on disk,
+  visible in `/packages list`; that is the cheap failure, and removing
+  something that still works is not. **Pip is the exception**, because a
+  library is shared by whoever names it with no edge between them: the three
+  trees are scanned and anything another file still declares is kept, kernel
+  requirements always. Bundles are cloud-only
   manifests in `origin/store` that list store-relative files and feed the same
   resolver. Versioning is deferred.
 

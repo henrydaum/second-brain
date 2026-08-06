@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import json
 from pathlib import Path
 
@@ -27,6 +28,9 @@ class _Backend:
             return self.files[rel]
         except KeyError:
             raise package_manager.PackageError(f"missing file: {rel}")
+
+    def refresh(self, force=False):
+        """``outdated_packages`` pulls before it compares; nothing to pull here."""
 
 
 class _Context:
@@ -215,6 +219,31 @@ def test_on_install_reruns_only_when_the_bytes_changed(tmp_path, monkeypatch):
     assert len(recorder.calls) == 2, "a new version may need new setup"
 
 
+def test_update_runs_on_install_for_what_it_rewrote(tmp_path, monkeypatch):
+    """``/packages update`` is an install of the changed files, hooks included.
+
+    It routes through ``execute_install_plan``, so this holds for free — but
+    "for free" is exactly the kind of claim that stops being true silently, and
+    the symptom is a plugin whose new version never gets set up while the
+    command reports success.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"tools/tool_setup.py": _hooked("on_install")}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    recorder = _capture_sandbox(monkeypatch)
+    package_manager.install_package(tmp_path, "tool_setup", _Context(tmp_path))
+
+    assert package_manager.update_packages(tmp_path, _Context(tmp_path)).ok
+    assert len(recorder.calls) == 1, "nothing was outdated"
+
+    files["tools/tool_setup.py"] = _hooked("on_install", body="return 2")
+    result = package_manager.update_packages(tmp_path, _Context(tmp_path))
+
+    assert len(recorder.calls) == 2
+    assert recorder.calls[1]["method"] == "on_install"
+    assert "Set up: tool_setup" in result.lines
+
+
 def test_a_failing_on_install_still_leaves_the_package_installed(tmp_path, monkeypatch):
     """A declined dialog is a failed Request, and the files are already down.
 
@@ -257,26 +286,75 @@ def test_on_uninstall_runs_while_the_file_is_still_there(tmp_path, monkeypatch):
     assert "Cleaned up: tool_setup" in result.lines
 
 
-def test_a_kept_dependency_is_not_torn_down(tmp_path, monkeypatch):
-    """``keep_files`` is a file somebody else still needs, so it is not going.
-
-    Firing its teardown would have one package drop another's tables on its way
-    out — the failure would surface much later, in the surviving plugin.
-    """
-    _patch_roots(monkeypatch, tmp_path)
+def _dependency_triangle(monkeypatch):
+    """``tool_a`` and ``tool_b`` both need ``tool_shared``, which needs nobody."""
     _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py",
            _tool(deps=["tools/tool_shared.py"]).decode())
     _write(package_manager.INSTALLED_PLUGINS, "tools/tool_b.py",
            _tool(deps=["tools/tool_shared.py"]).decode())
     _write(package_manager.INSTALLED_PLUGINS, "tools/tool_shared.py",
            _hooked("on_uninstall", name="shared").decode())
-    recorder = _capture_sandbox(monkeypatch)
+    return _capture_sandbox(monkeypatch)
+
+
+def test_uninstalling_a_dependent_leaves_what_it_depended_on(tmp_path, monkeypatch):
+    """A dependency is a claim about what I need, never a claim of ownership.
+
+    ``tool_shared`` works exactly as well without ``tool_a``, and nothing in
+    the tree records whether it was installed for its own sake or came along
+    for the ride — so the forward edge cannot answer the question and is not
+    followed. Its teardown must not fire either: that would have one package
+    drop another's tables on its way out, surfacing much later in the
+    surviving plugin.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    recorder = _dependency_triangle(monkeypatch)
 
     result = package_manager.uninstall_package("tool_a", _Context(tmp_path))
 
     assert recorder.calls == []
     assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_shared.py").exists()
-    assert any("Kept file: tools/tool_shared.py" in line for line in result.lines)
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_b.py").exists()
+    assert result.lines == ["Removed file: tools/tool_a.py"]
+
+
+def test_uninstalling_a_dependency_takes_everything_that_needed_it(tmp_path, monkeypatch):
+    """The other direction, and the one that is actually decidable.
+
+    ``tool_a`` and ``tool_b`` cannot run without ``tool_shared``, so leaving
+    them installed leaves two registered plugins failing every call — the
+    quietest possible breakage. Their own teardowns run, since they really are
+    being uninstalled.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    recorder = _dependency_triangle(monkeypatch)
+
+    result = package_manager.uninstall_package("tool_shared", _Context(tmp_path))
+
+    for stem in ("tool_a", "tool_b", "tool_shared"):
+        assert not (package_manager.INSTALLED_PLUGINS / "tools" / f"{stem}.py").exists()
+    assert [call["method"] for call in recorder.calls] == ["on_uninstall"]
+    assert "Cleaned up: tool_shared" in result.lines
+
+
+def test_dependents_are_followed_transitively(tmp_path, monkeypatch):
+    """A dependent's dependents are broken just as thoroughly.
+
+    This is the user's own chain: uninstall ``lexical_search`` and
+    ``hybrid_search`` cannot run, which means ``memory_retrieve`` cannot
+    either.
+    """
+    _patch_roots(monkeypatch, tmp_path)
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_lexical.py", _tool().decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_hybrid.py",
+           _tool(deps=["tools/tool_lexical.py"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_memory.py",
+           _tool(deps=["tools/tool_hybrid.py"]).decode())
+
+    plan = package_manager.build_uninstall_plan("tool_lexical")
+
+    assert set(plan.remove_files) == {"tools/tool_lexical.py", "tools/tool_hybrid.py",
+                                      "tools/tool_memory.py"}
 
 
 def test_a_failing_on_uninstall_still_removes_the_package(tmp_path, monkeypatch):
@@ -552,11 +630,15 @@ def test_bundle_uninstall_skips_missing_roots_and_keeps_shared_refs(tmp_path, mo
     assert (package_manager.INSTALLED_PLUGINS / "tools" / "helpers" / "shared.py").exists()
 
 
-def test_uninstall_keeps_file_and_pip_referenced_by_other_installed_plugin(tmp_path, monkeypatch):
+def test_uninstall_keeps_pip_another_installed_plugin_still_declares(tmp_path, monkeypatch):
+    """Files are decided by the dependency graph; pip is decided by declaration.
+
+    A library is shared by whoever names it, with no edge between them, so this
+    is the one keep-list the reverse closure does not answer on its own.
+    """
     _patch_roots(monkeypatch, tmp_path)
-    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py", _tool(deps=["tools/helpers/shared.py"], pip=["shared-lib"]).decode())
-    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_b.py", _tool(deps=["tools/helpers/shared.py"], pip=["shared-lib"]).decode())
-    _write(package_manager.INSTALLED_PLUGINS, "tools/helpers/shared.py", _helper(pip=["shared-lib"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py", _tool(pip=["shared-lib", "only-a-lib"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_b.py", _tool(pip=["shared-lib"]).decode())
     calls = []
     monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""))
 
@@ -564,25 +646,24 @@ def test_uninstall_keeps_file_and_pip_referenced_by_other_installed_plugin(tmp_p
 
     assert result.ok
     assert not (package_manager.INSTALLED_PLUGINS / "tools" / "tool_a.py").exists()
-    assert (package_manager.INSTALLED_PLUGINS / "tools" / "helpers" / "shared.py").exists()
-    assert calls == []
-    assert any("Kept file: tools/helpers/shared.py" in line for line in result.lines)
+    assert calls == [[sys.executable, "-m", "pip", "uninstall", "-y", "only-a-lib"]]
+    assert "Kept Python package(s): shared-lib" in "\n".join(result.lines)
 
 
-def test_uninstall_keeps_dependency_referenced_by_builtin_or_sandbox(tmp_path, monkeypatch):
+def test_uninstall_keeps_pip_declared_by_a_builtin_or_workspace_file(tmp_path, monkeypatch):
+    """The other two trees count too — they are not the store's to prune."""
     built_in, sandbox, installed = _patch_roots(monkeypatch, tmp_path)
-    _write(installed, "tools/tool_a.py", _tool(deps=["tools/helpers/shared.py"]).decode())
-    _write(installed, "tools/helpers/shared.py", _helper(pip=["shared-lib"]).decode())
-    _write(built_in, "tools/tool_builtin.py", _tool(deps=["tools/helpers/shared.py"], pip=["shared-lib"]).decode())
-    _write(sandbox, "tools/tool_sandbox.py", _tool(pip=["shared-lib"]).decode())
+    _write(installed, "tools/tool_a.py", _tool(pip=["builtin-lib", "sandbox-lib"]).decode())
+    _write(built_in, "tools/tool_builtin.py", _tool(pip=["builtin-lib"]).decode())
+    _write(sandbox, "tools/tool_sandbox.py", _tool(pip=["sandbox-lib"]).decode())
     calls = []
     monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""))
 
     result = package_manager.uninstall_package("tool_a", _Context(tmp_path))
 
-    assert (installed / "tools" / "helpers" / "shared.py").exists()
     assert calls == []
-    assert "Kept Python package(s): shared-lib" in "\n".join(result.lines)
+    kept = "\n".join(result.lines)
+    assert "builtin-lib" in kept and "sandbox-lib" in kept
 
 
 def test_parser_helper_install_and_uninstall_rescan_parsers(tmp_path, monkeypatch):

@@ -304,11 +304,11 @@ def build_uninstall_plan(target: str, *, root_dir: str | Path | None = None) -> 
     if bundle:
         candidates = set()
         for rel in _read_bundle_manifest(GitStoreBackend(root_dir), bundle)["files"]:
-            candidates.update(_dependency_closure_from_installed(_validate_rel_path(rel)))
+            candidates.update(_dependents_closure_from_installed(_validate_rel_path(rel)))
         if not candidates:
             return UninstallPlan(bundle, [], {}, [], {}, False, ["Resolving dependency plan"])
     else:
-        candidates = _dependency_closure_from_installed(_resolve_installed_target(target))
+        candidates = _dependents_closure_from_installed(_resolve_installed_target(target))
     return _uninstall_plan_from_candidates(target, candidates)
 
 
@@ -460,28 +460,50 @@ def _meta_from_installed(rel: str) -> DependencyMeta:
     return read_dependency_meta(rel, path.read_text(encoding="utf-8"))
 
 
-def _dependency_closure_from_installed(target_rel: str) -> set[str]:
-    active: list[str] = []
-    out: set[str] = set()
+def _dependents_closure_from_installed(target_rel: str) -> set[str]:
+    """The target plus everything installed that would stop working without it.
 
-    def visit(rel: str):
-        rel = _validate_rel_path(rel)
-        if rel in active:
-            raise PackageError(f"Dependency cycle includes {rel}.")
-        if rel in out:
-            return
-        path = _target(rel)
-        if not path.exists():
-            return
-        active.append(rel)
+    **The edge is followed backwards, and that is the whole of it.** Uninstall
+    used to walk ``dependencies_files`` *forwards* — remove a package, remove
+    what it needed — which is the relation stated in the file but the opposite
+    of the one the question asks. Removing ``tool_hybrid_search`` took
+    ``tool_semantic_search`` and ``tool_lexical_search`` with it, two tools that
+    work perfectly well alone and that the user may well have installed for
+    their own sake, while leaving ``service_memory_retrieve`` — which cannot
+    run without the thing that just left — installed, registered, autoloaded,
+    and failing every turn.
+
+    A dependency is a *claim about what I need*, never a claim of ownership,
+    and nothing in the tree records which files were installed for their own
+    sake and which came along for the ride. So the forward direction cannot be
+    answered and is not attempted: a file the target needed is left on disk,
+    where it is visible in ``/packages list`` and costs a few kilobytes. That
+    is the cheap failure. Removing something that still works is not.
+
+    Transitive, because a dependent's dependents are broken just as thoroughly
+    — uninstalling ``lexical_search`` takes ``hybrid_search`` and then
+    ``memory_retrieve``. Cycles terminate on the visited set rather than
+    raising: a cycle is a real problem when *resolving* an install, and merely
+    a shape of the graph when sweeping it.
+    """
+    target_rel = _validate_rel_path(target_rel)
+    dependents: dict[str, list[str]] = {}
+    for rel in _installed_rel_files():
         try:
-            out.add(rel)
-            for dep in _meta_from_installed(rel).dependencies_files:
-                visit(dep)
-        finally:
-            active.pop()
+            meta = _meta_from_installed(rel)
+        except PackageError:
+            continue
+        for dep in meta.dependencies_files:
+            dependents.setdefault(dep, []).append(rel)
 
-    visit(target_rel)
+    out: set[str] = set()
+    queue = [target_rel]
+    while queue:
+        rel = queue.pop()
+        if rel in out or not _target(rel).exists():
+            continue
+        out.add(rel)
+        queue.extend(dependents.get(rel, ()))
     return out
 
 
