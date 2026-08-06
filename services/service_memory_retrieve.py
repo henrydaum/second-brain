@@ -254,8 +254,7 @@ class MemoryRetrieve(BaseService):
         """Define the confined profile the curator runs under. Same shape."""
         profiles = sdk.config.read("agent_profiles") or {}
         if CURATOR_PROFILE in profiles:
-            self._check_curator_tools(sdk, profiles[CURATOR_PROFILE])
-            return ""
+            return self._top_up_curator_tools(sdk, profiles)
         try:
             sdk.config.write("agent_profiles", {**profiles, CURATOR_PROFILE: {
                 "llm": "default",
@@ -268,34 +267,42 @@ class MemoryRetrieve(BaseService):
         sdk.log(f"agent profile {CURATOR_PROFILE} created")
         return ""
 
-    def _check_curator_tools(self, sdk, profile):
-        """Say when an existing profile is missing tools this version needs.
+    def _top_up_curator_tools(self, sdk, profiles):
+        """Add tools a newer version needs to a profile that predates them.
 
-        Reported rather than repaired, and the direction is the reason. This
-        list grows as the suite learns what a curator needs, so an install that
-        predates the growth has a profile that is *correct for a version that
-        is gone* — silence there means the curator quietly does less than the
-        prompt tells it to, which is the failure this whole file has been
-        chasing all week.
+        ``CURATOR_TOOLS`` grows as the suite learns what a curator needs, so an
+        install that predates the growth holds a profile that is *correct for a
+        version that is gone*. Doing nothing there was tried and is worse than
+        it sounds: the curator silently does less than the prompt tells it to,
+        the only symptom is work not happening, and updating the package — the
+        one act that means "give me the new version" — changed nothing at all.
 
-        But adding the tools back would be a widening nobody asked for, and it
-        would fight the user every boot if they had deliberately removed one.
-        The profile is theirs the moment it exists; what belongs to this plugin
-        is knowing what it needs and saying so. So: name the gap and the fix,
-        once, and let a person decide.
+        Additive, and only from a package operation. Every other field is left
+        exactly as the user set it, an unrecognised name they added stays, and
+        this cannot run from a boot or a turn, so it is not something that
+        fights an edit every morning — it happens when somebody installs or
+        updates this package, which is when they asked for the new version.
+
+        A blacklist profile is left alone entirely: nothing is being kept out,
+        so there is nothing to top up, and rewriting it into a whitelist would
+        be a narrowing dressed as a repair.
         """
+        profile = profiles[CURATOR_PROFILE]
         if str(profile.get("whitelist_or_blacklist_tools") or "") != "whitelist":
-            return  # Not a whitelist, so nothing is being kept out.
-        listed = set(profile.get("tools_list") or [])
+            return ""
+        listed = list(profile.get("tools_list") or [])
         missing = [name for name in CURATOR_TOOLS if name not in listed]
         if not missing:
-            return
-        sdk.log(
-            f"the {CURATOR_PROFILE} profile predates this version and is "
-            f"missing {', '.join(missing)} — the curator will run without "
-            f"them. Add them in /config under agent_profiles, or delete the "
-            f"profile and reinstall to have it rebuilt.",
-            level="warning")
+            return ""
+        updated = {**profiles,
+                   CURATOR_PROFILE: {**profile, "tools_list": listed + missing}}
+        try:
+            sdk.config.write("agent_profiles", updated)
+        except sdk.Failed as error:
+            return (f"{CURATOR_PROFILE} still missing {', '.join(missing)} "
+                    f"({error}) — the curator will run without them")
+        sdk.log(f"{CURATOR_PROFILE} gained {', '.join(missing)}")
+        return ""
 
     def on_uninstall(self, sdk):
         """Drop the usage table. Leave the two settings alone.
