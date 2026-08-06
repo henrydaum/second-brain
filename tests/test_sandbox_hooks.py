@@ -567,3 +567,120 @@ def test_an_escort_swaps_by_name_and_unknown_names_are_ignored(monkeypatch):
 
     apply_model_request(request, {"llm": "does-not-exist"}, runtime)
     assert request.llm == "big"          # silently retargeting is the worst case
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Whose work is this? A hook stands in the turn that called it.
+# ──────────────────────────────────────────────────────────────────────
+
+class _SpyBox:
+    """A box that records who was asking when it was called."""
+
+    alive = True
+
+    def __init__(self):
+        self.caller = None
+        self.calls = 0
+
+    def call(self, method, *args, target="", **kwargs):
+        from sandbox import provenance
+        from sandbox.guest.requests import Result
+
+        self.caller = provenance.current()
+        self.calls += 1
+        return Result(data=None)
+
+
+def _spied(moment="turn_start", method="on_start"):
+    """A shim over a spy box, plus the spy."""
+    from sandbox.hooks import build_shim
+
+    spy = _SpyBox()
+    service = SimpleNamespace(name="memory", _sandbox_box=spy)
+    return build_shim(service, moment, method), spy
+
+
+def _ctx(session_key, runtime=None):
+    """A host-side hook context: a *live* session, not the guest projection."""
+    session = SimpleNamespace(key=session_key, user_id=1, conversation_id=3)
+    return SimpleNamespace(session=session, runtime=runtime, moment="turn_start")
+
+
+def test_a_hook_stands_in_the_turn_that_called_it():
+    """The kernel calls a doorway on the drive thread, during one session's
+    turn, so the turn is what caused the hook's work — which is exactly what a
+    chain records. Before this the box was called with nobody on the thread and
+    fell back to its own chain, rooted at the service."""
+    shim, spy = _spied()
+    shim(_ctx("repl"), SimpleNamespace())
+
+    assert spy.caller is not None, "the box was called with no caller"
+    assert spy.caller.chain.root == "repl"
+
+
+def test_the_key_is_read_where_project_context_reads_it():
+    """The host context spells it ``session.key``; the guest projection spells
+    it ``session_key``. Reading the guest name here finds nothing, falls
+    through to the null context, and leaves the fix looking applied while
+    changing nothing — silent in the one direction that matters."""
+    shim, spy = _spied()
+    # Shaped like the *guest* projection. Nothing to stand in.
+    shim(SimpleNamespace(session_key="repl", runtime=None), SimpleNamespace())
+
+    assert spy.calls == 1
+    assert spy.caller is None
+
+
+def test_the_hook_reads_the_world_as_the_session_rather_than_as_nobody():
+    """The context travels with the chain. A service's Requests were answered
+    from the kernel context, so a hook read config and rows as nobody in
+    particular; it now reads them as the user whose turn it is."""
+    shim, spy = _spied()
+    ctx = _ctx("repl")
+    shim(ctx, SimpleNamespace())
+
+    assert spy.caller.context is ctx
+
+
+def test_a_hook_in_a_subagents_turn_stays_unattended():
+    """The safety property, and it falls out of the same line rather than
+    needing its own rule: a child's session key is real but is never the active
+    one, so ``attended_now`` refuses it exactly as it does everywhere else."""
+    from runtime.subagents import SESSION_PREFIX
+    from sandbox.policy import attended_now
+
+    runtime = SimpleNamespace(is_attended=lambda key: key == "repl")
+
+    child_shim, child_spy = _spied()
+    child_shim(_ctx(f"{SESSION_PREFIX}42", runtime), SimpleNamespace())
+    foreground_shim, foreground_spy = _spied()
+    foreground_shim(_ctx("repl", runtime), SimpleNamespace())
+
+    assert child_spy.caller.chain.root == f"{SESSION_PREFIX}42"
+    assert attended_now(child_spy.caller.chain, runtime) is False
+    assert attended_now(foreground_spy.caller.chain, runtime) is True
+
+
+def test_the_hook_can_now_be_asked_about_an_unsafe_request():
+    """The whole point, stated as the symptom it fixes.
+
+    ``config.write`` is UNSAFE either way — that has not changed and must not.
+    What changed is whether anybody is asked: on the service's own chain the
+    root is not a session key at all, so ``attended_now`` said no and the
+    Request was refused outright while a person sat watching the very turn
+    that triggered it.
+    """
+    from sandbox import Chain, Request
+    from sandbox.policy import attended_now, classify
+
+    runtime = SimpleNamespace(is_attended=lambda key: key == "repl")
+    request = Request("config.write", {"key": "sync_directories", "value": []})
+
+    service_chain = Chain(root="service:memory")
+    turn_chain = Chain(root="repl").push("memory")
+
+    assert not classify(request, service_chain).safe
+    assert not classify(request, turn_chain).safe, "still unsafe, still asked"
+
+    assert attended_now(service_chain, runtime) is False, "refused, never asked"
+    assert attended_now(turn_chain, runtime) is True, "a dialog is reachable"

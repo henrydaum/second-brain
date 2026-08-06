@@ -1110,6 +1110,36 @@ translate. Only the four `end_turn` verdicts are genuinely identical, and
 folding the two modules together would save about thirty lines and cost a
 kernel-boundary widening. Not worth it.
 
+**A hook stands in the turn that called it.** `provenance.serving` is called
+in exactly two places: `Interpreter._execute` around a handler, and
+`sandbox/hooks._standing_in` around the box call a doorway makes. The second
+was missing, and the consequence was quiet. A doorway is invoked
+*synchronously, on the drive thread, during one session's turn* — so the turn
+caused the work, which is what a chain records — but with nobody marking the
+thread `PersistentBox.call` fell through to the box's own chain, rooted at
+`service:<name>`. That is not a session key, so `attended_now` asked
+`runtime.is_attended("service:memory")`, got False, and **every unsafe Request
+a hook made was refused outright rather than asked about**, with a person
+sitting there watching the turn that triggered it. `service_memory`'s attempt
+to add its folder to `sync_directories` could never have worked.
+
+Worse than the refusal was the disagreement: the guest is handed
+`ctx.attended` in its projected context, so a plugin could gate on attendance,
+pass, make the write, and be refused on the grounds that nobody was present.
+Two answers to one question, in the same call. The fix makes the chain agree
+with the context the guest was already given.
+
+It gets the subagent case right for one reason rather than two: a child's
+session key is real but is never the active one, so a hook firing inside a
+child's turn stays unattended — the same property that makes a subagent safe
+everywhere else. And it is why a hook is *not* like a poll tick or a bus
+delivery, which `boxes.py` used to file it with: time and another plugin cause
+those, and nothing caused them on anybody's behalf.
+
+Note what this does **not** change: which Requests are unsafe. `config.write`
+is UNSAFE on both chains. The only difference is whether the question reaches
+a person.
+
 **Hooks are declared, not registered.** A service names doorways in
 `hooks = {moment: method}`, read by AST like `exports`. The bridge stands a
 shim at each and removes it on unload — a hook cannot leak, because the plugin

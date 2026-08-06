@@ -15,6 +15,22 @@ The narrowing is the design, not a limitation to be engineered away later.
 verdict the kernel does not recognise — all of them come back as ``None``,
 which every doorway already understands as "no opinion". This is why a
 sandboxed hook cannot break a turn: the worst it can do is fall silent.
+
+**A hook stands in the turn that called it.** The kernel calls a doorway
+synchronously, on the drive thread, during one session's turn — so the turn is
+what *caused* the hook's work, and that is precisely what a chain records. The
+shim therefore marks the thread before calling the box (:func:`_standing_in`),
+which is the same mechanism ``Interpreter._execute`` uses around a handler and
+the only other place in the process that does it.
+
+Without it a hook's Requests were classified against the *service's* own chain,
+rooted at something that is not a session key at all — so ``attended_now``
+asked ``runtime.is_attended("service:memory")``, got False, and every unsafe
+Request was refused outright rather than asked about, with a person sitting
+there watching the very turn that triggered it. Worse, the guest was
+simultaneously handed ``ctx.attended = True``, so a plugin could gate on
+attendance, pass, and still be refused on the grounds that nobody was present.
+This makes the chain agree with the context the guest was already given.
 """
 
 from __future__ import annotations
@@ -22,6 +38,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from contextlib import nullcontext
 
 from .guest.hooks import MOMENTS
 from .guest.requests import Result
@@ -326,9 +343,10 @@ def build_shim(service, moment: str, method: str, make_response=None):
 
         # ``handler``, not ``method``: PersistentBox.call names its own first
         # parameter ``method``, and passing one by keyword collides with it.
-        result = box.call("__hook__", moment=moment, handler=method,
-                          ctx=project_context(ctx, moment),
-                          payload=project_payload(moment, payload))
+        with _standing_in(ctx):
+            result = box.call("__hook__", moment=moment, handler=method,
+                              ctx=project_context(ctx, moment),
+                              payload=project_payload(moment, payload))
         if not result.ok:
             logger.warning("%s hook %s.%s: %s", moment,
                            getattr(service, "name", "?"), method, result.error)
@@ -348,6 +366,45 @@ def _live_box(service):
     """The service's box, if it is open and able to take a call."""
     box = getattr(service, "_sandbox_box", None)
     return box if box is not None and box.alive else None
+
+
+def _standing_in(ctx):
+    """Mark this thread as acting for the session whose turn called the hook.
+
+    ``PersistentBox.call`` already does the right thing once a caller is on the
+    thread: it pushes the box's *registered* name onto the caller's chain and
+    answers the box's Requests from the caller's context. All that was missing
+    was somebody to be the caller, because ``provenance.serving`` is otherwise
+    called in exactly one place — around a handler, in the interpreter — and a
+    doorway is not a handler.
+
+    The root is the session key, which is what ``attended_now`` hands to
+    ``runtime.is_attended``. That gets both cases right for one reason rather
+    than two: a foreground turn's key is the active one, and a subagent's is
+    not — so a hook firing inside a child's turn stays unattended, which is the
+    same property that makes a subagent safe everywhere else.
+
+    Adopting the context matters as much as the chain. A service's Requests
+    were answered from the kernel context, so a hook read config and rows as
+    nobody in particular; it now reads them as the user whose turn it is.
+
+    No session key means nothing to stand in — a doorway reached with no
+    session, a test calling a shim directly — and the box keeps its own chain,
+    which is correct for a service acting on its own initiative.
+
+    The key comes off ``ctx.session.key``, which is where :func:`project_context`
+    reads it. That is worth stating because the two contexts are projections of
+    each other and the *guest* one spells it ``session_key`` — reading that name
+    here finds nothing, falls through to the null context, and leaves this
+    function looking like it works while changing nothing at all.
+    """
+    session_key = str(getattr(getattr(ctx, "session", None), "key", "") or "")
+    if not session_key:
+        return nullcontext()
+    from . import provenance
+    from .policy import Chain
+
+    return provenance.serving(Chain(root=session_key), ctx)
 
 
 def _build_escort(service, method: str, make_response=None):
@@ -380,10 +437,11 @@ def _build_escort(service, method: str, make_response=None):
 
         token = _park(dial)
         try:
-            result = box.call("__hook__", moment="llm_call", handler=method,
-                              ctx=project_context(ctx, "llm_call"),
-                              payload=project_model_request(request),
-                              token=token)
+            with _standing_in(ctx):
+                result = box.call("__hook__", moment="llm_call", handler=method,
+                                  ctx=project_context(ctx, "llm_call"),
+                                  payload=project_model_request(request),
+                                  token=token)
         finally:
             # The phone is disconnected the moment the escort steps away, so a
             # token that leaked cannot be used to place a call later.

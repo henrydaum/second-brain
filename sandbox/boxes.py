@@ -92,9 +92,16 @@ class PersistentBox:
         world rather than the kernel's. Serialization is what makes swapping
         live state safe here; one call is in flight at a time by construction.
 
-        A call with no caller — a poll tick, a bus delivery, a hook — keeps
-        the box's own chain and context, which is right: a service acting on
-        its own initiative is not acting for anybody.
+        A call with no caller — a poll tick, a bus delivery — keeps the box's
+        own chain and context, which is right: a service acting on its own
+        initiative is not acting for anybody.
+
+        A **hook** used to be filed with those two and is not like them. Time
+        and another plugin cause a tick and a delivery; a *turn* causes a
+        doorway visit, synchronously, on the drive thread. So ``sandbox/hooks``
+        marks the thread with the session's chain before calling in, and a hook
+        arrives here as an ordinary caller. Nothing below changed — it was
+        always ready for one.
 
         ``target`` names which occupant, for a box holding several services;
         empty means the only one. It is keyword-only, and that is not a style
