@@ -1479,3 +1479,77 @@ def test_a_service_write_outside_its_own_settings_is_refused(tmp_path, box):
         assert "denied" in str(caught.value)
     finally:
         service.unload()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# "Nothing can reach this service" is only worth saying when it is true.
+# ──────────────────────────────────────────────────────────────────────
+
+_REACHABLE = '''
+"""A service reached at a doorway rather than by name."""
+
+from guest.bases import BaseService
+
+
+class Listener(BaseService):
+    name = "listener"
+    description = "Reached by the kernel, never by a caller."
+    exports = []
+    {declaration}
+
+    def start(self, sdk):
+        return True
+
+    def on_turn_start(self, sdk, payload):
+        return None
+
+    def on_event(self, sdk, channel, payload):
+        return None
+
+    def poll(self, sdk):
+        return False
+'''
+
+
+def _adapt_service_source(tmp_path, declaration: str):
+    plugin = tmp_path / "service_listener.py"
+    plugin.write_text(_REACHABLE.format(declaration=declaration),
+                      encoding="utf-8")
+    assert validate_file(plugin).ok, validate_file(plugin).render()
+    return adapt(plugin)
+
+
+@pytest.mark.parametrize("declaration", [
+    'hooks = {"turn_start": "on_turn_start"}',
+    'subscribed_channels = ["config_changed"]',
+    "poll_interval = 1.0",
+])
+def test_a_service_reached_another_way_is_not_warned_about(
+        tmp_path, box, caplog, declaration):
+    """Exports are one of four ways in, so their absence alone means nothing.
+
+    A service standing at a doorway, listening on a channel, or running on its
+    own poll tick is *supposed* to export nothing — the kernel calls it, no
+    plugin ever does. Warning there put a red line at every boot beside a file
+    whose author had done nothing wrong, which is how a real warning stops
+    being read. It landed on the memory retrieval service, whose whole surface
+    is one ``turn_start`` hook, in the middle of debugging something else.
+    """
+    with caplog.at_level("WARNING", logger="Sandbox"):
+        _adapt_service_source(tmp_path, declaration)
+
+    assert "nothing can reach it" not in caplog.text
+
+
+def test_a_service_with_no_way_in_at_all_is_still_warned_about(
+        tmp_path, box, caplog):
+    """The case the warning was written for, which has to survive the fix.
+
+    No exports and no doorway means every attempt to call it fails as "not
+    exported" — a symptom that points nowhere near the missing declaration,
+    which is exactly why this is said out loud at load.
+    """
+    with caplog.at_level("WARNING", logger="Sandbox"):
+        _adapt_service_source(tmp_path, "timeout = 5.0")
+
+    assert "nothing can reach it after start" in caplog.text

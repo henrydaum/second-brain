@@ -365,12 +365,21 @@ def _service_adapter(
     interval, max_failures = _poll_settings(declarations, 0.0)
     polls = interval > 0 and _defines(source, entry, "poll")
 
-    if not exports:
-        # Not fatal — a service may exist only for its side effects — but it
-        # is nearly always a forgotten declaration, and the symptom (every
-        # call failing as "not exported") points nowhere near the cause.
-        logger.warning("sandboxed service %s declares no exports; nothing "
-                       "will be able to call it", path.name)
+    # Exports are one of four ways in, and warning about the absence of one is
+    # only useful when the other three are absent too. A service reached at a
+    # doorway, on a channel, or on its own poll tick is *supposed* to export
+    # nothing — nobody calls it by name, the kernel calls it — so warning there
+    # put a red line at boot beside the file whose author had done nothing
+    # wrong, and did it every boot, which is how a real warning stops being
+    # read. The case this was written for survives: no way in at all.
+    if not (exports or polls or declarations.get("hooks")
+            or declarations.get("subscribed_channels")):
+        # Not fatal — a service may still exist only for what ``start`` does —
+        # but it is nearly always a forgotten declaration, and the symptom
+        # (every call failing as "not exported") points nowhere near the cause.
+        logger.warning("sandboxed service %s declares no exports, hooks, "
+                       "channels or poll; nothing can reach it after start",
+                       path.name)
 
     def __init__(self):
         """Initialize native adapter state without importing guest code."""
