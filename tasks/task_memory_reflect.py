@@ -36,12 +36,21 @@ situation looked close, not that the advice was good. Only reading what
 happened next settles that, which is why a model does it and not a counter.
 
 **The curator writes through ``memory_curate`` and has no other way to write.**
-It is spawned under the ``memory_curator`` agent profile, which whitelists four
-tools and does not include ``edit_file``; ``memory_curate`` addresses entries
-by name and derives every path itself. So a background agent nobody is watching
-cannot touch anything outside the memory folder — including ``MEMORY.md``,
-which holds facts, is inlined into every prompt by the kernel, and belongs to
-the agent the user actually talks to.
+It is spawned under the ``memory_curator`` agent profile, whose whitelist does
+not include ``edit_file``; ``memory_curate`` addresses entries by name and
+derives every path itself. So a background agent nobody is watching cannot
+touch anything outside the memory folder — including ``MEMORY.md``, which holds
+facts, is inlined into every prompt by the kernel, and belongs to the agent the
+user actually talks to.
+
+**It reads widely on purpose**, and the two halves are not in tension. The
+profile grants the filesystem read-only (``read_file``, ``grep``, ``glob``),
+all three search tools, and ``sql_query`` for the conversation record itself —
+because a lesson is usually only visible in what happened *around* the
+transcript it was handed, and a curator that can only see one conversation
+writes entries about one conversation. Reading everything is dangerous next to
+a way to send it somewhere, and the curator has neither egress nor a writable
+path out of the memory folder.
 """
 
 import time
@@ -90,6 +99,14 @@ situation should do differently.
 Everything you write goes through the `memory_curate` tool. You address entries
 by name and it handles paths, frontmatter and dates; you cannot write anywhere
 else, and you must not try.
+
+You can read far more than you can write. The transcript below is the starting
+point, not the limit: `grep`, `glob` and `read_file` reach the codebase,
+`lexical_search` and `semantic_search` reach the indexed corpus, and `sql_query`
+reaches the conversation record — earlier conversations included. Use them when
+a lesson only makes sense with what happened around it: whether this went wrong
+before, what the code actually does, whether the user has corrected this twice.
+Do not go looking when the transcript already settles it.
 
 ## Job one: improve what was used
 

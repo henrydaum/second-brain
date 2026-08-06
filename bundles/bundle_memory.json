@@ -8,12 +8,15 @@
     "tasks/task_extract_text.py",
     "tasks/task_lexical_index.py",
     "tasks/task_memory_reflect.py",
+    "tools/tool_glob.py",
+    "tools/tool_grep.py",
     "tools/tool_hybrid_search.py",
     "tools/tool_lexical_search.py",
     "tools/tool_memory_curate.py",
     "tools/tool_memory_recall.py",
     "tools/tool_read_file.py",
-    "tools/tool_semantic_search.py"
+    "tools/tool_semantic_search.py",
+    "tools/tool_sql_query.py"
   ],
   "name": "Memory"
 }

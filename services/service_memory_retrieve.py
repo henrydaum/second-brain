@@ -65,12 +65,36 @@ SKILLS_DIRNAME = "skills"
 #: this. Must match ``CURATOR_PROFILE`` in ``task_memory_reflect``.
 CURATOR_PROFILE = "memory_curator"
 
-#: What that profile may do. Four tools, and the absence of ``edit_file`` is
-#: the point: a curator writes through ``memory_curate``, which cannot address
-#: a file outside the memory folder. ``read_file`` is for a skill's own
-#: references; ``hybrid_search`` pulls its two sub-searches in on its own,
-#: because a whitelist is closed over declared tool dependencies.
-CURATOR_TOOLS = ["memory_recall", "memory_curate", "hybrid_search", "read_file"]
+#: What that profile may do: read widely, write in exactly one place.
+#:
+#: The absence of ``edit_file`` is the point and survives every addition here.
+#: A curator writes through ``memory_curate``, which addresses entries by name
+#: and derives every path itself, so a background agent nobody is watching
+#: cannot touch a file outside the memory folder however much it can *read*.
+#: That asymmetry is what makes a broad read list safe to grant: reading
+#: everything is only dangerous next to a way to send it somewhere, and egress
+#: is gated separately.
+#:
+#: The search tools are listed rather than left to the dependency closure.
+#: ``scoped_registry`` distinguishes *visible* from *callable*: closing over
+#: ``hybrid_search``'s ``dependencies_tools`` made ``lexical_search`` and
+#: ``semantic_search`` callable, but they never appeared in the curator's
+#: catalogue, so it could not reach for one deliberately — a keyword search
+#: for an exact phrase, or a semantic one for a situation it cannot name.
+#:
+#: ``sql_query`` is how the curator reads the conversation record itself
+#: rather than the one transcript it was handed. Its writes are bounded by the
+#: kernel rather than by this list: ``db.write``/``db.define`` refuse every
+#: kernel table outright, so what remains reaches plugin-owned tables only —
+#: ``memory_usage`` among them. A curator that corrupted its own bookkeeping
+#: would be a nuisance, not a breach, and nothing here can reach conversations,
+#: users or the ledger.
+CURATOR_TOOLS = [
+    "memory_recall", "memory_curate",          # its own two
+    "read_file", "grep", "glob",               # the filesystem, read-only
+    "hybrid_search", "lexical_search", "semantic_search",  # the index
+    "sql_query",                               # the record
+]
 
 
 def _memory_root(sdk):
@@ -230,6 +254,7 @@ class MemoryRetrieve(BaseService):
         """Define the confined profile the curator runs under. Same shape."""
         profiles = sdk.config.read("agent_profiles") or {}
         if CURATOR_PROFILE in profiles:
+            self._check_curator_tools(sdk, profiles[CURATOR_PROFILE])
             return ""
         try:
             sdk.config.write("agent_profiles", {**profiles, CURATOR_PROFILE: {
@@ -242,6 +267,35 @@ class MemoryRetrieve(BaseService):
             return f"{CURATOR_PROFILE} profile not created ({error}) — no curator can spawn"
         sdk.log(f"agent profile {CURATOR_PROFILE} created")
         return ""
+
+    def _check_curator_tools(self, sdk, profile):
+        """Say when an existing profile is missing tools this version needs.
+
+        Reported rather than repaired, and the direction is the reason. This
+        list grows as the suite learns what a curator needs, so an install that
+        predates the growth has a profile that is *correct for a version that
+        is gone* — silence there means the curator quietly does less than the
+        prompt tells it to, which is the failure this whole file has been
+        chasing all week.
+
+        But adding the tools back would be a widening nobody asked for, and it
+        would fight the user every boot if they had deliberately removed one.
+        The profile is theirs the moment it exists; what belongs to this plugin
+        is knowing what it needs and saying so. So: name the gap and the fix,
+        once, and let a person decide.
+        """
+        if str(profile.get("whitelist_or_blacklist_tools") or "") != "whitelist":
+            return  # Not a whitelist, so nothing is being kept out.
+        listed = set(profile.get("tools_list") or [])
+        missing = [name for name in CURATOR_TOOLS if name not in listed]
+        if not missing:
+            return
+        sdk.log(
+            f"the {CURATOR_PROFILE} profile predates this version and is "
+            f"missing {', '.join(missing)} — the curator will run without "
+            f"them. Add them in /config under agent_profiles, or delete the "
+            f"profile and reinstall to have it rebuilt.",
+            level="warning")
 
     def on_uninstall(self, sdk):
         """Drop the usage table. Leave the two settings alone.
