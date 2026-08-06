@@ -59,10 +59,10 @@ MEMORY_DIRNAME = "memory"
 NOTES_DIRNAME = "notes"
 SKILLS_DIRNAME = "skills"
 
-#: The agent profile a curator subagent runs under. Seeded here because this is
-#: the only part of the suite that ever runs attended, and writing a kernel
-#: setting from an unattended chain is refused rather than asked. Must match
-#: ``CURATOR_PROFILE`` in ``task_memory_reflect``.
+#: The agent profile a curator subagent runs under. Seeded by ``on_install``,
+#: which is the one moment a plugin can write a kernel setting: attended, so
+#: the write can be asked about, and caused by somebody deliberately installing
+#: this. Must match ``CURATOR_PROFILE`` in ``task_memory_reflect``.
 CURATOR_PROFILE = "memory_curator"
 
 #: What that profile may do. Four tools, and the absence of ``edit_file`` is
@@ -143,9 +143,11 @@ class MemoryRetrieve(BaseService):
 
     exports = []
     hooks = {"turn_start": "on_turn_start"}
-    # No ``config.write``: the two kernel settings this needs are seeded at
-    # install, not asked for mid-turn. See ``start``.
-    requests = ["paths.get", "config.read",
+    # ``config.write`` is here for ``on_install`` and nowhere else. That is not
+    # a convention this file keeps on its honour: everywhere else in this
+    # plugin the chain is a service's own, which is unattended, and an unsafe
+    # write on an unattended chain is refused outright rather than asked.
+    requests = ["paths.get", "config.read", "config.write",
                 "tool.call", "fs.read", "fs.list", "fs.write",
                 "db.define", "db.query", "db.write",
                 "session.add_prompt_extra"]
@@ -180,30 +182,97 @@ class MemoryRetrieve(BaseService):
         "ends, so there is no need to record as you go."
     )
 
+    def on_install(self, sdk):
+        """Arrange the two kernel settings this suite cannot work without.
+
+        ``sync_directories`` must contain the memory folder or nothing is ever
+        indexed and retrieval stays empty forever; ``agent_profiles`` must hold
+        ``memory_curator`` or ``task_memory_reflect`` cannot spawn a confined
+        curator and refuses to spawn an unconfined one.
+
+        Both were attempted from ``start`` and then, when that failed, from the
+        ``turn_start`` hook. Neither works, and neither should: a service has
+        no session, so its chain is unattended and an unsafe write is refused
+        rather than asked — and making the hook attended, which was tried and
+        reverted, only moved the question to the moment *furthest* from
+        anything the user deliberately did. Typing a message is consent to a
+        reply, not to a config change. Installing this package is.
+
+        Read-then-skip rather than write-then-hope, on both. This runs again on
+        every update that changes this file, and a value the user has since
+        edited is theirs.
+
+        The two are attempted independently and neither aborts the other. Each
+        is its own dialog, so letting the first refusal skip the second would
+        make one "no" answer a question that was never asked — and the two
+        settings fail in unrelated ways, one leaving retrieval empty and the
+        other stopping the curator.
+        """
+        problems = [note for note in (self._seed_sync_directory(sdk),
+                                      self._seed_curator_profile(sdk)) if note]
+        if problems:
+            raise RuntimeError("; ".join(problems))
+
+    def _seed_sync_directory(self, sdk):
+        """Put the memory folder on the sync list. Answers with what went wrong."""
+        root = _memory_root(sdk)
+        current = sdk.config.read("sync_directories") or []
+        if root in current:
+            return ""
+        try:
+            sdk.config.write("sync_directories", [*current, root])
+        except sdk.Failed as error:
+            return f"memory folder not synced ({error}) — nothing will be indexed"
+        sdk.log(f"memory folder added to sync_directories: {root}")
+        return ""
+
+    def _seed_curator_profile(self, sdk):
+        """Define the confined profile the curator runs under. Same shape."""
+        profiles = sdk.config.read("agent_profiles") or {}
+        if CURATOR_PROFILE in profiles:
+            return ""
+        try:
+            sdk.config.write("agent_profiles", {**profiles, CURATOR_PROFILE: {
+                "llm": "default",
+                "prompt_suffix": "",
+                "whitelist_or_blacklist_tools": "whitelist",
+                "tools_list": list(CURATOR_TOOLS),
+            }})
+        except sdk.Failed as error:
+            return f"{CURATOR_PROFILE} profile not created ({error}) — no curator can spawn"
+        sdk.log(f"agent profile {CURATOR_PROFILE} created")
+        return ""
+
+    def on_uninstall(self, sdk):
+        """Drop the usage table. Leave the two settings alone.
+
+        The asymmetry with ``on_install`` is deliberate. ``memory_usage`` is
+        unambiguously this plugin's — nothing else writes it and nothing else
+        can read anything out of it. A folder the user has been syncing for
+        months and a profile they may have edited are theirs now, whoever put
+        them there first, and an uninstall quietly narrowing what the machine
+        indexes is a worse surprise than a leftover config line. Both are
+        visible and removable in ``/config``; a dropped table is not
+        recoverable at all.
+
+        The notes and skills themselves are never touched. They are the user's
+        writing, in the user's workspace.
+        """
+        try:
+            sdk.db.define("DROP TABLE IF EXISTS memory_usage")
+        except sdk.Failed as error:
+            sdk.log(f"could not drop the memory usage table: {error}",
+                    level="warning")
+
     def start(self, sdk):
         """Make the folder and the usage table. Nothing else, on purpose.
 
-        This service needs two kernel settings it deliberately does not try to
-        write: ``sync_directories`` must contain the memory folder or nothing
-        is indexed and retrieval stays empty forever, and ``agent_profiles``
-        must hold ``memory_curator`` or ``task_memory_reflect`` cannot spawn a
-        confined curator.
-
-        Both were attempted here and then, when that failed, from the
-        ``turn_start`` hook. Neither works, and neither should. A service has
-        no session, so its chain is unattended and an unsafe write is refused
-        rather than asked (``sandbox/approval.py`` step 3) — and making the
-        hook attended, which was tried, only moved the question to the moment
-        *furthest* from anything the user deliberately did. Typing a message is
-        consent to a reply, not to a config change.
-
-        Settings a plugin needs are an install-time concern: that is where
-        somebody chose to install it, and where the approval authorizing
-        arbitrary sandboxed code was already given. Until the package manager
-        seeds them, both are documented in the bundle description and the
-        README, and both fail loudly rather than silently — an unindexed folder
-        logs on first search, and a missing profile stops the curator with a
-        message naming it.
+        The two kernel settings this needs are ``on_install``'s job, because a
+        service's own chain is unattended and cannot be asked about one. If
+        they are missing — an install predating that hook, or a declined
+        dialog — both fail loudly rather than silently: an unindexed folder
+        logs on the first search, and a missing profile stops the curator with
+        a message naming it.
         """
         self._ensure_folder(sdk, _memory_root(sdk))
         self._ensure_usage_table(sdk)
