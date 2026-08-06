@@ -631,15 +631,23 @@ def test_the_key_is_read_where_project_context_reads_it():
     assert spy.caller is None
 
 
-def test_the_hook_reads_the_world_as_the_session_rather_than_as_nobody():
-    """The context travels with the chain. A service's Requests were answered
-    from the kernel context, so a hook read config and rows as nobody in
-    particular; it now reads them as the user whose turn it is."""
+def test_only_the_chain_travels_and_never_the_hook_context():
+    """The ``ctx`` a doorway gets is a ``HookContext`` — session, runtime,
+    moment. It is *not* the ``SecondBrainContext`` handlers read ``config``,
+    ``db`` and ``user_id`` off. Handing it over as the caller's context
+    replaced a working context with one missing every field a handler needs,
+    and the write this mechanism exists to permit came back "config is not
+    available in this kernel" — approved by a person, then failed.
+
+    ``None`` leaves the box on the context the interpreter built for it.
+    """
     shim, spy = _spied()
     ctx = _ctx("repl")
     shim(ctx, SimpleNamespace())
 
-    assert spy.caller.context is ctx
+    assert spy.caller.chain.root == "repl", "the chain still travels"
+    assert spy.caller.context is None
+    assert spy.caller.context is not ctx
 
 
 def test_a_hook_in_a_subagents_turn_stays_unattended():
@@ -684,3 +692,97 @@ def test_the_hook_can_now_be_asked_about_an_unsafe_request():
 
     assert attended_now(service_chain, runtime) is False, "refused, never asked"
     assert attended_now(turn_chain, runtime) is True, "a dialog is reachable"
+
+
+SEEDER = '''
+"""A service that needs a kernel setting to do its job."""
+
+from guest.bases import BaseService
+
+
+class Seeder(BaseService):
+    """Seeds a kernel setting on the first attended turn."""
+
+    name = "seeder"
+    exports = ["outcome"]
+    hooks = {"turn_start": "on_start"}
+    requests = ["config.read", "config.write"]
+
+    def start(self, sdk):
+        """Begin."""
+        self._outcome = "never ran"
+        return True
+
+    def outcome(self, sdk):
+        """What happened when it tried."""
+        return self._outcome
+
+    def on_start(self, sdk, ctx, payload):
+        """Try to add a folder to the indexer."""
+        if not ctx.attended:
+            self._outcome = "not attended"
+            return None
+        try:
+            sdk.config.write("sync_directories", ["/memory"])
+            self._outcome = "written"
+        except sdk.Denied as denied:
+            self._outcome = f"denied: {denied}"
+        except sdk.Failed as failed:
+            self._outcome = f"failed: {failed}"
+        return None
+'''
+
+
+def test_an_unsafe_request_from_a_hook_reaches_the_approver(tmp_path, runtime,
+                                                            registry, session):
+    """The end-to-end claim, driven through the real registry and a real box.
+
+    This is the shape of the bug that started it: a service gating on
+    ``ctx.attended``, passing, and then being refused because the chain said
+    nobody was there. The approver is a spy rather than a dialog, so what is
+    pinned is that the question is *asked* — which is the whole difference.
+    """
+    from sandbox import Sandbox
+    from sandbox.bridge import adapt, configure
+
+    asked = []
+
+    def approve(chain, request, decision):
+        asked.append((chain.root, request.type, request.args.get("key")))
+        return True
+
+    # A context shaped like the real one: handlers read ``config`` off it, and
+    # a bare namespace is what made this test report the *product* bug it was
+    # written to catch as though it were a harness gap.
+    settings = {}
+    made = Sandbox(approve=approve, runtime=runtime,
+                   context=SimpleNamespace(config=settings, db=None,
+                                           services={}, user_id=1,
+                                           session_key="repl"))
+    configure(made)
+    try:
+        path = tmp_path / "service_seeder.py"
+        path.write_text(SEEDER, encoding="utf-8")
+        service = adapt(path).build_services({})["seeder"]
+        service.bind_runtime(runtime=runtime)
+        assert service.load() is True
+
+        registry.start_turn(session, runtime)
+        outcome = service.outcome()
+        service.unload()
+    finally:
+        configure(None)
+        made.shutdown()
+        unload_box("service_seeder")
+
+    assert asked, ("the hook's unsafe Request never reached the approver — it "
+                   "was refused on the service's own unattended chain")
+    root, kind, key = asked[0]
+    assert (root, kind, key) == ("repl", "config.write", "sync_directories")
+
+    # Being asked is only half of it. The write has to *land* — the first
+    # version of this fix handed the hook's own context to the handler, so an
+    # approved write failed with "config is not available in this kernel" and
+    # sync_directories stayed empty.
+    assert outcome == "written", outcome
+    assert settings.get("sync_directories") == ["/memory"]

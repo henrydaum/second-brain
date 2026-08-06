@@ -384,9 +384,21 @@ def _standing_in(ctx):
     not — so a hook firing inside a child's turn stays unattended, which is the
     same property that makes a subagent safe everywhere else.
 
-    Adopting the context matters as much as the chain. A service's Requests
-    were answered from the kernel context, so a hook read config and rows as
-    nobody in particular; it now reads them as the user whose turn it is.
+    **Only the chain travels — the context is deliberately left alone.** The
+    ``ctx`` a doorway is handed is a ``HookContext``: a live ``session``, a
+    ``runtime``, and the moment. It is *not* the ``SecondBrainContext`` that
+    answers Requests, which is what handlers mean by ``ctx`` — they read
+    ``ctx.config``, ``ctx.db``, ``ctx.user_id`` off it. Passing the hook's
+    context here therefore replaced a working context with one missing every
+    field a handler needs, and the write that this whole mechanism exists to
+    permit came back *"config is not available in this kernel"* — approved by a
+    person, then failed. Passing ``None`` leaves the box on the context the
+    interpreter already built for it from the bound factory.
+
+    So this changes who is *asking*, not what is being asked of. That is the
+    right split anyway: the chain is a claim about causation, and rebuilding
+    the world a resident service reads from, per doorway visit, would be a
+    much larger change wearing the same clothes.
 
     No session key means nothing to stand in — a doorway reached with no
     session, a test calling a shim directly — and the box keeps its own chain,
@@ -404,7 +416,7 @@ def _standing_in(ctx):
     from . import provenance
     from .policy import Chain
 
-    return provenance.serving(Chain(root=session_key), ctx)
+    return provenance.serving(Chain(root=session_key), None)
 
 
 def _build_escort(service, method: str, make_response=None):

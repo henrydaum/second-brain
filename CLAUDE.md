@@ -1140,6 +1140,18 @@ Note what this does **not** change: which Requests are unsafe. `config.write`
 is UNSAFE on both chains. The only difference is whether the question reaches
 a person.
 
+**Only the chain travels; the context deliberately does not.** The `ctx` a
+doorway is handed is a `HookContext` — a live `session`, a `runtime`, the
+moment — and it is *not* the `SecondBrainContext` that answers Requests, which
+is what handlers mean by `ctx` when they read `ctx.config` or `ctx.db`. The
+first version of this fix passed the hook's context to `provenance.serving`,
+which replaced a working context with one missing every field a handler needs:
+the approval dialog appeared, the person said yes, and the write came back
+*"config is not available in this kernel"* with `sync_directories` unchanged.
+Passing `None` leaves the box on the context the interpreter already built for
+it from the bound factory. Two contexts, one word — and `project_context`
+translating between them is exactly why the confusion is easy.
+
 **Hooks are declared, not registered.** A service names doorways in
 `hooks = {moment: method}`, read by AST like `exports`. The bridge stands a
 shim at each and removes it on unload — a hook cannot leak, because the plugin
