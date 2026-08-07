@@ -45,17 +45,34 @@ render kind          AG-UI event
 ``tool_status``      ``TOOL_CALL_START`` / ``_ARGS`` / ``_RESULT``
 ``error``            ``RUN_ERROR``
 ``typing`` False     ``RUN_FINISHED``, then the stream closes
-``approval``         ``CUSTOM`` — ``second_brain.approval``
-``form_field``       ``CUSTOM`` — ``second_brain.form``
-``buttons``          ``CUSTOM`` — ``second_brain.buttons``
+``approval``         ``RUN_FINISHED`` + interrupt, ``reason=confirmation``
+``form_field``       ``RUN_FINISHED`` + interrupt, ``reason=input_required``
+``buttons``          ``RUN_FINISHED`` + interrupt, ``reason=input_required``
 ``attachments``      ``CUSTOM`` — ``second_brain.attachments``
+``tool_status`` else ``CUSTOM`` — ``second_brain.tool_progress``
 ===================  ======================================================
 
-The last four are ``CUSTOM`` because AG-UI standardises the *conversation* and
-has no vocabulary for an approval dialog or a form. ``INTERRUPT`` is reported
-by some write-ups and absent from the protocol's own event reference; guessing
-wrong means a client silently ignoring every approval, so these stay CUSTOM
-until the pinned SDK says otherwise.
+**The three interactive kinds are interrupts, not custom events, and the
+difference is whether a client can answer.** An interrupt is the protocol's own
+way to stop and wait: it carries an ``id``, a ``message`` and a
+``responseSchema``, and it is resumed by the next run carrying a ``resume``
+array of ``{interruptId, status, payload}``. A ``CUSTOM`` event carries no way
+back at all — an approval sent that way could be *displayed* and never
+resolved, leaving the turn blocked while the client believed it had done its
+job. The reasons line up exactly with what the kernel asks about:
+``confirmation`` for an approval, ``input_required`` for a form field or a set
+of buttons.
+
+Every interrupt also carries ``metadata.second_brain``, holding the kernel's
+own payload verbatim. A client that knows this system renders the real thing —
+a form with its labels, its skip and its cancel — while one that does not still
+has ``message`` and ``responseSchema``, which is enough to ask the question and
+send back a valid answer. Nothing is duplicated: the metadata *is* the payload
+the REPL and Telegram already receive.
+
+``attachments`` stays ``CUSTOM`` because nobody answers a list of files, so
+there is nothing to interrupt for, and a client may render or ignore it without
+breaking a turn.
 
 Text crosses **as markdown, verbatim**. Telegram needed a converter because its
 API wants HTML; assistant-ui renders markdown natively, so the kernel's own
@@ -95,6 +112,74 @@ _JSON = {"Content-Type": "application/json"}
 # and losing it silently is worse than any other failure here — but a client
 # that never comes back must not grow this without bound.
 _MAX_BUFFERED = 500
+
+_TRUE = ("yes", "y", "allow", "approve", "true", "ok", "accept")
+_FALSE = ("no", "n", "deny", "reject", "false", "cancel")
+
+
+def _schema_for(field) -> dict:
+    """The JSON Schema describing a valid answer to one interrupt.
+
+    This is what a client that knows nothing about Second Brain renders from,
+    so it has to be honest about the *answer* rather than descriptive of the
+    question. An enum becomes an enum; everything else becomes the field's own
+    type. ``enumLabels`` is a non-standard sibling carried alongside because
+    ``enum`` and ``enum_labels`` pair by index in the kernel and losing the
+    labels would put internal spellings like ``always:api.search.brave.com``
+    on a person's buttons.
+    """
+    field = dict(field or {})
+    choices = field.get("enum")
+    if choices:
+        answer = {"type": "string",
+                  "enum": [str(choice) for choice in choices]}
+        labels = field.get("enum_labels")
+        if labels:
+            answer["enumLabels"] = [str(label) for label in labels]
+    else:
+        answer = {"type": _JSON_TYPES.get(str(field.get("type") or "string"),
+                                          "string")}
+    if field.get("default") is not None:
+        answer["default"] = field["default"]
+    return {"type": "object", "properties": {"value": answer},
+            "required": ["value"]}
+
+
+_JSON_TYPES = {"string": "string", "integer": "integer", "int": "integer",
+               "number": "number", "boolean": "boolean", "array": "array",
+               "path_list": "array"}
+
+
+def _answer_of(payload):
+    """The value inside a resume payload, however the client shaped it.
+
+    Three spellings are accepted because three exist in the wild: the
+    protocol's own ``{"accepted": bool}`` for a confirmation, the ``{"value":
+    x}`` this frontend's schemas ask for, and a bare value from a client that
+    read the schema loosely. Refusing two of them would be correct and useless.
+    """
+    if isinstance(payload, dict):
+        for key in ("value", "accepted", "response", "answer"):
+            if key in payload:
+                return payload[key]
+        return None
+    return payload
+
+
+def _coerce(request, value):
+    """An approval answer, in the shape the waiting frame accepts.
+
+    An ``enum`` request's choices go back **verbatim**; only the boolean
+    fallback spells things true/false. Coercing unconditionally is what once
+    made every sandbox Request dialog unanswerable by button — the frame
+    validated ``True`` against ``["allow", "deny"]``, refused it, and left the
+    dialog up until it timed out with nothing on screen saying so.
+    """
+    if (request or {}).get("enum"):
+        return value
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in _TRUE
 
 
 class AGUI(BaseFrontend):
@@ -166,6 +251,11 @@ class AGUI(BaseFrontend):
         # *pending* is asked, never remembered — it can be answered elsewhere
         # or time out.
         self._approvals = {}
+        # session_key -> {interrupt_id: {kind, payload}}. What a ``resume``
+        # entry is answering. Kept because the resume carries only an id and a
+        # value, and what to *do* with that value — resolve an approval, submit
+        # a form field — is a fact about the interrupt that raised it.
+        self._pending_interrupts = {}
 
     # ──────────────────────────────────────────────────────────────────
     # Lifecycle.
@@ -334,11 +424,24 @@ class AGUI(BaseFrontend):
         for event in self._pending.pop(session_key, []):
             self._push(sdk, session_key, event)
 
+        # A resumed run answers what the last one interrupted on. It comes
+        # first because a client may send both — an answer and the next thing
+        # to say — and the turn that was blocked has to be released before
+        # anything new is handed to it, or the message lands while the state
+        # machine is still collecting an approval and is eaten as the answer.
+        resumed = self._resume(sdk, session_key, body.get("resume"))
+
         if not text:
-            # Nothing to say: a client opening a stream to collect buffered
-            # events is legitimate, and it should get them and a clean end
-            # rather than an empty turn.
-            self._finish(sdk, session_key)
+            # A resumed run stays open, because the turn it just unblocked is
+            # about to render into it — that is what makes the resume a
+            # continuation rather than a second conversation. It ends the
+            # ordinary way, when ``typing`` goes false.
+            #
+            # With nothing resumed and nothing to say, there is no turn coming:
+            # a client opening a stream only to collect buffered events is
+            # legitimate and gets those events and a clean end.
+            if not resumed:
+                self._finish(sdk, session_key)
             return True
         if not self._absorb_approval(sdk, session_key, text):
             sdk.frontend.submit_text(session_key, text)
@@ -424,11 +527,136 @@ class AGUI(BaseFrontend):
                               {"message": str(message or "error")})
         if kind == "approval":
             self._approvals[session_key] = dict(payload or {})
-            return self._custom(sdk, session_key, "approval", payload)
-        if kind in ("form_field", "buttons", "attachments"):
-            return self._custom(sdk, session_key, kind.replace("_field", ""),
-                                payload)
+            return self._interrupt(sdk, session_key, "approval", payload or {})
+        if kind in ("form_field", "buttons"):
+            return self._interrupt(sdk, session_key, kind, payload)
+        if kind == "attachments":
+            # Display-only: nobody answers a list of files, so there is nothing
+            # to interrupt for. CUSTOM is reachable through the adapter's
+            # ``onCustomEvent``, which is the right home for something a client
+            # may render or ignore without breaking the turn.
+            return self._custom(sdk, session_key, "attachments", payload)
         return None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Interrupts — the three kinds that stop and wait for a person.
+    # ──────────────────────────────────────────────────────────────────
+
+    def _interrupt(self, sdk, session_key: str, kind: str, payload):
+        """Raise an AG-UI interrupt and end the run on it.
+
+        This is the protocol's own mechanism rather than a ``CUSTOM`` event,
+        and the difference is whether a client can *answer*. An interrupt has a
+        first-class ``responseSchema`` and is resumed with a ``resume`` array;
+        assistant-ui parses one into ``AgUiInterrupt`` and hands back
+        ``submitInterruptResponses``. A CUSTOM event has neither, so an
+        approval sent that way could be displayed and never resolved — the turn
+        would sit blocked with the client believing it had shown something.
+
+        **The run ends here, and that is not a lie about the turn.** Second
+        Brain is still mid-turn, blocked in ``approving_request``; AG-UI models
+        that as the run finishing with an interrupt outcome and a later run
+        resuming it. Nothing more is coming on this stream until somebody
+        answers, so holding it open would only mean a client waiting on
+        silence.
+        """
+        interrupt = self._describe(kind, payload)
+        self._pending_interrupts.setdefault(session_key, {})[
+            interrupt["id"]] = {"kind": kind, "payload": payload}
+        return self._finish(sdk, session_key, interrupts=[interrupt])
+
+    def _describe(self, kind: str, payload) -> dict:
+        """One interrupt, in the protocol's vocabulary.
+
+        ``metadata`` carries Second Brain's own payload verbatim beside the
+        generic fields. A client that knows this system renders the real thing
+        — a form with its labels and its skip button — while one that does not
+        still has ``message`` and ``responseSchema``, which is enough to ask
+        the question and send back something valid.
+        """
+        if kind == "approval":
+            request = dict(payload or {})
+            title = str(request.get("title") or "Approval required")
+            body = str(request.get("body") or "")
+            return {
+                "id": str(request.get("id") or uuid.uuid4().hex),
+                # ``confirmation`` rather than ``tool_call``: the kernel asks
+                # about Requests, commands and shell lines, and only some of
+                # those are a tool. Claiming ``tool_call`` would put a
+                # ``toolCallId`` on the interrupt that nothing could resolve.
+                "reason": "confirmation",
+                "message": f"{title}\n\n{body}".strip(),
+                "responseSchema": _schema_for(request),
+                "metadata": {"second_brain": {"kind": "approval",
+                                              "request": request}},
+            }
+        if kind == "form_field":
+            form = dict(payload or {})
+            field = dict(form.get("field") or {})
+            display = dict(form.get("display") or {})
+            prompt = (display.get("prompt") or field.get("prompt")
+                      or field.get("name") or "Input required")
+            return {
+                "id": uuid.uuid4().hex,
+                "reason": "input_required",
+                "message": str(prompt),
+                "responseSchema": _schema_for(field),
+                "metadata": {"second_brain": {"kind": "form_field",
+                                              "form": form}},
+            }
+        buttons = list(payload or [])
+        return {
+            "id": uuid.uuid4().hex,
+            "reason": "input_required",
+            "message": "Choose:",
+            "responseSchema": {
+                "type": "object",
+                "properties": {"value": {
+                    "type": "string",
+                    "enum": [str(b.get("value")) for b in buttons
+                             if isinstance(b, dict)],
+                    "enumLabels": [str(b.get("label") or b.get("value"))
+                                   for b in buttons if isinstance(b, dict)]}},
+                "required": ["value"]},
+            "metadata": {"second_brain": {"kind": "buttons",
+                                          "buttons": buttons}},
+        }
+
+    def _resume(self, sdk, session_key: str, entries) -> bool:
+        """Answer whatever the last run interrupted on. True if anything was.
+
+        The answer is carried back the way the kernel already accepts it: an
+        approval by ``resolve``, everything else as text. Nothing new is
+        invented on the way in, so a form filled from the app takes exactly the
+        path a form filled from the REPL does.
+        """
+        pending = self._pending_interrupts.get(session_key) or {}
+        answered = False
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            raised = pending.pop(str(entry.get("interruptId") or ""), None)
+            if raised is None:
+                continue
+            answered = True
+            cancelled = entry.get("status") == "cancelled"
+            value = _answer_of(entry.get("payload"))
+            if raised["kind"] == "approval":
+                request = dict(raised["payload"] or {})
+                resolved = False if cancelled else _coerce(request, value)
+                request_id = str(request.get("id") or "")
+                if not sdk.frontend.resolve(session_key, resolved, request_id):
+                    # Already answered elsewhere, or timed out. The state
+                    # machine's own text path is what answers whatever is
+                    # waiting now, if anything is.
+                    sdk.frontend.submit_text(
+                        session_key, "no" if resolved is False else "yes")
+                continue
+            sdk.frontend.submit_text(
+                session_key, "/cancel" if cancelled else str(value))
+        if not pending:
+            self._pending_interrupts.pop(session_key, None)
+        return answered
 
     def _delta(self, sdk, session_key: str, payload: dict):
         """Streamed assistant text, as an AG-UI message in three acts."""
@@ -533,13 +761,23 @@ class AGUI(BaseFrontend):
             return False
         return True
 
-    def _finish(self, sdk, session_key: str):
-        """End the run this session is streaming, if any."""
+    def _finish(self, sdk, session_key: str, interrupts=None):
+        """End the run this session is streaming, if any.
+
+        ``interrupts`` rides on the ``outcome``, which is where AG-UI puts the
+        reason a run stopped short. A run that simply ended carries none, and
+        the field is omitted rather than sent empty — a client checking
+        ``outcome.type`` should not have to also check whether the list is
+        worth reading.
+        """
         run = self._runs.get(session_key)
         if run is None:
             return None
-        self._emit(sdk, session_key, "RUN_FINISHED",
-                   {"threadId": run["thread"], "runId": run["run"]})
+        finished = {"threadId": run["thread"], "runId": run["run"]}
+        if interrupts:
+            finished["outcome"] = {"type": "interrupt",
+                                   "interrupts": list(interrupts)}
+        self._emit(sdk, session_key, "RUN_FINISHED", finished)
         self._runs.pop(session_key, None)
         self._streamed.pop(session_key, None)
         for marker in [m for m in self._streaming if m[0] == session_key]:
