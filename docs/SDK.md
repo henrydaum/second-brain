@@ -217,6 +217,47 @@ except sdk.Denied:
 `sdk.Denied` (the user or policy said no) is a subclass of `sdk.Failed`
 (anything went wrong), so catching `sdk.Failed` catches both.
 
+**Let `sdk.retry` decide what is worth trying again.** Every failure carries
+whether it was transient, set by the handler that failed — which is the only
+place that knows. A locked file, an HTTP timeout and a box that died all say
+yes; a malformed query says no:
+
+```python
+page = sdk.retry(lambda: sdk.net.http(url))
+```
+
+Three attempts by default, waiting `backoff` seconds and then double. A
+**refusal is never retried** whatever else you ask for — policy is not a
+transient condition, and asking again is a second dialog in front of somebody
+who already answered. Pass `on=` a predicate over the exception to decide for
+yourself, `attempts=1` to turn it off without unwrapping the call.
+
+The backoff sleeps, and sleeping counts against your deadline — which is the
+reason the next one exists.
+
+**Ask `sdk.budget()` how long is left**, so long work can stop itself:
+
+```python
+done = []
+for doc in documents:
+    if sdk.budget()["running"] < 20:
+        break
+    done.append(analyse(sdk, doc))
+return sdk.ok({"done": done, "resume_at": len(done)})
+```
+
+It answers `{running, wall, deadline, ceiling}` in seconds. `running` is what
+your declared `timeout` measures — elapsed time *minus* whatever the kernel
+spent answering your Requests, so four minutes inside `sdk.proc.run` costs you
+almost nothing. `wall` is the ceiling that bounds the run however it spends the
+time, and it is not declarable. Both are `None` when nothing is enforcing a
+deadline.
+
+Without this the only thing that ends an over-long run is the watchdog, and it
+ends it by killing the box — so a loop three-quarters of the way through a
+corpus returns *nothing at all*. It is read-only, so calling it every iteration
+costs nothing.
+
 **Log through the SDK**, never the `logging` module — a subprocessed plugin's
 log lines have to reach the kernel to be seen at all:
 
@@ -279,6 +320,11 @@ sdk.proc.list()                            # -> [ ... ]
 
 sdk.scripts.run(path, entry="main", wait=True, **args)  # -> whatever it
                                            #     returned; no dialog
+                                           #     wait=False -> {id, script,
+                                           #     started}
+sdk.scripts.collect(ids=None, timeout=None) # join detached scripts;
+                                           #     ids=None = all mine
+sdk.scripts.stop(id)                       # cancel one
 
 sdk.env.read(name)                         # credentials come back as handles
 sdk.secrets.reveal(name)                   # plaintext; always asks the user
@@ -297,6 +343,24 @@ always asks. The two are not close in cost, so reach for the shell only when
 the work genuinely is another program. Keyword arguments go to the entry
 function — `sdk.scripts.run(p, total=3)` calls `main(sdk, total=3)` — and
 `wait=False` answers as soon as it has started rather than when it finishes.
+
+**Several at once.** `wait=False` hands back an `id`, and that is how work is
+fanned out over ordinary code rather than over subagents. Each script is a box
+of its own, so they genuinely run in parallel; none of it involves a model.
+
+```python
+ids = [sdk.scripts.run("analyse.py", wait=False, doc=d)["id"]
+       for d in documents]
+for report in sdk.scripts.collect(ids):
+    sdk.log(f"{report['script']}: {report['state']} {report['data']}")
+```
+
+A report carries `id`, `script`, `state`, `ok`, `data` and `error`, where
+`state` is `running`, `done`, `failed` or `cancelled` — the same four a
+subagent reports. `timeout=0` polls without waiting, and anything still going
+comes back `running` and stays collectable. Each finished report is
+**delivered once**, so two collectors cannot both act on one answer. Reach for
+`sdk.agent.spawn` instead when the work needs judgement rather than code.
 
 **Reaching the network.** `sdk.net.http` answers with
 `{status, body, headers}`, and an HTTP *error* status is an ordinary answer

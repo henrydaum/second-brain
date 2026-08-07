@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from pathlib import Path
 
 from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
@@ -52,7 +53,9 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
                               SESSION_REMOVE_TOOL, SESSION_SET_MODE,
                               SESSION_STATE_GET,
-                              SESSION_STATE_SET, SCRIPT_RUN,
+                              SESSION_STATE_SET,
+                              SCRIPT_COLLECT, SCRIPT_RUN, SCRIPT_STOP,
+                              SELF_BUDGET,
                               TASK_ENQUEUE, TASK_GRAPH,
                               TASK_LIST, TASK_OUTPUT, TASK_PAUSE, TASK_RESET,
                               TASK_STATUS, TASK_TRIGGER, TOOL_CALL, TOOL_LIST,
@@ -2911,6 +2914,18 @@ def _ledger_read(ctx, args: dict) -> Result:
 _SCRIPT_POLL = 0.2
 
 
+def _script_owner(chain) -> str:
+    """Who may collect a script this chain detached.
+
+    The chain *root* — what caused the work — rather than the innermost link.
+    Two scripts started by the same turn should be collectable together, which
+    is what ``collect(ids=None)`` means, and the root is the only part of a
+    chain that is the same for both. It is also the part a guest cannot state
+    about itself, so a box cannot claim somebody else's runs.
+    """
+    return getattr(chain, "root", None) or "user"
+
+
 def _script_run(ctx, args: dict) -> Result:
     """Run a file of SDK code that is not a plugin.
 
@@ -2963,9 +2978,14 @@ def _script_run(ctx, args: dict) -> Result:
         logger.exception("script_run failed")
         return Result.failure(f"the sandbox is not available: {exc}")
 
+    wait = args.get("wait", True)
     try:
         run = sandbox.start(str(path), entry, kwargs=kwargs, chain=chain,
-                            context=getattr(caller, "context", None))
+                            context=getattr(caller, "context", None),
+                            # Only a detached run is kept for collection. A
+                            # waited one hands its Result back here and there is
+                            # nothing left to come back for.
+                            collect_owner=None if wait else _script_owner(chain))
     except Exception as exc:
         # A BoxError here is the useful case: a script declaring a persistent
         # lifetime is told to be opened rather than run, which is a real
@@ -2973,8 +2993,11 @@ def _script_run(ctx, args: dict) -> Result:
         logger.exception("script_run failed")
         return Result.failure(f"{path.name} could not start: {exc}")
 
-    if not args.get("wait", True):
-        return Result(data={"script": path.name, "started": True})
+    if not wait:
+        # ``started`` and ``script`` are what this answered before there was an
+        # id; kept so nothing reading them has to change.
+        return Result(data={"script": path.name, "id": run.id,
+                            "started": True})
 
     # Waiting in slices rather than one blocking call. Cancellation reaches
     # code that is making Requests, and this handler is making none while it
@@ -2988,6 +3011,106 @@ def _script_run(ctx, args: dict) -> Result:
         if caller is not None and caller.abandoned:
             run.cancel()
             return Result.failure(f"{path.name} was cancelled")
+
+
+def _script_collect(ctx, args: dict) -> Result:
+    """Take the results of scripts this caller started with ``wait=False``.
+
+    The counterpart of ``agent.collect``, and it waits the same way ``_script_
+    run`` does — in slices, watching for the caller going away — because this
+    handler makes no Requests of its own while it waits, so cancellation has no
+    other route in.
+    """
+    from .. import provenance
+    from ..bridge import get_sandbox
+
+    caller = provenance.current()
+    owner = _script_owner(getattr(caller, "chain", None))
+    try:
+        sandbox = get_sandbox()
+    except Exception as exc:
+        logger.exception("script_collect failed")
+        return Result.failure(f"the sandbox is not available: {exc}")
+
+    runs = sandbox.collectable(owner, args.get("ids"))
+    if not runs:
+        return Result(data=[])
+
+    timeout = args.get("timeout")
+    timeout = None if timeout is None else float(timeout)
+    started = time.monotonic()
+    while True:
+        pending = [run for run in runs if not run.done]
+        # Nothing left to wait for, or the caller asked not to wait, or its own
+        # limit has passed. ``timeout=0`` is the poll: one pass, no sleeping.
+        if (not pending
+                or timeout == 0
+                or (timeout is not None
+                    and time.monotonic() - started >= timeout)):
+            break
+        if caller is not None and caller.abandoned:
+            # The caller is gone. Leave the runs alone — cancelling them here
+            # would end work a *different* collector may still be owed, and
+            # ``interrupt_session`` already reaches anything this turn started.
+            return Result.failure("collection was cancelled")
+        time.sleep(_SCRIPT_POLL)
+
+    reports = []
+    for run in runs:
+        report = run.report()
+        reports.append(report)
+        # Delivered once, and only what is actually finished: a run still going
+        # stays in the registry so a later collect still gets it.
+        if report["state"] != "running":
+            sandbox.take(run)
+    return Result(data=reports)
+
+
+def _script_stop(ctx, args: dict) -> Result:
+    """Cancel a detached script. Answers whether there was one to cancel."""
+    from .. import provenance
+    from ..bridge import get_sandbox
+
+    caller = provenance.current()
+    owner = _script_owner(getattr(caller, "chain", None))
+    try:
+        sandbox = get_sandbox()
+    except Exception as exc:
+        logger.exception("script_stop failed")
+        return Result.failure(f"the sandbox is not available: {exc}")
+
+    run = sandbox.find_run(args.get("id") or "", owner)
+    if run is None:
+        return Result(data=False)
+    run.cancel()
+    return Result(data=True)
+
+
+def _self_budget(ctx, args: dict) -> Result:
+    """How much of its deadline the calling execution has left.
+
+    The kernel is the only party that can answer this. The guest can read a
+    clock, but the deadline it is judged against is *running* time — elapsed
+    minus whatever the kernel spent owing it an answer — and it can see neither
+    that discount nor the ceiling its declared timeout was clamped to.
+
+    Without it the watchdog is the only thing that ends an over-long run, and
+    it ends it by killing the box: a loop three-quarters through a corpus
+    returns nothing at all. Answering lets it stop itself and hand back what it
+    has.
+    """
+    from .. import provenance
+    from ..watchdog import HARD_CEILING
+
+    caller = provenance.current()
+    execution = getattr(caller, "execution", None)
+    if execution is None:
+        # No execution to speak about — an in-process caller the provenance
+        # stack never marked. Say so with nulls rather than inventing a
+        # deadline: a fabricated number would be believed and acted on.
+        return Result(data={"running": None, "wall": None,
+                            "deadline": None, "ceiling": HARD_CEILING})
+    return Result(data=execution.remaining())
 
 
 def _app_stop(ctx, args: dict) -> Result:
@@ -3068,6 +3191,8 @@ HANDLERS = {
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,
     PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
     LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,
-    SCRIPT_RUN: _script_run,
+    SCRIPT_RUN: _script_run, SCRIPT_COLLECT: _script_collect,
+    SCRIPT_STOP: _script_stop,
+    SELF_BUDGET: _self_budget,
     APP_STOP: _app_stop,
 }

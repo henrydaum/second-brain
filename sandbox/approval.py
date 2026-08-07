@@ -297,6 +297,12 @@ GRANT_PHRASES = {
     # dialog that overstates a grant erodes trust in the dialog exactly as fast
     # as one that understates it erodes safety.
     "script.run": "run its own sandboxed scripts",
+    # And the two that only ever speak about a script already started, exactly
+    # as the ``proc.*`` pair above does. Both are safe, so they reach a dialog
+    # only inside a command's declared grant — and there the honest thing to
+    # say is that neither starts anything new.
+    "script.collect": "wait for scripts it started",
+    "script.stop": "stop scripts it started",
     "net.http": "make network requests",
     "secret.reveal": "read your credentials in plaintext",
     "config.write": "change settings",
@@ -363,6 +369,7 @@ GRANT_PHRASES = {
     # total so that a new Request cannot quietly render as a dotted name.
     "agent.complete": "finish the agent's turn",
     "self.respond": "answer its own request",
+    "self.budget": "check how long it has left",
 }
 
 # Families that share one phrase when no specific entry matched. Keeps a new

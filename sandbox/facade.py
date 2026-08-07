@@ -56,6 +56,15 @@ logger = logging.getLogger("Sandbox")
 WAIT_CEILING = 660.0
 
 
+#: How long a finished-but-uncollected run is kept before it is swept. Nothing
+#: obliges a caller to collect, and a script that starts detached work and then
+#: fails leaves its results behind — so the registry has to forget on its own or
+#: it is a leak with no symptom until the process is out of memory. Generous
+#: against the longest a run can take (``HARD_CEILING``), because the failure to
+#: avoid is dropping a result somebody was about to ask for.
+COLLECT_RETENTION = 1800.0
+
+
 class Run:
     """An ephemeral execution in flight.
 
@@ -63,10 +72,29 @@ class Run:
     the handle for finding out how it went, or for stopping it.
     """
 
+    _next_id = 0
+    _id_lock = threading.Lock()
+
     def __init__(self, name: str, chain: Chain, execution: Execution,
                  interpreter: Interpreter):
         self.name = name
         self.chain = chain
+        # A handle, because a detached run outlives the call that started it
+        # and there has to be something to name it by later. Counter rather
+        # than uuid so it reads in a log line; process-local, which is all it
+        # ever has to be — nothing persists a run id.
+        with Run._id_lock:
+            Run._next_id += 1
+            self.id = f"run-{Run._next_id}"
+        #: Who may collect this run: the chain root of whatever started it.
+        #: Set by :meth:`Sandbox.start` when a caller asks to keep it.
+        self.owner: str | None = None
+        self.finished_at: float | None = None
+        #: The file this run came from, as ``script.run`` names it. ``name`` is
+        #: the *box* — the stem — and the two Requests must not answer the same
+        #: key with two different strings, which is what "tally" beside
+        #: "tally.py" would be.
+        self.label: str = name
         self._execution = execution
         self._interpreter = interpreter
         self._future = None
@@ -110,6 +138,29 @@ class Run:
             return Result.failure("still running", retryable=True)
         except Exception as exc:
             return Result.failure(f"run failed: {exc}")
+
+    def report(self) -> dict:
+        """What this run looks like from outside, as plain data.
+
+        The shape ``script.collect`` answers with, and the same four states a
+        subagent handle reports — a caller that has learned one has learned
+        both. ``running`` carries no ``data``, because there is none yet.
+        """
+        if not self.done:
+            state = "running"
+            result = None
+        else:
+            result = self.wait(timeout=0)
+            state = ("cancelled" if self._cancelled
+                     else "done" if result.ok else "failed")
+        return {
+            "id": self.id,
+            "script": self.label,
+            "state": state,
+            "ok": bool(result.ok) if result is not None else False,
+            "data": result.data if result is not None else None,
+            "error": (result.error if result is not None else "") or "",
+        }
 
     def cancel(self) -> None:
         """Stop it: starve the Requests, then close the pipe.
@@ -165,6 +216,13 @@ class Sandbox:
         #: across trees is caught rather than silently resolved.
         self._source_of: dict[str, str] = {}
         self._runs: list[Run] = []
+        #: Detached runs somebody asked to keep, by id, until collected or
+        #: swept. Deliberately *not* ``_runs``: that list is what ``/cancel``
+        #: sweeps and it drops a run the moment it finishes, which is correct
+        #: for interruption and useless for collection — the result is gone
+        #: before anyone can ask. Only a run started with ``collect_owner``
+        #: lands here, so ordinary tool and command runs still cost nothing.
+        self._collectable: dict[str, Run] = {}
         self._lock = threading.Lock()
 
     def bind_runtime(self, runtime, session_key=None) -> None:
@@ -371,12 +429,17 @@ class Sandbox:
               chain: Chain | None = None, name: str | None = None,
               isolated: bool | None = None, timeout: float | None = None,
               on_done=None, context=None, method: str = "run",
-              once: bool = False) -> Run:
+              once: bool = False, collect_owner: str | None = None) -> Run:
         """Run without waiting. The ``wait=False`` shape.
 
         The work begins immediately on a background thread and the caller
         keeps going. ``on_done`` fires with the Result when it finishes, which
         is how a spawner queues a completion notice back to its session.
+
+        ``collect_owner`` keeps the run's result after it finishes so that
+        owner can :meth:`collect` it later. Without it the result is discarded
+        the moment the run ends, which is right for a caller that is holding
+        the ``Run`` itself and wrong for one that only has an id.
 
         ``once`` waives the persistent-lifetime refusal below. A resident
         plugin still has one-shot moments — ``on_install``, ``on_uninstall`` —
@@ -399,6 +462,7 @@ class Sandbox:
                               chain=(chain or Chain()).push(run_name),
                               context=context)
         run = Run(run_name, execution.chain, execution, self.interpreter)
+        run.label = Path(str(source)).name or run_name
 
         def _work() -> Result:
             """Do the run on a background thread."""
@@ -434,6 +498,10 @@ class Sandbox:
             with self._lock:
                 if run in self._runs:
                     self._runs.remove(run)
+                # Stamped under the same lock the sweep reads it under, so a
+                # run cannot be swept while it is still being marked finished.
+                if run.owner is not None:
+                    run.finished_at = time.monotonic()
 
             if on_done is None:
                 return
@@ -444,9 +512,62 @@ class Sandbox:
 
         with self._lock:
             self._runs.append(run)
+            if collect_owner is not None:
+                run.owner = collect_owner
+                self._collectable[run.id] = run
+                self._sweep_collectable()
         future = self._pool.submit(_work)
         future.add_done_callback(_finish)
         return run._attach(future)
+
+    # ──────────────────────────────────────────────────────────────
+    # Collecting detached runs.
+    # ──────────────────────────────────────────────────────────────
+
+    def _sweep_collectable(self) -> None:
+        """Forget results nobody came back for. Caller holds ``_lock``.
+
+        Swept on the way in rather than on a timer: the only thing that grows
+        this registry is starting another detached run, so that is exactly when
+        it is worth looking. A process that stops starting them stops needing
+        the sweep.
+        """
+        cutoff = time.monotonic() - COLLECT_RETENTION
+        for run_id, run in list(self._collectable.items()):
+            if run.finished_at is not None and run.finished_at < cutoff:
+                del self._collectable[run_id]
+                logger.debug("swept uncollected run %s (%s)", run_id, run.name)
+
+    def collectable(self, owner: str, ids=None) -> list[Run]:
+        """The detached runs ``owner`` may collect, in start order.
+
+        ``ids=None`` means all of them. An id belonging to somebody else is
+        skipped rather than refused: a caller naming an id it does not own has
+        made a mistake about *which* run, and answering "no such run" says that
+        without also disclosing that one exists.
+        """
+        wanted = None if ids is None else {str(i) for i in ids}
+        with self._lock:
+            return [run for run in self._collectable.values()
+                    if run.owner == owner
+                    and (wanted is None or run.id in wanted)]
+
+    def take(self, run: Run) -> None:
+        """Hand a finished run's result over, once.
+
+        Delivery is one-shot for the reason a subagent report is: two
+        collectors both acting on one answer is worse than one of them getting
+        nothing, and "did I already handle this?" is not a question the caller
+        can answer from the outside.
+        """
+        with self._lock:
+            self._collectable.pop(run.id, None)
+
+    def find_run(self, run_id: str, owner: str) -> Run | None:
+        """One detached run by id, if this owner started it."""
+        with self._lock:
+            run = self._collectable.get(str(run_id))
+        return run if run is not None and run.owner == owner else None
 
     # ──────────────────────────────────────────────────────────────
     # Resident.

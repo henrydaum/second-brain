@@ -1472,6 +1472,60 @@ none while it waits. `provenance.Caller` carries the calling `Execution` for
 exactly that — a cancelled turn would otherwise leave the child running to its
 ceiling on a held pool worker.
 
+**And a detached script needed the handle `proc.start` already argues for.**
+`wait=False` shipped answering `{"started": True}` and dropping the `Run` on
+the floor, so the result could never be collected, the run never cancelled, and
+its finishing never observed — fire-and-forget with no forget-me-not. Both
+siblings already had the shape: `agent.spawn`/`collect`/`stop` for a background
+*agent*, `proc.start`/`status`/`stop` for a background *process*. So
+`script.collect` and `script.stop`, both `ALWAYS_SAFE` on the argument those
+two already make — collecting reads a result already produced, stopping
+narrows, and neither starts anything `script.run` did not already answer for.
+What it buys is fan-out over ordinary code: starting eight scripts and
+collecting eight, without every branch having to be a subagent and cost a model
+call.
+
+Three details are load-bearing. Ownership is the **chain root**, so two scripts
+detached by one turn collect together and a guest cannot claim another's — the
+root is precisely the part of a chain a box cannot state about itself. Delivery
+is **one-shot**, like a subagent report, because "did I already handle this?"
+is not answerable from outside; `Sandbox._collectable` is therefore a separate
+registry from `_runs`, which drops a run the moment it finishes (right for
+`/cancel`, useless for collection). And an uncollected result is **swept** at
+`COLLECT_RETENTION` — nothing obliges a caller to come back, and a leak whose
+only symptom is memory is the worst kind.
+
+**A deadline nobody can see can only be discovered by being killed by it.**
+`self.budget` is the counterpart, and the argument for a new type is that the
+kernel is the sole holder: a guest may read a clock (`time` is an allowed
+module), but the deadline measures *running* time — elapsed minus what the
+kernel spent owing it an answer — and it can see neither that discount nor the
+clamp its declared `timeout` got. So the watchdog was the only thing that ended
+a long run, and it ends one by killing the box, discarding everything computed
+on the way. `sdk.budget()` lets the loop stop itself and return partial work.
+
+The numbers come from `Execution.remaining()`, and `Watchdog.watch` writes them
+onto the execution rather than each of its three callers doing it — the same
+argument `watchdog.overdue` already makes for sharing its comparison: two
+copies of one deadline drift, and the drift is invisible until something dies
+early. `release` clears them only if the ticket matches, since two watches can
+overlap on one execution. Nothing in force answers `None` rather than a number,
+because a fabricated ceiling would be believed. And it is `READ_ONLY` — a loop
+asks every iteration, so counting it as a change would bump `sandbox.epoch` per
+tick and silently invalidate every cached `agent_prompt`, the same trap
+`llm.delta` is kept out of the ledger sink for.
+
+**`sdk.retry` is the third, and it is pure guest-side sugar over a signal that
+was already there and read by nobody.** `Result.retryable` is set at ~18
+handler sites — a locked file, an HTTP timeout, a dead box — and until this
+existed the only consumers in the tree were tests asserting it was set. That
+is the better arrangement than a guest-side rule about exception types, which
+is what LangGraph's `RetryPolicy` has to do: whether a failure is transient is
+known where it *happened*. `Denied` is re-raised first and unconditionally,
+ordering that is load-bearing because it subclasses `Failed` — a helper
+catching the general case first would sweep every refusal into the loop, and
+each attempt is a fresh dialog for somebody who already answered.
+
 `paths.get` also gained `python` and `platform`. The validator refuses `sys`,
 correctly — it is a door to the interpreter, not a fact about it — but which
 Python is hosting the app (so `pip install` lands where the app can import

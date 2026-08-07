@@ -215,9 +215,32 @@ PROC_LIST = "proc.list"
 # while ``proc.run`` never can be.
 SCRIPT_RUN = "script.run"
 
+# ``script.run(wait=False)`` starts work that outlives the Request that started
+# it, which is the exact condition ``proc.start`` grew a handle for one comment
+# above. It shipped without one: the handler started the run, dropped the
+# ``Run`` on the floor and answered ``{"started": True}``, so a detached script
+# could never be collected, cancelled, or even observed to have finished.
+#
+# These two close that, and the shape is copied rather than invented — it is
+# ``agent.spawn``/``agent.collect``/``agent.stop`` (a background *agent*) and
+# ``proc.start``/``proc.status``/``proc.stop`` (a background *process*) applied
+# to a background *script*. What it buys is fan-out over ordinary SDK code:
+# start eight, collect eight, without every branch having to be a subagent.
+SCRIPT_COLLECT = "script.collect"
+SCRIPT_STOP = "script.stop"
+
 ENV_READ = "env.read"
 SECRET_REVEAL = "secret.reveal"
 SELF_RESPOND = "self.respond"
+
+# How much of its deadline this execution has left. The kernel is the only
+# holder of the number: the guest can read a clock, but the deadline it is
+# judged against is *running* time — elapsed minus whatever the kernel spent
+# owing it an answer — and it can neither see that discount nor learn the
+# ceiling its declared timeout was clamped to. So a long loop had no way to
+# stop early and the watchdog simply killed the box, discarding whatever had
+# been computed. Asking is what lets it wrap up and return partial work.
+SELF_BUDGET = "self.budget"
 
 # Ending the process. One type with a ``restart`` argument rather than two,
 # because stopping and stopping-then-starting are the same act with a different
@@ -254,8 +277,8 @@ ALL_TYPES = {
     TASK_PAUSE, TASK_RESET, TASK_TRIGGER, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
     NET_HTTP, PROC_RUN, PROC_START, PROC_STATUS, PROC_STOP, PROC_LIST,
-    SCRIPT_RUN,
-    ENV_READ, SECRET_REVEAL, SELF_RESPOND,
+    SCRIPT_RUN, SCRIPT_COLLECT, SCRIPT_STOP,
+    ENV_READ, SECRET_REVEAL, SELF_RESPOND, SELF_BUDGET,
     APP_STOP,
 }
 
@@ -277,6 +300,14 @@ READ_ONLY = {
     # fan-out loop would otherwise write a row per tick forever — the same
     # problem ``console.read`` is in this set for.
     AGENT_COLLECT,
+    # Here for both of the reasons above at once, and it matters more than for
+    # its neighbours. A fan-out polls ``collect(timeout=0)`` and a long loop
+    # asks ``budget()`` every iteration, so leaving either out would write a
+    # ledger row per tick — and, worse, bump ``sandbox.epoch`` every tick,
+    # which invalidates every cached ``agent_prompt`` in the process. That is
+    # the same trap ``llm.delta`` is excluded from the ledger sink for: a
+    # Request issued per iteration must never be treated as a change.
+    SCRIPT_COLLECT, SELF_BUDGET,
 }
 
 

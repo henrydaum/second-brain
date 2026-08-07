@@ -86,8 +86,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PLUGIN_VALIDATE,
                        PROC_LIST, PROC_RUN, PROC_START, PROC_STATUS,
                        PROC_STOP,
-                       SCRIPT_RUN,
-                       SECRET_REVEAL, SELF_RESPOND,
+                       SCRIPT_COLLECT, SCRIPT_RUN, SCRIPT_STOP,
+                       SECRET_REVEAL, SELF_BUDGET, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
                        SERVICE_UNLOAD, SESSION_ADD_ATTACHMENT,
                        SESSION_ADD_PROMPT,
@@ -1325,11 +1325,45 @@ class _Scripts(_Namespace):
 
         ``entry`` names the function; everything else is passed to it as
         keyword arguments, so ``sdk.scripts.run(p, total=3)`` calls
-        ``main(sdk, total=3)``. Pass ``wait=False`` to start it and carry on,
-        which answers as soon as it has begun rather than when it finishes.
+        ``main(sdk, total=3)``.
+
+        ``wait=False`` answers as soon as it has *begun*, with
+        ``{"script", "id", "started"}`` — the ``id`` is the handle
+        :meth:`collect` and :meth:`stop` take. That is how several run at
+        once::
+
+            ids = [sdk.scripts.run(p, "analyse", wait=False, doc=d)["id"]
+                   for d in documents]
+            for report in sdk.scripts.collect(ids):
+                sdk.log(report["state"], report["data"])
+
+        Each one is a box of its own, so they genuinely run in parallel — and
+        unlike a subagent, nothing here involves a model. Reach for this when
+        the work is code and for ``sdk.agent.spawn`` when it is judgement.
         """
         return self._ask(SCRIPT_RUN, path=str(path), entry=entry,
                          args=args, wait=bool(wait))
+
+    def collect(self, ids=None, timeout: float | None = None):
+        """Wait for detached scripts and take their results.
+
+        ``ids=None`` takes every script this caller started with
+        ``wait=False`` and has not collected yet. ``timeout=0`` polls without
+        waiting — anything still going comes back with ``state ==
+        "running"`` and stays uncollected, so a later call still gets it.
+        ``timeout=None`` waits until each one's own deadline.
+
+        Each report is a dict with ``id``, ``script``, ``state``, ``ok``,
+        ``data`` and ``error``, where ``state`` is ``running``, ``done``,
+        ``failed`` or ``cancelled``. **Delivered once**: a finished result is
+        held until somebody takes it, and taken only once, so two collectors
+        cannot both act on the same answer.
+        """
+        return self._ask(SCRIPT_COLLECT, ids=ids, timeout=timeout)
+
+    def stop(self, id: str):
+        """Cancel a detached script. Narrows, so it is the safe direction."""
+        return self._ask(SCRIPT_STOP, id=id)
 
 
 class _App(_Namespace):
@@ -2008,6 +2042,107 @@ class SDK:
     def fail(self, error: str, retryable: bool = False):
         """Fail with a reason."""
         return Result.failure(error, retryable=retryable)
+
+    # ── trying again ───────────────────────────────────────────────
+
+    def retry(self, fn, attempts: int = 3, backoff: float = 0.5, on=None):
+        """Run ``fn()``, retrying only what the kernel said was worth retrying.
+
+        ``Result.retryable`` is set by the handler that failed — the one place
+        that actually knows whether trying again could plausibly work. A read
+        that hit a locked file, an HTTP call that timed out and a box that died
+        all carry it; a malformed query and a refusal do not. This spends that
+        signal, so the common loop is one line::
+
+            page = sdk.retry(lambda: sdk.net.http(url))
+
+        Waits ``backoff``, then double, between attempts. Pass ``on=`` a
+        predicate over the exception to decide for yourself — ``on=lambda e:
+        e.code == "not_found"`` to retry something the kernel does not consider
+        transient, or ``on=lambda e: False`` to disable retrying entirely
+        without changing the call.
+
+        **A refusal is never retried.** Policy is not a transient condition,
+        and asking three times is how one dialog becomes three. ``Denied``
+        propagates on the first attempt whatever ``on`` says, so a caller can
+        still tell "you said no" from "the disk was busy"::
+
+            try:
+                rows = sdk.retry(lambda: sdk.db.query(sql))
+            except sdk.Denied:
+                return "I need permission to read that."
+            except sdk.Failed as exc:
+                return f"Gave up after {exc.error}"
+
+        The backoff sleeps, and sleeping is *running* time — no Request is in
+        flight for the kernel to discount, so it is charged against the
+        deadline like any other computation. At the defaults that is 1.5s,
+        which is why a long loop that retries wants to check :meth:`budget`.
+        """
+        import time
+
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
+        for attempt in range(attempts):
+            try:
+                return fn()
+            except Denied:
+                # Ordering is load-bearing: ``Denied`` subclasses ``Failed``,
+                # so catching the general case first would swallow every
+                # refusal into the retry loop.
+                raise
+            except RequestFailed as exc:
+                if attempt == attempts - 1:
+                    raise
+                if not (on(exc) if on is not None else exc.retryable):
+                    raise
+                self.log(f"retrying after {exc.error} "
+                         f"({attempt + 1}/{attempts})", "debug")
+                time.sleep(backoff * 2 ** attempt)
+        # Unreachable: the loop either returns or raises on the last attempt.
+        raise RuntimeError("retry fell through")
+
+    # ── how long is left ───────────────────────────────────────────
+
+    def budget(self) -> dict:
+        """How much of this execution's deadline is left.
+
+        Answers ``{"running", "wall", "deadline", "ceiling"}`` — seconds of
+        running time remaining, seconds of wall clock remaining, the clamped
+        deadline this execution was actually given, and the wall ceiling that
+        bounds it however it spends the time. ``running`` is ``None`` when
+        nothing is enforcing a deadline right now.
+
+        The two numbers differ, and which one bites depends on what the code
+        spends its time doing. **Running** time is what a declared ``timeout``
+        measures: elapsed minus whatever the kernel spent owing an answer, so
+        four minutes inside ``sdk.proc.run`` costs almost nothing against it.
+        **Wall** clock is the backstop, and it is not declarable — it is what
+        stops a runaway hiding inside long waits.
+
+        This exists so long work can stop *itself*. Without it the watchdog is
+        the only thing that ends a run that has gone on too long, and it ends
+        it by killing the box — so a loop three-quarters of the way through a
+        corpus returns nothing at all. Checking lets it hand back what it has::
+
+            done = []
+            for doc in documents:
+                if sdk.budget()["running"] < 20:
+                    break
+                done.append(analyse(sdk, doc))
+            return sdk.ok({"done": done, "resume_at": len(done)},
+                          llm_summary=f"{len(done)}/{len(documents)} analysed")
+
+        Free to call in a loop: it is read-only, so it neither writes a ledger
+        row nor counts as a change.
+        """
+        # Raising on failure like every other Request. ``respond`` next door
+        # reaches ``_send`` bare because it is about to unwind anyway; this one
+        # answers a caller who will use the number.
+        result = self._send(Request(SELF_BUDGET, {}))
+        if result.ok:
+            return result.data
+        raise (Denied if result.denied else RequestFailed)(result, SELF_BUDGET)
 
     def respond(self, value) -> None:
         """Return a result and terminate.

@@ -91,6 +91,12 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
     worker = threading.Thread(target=_worker, daemon=True,
                               name=f"sandbox-{name}")
     started = time.perf_counter()
+    # Recorded *before* the worker starts, not beside the wait loop below.
+    # The guest can ask ``sdk.budget()`` on its very first line, and a deadline
+    # that is not yet on the execution answers "nothing is in force" — which
+    # would be a lie told exactly when the whole run is still ahead.
+    monotonic_start = time.monotonic()
+    execution.watching(monotonic_start, deadline)
     worker.start()
 
     # Wait on the guest, not on the clock — the same measure a resident box
@@ -102,7 +108,6 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
     # with — died at thirty seconds having done nothing wrong, and the report
     # blamed the plugin. ``HARD_CEILING`` still backs it up, so a runaway
     # hiding inside long Requests is not immortal.
-    monotonic_start = time.monotonic()
     completed = True
     while not execution.finished.wait(timeout=TICK):
         if overdue(execution, monotonic_start, deadline):

@@ -179,6 +179,15 @@ def test_the_sdk_reaches_every_wired_request():
                 continue
             _probe(method)
 
+    # The root itself, because the ``self.*`` family lives there rather than in
+    # a namespace of its own — ``respond`` and ``budget`` are about the calling
+    # execution, which is not a subject with methods to group. Probing only
+    # namespaces made a root-level Request invisible to a test whose whole
+    # claim is totality. ``respond`` unwinds and ``retry`` takes a callable, so
+    # neither survives a blind probe; both are exercised elsewhere.
+    for attr in ("budget",):
+        _probe(getattr(sdk, attr))
+
     unreachable = set(HANDLERS) - set(sent)
     assert unreachable == set(), f"no SDK route to: {sorted(unreachable)}"
 

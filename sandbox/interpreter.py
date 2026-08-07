@@ -128,6 +128,65 @@ class Execution:
     _blocked_since: float = 0.0
     _progress_lock: threading.Lock = field(default_factory=threading.Lock)
 
+    # The deadline currently in force, recorded by whoever armed the watchdog
+    # (both runners, and ``PersistentBox`` per call). It was already computed
+    # in all three places and simply not kept, so the one party that could
+    # answer "how long have I got" — the kernel — had nowhere to read it from.
+    # ``None`` means nothing is enforcing one right now, which is a real state
+    # for a resident box between calls and must not be answered with a number.
+    watch_started: float | None = None
+    watch_deadline: float | None = None
+    watch_ticket: object = None
+
+    def watching(self, started: float, deadline: float,
+                 ticket=None) -> None:
+        """Record the deadline this execution is being held to.
+
+        Written by :meth:`Watchdog.watch` itself rather than by its callers,
+        so the number the guest is told cannot drift from the number being
+        enforced — the same argument ``watchdog.overdue`` already makes for
+        sharing its comparison between the two loops.
+        """
+        self.watch_started = started
+        self.watch_deadline = deadline
+        self.watch_ticket = ticket
+
+    def unwatched(self, ticket=None) -> None:
+        """Forget the deadline, if this is the watch that set it.
+
+        The guard matters because two watches can overlap on one execution — a
+        box stop racing a call, which is why ``Watchdog.watch`` hands out
+        tickets at all. Clearing unconditionally would let the *finishing* one
+        erase the deadline the *live* one is still enforcing.
+        """
+        if ticket is not None and ticket != self.watch_ticket:
+            return
+        self.watch_started = None
+        self.watch_deadline = None
+        self.watch_ticket = None
+
+    def remaining(self, now: float | None = None) -> dict:
+        """How much of the current deadline is left, both ways.
+
+        ``running`` is what the deadline actually measures and ``wall`` is the
+        ceiling that bounds it however the time is spent — see
+        ``sandbox/watchdog.py`` for why one alone is answerable in the wrong
+        direction. Both are ``None`` when no deadline is in force.
+        """
+        from .watchdog import HARD_CEILING
+
+        started, deadline = self.watch_started, self.watch_deadline
+        if started is None or deadline is None:
+            return {"running": None, "wall": None,
+                    "deadline": None, "ceiling": HARD_CEILING}
+        now = time.monotonic() if now is None else now
+        return {
+            "running": max(0.0, deadline - self.running_for(started, now)),
+            "wall": max(0.0, HARD_CEILING - (now - started)),
+            "deadline": deadline,
+            "ceiling": HARD_CEILING,
+        }
+
     def entered(self):
         """One of this execution's Requests has reached a handler."""
         with self._progress_lock:

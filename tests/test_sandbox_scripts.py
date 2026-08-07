@@ -406,3 +406,236 @@ def test_a_bare_name_runs(sb, tree, monkeypatch):
                                 "args": {"values": [1, 2, 3]}})
     assert result.ok, result.error
     assert result.data == 6
+
+
+# ── detaching one, and coming back for it ─────────────────────────────
+#
+# ``wait=False`` shipped answering ``{"started": True}`` and dropping the
+# ``Run`` on the floor, so a detached script could never be collected,
+# cancelled, or even observed to have finished. Both of its siblings already
+# had the shape it was missing — ``agent.spawn``/``collect``/``stop`` for a
+# background agent, ``proc.start``/``status``/``stop`` for a background
+# process — and the argument is the one ``proc.start`` already makes: work that
+# outlives the Request that started it needs a handle.
+
+
+@pytest.fixture
+def wired(sb, tree, monkeypatch):
+    """The global sandbox pointed at this tree, as a real caller would find it."""
+    from sandbox import bridge
+
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
+                        (tree.parent.resolve(),))
+    bridge.configure(sb)
+    return sb
+
+
+def _as(chain, fn, args):
+    """Call a handler with provenance, the way the interpreter does."""
+    from sandbox import provenance
+    from sandbox.interpreter import Execution
+
+    execution = Execution(name="caller", chain=chain)
+    with provenance.serving(chain, None, execution):
+        return fn(None, args)
+
+
+def test_a_detached_script_hands_back_an_id(wired, tree):
+    """The handle. Without it there is nothing to name the run by later."""
+    from sandbox.handlers.kernel import _script_run
+
+    result = _as(Chain(root="user"), _script_run,
+                 {"path": str(write(tree)), "args": {"values": [1]},
+                  "wait": False})
+
+    assert result.ok, result.error
+    assert result.data["id"]
+    # The two keys this answered before there was an id. Kept, because
+    # something reading them should not have to change to gain a third.
+    assert result.data["started"] is True
+    assert result.data["script"] == "tally.py"
+
+
+def test_several_run_at_once_and_are_collected_together(wired, tree):
+    """The fan-out, which is the whole reason to detach one.
+
+    Each is a box of its own, so these genuinely run in parallel — and unlike a
+    subagent, none of it involves a model. That is the gap: fanning work out
+    used to mean spawning agents even when the work was ordinary code.
+    """
+    from sandbox.handlers.kernel import _script_collect, _script_run
+
+    chain = Chain(root="user")
+    path = str(write(tree))
+    for values in ([1], [2, 3], [4, 5, 6]):
+        started = _as(chain, _script_run,
+                      {"path": path, "args": {"values": values},
+                       "wait": False})
+        assert started.ok, started.error
+
+    collected = _as(chain, _script_collect, {"ids": None})
+
+    assert collected.ok, collected.error
+    assert sorted(r["data"] for r in collected.data) == [1, 5, 15]
+    assert {r["state"] for r in collected.data} == {"done"}
+    # The same string ``script.run`` answered with. Two Requests about one run
+    # must not name it two different ways.
+    assert {r["script"] for r in collected.data} == {"tally.py"}
+
+
+def test_a_report_is_delivered_once(wired, tree):
+    """Two collectors both acting on one answer is the worse failure.
+
+    "Did I already handle this?" is not a question the caller can answer from
+    outside, so the registry answers it — the same one-shot delivery a subagent
+    report has, and for the same reason.
+    """
+    from sandbox.handlers.kernel import _script_collect, _script_run
+
+    chain = Chain(root="user")
+    _as(chain, _script_run, {"path": str(write(tree)),
+                             "args": {"values": [7]}, "wait": False})
+
+    first = _as(chain, _script_collect, {"ids": None})
+    second = _as(chain, _script_collect, {"ids": None})
+
+    assert [r["data"] for r in first.data] == [7]
+    assert second.data == []
+
+
+def test_polling_leaves_an_unfinished_run_collectable(wired, tree):
+    """``timeout=0`` is a look, not a wait.
+
+    A run still going comes back ``running`` and *stays* in the registry, so
+    the poll that found it unfinished has not consumed it. Getting this wrong
+    would lose the result of every slow run a fan-out checked on early.
+    """
+    from sandbox.handlers.kernel import _script_collect, _script_run
+
+    slow = tree / "scripts" / "tally.py"
+    slow.write_text(
+        "import time\n\n\ndef main(sdk):\n"
+        '    """Take a moment."""\n'
+        "    time.sleep(1.5)\n"
+        "    return 'eventually'\n", encoding="utf-8")
+
+    chain = Chain(root="user")
+    _as(chain, _script_run, {"path": str(slow), "wait": False})
+
+    polled = _as(chain, _script_collect, {"ids": None, "timeout": 0})
+    assert [r["state"] for r in polled.data] == ["running"]
+    assert polled.data[0]["data"] is None
+
+    waited = _as(chain, _script_collect, {"ids": None})
+    assert [r["data"] for r in waited.data] == ["eventually"]
+
+
+def test_one_caller_cannot_collect_anothers_runs(wired, tree):
+    """Ownership is the chain *root* — what caused the work.
+
+    The root rather than the innermost link, because two scripts started by one
+    turn should be collectable together and the root is the only part of a
+    chain both share. It is also the part a guest cannot state about itself, so
+    a box cannot claim somebody else's results by asking nicely.
+    """
+    from sandbox.handlers.kernel import _script_collect, _script_run
+
+    mine = Chain(root="user").push("run_script")
+    theirs = Chain(root="cron:nightly").push("task_index")
+    _as(mine, _script_run, {"path": str(write(tree)),
+                            "args": {"values": [9]}, "wait": False})
+
+    assert _as(theirs, _script_collect, {"ids": None}).data == []
+    assert [r["data"] for r in _as(mine, _script_collect,
+                                   {"ids": None}).data] == [9]
+
+
+def test_stopping_a_detached_script_reaches_it(wired, tree):
+    """Narrows, so it is the safe direction — and it has to actually work.
+
+    A fan-out the caller cannot abandon is one it will not start, which is the
+    argument ``proc.stop`` already makes about a dev server.
+    """
+    from sandbox.handlers.kernel import _script_collect, _script_run, _script_stop
+
+    spinner = tree / "scripts" / "tally.py"
+    spinner.write_text(SPINNER, encoding="utf-8")
+
+    chain = Chain(root="user")
+    started = _as(chain, _script_run, {"path": str(spinner), "wait": False})
+    stopped = _as(chain, _script_stop, {"id": started.data["id"]})
+
+    assert stopped.data is True
+    report = _as(chain, _script_collect, {"ids": [started.data["id"]]})
+    assert report.data[0]["state"] == "cancelled"
+
+
+def test_stopping_a_run_that_is_not_yours_does_nothing(wired, tree):
+    """Answers False rather than raising: there is no such run, to you."""
+    from sandbox.handlers.kernel import _script_run, _script_stop
+
+    started = _as(Chain(root="user"), _script_run,
+                  {"path": str(write(tree)), "wait": False})
+    refused = _as(Chain(root="cron:nightly"), _script_stop,
+                  {"id": started.data["id"]})
+
+    assert refused.data is False
+
+
+def test_a_waited_run_is_not_kept_for_collection(wired, tree):
+    """Nothing to come back for, so nothing is retained.
+
+    Worth pinning as a *negative*: retaining every run would make the registry
+    grow with ordinary tool and command work, which is a leak with no symptom
+    until the process runs out of memory.
+    """
+    from sandbox.handlers.kernel import _script_collect, _script_run
+
+    chain = Chain(root="user")
+    done = _as(chain, _script_run, {"path": str(write(tree)),
+                                    "args": {"values": [1, 2]}})
+
+    assert done.data == 3
+    assert _as(chain, _script_collect, {"ids": None}).data == []
+
+
+FANOUT = '''\
+requests = ["script.run", "script.collect"]
+
+from guest.bases import BaseTool
+
+
+class Fanout(BaseTool):
+    """Start several scripts at once and collect them."""
+
+    name = "fanout"
+    description = "x"
+
+    def run(self, sdk, path):
+        """Three at once, then the answers."""
+        ids = [sdk.scripts.run(path, wait=False, values=[n])["id"]
+               for n in (1, 2, 3)]
+        return sorted(r["data"] for r in sdk.scripts.collect(ids))
+'''
+
+
+def test_the_sdk_reaches_all_of_it_from_inside_a_box(wired, tree):
+    """End to end through the SDK, which is the only path that matters.
+
+    The handler tests above call in directly for precision; this is the shape a
+    plugin author actually writes, and it is the one that would break if the
+    Request names, the argument spelling or the answer shape drifted.
+    """
+    fanout = tree / "tools" / "tool_fanout.py"
+    fanout.parent.mkdir(parents=True, exist_ok=True)
+    fanout.write_text(FANOUT, encoding="utf-8")
+
+    try:
+        result = wired.run(str(fanout), "Fanout",
+                           kwargs={"path": str(write(tree))},
+                           chain=Chain(root="user"))
+    finally:
+        unload_box("tool_fanout")
+
+    assert result.ok, result.error
+    assert result.data == [1, 2, 3]

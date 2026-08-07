@@ -574,9 +574,23 @@ ALWAYS_SAFE = {
     # agent cannot kill without a dialog is a dev server the agent will not
     # start, and the alternative to stopping it is leaving it running.
     R.PROC_STATUS, R.PROC_LIST, R.PROC_STOP,
+    # And the same two ways of speaking about a *script* this system already
+    # started, on exactly the argument the three above make. ``script.run`` is
+    # itself branched — where the file lives and what it imports is the whole
+    # question — but that question was already answered when the run started.
+    # Collecting reads a result the script has already produced; stopping
+    # narrows, and a fan-out the caller cannot abandon without a dialog is one
+    # it will not start.
+    R.SCRIPT_COLLECT, R.SCRIPT_STOP,
     R.FILE_REGISTER, R.FILE_LIST,
     R.PARSE_FILE, R.PARSE_MODALITY,
     R.LEDGER_RECORD, R.LEDGER_READ,
+    # Asking the kernel how long this execution has left. It reads a clock the
+    # kernel keeps *about the caller itself* — no other execution is visible
+    # through it — and the answer only ever causes the guest to do less. A
+    # deadline nobody can see is one that can only be discovered by being
+    # killed by it.
+    R.SELF_BUDGET,
 }
 
 # Every Request must appear in exactly one of the two sets or be handled by a

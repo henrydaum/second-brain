@@ -830,6 +830,8 @@ prompt is emphatic about stopping them.
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `script.run(path, entry, args, wait)` | Run a file of SDK code that is not a plugin | the directory the file is in; what it imports | safe |
+| `script.collect(ids, timeout)` | Take detached scripts' results | — | safe |
+| `script.stop(id)` | Cancel a detached script | — | safe |
 
 **This is the shell's job, moved somewhere it can be answered.** Section 18
 concludes that a command line cannot be classified, so every command is asked
@@ -873,6 +875,26 @@ script that wants to run for an hour is a pipeline task; both are families that
 already exist and both are approved at the point they are created, which is
 where a commitment that outlives a turn should be answered for.
 
+**`collect` and `stop` speak only about a script this caller already started**,
+which is why neither needs the two checks above: `run` answered them when the
+work began, and neither of these starts anything. Collecting reads a result
+already produced. Stopping *narrows*, and is safe for the reason `proc.stop`
+and `agent.stop` are — a fan-out the caller cannot abandon without a dialog is
+one it will not start.
+
+Ownership is the caller's chain **root**, so two scripts detached by one turn
+are collectable together and a different root reaches neither. The root is
+also the part of a chain a guest cannot state about itself, so a box cannot
+claim somebody else's results by asking for them. An id belonging to another
+owner answers "no such run" rather than refusing — that names the caller's
+actual mistake without disclosing that the run exists.
+
+`script.collect` is in `READ_ONLY`, so the ledger's sandbox sink drops it: a
+fan-out polls with `timeout=0` and would otherwise write a row per tick, the
+same problem `console.read` and `agent.collect` are in that set for. Delivery
+is one-shot, and a finished result nobody collects is swept after
+`COLLECT_RETENTION` so an abandoned fan-out is not a leak.
+
 ## 19. Self and ambient
 
 | Request | Purpose | Policy inputs | Default |
@@ -880,12 +902,28 @@ where a commitment that outlives a turn should be answered for.
 | `self.respond(result)` | Return a result and terminate | — | safe |
 | `self.terminate()` | End without a result | — | safe |
 | `self.yield()` | Persistent containers: sleep until next input | — | safe |
+| `self.budget()` | How much of this execution's deadline is left | — | safe |
 | `env.read(name)` | Environment variable | name sensitivity | safe, **credential-looking names returned as handles** |
 | `secret.reveal(name)` | A credential in plaintext | — | **unsafe, always** |
 
 `time.now()` is SDK, not a Request — determinism is not a goal.
 
 `self.respond` is invalid for persistent containers, which use `self.yield`.
+
+`self.budget` reads a clock the kernel keeps **about the caller itself** — no
+other execution is visible through it — and the answer only ever causes the
+guest to do less, so there is nothing here for a dialog to be about. It is
+`READ_ONLY` for the reason `script.collect` is, and more sharply: a long loop
+asks every iteration, so counting it as a change would bump `sandbox.epoch` per
+tick and silently invalidate every cached `agent_prompt` in the process.
+
+It exists because the kernel is the only party that can answer. The guest may
+read a clock, but a deadline measures *running* time — elapsed minus whatever
+the kernel spent owing it an answer — and it can see neither that discount nor
+the ceiling its declared `timeout` was clamped to. Without the Request the only
+way to discover a deadline is to be killed by it, which discards everything
+computed on the way; with it, a run that is going to be too long can hand back
+what it has.
 
 ## 20. The application
 

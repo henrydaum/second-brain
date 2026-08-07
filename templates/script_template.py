@@ -94,6 +94,57 @@ you 600. And a separate wall-clock ceiling of 600s bounds every run however it
 spends the time, blocked or not. So ten minutes of elapsed time is the real
 limit on a script, and work that needs longer than that wants to be a task.
 
+Ask `sdk.budget()` what is actually left, rather than guessing from the number
+you declared — it answers `{running, wall, deadline, ceiling}` in seconds, and
+`deadline` is what the kernel is enforcing after the clamp. Checking it is what
+lets a long loop stop itself:
+
+    def sweep(sdk, documents):
+        done = []
+        for doc in documents:
+            if sdk.budget()["running"] < 20:
+                break
+            done.append(analyse(sdk, doc))
+        return sdk.ok({"done": done, "resume_at": len(done)})
+
+Worth doing in any loop over an unknown amount of work. The alternative is not
+"it runs a bit longer" — it is the watchdog killing the box, so a run
+three-quarters of the way through returns nothing at all. Calling it costs
+nothing: it is read-only, so it draws no dialog and writes no ledger row.
+
+
+DOING SEVERAL THINGS AT ONCE
+----------------------------
+`wait=False` hands back an id, and that is how a script fans work out:
+
+    ids = [sdk.scripts.run(path, "analyse", wait=False, doc=d)["id"]
+           for d in documents]
+    for report in sdk.scripts.collect(ids):
+        sdk.log(report["state"], report["data"])
+
+Each one is a box of its own, so they genuinely run in parallel. `collect`
+answers with `id`, `script`, `state`, `ok`, `data` and `error` per run;
+`timeout=0` polls without waiting and leaves anything still running collectable;
+`sdk.scripts.stop(id)` cancels one. Every report is delivered once.
+
+Reach for this when the work is code, and for `sdk.agent.spawn` when it needs
+judgement — that one costs a model call per child and this one costs none.
+
+
+TRYING AGAIN
+------------
+`sdk.retry(fn)` retries only what the kernel said was worth retrying, which it
+knows because the handler that failed set it:
+
+    page = sdk.retry(lambda: sdk.net.http(url))
+
+A locked file and a timed-out request come back retryable; a malformed query
+does not, and neither does a refusal — `sdk.Denied` propagates on the first
+attempt however you configure it, because asking again is a second dialog in
+front of somebody who already said no. The backoff sleeps, and sleeping is
+running time, so a retry loop inside a long run is one more reason to watch
+`sdk.budget()`.
+
 
 HELPER FILES AND BOXES
 ----------------------

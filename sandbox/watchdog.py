@@ -73,6 +73,33 @@ def overdue(execution, started: float, deadline: float,
     return execution.running_for(started, now) > deadline
 
 
+def _record(execution, started: float, deadline: float, ticket) -> None:
+    """Note the deadline on the execution, tolerating anything that lacks one.
+
+    Test doubles stand in for an ``Execution`` all over the suite and only ever
+    needed ``running_for``. Watching one must not start failing because the
+    watchdog gained a second thing to say to it.
+    """
+    note = getattr(execution, "watching", None)
+    if note is None:
+        return
+    try:
+        note(started, deadline, ticket)
+    except Exception:
+        logger.debug("could not record a deadline on %r", execution)
+
+
+def _forget(execution, ticket) -> None:
+    """The counterpart of :func:`_record`, with the same tolerance."""
+    drop = getattr(execution, "unwatched", None)
+    if drop is None:
+        return
+    try:
+        drop(ticket)
+    except Exception:
+        logger.debug("could not clear a deadline on %r", execution)
+
+
 class Watchdog:
     """A registry of deadlines and one thread that enforces them."""
 
@@ -96,6 +123,12 @@ class Watchdog:
             ticket = self._next
             self._watched[ticket] = (execution, started, float(deadline),
                                      on_overdue)
+        # Tell the execution what it is being held to, so ``sdk.budget`` can
+        # answer from the same two numbers this loop compares against. Done
+        # here rather than at each of the three call sites for the reason
+        # ``overdue`` is shared: two copies of one deadline drift, and the
+        # drift is invisible until something dies early.
+        _record(execution, started, float(deadline), ticket)
         self._ensure_running()
         return ticket
 
@@ -104,7 +137,9 @@ class Watchdog:
         if ticket is None:
             return
         with self._lock:
-            self._watched.pop(ticket, None)
+            entry = self._watched.pop(ticket, None)
+        if entry is not None:
+            _forget(entry[0], ticket)
 
     def _ensure_running(self) -> None:
         """Start the thread on first use; never start a second."""
