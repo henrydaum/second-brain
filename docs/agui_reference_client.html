@@ -95,17 +95,26 @@ $("send").onsubmit = async (event) => {
   if (!text) return;
   $("text").value = "";
   add("user", text);
+  await run({ text });
+};
 
-  // One POST per run, SSE until RUN_FINISHED. The whole thread is resent by
-  // spec; Second Brain keeps its own history and reads only the last user
-  // turn, so sending just this one is honest and sufficient.
+// One POST per run, SSE until RUN_FINISHED. ``resume`` answers whatever the
+// previous run interrupted on — an approval, a form field — and a run may
+// carry both an answer and a new message.
+async function run({ text = "", resume = [] }) {
   const reply = await fetch($("url").value + "/agui", {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({
       threadId: $("thread").value || "default",
       runId: "run-" + Math.random().toString(16).slice(2),
-      messages: [{ id: "m" + Date.now(), role: "user", content: text }],
+      // The whole thread is resent by spec; Second Brain keeps its own history
+      // and reads only the last user turn, so sending just this one is honest
+      // and sufficient.
+      messages: text
+        ? [{ id: "m" + Date.now(), role: "user", content: text }]
+        : [],
+      resume,
       state: {}, tools: [], context: [], forwardedProps: {},
     }),
   });
@@ -135,7 +144,7 @@ $("send").onsubmit = async (event) => {
       catch (err) { add("msg err", "bad frame: " + err); }
     }
   }
-};
+}
 
 function handle(event, messages) {
   switch (event.type) {
@@ -163,45 +172,71 @@ function handle(event, messages) {
     case "RUN_ERROR":
       add("msg err", "Error: " + event.message);
       break;
-    case "RUN_FINISHED":
+    case "RUN_FINISHED": {
+      // A run that stopped short says why here. This is the only way a client
+      // can *answer* — a CUSTOM event has no route back — so a client that
+      // ignores it will leave the agent blocked on a question nobody sees.
+      const outcome = event.outcome;
+      if (outcome && outcome.type === "interrupt") {
+        for (const interrupt of outcome.interrupts) ask(interrupt);
+      }
       break;
+    }
     case "CUSTOM":
-      custom(event);
+      add("custom", event.name + "\n" + JSON.stringify(event.value, null, 2));
       break;
     default:
       add("custom", event.type + " " + JSON.stringify(event));
   }
 }
 
-// The four things AG-UI has no words for. A real client renders these
-// properly; here they only have to be legible enough to prove they arrived
-// with their payloads intact.
-function custom(event) {
-  const value = event.value || {};
-  if (event.name === "second_brain.approval") {
-    const node = add("custom", `${value.title || "Approval"}\n${value.body || ""}`);
-    const choices = value.enum
-      ? value.enum.map((v, i) => [(value.enum_labels || [])[i] || String(v), v])
-      : [["Allow", "yes"], ["Deny", "no"]];
-    for (const [label, answer] of choices) {
+// One interrupt, rendered from the generic fields alone. A real client would
+// reach into metadata.second_brain for the labelled, skippable, cancellable
+// form the kernel actually described — but rendering only what the protocol
+// guarantees is the point of a reference: if this works, any AG-UI client can
+// be made to work.
+function ask(interrupt) {
+  const node = add("custom", interrupt.message || "Input required");
+  const answer = ((interrupt.responseSchema || {}).properties || {}).value || {};
+  const done = (payload, status = "resolved") => {
+    node.querySelectorAll("button, input").forEach((el) => el.disabled = true);
+    run({ resume: [{ interruptId: interrupt.id, status, payload }] });
+  };
+
+  node.appendChild(document.createElement("br"));
+  if (answer.enum) {
+    // enum and enumLabels pair by index: answer with the value, show the
+    // label. Showing the value puts internal spellings on a person's buttons.
+    answer.enum.forEach((value, i) => {
+      const button = document.createElement("button");
+      button.textContent = (answer.enumLabels || [])[i] || String(value);
+      button.style.marginRight = ".4rem";
+      button.onclick = () => done({ value });
+      node.appendChild(button);
+    });
+  } else if (answer.type === "boolean" || interrupt.reason === "confirmation") {
+    for (const [label, value] of [["Allow", true], ["Deny", false]]) {
       const button = document.createElement("button");
       button.textContent = label;
       button.style.marginRight = ".4rem";
-      // Answered by submitting text, exactly as a person typing "yes" would:
-      // the frontend absorbs it into the waiting approval.
-      button.onclick = () => { $("text").value = String(answer);
-                               $("send").requestSubmit(); };
-      node.appendChild(document.createElement("br"));
+      // ``accepted`` is the protocol's own spelling for a confirmation; the
+      // frontend accepts it or ``value`` interchangeably.
+      button.onclick = () => done({ accepted: value });
       node.appendChild(button);
     }
-    return;
+  } else {
+    const input = document.createElement("input");
+    input.placeholder = answer.type || "string";
+    if (answer.default !== undefined) input.value = answer.default;
+    input.onkeydown = (e) => { if (e.key === "Enter") done({ value: input.value }); };
+    node.appendChild(input);
   }
-  if (event.name === "second_brain.form") {
-    const field = value.field || {}, display = value.display || {};
-    add("custom", `Form · ${display.prompt || field.prompt || field.name}\n` +
-                  JSON.stringify(value, null, 2));
-    return;
-  }
-  add("custom", event.name + "\n" + JSON.stringify(value, null, 2));
+
+  const cancel = document.createElement("button");
+  cancel.textContent = "✕";
+  cancel.title = "Cancel — the agent is told, rather than left waiting";
+  cancel.style.marginLeft = ".4rem";
+  cancel.onclick = () => done(undefined, "cancelled");
+  node.appendChild(cancel);
 }
 </script>

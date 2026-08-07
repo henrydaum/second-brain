@@ -158,6 +158,7 @@ class _Desk:
     def __init__(self):
         self.submitted = []
         self.pending = {}
+        self.answered = None
 
     def submit_text(self, session_key, text):
         """Take a line, as the state machine's entry point would."""
@@ -176,6 +177,16 @@ class _Desk:
     def next_pending_approval_id(self, session_key):
         """The id of the approval that would be answered."""
         return self.pending.get(session_key)
+
+    def is_approval_pending(self, session_key, request_id=None):
+        """Whether *this* approval is still waiting.
+
+        Asked by ``frontend.resolve`` before it does anything, which is what
+        stops a stale answer landing on whatever is waiting now.
+        """
+        if request_id is None:
+            return session_key in self.pending
+        return self.pending.get(session_key) == request_id
 
     def resolve_approval(self, session_key, request_id, value, resolved_by=None):
         """Answer one by id."""
@@ -501,28 +512,166 @@ def test_events_with_no_open_stream_are_buffered_not_dropped(running):
 # ── the four AG-UI has no words for ─────────────────────────────────
 
 @pytest.mark.store
-def test_the_interactive_kinds_ride_as_custom_events(running):
-    """The payload crosses verbatim.
+def _interrupts(frames):
+    """The interrupts carried on this run's outcome."""
+    for event in frames:
+        if event["type"] == "RUN_FINISHED":
+            outcome = event.get("outcome") or {}
+            if outcome.get("type") == "interrupt":
+                return outcome["interrupts"]
+    return []
 
-    The form schema is already built — ``{field, display}`` is what the kernel
-    renders and what Telegram consumes — so re-describing it here would be a
-    second copy to keep in step.
+
+@pytest.mark.store
+def test_an_approval_ends_the_run_as_an_interrupt(running):
+    """The difference between an interrupt and a CUSTOM event is answerability.
+
+    A CUSTOM event carries no way back, so an approval sent that way could be
+    displayed and never resolved — the turn blocked while the client believed
+    it had done its job. An interrupt has an id, a message and a
+    ``responseSchema``, and the protocol says how to answer it.
     """
     conn, opened = _run(running, "t4")
     running.render("agui:t4", "approval",
                    {"id": "a1", "title": "Run shell?", "body": "git status",
                     "type": "boolean"})
-    running.render("agui:t4", "form_field",
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    assert len(raised) == 1
+    assert raised[0]["id"] == "a1"
+    assert raised[0]["reason"] == "confirmation"
+    assert "Run shell?" in raised[0]["message"]
+    assert "git status" in raised[0]["message"]
+    # The kernel's own payload rides alongside, so a client that knows this
+    # system renders the real thing rather than re-deriving it from prose.
+    assert raised[0]["metadata"]["second_brain"]["request"]["id"] == "a1"
+
+
+@pytest.mark.store
+def test_an_enum_approval_offers_its_choices_and_their_labels(running):
+    """``enum`` and ``enum_labels`` pair by index and both have to survive.
+
+    Rendering the values would put internal spellings like
+    ``always:api.search.brave.com`` on a person's buttons — written for a
+    ledger row months later, not for somebody mid-decision.
+    """
+    conn, opened = _run(running, "t8")
+    running.render("agui:t8", "approval",
+                   {"id": "a2", "title": "Allow?", "type": "string",
+                    "enum": ["allow", "always:x.com", "deny"],
+                    "enum_labels": ["Allow once", "Always allow x.com", "Deny"]})
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    answer = raised[0]["responseSchema"]["properties"]["value"]
+    assert answer["enum"] == ["allow", "always:x.com", "deny"]
+    assert answer["enumLabels"][1] == "Always allow x.com"
+
+
+@pytest.mark.store
+def test_a_form_field_interrupts_as_input_required(running):
+    """The form schema is already built; this only has to carry it."""
+    conn, opened = _run(running, "t9")
+    running.render("agui:t9", "form_field",
                    {"field": {"name": "port", "type": "integer"},
                     "display": {"prompt": "Which port?"}})
-    running.render("agui:t4", "buttons", [{"label": "Yes", "value": "y"}])
-    running.render("agui:t4", "typing", False)
-    frames = _events(conn, opened)
-    customs = {e["name"]: e["value"] for e in frames if e["type"] == "CUSTOM"}
-    assert customs["second_brain.approval"]["title"] == "Run shell?"
-    assert customs["second_brain.form"]["field"]["name"] == "port"
-    assert customs["second_brain.buttons"][0]["value"] == "y"
+    raised = _interrupts(_events(conn, opened))
     conn.close()
+
+    assert raised[0]["reason"] == "input_required"
+    assert raised[0]["message"] == "Which port?"
+    assert raised[0]["responseSchema"]["properties"]["value"]["type"] == "integer"
+    form = raised[0]["metadata"]["second_brain"]["form"]
+    assert form["field"]["name"] == "port"
+
+
+@pytest.mark.store
+def test_buttons_interrupt_with_their_values_as_choices(running):
+    conn, opened = _run(running, "t10")
+    running.render("agui:t10", "buttons",
+                   [{"label": "Yes", "value": "y"},
+                    {"label": "No", "value": "n"}])
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    answer = raised[0]["responseSchema"]["properties"]["value"]
+    assert answer["enum"] == ["y", "n"]
+    assert answer["enumLabels"] == ["Yes", "No"]
+
+
+@pytest.mark.store
+def test_resuming_an_approval_resolves_it(running):
+    """The round trip, which is the whole reason for interrupts.
+
+    The answer goes back the way the kernel already accepts one — ``resolve``
+    by id — so an approval answered from the app takes exactly the path an
+    approval answered from the REPL does.
+    """
+    conn, opened = _run(running, "t11")
+    running.desk.pending["agui:t11"] = "a3"
+    running.render("agui:t11", "approval",
+                   {"id": "a3", "title": "Run shell?", "type": "boolean"})
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    body = json.dumps({"threadId": "t11", "runId": "r-resume", "messages": [],
+                       "resume": [{"interruptId": raised[0]["id"],
+                                   "status": "resolved",
+                                   "payload": {"accepted": True}}]})
+    conn = _open(running, _request("POST", "/agui", body=body))
+    conn.close()
+    assert running.desk.answered == ("agui:t11", "a3", True)
+
+
+@pytest.mark.store
+def test_a_cancelled_interrupt_denies_rather_than_hangs(running):
+    """Closing the dialog is an answer, and the turn is entitled to hear it."""
+    conn, opened = _run(running, "t12")
+    running.desk.pending["agui:t12"] = "a4"
+    running.render("agui:t12", "approval",
+                   {"id": "a4", "title": "Delete everything?",
+                    "type": "boolean"})
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    body = json.dumps({"threadId": "t12", "runId": "r-cancel", "messages": [],
+                       "resume": [{"interruptId": raised[0]["id"],
+                                   "status": "cancelled"}]})
+    conn = _open(running, _request("POST", "/agui", body=body))
+    conn.close()
+    assert running.desk.answered == ("agui:t12", "a4", False)
+
+
+@pytest.mark.store
+def test_resuming_a_form_field_submits_the_value_as_text(running):
+    """A form value is not an approval, and goes back the way text does."""
+    conn, opened = _run(running, "t13")
+    running.render("agui:t13", "form_field",
+                   {"field": {"name": "port", "type": "integer"},
+                    "display": {"prompt": "Which port?"}})
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    body = json.dumps({"threadId": "t13", "runId": "r-form", "messages": [],
+                       "resume": [{"interruptId": raised[0]["id"],
+                                   "status": "resolved",
+                                   "payload": {"value": 8080}}]})
+    conn = _open(running, _request("POST", "/agui", body=body))
+    conn.close()
+    assert ("agui:t13", "8080") in running.desk.submitted
+
+
+@pytest.mark.store
+def test_an_unknown_interrupt_id_is_ignored(running):
+    """A stale resume must not be applied to whatever is waiting now."""
+    conn = _open(running, _request("POST", "/agui", body=json.dumps(
+        {"threadId": "t14", "runId": "r", "messages": [],
+         "resume": [{"interruptId": "never-raised", "status": "resolved",
+                     "payload": {"accepted": True}}]})))
+    conn.close()
+    assert not running.desk.submitted
+    assert not getattr(running.desk, "answered", None)
 
 
 @pytest.mark.store

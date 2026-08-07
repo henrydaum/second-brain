@@ -292,6 +292,25 @@ def main(sdk):
         pass
 '''
 
+BUSY = '''\
+def main(sdk):
+    """Never finish, but keep asking the kernel things.
+
+    The difference from ``SPINNER`` is where cancellation lands. A cancelled
+    guest learns at its **next Request**, which raises ``Terminated``; code
+    that makes none can only be *killed*, and killing waits for the deadline —
+    the 60s default, since a script that declares no ``timeout`` gets
+    ``interpreter.DEFAULT_TIMEOUT_SECONDS``.
+
+    That kill path has its own test (``test_a_runaway_is_actually_killed``),
+    which buys it for 2s by declaring a one-second timeout. Spending another
+    sixty here to re-prove it — while the claim under test is that *stopping*
+    reaches a detached run — made one test half of the whole suite.
+    """
+    while True:
+        sdk.fs.list(".")
+'''
+
 
 def test_cancelling_the_caller_tears_down_the_script(sb, tree, monkeypatch):
     """Cancellation reaches code that is *making* Requests. This makes none.
@@ -555,11 +574,16 @@ def test_stopping_a_detached_script_reaches_it(wired, tree):
 
     A fan-out the caller cannot abandon is one it will not start, which is the
     argument ``proc.stop`` already makes about a dev server.
+
+    The script is ``BUSY`` rather than ``SPINNER`` deliberately — see that
+    constant. What is under test here is that ``script.stop`` reaches a
+    detached run, not how long the kernel takes to kill code that refuses to
+    ask it anything.
     """
     from sandbox.handlers.kernel import _script_collect, _script_run, _script_stop
 
     spinner = tree / "scripts" / "tally.py"
-    spinner.write_text(SPINNER, encoding="utf-8")
+    spinner.write_text(BUSY, encoding="utf-8")
 
     chain = Chain(root="user")
     started = _as(chain, _script_run, {"path": str(spinner), "wait": False})
