@@ -44,7 +44,6 @@ class SpawnSubagent(BaseTool):
         "required": ["prompt"],
     }
     requires_services = []
-    plan_mode_safe = False
     agent_prompt = (
         "## Spawning agents\n"
         "Delegate only work that is (a) genuinely independent and heavy, or (b) "

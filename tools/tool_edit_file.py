@@ -110,7 +110,6 @@ class EditFile(BaseTool):
         "required": ["operation", "path"],
     }
     requires_services = []
-    plan_mode_safe = False
 
     def run(self, sdk, **kwargs):
         """Run edit file.
