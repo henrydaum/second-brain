@@ -658,9 +658,16 @@ The console's inversion one layer out, for the same reason and with the same
 scoping. `socket` and `http` are refused to a guest and `sdk.net.http` dials
 *out*, so a frontend could talk to the world and never be talked to — fine for
 a transport that polls somebody else's servers, impossible for one a client
-connects to. A frontend declares `serves_http = <port>`, the kernel binds it on
-**loopback**, accepts and parses on its own threads, and the guest drains what
-arrived. Exposing that port is a tunnel's job, not a declaration's.
+connects to. A frontend declares `serves_http = <port>` (a default; the config
+key `<name>_port` overrides it), the kernel binds it on **loopback**, parses
+with `http.server`, and the guest drains what arrived. Exposing that port is a
+tunnel's job, not a declaration's.
+
+The guest sets its own response headers and the kernel only fills gaps —
+`Content-Length`, `Connection`, and the SSE content type. Notably **no CORS**:
+which origins may reach a frontend is a fact about a deployment, not something
+the boundary can decide, and a kernel-chosen `Access-Control-Allow-Origin`
+would be either uselessly strict or a hole nobody asked for.
 
 Four rather than two because **a reply may outlive the call that opened it**.
 An SSE stream stays open for a whole conversation and takes frames one at a

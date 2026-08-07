@@ -540,10 +540,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
     interval, max_failures = _poll_settings(declarations, 0.05)
 
     wants_console = bool(declarations.get("uses_console"))
-    # A port, or None. Declared as the number rather than as a flag plus a
-    # setting, because the kernel has to bind before the box opens and a
-    # config read at that moment would be answering for a frontend that does
-    # not exist yet. Zero means "any free port", which is what a test wants.
+    # A port, or None. Zero means "any free port", which is what a test wants.
     try:
         serves_http = declarations.get("serves_http")
         serves_http = None if serves_http is None else int(serves_http)
@@ -552,7 +549,25 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
                        "port; it will not serve", name,
                        declarations.get("serves_http"))
         serves_http = None
+    # What a person may move without editing a plugin. The declaration is the
+    # default and ``<name>_port`` overrides it — named by convention rather
+    # than by a second declaration, the same way ``secret_*`` declares itself.
+    # ``FrontendManager.register`` calls ``bind`` before ``start``, so config
+    # is already here when the claim happens.
+    http_setting = f"{name}_port"
     restore_on_start = bool(declarations.get("restore_on_start"))
+
+    def _http_port(self) -> int:
+        """The port to claim: config if it names one, else the declaration."""
+        configured = (getattr(self, "config", None) or {}).get(http_setting)
+        if configured in (None, ""):
+            return serves_http
+        try:
+            return int(configured)
+        except (TypeError, ValueError):
+            logger.warning("frontend %s: %s=%r is not a port; using %s", name,
+                           http_setting, configured, serves_http)
+            return serves_http
 
     def __init__(self, shutdown_event=None):
         """Take the host's shutdown Event, if the manager offers one.
@@ -626,7 +641,8 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         if serves_http is not None:
             from .http_server import SERVER
 
-            if SERVER.claim(self._token, serves_http):
+            wanted = _http_port(self)
+            if SERVER.claim(self._token, wanted):
                 logger.info("frontend %s is serving on 127.0.0.1:%s", name,
                             SERVER.port)
             else:
@@ -635,7 +651,8 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
                 # — another frontend holds the port, or the port is in use by
                 # something outside this process entirely.
                 logger.error("frontend %s could not take port %s; it will "
-                             "receive no requests", name, serves_http)
+                             "receive no requests (set %s to move it)", name,
+                             wanted, http_setting)
         result = box.call("__bind__", token=self._token)
         if not result.ok:
             logger.error("frontend %s could not be bound: %s", name,

@@ -347,13 +347,71 @@ def test_an_oversized_request_is_refused_rather_than_truncated(server):
     assert _await_drain(server, timeout=0.5) == []
 
 
-def test_a_malformed_request_line_is_refused(server):
+def test_a_malformed_length_is_refused(server):
+    """The one parse branch this module owns rather than delegates."""
+    server.claim("a", 0)
+    conn = _connect(server)
+    conn.sendall(b"POST /x HTTP/1.1\r\nHost: h\r\n"
+                 b"Content-Length: notanumber\r\n\r\n")
+    assert b"400" in conn.recv(400)
+    conn.close()
+    assert _await_drain(server, timeout=0.5) == []
+
+
+def test_a_malformed_request_never_reaches_the_guest(server):
+    """Whatever the stdlib answers, nothing unparseable is buffered.
+
+    The status is deliberately not asserted: a one-word request line is a
+    valid HTTP/0.9 request, and the stdlib answers it the HTTP/0.9 way — body
+    only, no status line. What matters here is the boundary, not the wording.
+    """
     server.claim("a", 0)
     conn = _connect(server)
     conn.sendall(b"nonsense\r\nHost: h\r\n\r\n")
-    assert b"400" in conn.recv(200)
     conn.close()
     assert _await_drain(server, timeout=0.5) == []
+
+
+def test_a_plain_response_carries_its_length(server):
+    """Without it a client cannot know the body ended.
+
+    It waits for a close it has no reason to expect, and the author debugging
+    that is staring at a hung browser rather than a stack trace — so the
+    header is computed here unless the caller said otherwise.
+    """
+    server.claim("a", 0)
+    conn = _connect(server)
+    conn.sendall(b"GET /x HTTP/1.1\r\nHost: h\r\n\r\n")
+    item = _await_drain(server)[0]
+    server.respond(item["id"], 200, {}, "hello")
+    head = conn.recv(500).decode()
+    assert "Content-Length: 5" in head
+    conn.close()
+
+
+def test_length_is_bytes_not_characters(server):
+    """A multi-byte character would otherwise make the header a lie."""
+    server.claim("a", 0, source=iter(()))
+    chunks = []
+    server._accept(_request(), _wrap(chunks))
+    rid = server.drain()[0]["id"]
+    server.respond(rid, 200, {}, "héllo")
+    assert "Content-Length: 6" in "".join(chunks)
+
+
+def test_a_caller_may_set_its_own_headers(server):
+    """CORS is the motivating case, and it is the guest's to decide."""
+    server.claim("a", 0, source=iter(()))
+    chunks = []
+    server._accept(_request(), _wrap(chunks))
+    rid = server.drain()[0]["id"]
+    server.respond(rid, 200, {"Access-Control-Allow-Origin": "*",
+                              "Content-Length": "99"}, "hi")
+    written = "".join(chunks)
+    assert "Access-Control-Allow-Origin: *" in written
+    # Theirs wins: a caller that set one meant it.
+    assert written.count("Content-Length") == 1
+    assert "Content-Length: 99" in written
 
 
 def _wrap(chunks):
@@ -492,3 +550,40 @@ def test_stopping_the_frontend_gives_the_port_back(serving):
     assert server.owner
     made.stop()
     assert server.owner == ""
+
+
+def test_config_moves_the_port_without_editing_the_plugin(tmp_path):
+    """The declaration is a default, not a decision.
+
+    ``<name>_port`` wins when set. Named by convention rather than by a second
+    declaration, the same way ``secret_*`` declares itself — and reachable at
+    claim time because ``register`` binds config before it starts a frontend.
+    """
+    import threading
+
+    from guest.loader import unload_box
+    from sandbox.bridge import adapt
+    from sandbox.http_server import SERVER
+
+    path = tmp_path / "frontend_web.py"
+    path.write_text(SERVING_FRONTEND, encoding="utf-8")
+    module = adapt(path)
+    made = module.SandboxedWeb()
+    # A free port, taken and given back, so the number is real but unheld.
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    chosen = probe.getsockname()[1]
+    probe.close()
+    made.bind(None, None, {"web_port": chosen})
+    thread = threading.Thread(target=made.start, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not SERVER.port:
+            time.sleep(0.01)
+        # The declaration says 0 (ephemeral); config said otherwise.
+        assert SERVER.port == chosen
+    finally:
+        made.stop()
+        SERVER.stop()
+        unload_box("frontend_web")

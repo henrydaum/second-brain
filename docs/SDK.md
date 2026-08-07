@@ -1117,10 +1117,45 @@ return falsy from `poll` when it is empty and renders land in the pause.
 `push` returns falsy once the client has gone, which is the ordinary end of a
 stream rather than a fault.
 
+`Content-Length` and `Connection` are computed for you on a non-streaming
+response, and the SSE content type on a streaming one. Anything you put in
+`headers` wins — the kernel fills gaps, it does not overrule you.
+
+**Serving a browser means CORS, and it is yours to set.** The kernel adds no
+`Access-Control-*` headers, because which origins may talk to your frontend is
+a decision about *your* deployment, not something a sandbox can guess. A page
+served from anywhere other than this exact port is a cross-origin request, so a
+client on a different host — or the same host on a different port — needs at
+minimum:
+
+```python
+CORS = {"Access-Control-Allow-Origin": "https://example.com",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization"}
+
+
+def poll(self, sdk):
+    """Answer preflight before anything else."""
+    for request in sdk.http.drain():
+        if request["method"] == "OPTIONS":
+            sdk.http.respond(request["id"], status=204, headers=CORS)
+            continue
+        sdk.http.respond(request["id"], headers=CORS, body="{}")
+    return True
+```
+
+Forget the preflight and a browser reports a CORS failure with no detail and no
+server-side trace, which is an hour lost to an opaque error. Prefer serving
+your client's HTML from this same frontend when you can — same origin, no CORS,
+nothing to get wrong.
+
 **The port is exclusive**, for a blunter reason than the console's: two
 frontends cannot bind one port. The kernel lends it to the first claimant and
 refuses the second. Binding is the kernel's act, so nothing you declare can
 reach a public interface — exposing the port is a tunnel's job.
+
+**Your declaration is a default.** The config key `<name>_port` overrides it,
+so a person can move the port without editing your plugin. Declare it in
+`config_settings` and it shows up in `/config` like any other setting.
 
 `bind` is the "whose data is this?" axis, not permissions. With no
 `external_id` the session takes your declared `default_user_id`; with one it is
