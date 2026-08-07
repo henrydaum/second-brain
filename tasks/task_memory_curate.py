@@ -34,9 +34,9 @@ model, and everything below follows from it: an entry with no action in it
 cannot change anything, so it is not an entry.
 
 **The curator has two jobs, and one column says which.** ``memory_usage``
-records every entry the retrieval service offered and every one
-``tool_memory_recall`` then opened. An entry that was *taken* earns a rewrite —
-it worked, so make it work harder. Anything the agent worked out for itself is
+records every entry the retrieval service offered and every one ``tool_memory``
+then opened. An entry that was *taken* earns a rewrite — it worked, so make it
+work harder. Anything the agent worked out for itself is
 not in the corpus yet and wants writing down. Offered-but-not-taken is neither,
 and saying so is cheap now that it is a recorded fact rather than something
 reconstructed by parsing tool calls out of the transcript.
@@ -45,9 +45,9 @@ Note what "taken" is *not*: a score. That an entry was opened says the
 situation looked close, not that the advice was good. Only reading what
 happened next settles that, which is why a model does it and not a counter.
 
-**The curator writes through ``memory_curate`` and has no other way to write.**
+**The curator writes through ``memory`` and has no other way to write.**
 It is spawned under the ``memory_curator`` agent profile, whose whitelist does
-not include ``edit_file``; ``memory_curate`` addresses entries by name and
+not include ``edit_file``; the ``memory`` tool addresses entries by name and
 derives every path itself. So a background agent nobody is watching cannot
 touch anything outside the memory folder — including ``MEMORY.md``, which holds
 facts, is inlined into every prompt by the kernel, and belongs to the agent the
@@ -106,7 +106,7 @@ _PROMPT = """You curate this agent's memory. Read conversation {cid} ("{title}")
 below, including its tool calls, and work out what the next agent in this
 situation should do differently.
 
-Everything you write goes through the `memory_curate` tool. You address entries
+Everything you write goes through the `memory` tool. You address entries
 by name and it handles paths, frontmatter and dates; you cannot write anywhere
 else, and you must not try.
 
@@ -125,11 +125,15 @@ These entries were surfaced to the agent and it opened them:
 {used}
 
 Each one earned its place, so make it work harder. Read it with
-`memory_recall`, then `memory_curate update` it against what actually happened:
+`memory read`, then `memory update` it against what actually happened:
 
 - sharpen the description so it also fires on the situation that just came up
 - tighten the advice if it was vague, incomplete, or partly wrong
 - record the real result
+
+Omit `description` on an update to keep the one that is already there; supply
+one to replace it. Sharpening it is usually the most valuable part of a
+revision, so supply one whenever the situation has widened.
 
 You have evidence of how these performed, which is the one thing that makes a
 rewrite an improvement rather than a guess. If one turned out to be wrong or
@@ -181,21 +185,21 @@ Transcript:
 Reply with one line: what you wrote or improved, or "nothing worth keeping"."""
 
 
-class MemoryReflect(BaseTask):
-    """Reflect on conversations that have gone quiet."""
+class MemoryCurate(BaseTask):
+    """Curate memory entries from conversations that have gone quiet."""
 
-    name = "memory_reflect"
+    name = "memory_curate"
     description = "Curate memory entries from conversations that have gone quiet."
 
     trigger = "event"
     trigger_channels = ["session_conversation_ended"]
     reads = []
-    writes = ["memory_reflections"]
+    writes = ["memory_curations"]
     output_schema = """
-        CREATE TABLE IF NOT EXISTS memory_reflections (
+        CREATE TABLE IF NOT EXISTS memory_curations (
             conversation_id INTEGER PRIMARY KEY,
             last_message_id INTEGER NOT NULL,
-            reflected_at REAL
+            curated_at REAL
         )
     """
     timeout = 600
@@ -209,19 +213,19 @@ class MemoryReflect(BaseTask):
     # Declared for installation, never imported: the corpus listing goes
     # through ``tool.call``, so the curator and this task read the folder
     # through exactly one implementation.
-    dependencies_files = ["tools/tool_memory_recall.py"]
+    dependencies_files = ["tools/tool_memory.py"]
     dependencies_pip = []
 
     config_settings = [
-        ("Memory reflection floor", "memory_reflect_min_messages",
-         "How many new messages a conversation needs before it is reflected on. "
+        ("Memory curation floor", "memory_curate_min_messages",
+         "How many new messages a conversation needs before it is curated. "
          "Keeps browsing your history from spawning subagents.",
          4, {"type": "slider", "range": (2, 40, 38), "is_float": False}),
-        ("Memory reflection window", "memory_reflect_max_age_hours",
-         "How recently a conversation must have been active to be reflected on. "
-         "Stops a fresh install from reflecting on your entire history.",
+        ("Memory curation window", "memory_curate_max_age_hours",
+         "How recently a conversation must have been active to be curated. "
+         "Stops a fresh install from curating your entire history.",
          24, {"type": "slider", "range": (1, 168, 167), "is_float": False}),
-        ("Reflect on subagents", "memory_reflect_include_subagents",
+        ("Curate subagents", "memory_curate_include_subagents",
          "Also curate memories from subagents you spawned. Their whole purpose "
          "is often to go and find something out, so the lesson is real — but "
          "nobody was steering, and every one costs another curator run. "
@@ -269,7 +273,7 @@ class MemoryReflect(BaseTask):
                 done.append({
                     "conversation_id": row["cid"],
                     "last_message_id": row["max_id"],
-                    "reflected_at": time.time(),
+                    "curated_at": time.time(),
                 })
         return sdk.ok(done, llm_summary=f"Reflected on {len(done)} conversation(s).")
 
@@ -285,7 +289,7 @@ class MemoryReflect(BaseTask):
         is reflecting on.
         """
         try:
-            return bool(sdk.config.read("memory_reflect_include_subagents"))
+            return bool(sdk.config.read("memory_curate_include_subagents"))
         except sdk.Failed:
             return False
 
@@ -313,7 +317,7 @@ class MemoryReflect(BaseTask):
     def _floor(self, sdk):
         """How many new messages earn a reflection."""
         try:
-            return max(1, int(sdk.config.read("memory_reflect_min_messages") or 4))
+            return max(1, int(sdk.config.read("memory_curate_min_messages") or 4))
         except (sdk.Failed, TypeError, ValueError):
             return 4
 
@@ -334,7 +338,7 @@ class MemoryReflect(BaseTask):
         exactly when it *is* worth reflecting on.
         """
         try:
-            hours = max(1, int(sdk.config.read("memory_reflect_max_age_hours") or 24))
+            hours = max(1, int(sdk.config.read("memory_curate_max_age_hours") or 24))
         except (sdk.Failed, TypeError, ValueError):
             hours = 24
         return time.time() - (hours * 3600)
@@ -408,7 +412,7 @@ class MemoryReflect(BaseTask):
               FROM conversation_messages m
               JOIN my_conversations c
                      ON c.id = m.conversation_id
-              LEFT JOIN memory_reflections r
+              LEFT JOIN memory_curations r
                      ON r.conversation_id = m.conversation_id
              WHERE m.id > COALESCE(r.last_message_id, 0)
                AND LOWER(m.role) IN ('user', 'assistant')
@@ -469,7 +473,7 @@ class MemoryReflect(BaseTask):
     def _used_entries(self, sdk, cid):
         """Entries this conversation was offered and actually opened.
 
-        One column, because ``tool_memory_recall`` wrote the fact down when it
+        One column, because ``tool_memory`` wrote the fact down when it
         happened. This used to be reconstructed: read every offer out of one
         table, then scan every assistant message for a ``read_file`` tool call,
         decode two layers of JSON, absolutize and normalize the path it named,
@@ -507,7 +511,7 @@ class MemoryReflect(BaseTask):
         enough to be useful is small enough to list.
         """
         try:
-            entries = sdk.tools.call("memory_recall", action="list") or []
+            entries = sdk.tools.call("memory", action="list") or []
         except sdk.Failed as error:
             sdk.log(f"could not list memory entries: {error}", level="info")
             return "(could not be listed)"

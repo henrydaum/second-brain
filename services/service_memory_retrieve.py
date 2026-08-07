@@ -3,9 +3,9 @@
 Every turn, search the memory folder for entries relevant to what the user just
 said and put their names in the prompt.
 
-One of four, in two pairs, each with an automatic half and an agent-invoked
-one: ``memory_retrieve`` and ``memory_recall`` read, ``memory_reflect`` and
-``memory_curate`` write.
+One of three. This service ranks the corpus and puts names in the prompt,
+``tool_memory`` is the only thing that touches the files in either direction,
+and ``task_memory_curate`` decides when a curator runs.
 
 The folder holds two kinds of entry and retrieval does not distinguish between
 them. A **note** (``notes/<name>.md``) is one situation and what to do about
@@ -24,7 +24,7 @@ destroyed the one observable signal in the system. With the content already in
 the prompt there is no reason to open anything, and the curator needs to know
 which entries were opened to tell whether it is improving one or writing a new
 one. So this service also records what it surfaced (``memory_usage``);
-``tool_memory_recall`` records the other half.
+``tool_memory`` records the other half.
 
 The retrieval itself is one ``hybrid_search`` call at ``turn_start``, with the
 user's own message as the query. That is deliberate on both counts. The hook
@@ -33,9 +33,9 @@ reply, so there is no model call and no subagent here. And the user's words
 *are* the retrieval cue — rewriting them into "better" search terms costs a
 round trip to guess at something the person already said.
 
-Writing is not this service's job and cannot be: only ``tool_memory_curate``
+Writing is not this service's job and cannot be: only ``tool_memory``
 writes entries, whether the caller is the agent mid-conversation or the curator
-subagent ``task_memory_reflect`` spawns after one ends.
+subagent ``task_memory_curate`` spawns after one ends.
 """
 
 import time
@@ -53,8 +53,7 @@ MAX_DESCRIPTION_CHARS = 200
 #: Where entries live, under the memory root, and the only two places searched.
 #: Everything else in ``memory/`` — ``MEMORY.md``, the README, drafts, anything
 #: the agent leaves lying around — is outside them and therefore outside
-#: retrieval. Must match the constants in ``tool_memory_recall`` and
-#: ``tool_memory_curate``.
+#: retrieval. Must match the constants in ``tool_memory``.
 MEMORY_DIRNAME = "memory"
 NOTES_DIRNAME = "notes"
 SKILLS_DIRNAME = "skills"
@@ -62,13 +61,13 @@ SKILLS_DIRNAME = "skills"
 #: The agent profile a curator subagent runs under. Seeded by ``on_install``,
 #: which is the one moment a plugin can write a kernel setting: attended, so
 #: the write can be asked about, and caused by somebody deliberately installing
-#: this. Must match ``CURATOR_PROFILE`` in ``task_memory_reflect``.
+#: this. Must match ``CURATOR_PROFILE`` in ``task_memory_curate``.
 CURATOR_PROFILE = "memory_curator"
 
 #: What that profile may do: read widely, write in exactly one place.
 #:
 #: The absence of ``edit_file`` is the point and survives every addition here.
-#: A curator writes through ``memory_curate``, which addresses entries by name
+#: A curator writes through ``memory``, which addresses entries by name
 #: and derives every path itself, so a background agent nobody is watching
 #: cannot touch a file outside the memory folder however much it can *read*.
 #: That asymmetry is what makes a broad read list safe to grant: reading
@@ -90,11 +89,18 @@ CURATOR_PROFILE = "memory_curator"
 #: would be a nuisance, not a breach, and nothing here can reach conversations,
 #: users or the ledger.
 CURATOR_TOOLS = [
-    "memory_recall", "memory_curate",          # its own two
+    "memory",                                  # its own one
     "read_file", "grep", "glob",               # the filesystem, read-only
     "hybrid_search", "lexical_search", "semantic_search",  # the index
     "sql_query",                               # the record
 ]
+
+#: Tool names this suite used to ship, dropped from an existing profile on a
+#: top-up. ``memory_recall`` and ``memory_curate`` were the read half and the
+#: write half before they became the one ``memory`` tool above; a profile seeded
+#: before that merge names both and would keep naming them forever, since
+#: ``_top_up_curator_tools`` is otherwise purely additive.
+RETIRED_CURATOR_TOOLS = ("memory_recall", "memory_curate")
 
 
 def _memory_root(sdk):
@@ -182,8 +188,7 @@ class MemoryRetrieve(BaseService):
     # profile claims. So this is the same relationship as the others: files
     # this plugin needs present to work as described.
     dependencies_files = ["tools/tool_hybrid_search.py",
-                          "tools/tool_memory_recall.py",
-                          "tools/tool_memory_curate.py",
+                          "tools/tool_memory.py",
                           "tools/tool_read_file.py",
                           "tools/tool_grep.py",
                           "tools/tool_glob.py",
@@ -196,24 +201,25 @@ class MemoryRetrieve(BaseService):
          5, {"type": "slider", "range": (0, 15, 15), "is_float": False}),
     ]
 
+    # Says only what this service is the authority on: which folders are
+    # searched, and what the list it injects is. How to open an entry, and what
+    # earns one, belong to the ``memory`` tool's own block — stating them here
+    # too is how note-vs-skill came to be explained in three files. Nor does
+    # this claim that anything reviews the conversation afterwards: that is
+    # ``task_memory_curate``'s block, and if the task is uninstalled while this
+    # service is not, a copy here would be a promise nothing keeps.
     agent_prompt = (
         "## Memory\n"
-        "`memory/` in your workspace holds what you have learned: `notes/` for "
-        "a situation and what to do about it, `skills/` for a repeatable "
-        "procedure with its own references. Only those two folders are "
-        "searched, so the rest of `memory/` is free for drafts and scratch "
-        "files.\n"
+        "`memory/` in your workspace holds what you have learned, as `notes/` "
+        "and `skills/`. Only those two folders are searched, so the rest of "
+        "`memory/` is free for drafts and scratch files.\n"
         "Entries matching the current message are listed above under 'Things "
         "you have done before'. That list gives you a name and a description, "
-        "never the entry itself — `memory_recall` one when its situation looks "
-        "close enough to yours to be worth learning from. It is advice from a "
-        "past case, not an instruction: weigh whether this case really is that "
-        "one.\n"
+        "never the entry itself. It is advice from a past case, not an "
+        "instruction: weigh whether this case really is that one.\n"
         "Facts, names and preferences with no action attached are not entries "
         "— those go in MEMORY.md, which is yours to maintain and is already in "
-        "this prompt.\n"
-        "Anything you do not write down is reviewed after the conversation "
-        "ends, so there is no need to record as you go."
+        "this prompt."
     )
 
     def on_install(self, sdk):
@@ -221,7 +227,7 @@ class MemoryRetrieve(BaseService):
 
         ``sync_directories`` must contain the memory folder or nothing is ever
         indexed and retrieval stays empty forever; ``agent_profiles`` must hold
-        ``memory_curator`` or ``task_memory_reflect`` cannot spawn a confined
+        ``memory_curator`` or ``task_memory_curate`` cannot spawn a confined
         curator and refuses to spawn an unconfined one.
 
         Both were attempted from ``start`` and then, when that failed, from the
@@ -296,13 +302,23 @@ class MemoryRetrieve(BaseService):
         A blacklist profile is left alone entirely: nothing is being kept out,
         so there is nothing to top up, and rewriting it into a whitelist would
         be a narrowing dressed as a repair.
+
+        Names this suite *retired* are the one exception to leaving a list
+        alone, and the distinction is authorship: an unrecognised name the user
+        added is theirs and stays, but one this package published and then
+        stopped shipping is ours to clean up. Dead whitelist entries grant
+        nothing — ``scoped_registry`` matches against what is actually
+        registered — so this is tidiness rather than safety, and without it the
+        two names the merge retired would sit in the user's ``/config``
+        forever.
         """
         profile = profiles[CURATOR_PROFILE]
         if str(profile.get("whitelist_or_blacklist_tools") or "") != "whitelist":
             return ""
-        listed = list(profile.get("tools_list") or [])
+        listed = [name for name in (profile.get("tools_list") or [])
+                  if name not in RETIRED_CURATOR_TOOLS]
         missing = [name for name in CURATOR_TOOLS if name not in listed]
-        if not missing:
+        if not missing and listed == list(profile.get("tools_list") or []):
             return ""
         updated = {**profiles,
                    CURATOR_PROFILE: {**profile, "tools_list": listed + missing}}
@@ -311,7 +327,8 @@ class MemoryRetrieve(BaseService):
         except sdk.Failed as error:
             return (f"{CURATOR_PROFILE} still missing {', '.join(missing)} "
                     f"({error}) — the curator will run without them")
-        sdk.log(f"{CURATOR_PROFILE} gained {', '.join(missing)}")
+        sdk.log(f"{CURATOR_PROFILE} gained {', '.join(missing)}" if missing
+                else f"{CURATOR_PROFILE} dropped tools this suite retired")
         return ""
 
     def on_uninstall(self, sdk):
@@ -354,8 +371,8 @@ class MemoryRetrieve(BaseService):
         """The one table that records the life of a memory: offered, then taken.
 
         Defined here because this service is the first writer — it inserts a
-        row per offer. ``tool_memory_recall`` fills ``recalled_at`` and
-        ``task_memory_reflect`` only reads. One table rather than three answers
+        row per offer. ``tool_memory`` fills ``recalled_at`` and
+        ``task_memory_curate`` only reads. One table rather than three answers
         every question anyone has asked of it so far: which entries this
         conversation actually used, and — later, when there is a pruning pass
         — which entries nobody has used in months.
@@ -474,7 +491,7 @@ class MemoryRetrieve(BaseService):
     def _log_offered(self, sdk, ctx, offered):
         """Record which entries were surfaced in this conversation.
 
-        Half of a pair: ``tool_memory_recall`` fills in ``recalled_at`` if the
+        Half of a pair: ``tool_memory`` fills in ``recalled_at`` if the
         agent goes on to open one, and that is what tells the curator whether
         to improve an existing entry or write a new one. The prompt is not
         stored anywhere, so this is the only place the offer is knowable —
@@ -678,7 +695,7 @@ class MemoryRetrieve(BaseService):
         return ("## Things you have done before\n"
                 "These matched what was just said. Each is a note or skill you "
                 "wrote earlier; the description is all you get here, so "
-                "`memory_recall` the name when one looks close enough to your "
+                "`memory read` the name when one looks close enough to your "
                 "situation to be worth learning from.\n\n"
                 + "\n".join(entries)
                 + self._more(sdk, len(entries)))
@@ -694,7 +711,7 @@ class MemoryRetrieve(BaseService):
         total = self._corpus_size(sdk)
         if total <= shown:
             return ""
-        return (f"\n\nShowing {shown} of {total}. `memory_recall list` shows "
+        return (f"\n\nShowing {shown} of {total}. `memory list` shows "
                 "them all, or search the folder with `hybrid_search`.")
 
     def _corpus_size(self, sdk):
