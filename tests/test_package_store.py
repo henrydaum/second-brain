@@ -348,13 +348,18 @@ def test_dependents_are_followed_transitively(tmp_path, monkeypatch):
     _write(package_manager.INSTALLED_PLUGINS, "tools/tool_lexical.py", _tool().decode())
     _write(package_manager.INSTALLED_PLUGINS, "tools/tool_hybrid.py",
            _tool(deps=["tools/tool_lexical.py"]).decode())
-    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_memory.py",
+    # The real dependent of ``hybrid_search`` is the *service*, and the
+    # metadata parser is family-agnostic, so the fixture may as well say so.
+    # It used to be ``tools/tool_memory.py``, which is now a real store file
+    # holding something else entirely — a synthetic fixture wearing a real
+    # filename reads as a claim about that file.
+    _write(package_manager.INSTALLED_PLUGINS, "services/service_memory_retrieve.py",
            _tool(deps=["tools/tool_hybrid.py"]).decode())
 
     plan = package_manager.build_uninstall_plan("tool_lexical")
 
     assert set(plan.remove_files) == {"tools/tool_lexical.py", "tools/tool_hybrid.py",
-                                      "tools/tool_memory.py"}
+                                      "services/service_memory_retrieve.py"}
 
 
 def test_a_failing_on_uninstall_still_removes_the_package(tmp_path, monkeypatch):

@@ -8,7 +8,7 @@ appear in that row at all, in a form something can match on.
 It was written for a loop that no longer exists: the memory bundle used to
 infer that a note had been *opened* by scanning the transcript for a
 ``read_file`` call and comparing the path it named. That inference is gone —
-``tool_memory_recall`` records the fact when it happens — and the property
+``tool_memory`` records the fact when it happens — and the property
 survives it, because the transcript is still the only place a past tool call
 is observable and the encoding is still the trap described below.
 

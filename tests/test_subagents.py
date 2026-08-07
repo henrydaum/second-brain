@@ -1012,7 +1012,7 @@ PROFILES = {
                 "tools_list": []},
     "memory_curator": {"llm": "default",
                        "whitelist_or_blacklist_tools": "whitelist",
-                       "tools_list": ["memory_recall", "memory_curate"]},
+                       "tools_list": ["memory"]},
     "researcher": {"llm": "default",
                    "whitelist_or_blacklist_tools": "whitelist",
                    "tools_list": ["hybrid_search"]},

@@ -475,7 +475,7 @@ Second Brain/
     │   ├── llm/
     │   ├── scripts/
     │   ├── attachments/    # files sent in from a frontend (not a tree root)
-    │   ├── memory/         # MEMORY.md + topic files (not a tree root)
+    │   ├── memory/         # MEMORY.md + notes/ + skills/ (not a tree root)
     │   └── temp/           # scratch (not a tree root)
     └── installed/          # the package store's tree, same shape
 ```

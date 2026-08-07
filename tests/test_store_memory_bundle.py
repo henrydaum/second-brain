@@ -5,13 +5,22 @@ be *about* store files. The subject is the kernel's own verdict — does this
 load, are these Requests real, is the retrieval free of dialogs, can this reach
 outside the folder — and the store file is the input.
 
-The four matter together because they are two pairs, and each half is useless
-alone. Retrieval is ``service_memory_retrieve`` (ranks the corpus at
-``turn_start`` and injects descriptions) plus ``tool_memory_recall`` (opens one
-by name). Curation is ``task_memory_reflect`` (spawns a curator when a
-conversation ends) plus ``tool_memory_curate`` (the only writer). Automatic
-half, agent-invoked half, twice over — which is what the four names say.
-What connects them is not an import
+The three matter together because each is useless alone, and they divide by
+*when* rather than by verb. ``service_memory_retrieve`` ranks the corpus at
+``turn_start``, injects descriptions and records what it offered.
+``tool_memory`` is the only thing that touches the files — in either direction
+— and records what was opened. ``task_memory_curate`` decides when a curator
+runs. Two automatic halves and one agent-invoked one.
+
+Reading and writing are one tool on purpose. They were two, whose
+*declarations* were disjoint — the writer had no ``fs.read`` — and that bought
+nothing a curator could not get through ``read_file`` one tool over, while
+costing a revision the ability to keep a description it had just read. What
+confines the tool is that it takes a name and derives every path itself, so the
+tests below pin the character set and the two path templates rather than the
+split.
+
+What connects the three is not an import
 but the *folder* and one table, so the things worth pinning are the
 declarations that decide whether any of it runs at all: the hook moment, the
 trigger channel, the default job, the shared constants, and the profile that
@@ -31,12 +40,11 @@ import sandbox  # noqa: F401
 from tests.support import store_source, store_worktree
 
 SERVICE = "services/service_memory_retrieve.py"
-TASK = "tasks/task_memory_reflect.py"
-RECALL = "tools/tool_memory_recall.py"
-CURATE = "tools/tool_memory_curate.py"
+TASK = "tasks/task_memory_curate.py"
+MEMORY = "tools/tool_memory.py"
 BUNDLE = "bundles/bundle_memory.json"
 
-SUITE = [SERVICE, TASK, RECALL, CURATE]
+SUITE = [SERVICE, TASK, MEMORY]
 
 
 def _source_or_skip(relative: str) -> str:
@@ -107,7 +115,7 @@ def test_every_declared_request_is_a_real_one(relative):
 # The corpus: one shape for notes and skills, decided by location.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_all_four_agree_on_where_entries_live():
+def test_both_files_that_hold_a_path_agree_on_where_entries_live():
     """Membership is a path, which is the one thing a writer cannot fumble.
 
     Requiring a field in the frontmatter made *being an entry* something the
@@ -115,14 +123,15 @@ def test_all_four_agree_on_where_entries_live():
     — no fences, the key in the body — made the entry silently unreachable. A
     path cannot be subtly wrong.
 
-    Three files derive that path independently — the two tools *could* share a
-    ``tools/helpers/`` module, but the service is another family and could not,
-    so sharing would take three copies to two rather than to one. This test is
-    what keeps them equal either way. The task is deliberately not among them:
-    it reaches the corpus only through ``tool.call``, so it holds no path
+    Two files derive that path independently, and they cannot be merged into
+    one: they are different families, so a ``tools/helpers/`` module could not
+    hold the service's copy. Merging the two tools took three copies to two —
+    this test is what keeps the last two equal, which is why it survives the
+    merge rather than being retired by it. The task is deliberately not among
+    them: it reaches the corpus only through ``tool.call``, so it holds no path
     knowledge at all and cannot drift.
     """
-    for relative in (SERVICE, RECALL, CURATE):
+    for relative in (SERVICE, MEMORY):
         source = _source_or_skip(relative)
         assert 'MEMORY_DIRNAME = "memory"' in source, relative
         assert 'NOTES_DIRNAME = "notes"' in source, relative
@@ -203,7 +212,7 @@ def test_the_corpus_is_actions_and_facts_live_elsewhere():
     may touch. Every half has to say so or the agent is told one thing and the
     curator does another.
     """
-    for relative in (SERVICE, TASK, CURATE):
+    for relative in (SERVICE, TASK, MEMORY):
         source = _source_or_skip(relative)
         assert "MEMORY.md" in source, relative
 
@@ -211,7 +220,7 @@ def test_the_corpus_is_actions_and_facts_live_elsewhere():
     # mid-conversation, and to the curator that writes after one. The service
     # only has to say where facts go instead. Matched on the fragment that
     # survives line-wrapping in both prompts.
-    assert "there is nothing to write" in _source_or_skip(CURATE)
+    assert "there is nothing to write" in _source_or_skip(MEMORY)
     assert "there is nothing to write" in _source_or_skip(TASK)
     assert "not entries" in _source_or_skip(SERVICE)
 
@@ -220,22 +229,22 @@ def test_the_corpus_is_actions_and_facts_live_elsewhere():
 # The tools. Two halves of one folder, with disjoint reach.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_neither_tool_can_be_handed_a_path():
+def test_the_tool_cannot_be_handed_a_path():
     """The confinement is structural, not a check that could be bypassed.
 
-    Both tools take a *name* and derive the path from it, so there is no
+    The tool takes a *name* and derives the path from it, so there is no
     argument that escapes ``workspace/memory`` and none that names MEMORY.md.
-    That is what makes them safe to give a subagent nobody is watching — and
-    a ``path`` parameter appearing later would quietly undo it.
+    That is what makes it safe to give a subagent nobody is watching — and a
+    ``path`` parameter appearing later would quietly undo it.
+
+    This now guards the writer as much as the reader. When they were two tools
+    the writer's inability to read was offered as the safety property; it never
+    was one, and this is.
     """
-    for relative in (RECALL, CURATE):
-        parameters = _load_store_class(
-            relative, "MemoryRecall" if relative == RECALL else "MemoryCurate"
-        ).parameters
-        properties = set(parameters["properties"])
-        assert "path" not in properties, relative
-        assert "name" in properties, relative
-        assert not (properties & {"folder", "file", "filename"}), relative
+    properties = set(_load_store_class(MEMORY, "Memory").parameters["properties"])
+    assert "path" not in properties
+    assert "name" in properties
+    assert not (properties & {"folder", "file", "filename"})
 
 
 def test_a_name_cannot_be_a_path():
@@ -244,36 +253,158 @@ def test_a_name_cannot_be_a_path():
     Lowercase alphanumerics and hyphens is the agentskills.io rule, and it also
     happens to exclude every way of writing a traversal: a dot, a separator, a
     drive letter, a leading tilde.
+
+    It guards every write as well as every read, which it did not have to when
+    the writer was a separate file. ``MEMORY.md`` and ``note.md`` are refused
+    twice over: they are not legal names, and no legal name produces them.
     """
-    for relative, class_name in ((RECALL, "MemoryRecall"), (CURATE, "MemoryCurate")):
-        namespace = {}
-        exec(compile(_source_or_skip(relative), relative, "exec"), namespace)
-        valid = namespace["_valid_name"]
+    namespace = {}
+    exec(compile(_source_or_skip(MEMORY), MEMORY, "exec"), namespace)
+    valid = namespace["_valid_name"]
 
-        assert valid("retry-failed-uploads")
-        assert valid("pdf2text")
-        for bad in ("../escape", "a/b", r"a\b", "C:name", "~", "UPPER",
-                    "-lead", "trail-", "a--b", "", "x" * 65, "with space",
-                    "MEMORY.md", "note.md"):
-            assert not valid(bad), f"{relative}: {bad!r} must be refused"
+    assert valid("retry-failed-uploads")
+    assert valid("pdf2text")
+    for bad in ("../escape", "a/b", r"a\b", "C:name", "~", "UPPER",
+                "-lead", "trail-", "a--b", "", "x" * 65, "with space",
+                "MEMORY.md", "note.md"):
+        assert not valid(bad), f"{bad!r} must be refused"
 
 
-def test_the_writer_cannot_read_and_the_reader_cannot_write():
-    """Disjoint capabilities, declared rather than described.
+def test_one_tool_reads_and_writes_and_nothing_it_is_handed_becomes_a_path():
+    """The union is deliberate, and it is safe for a reason that is not a split.
 
-    ``memory_curate`` requires a description on update instead of reading the
-    old one back, which is what lets it declare no ``fs.read`` at all — so the
-    tool that can write is not also a way to see what is in the folder.
-    Symmetrically the reader cannot write a file; its one write is the usage
-    row that records the recall.
+    This replaces ``test_the_writer_cannot_read_and_the_reader_cannot_write``,
+    which pinned that ``memory_curate`` declared no ``fs.read``. That property
+    was retired knowingly. It read as defence in depth and was not: the curator
+    profile also grants ``read_file``, ``grep`` and three search tools, so a
+    writer without ``fs.read`` was denied nothing it could not get one tool
+    over — while the workaround it forced, restating a description on every
+    update, was a real cost paid every time an entry was revised. And it never
+    guarded the folder in the first place, because everything under
+    ``workspace/`` is a standing free-write grant: ``fs.write`` there raises no
+    dialog whether or not the same file can read.
+
+    What does the guarding is that no argument ever becomes a path. Every
+    ``sdk.fs`` call and every ``sdk.path.join`` takes a value derived from
+    ``_memory_root``; ``kwargs`` reaches the document body and a description
+    string, and nothing else. Checked structurally, because this is the
+    property a future action could quietly break.
     """
-    recall = set(_declarations(RECALL)["requests"])
-    curate = set(_declarations(CURATE)["requests"])
+    import ast
 
-    assert not (recall & {"fs.write", "fs.delete"})
-    assert not (curate & {"fs.read"})
-    assert {"fs.write", "fs.delete"} <= curate
-    assert "fs.read" in recall
+    declared = set(_declarations(MEMORY)["requests"])
+    assert {"fs.read", "fs.write", "fs.delete"} <= declared
+
+    source = _source_or_skip(MEMORY)
+    tree = ast.parse(source)
+    checked = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        # ``sdk.fs.<verb>(path, ...)`` and ``sdk.path.join(root, ...)`` — the
+        # first argument is the one that decides what gets touched.
+        owner = func.value
+        is_fs = (isinstance(owner, ast.Attribute) and owner.attr == "fs")
+        is_join = (func.attr == "join" and isinstance(owner, ast.Attribute)
+                   and owner.attr == "path")
+        if not (is_fs or is_join):
+            continue
+        first = ast.get_source_segment(source, node.args[0]) or ""
+        assert "kwargs" not in first, f"a model-supplied value reached {first!r}"
+        checked += 1
+    assert checked > 10, "the walk found nothing, so it is not proving anything"
+
+
+def test_the_two_paths_a_name_can_mean_are_the_only_two():
+    """``MEMORY.md`` is unreachable by computation, not by grep.
+
+    One function produces every path this tool can touch, for reading and for
+    writing alike, and ``_existing`` goes through it — so the write side cannot
+    grow a third template without this test seeing it. Together with the
+    character set, that is the whole confinement: no legal name produces
+    ``MEMORY.md``, and ``MEMORY.md`` is not a legal name.
+    """
+    import ast
+
+    source = _source_or_skip(MEMORY)
+    namespace = {}
+    exec(compile(source, MEMORY, "exec"), namespace)
+
+    class _Sdk:
+        paths = type("P", (), {"get": staticmethod(lambda key: "/w")})()
+        path = type("Q", (), {"join": staticmethod(lambda *p: "/".join(p))})()
+
+    assert namespace["_paths_for"](_Sdk(), "x") == [
+        ("/w/memory/notes/x.md", "note"),
+        ("/w/memory/skills/x/SKILL.md", "skill"),
+    ]
+
+    # And the writer's probe resolves through it rather than rebuilding it.
+    tree = ast.parse(source)
+    existing = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "_existing")
+    assert any(getattr(n.func, "id", "") == "_paths_for"
+               for n in ast.walk(existing) if isinstance(n, ast.Call)), (
+        "_existing must resolve through _paths_for, not its own path list")
+
+
+def test_update_keeps_the_description_it_was_not_given():
+    """The capability the merge bought, and the pin that keeps it.
+
+    A revision that only fixes a body should not have to restate a sentence it
+    just read; requiring one was a workaround for a tool that could not read.
+    The body is still a full replacement — so this cannot reintroduce the
+    "partial edit against a file the model has not seen" problem, since the
+    model still supplies a whole entry.
+
+    An entry with no description anywhere is still refused: it would rank and
+    never once be offered, which looks exactly like having no memory at all.
+    """
+    source = _source_or_skip(MEMORY)
+    update = source.split("def _update", 1)[1].split("\n    def ", 1)[0]
+
+    assert "_supplied_description(kwargs)" in update
+    assert "_stored_description(sdk, path)" in update, "it must read the old one"
+    assert "needs a description" in update, "and still refuse when there is none"
+
+    # The two directions a description travels are named apart. One function
+    # called ``_description`` for both is how a model-supplied string ends up
+    # somewhere only a stored one belongs.
+    assert "def _stored_description(self, sdk, path)" in source
+    assert "def _supplied_description(self, kwargs)" in source
+
+
+def test_one_tool_five_actions_and_only_action_is_required():
+    """Two tools became five actions on one, which is one declaration.
+
+    ``required`` cannot express "a name unless you are listing", so the schema
+    declares the floor and ``run`` enforces the rest. Stating it in JSON Schema
+    with ``if``/``then`` was available and refused: nothing in the kernel reads
+    those keywords and weak models handle them badly.
+    """
+    parameters = _load_store_class(MEMORY, "Memory").parameters
+
+    assert parameters["required"] == ["action"]
+    assert set(parameters["properties"]["action"]["enum"]) == {
+        "read", "list", "create", "update", "delete"}
+    assert {"name", "kind", "description", "body", "narration"} <= set(
+        parameters["properties"])
+
+
+def test_list_is_answered_before_a_name_is_required():
+    """The conditional lives in one place, and its order is the whole of it.
+
+    ``list`` takes no name, so it has to be answered before the name check —
+    otherwise the one action that needs no argument fails without one.
+    """
+    source = _source_or_skip(MEMORY)
+    body = source.split("def run(self, sdk", 1)[1].split("\n    def ", 1)[0]
+
+    assert body.index('action == "list"') < body.index("_valid_name")
+    assert "NAMED_ACTIONS" in body
 
 
 def test_reading_a_skill_points_at_its_resources_without_loading_them():
@@ -283,13 +414,13 @@ def test_reading_a_skill_points_at_its_resources_without_loading_them():
     the resource paths on read means the agent never has to guess a path or
     list a directory, and never pays for a reference it does not open.
     """
-    source = _source_or_skip(RECALL)
+    source = _source_or_skip(MEMORY)
     assert 'SKILL_RESOURCE_DIRS = ("references", "scripts", "assets")' in source
     assert "_resources" in source
 
 
 # ──────────────────────────────────────────────────────────────────────
-# The usage table: one place, three writers of one fact each.
+# The usage table: one place, two writers of one fact each and a reader.
 # ──────────────────────────────────────────────────────────────────────
 
 def test_offered_and_recalled_are_one_table():
@@ -301,10 +432,10 @@ def test_offered_and_recalled_are_one_table():
     tool records the take directly, which is the whole reason it exists.
     """
     service = _source_or_skip(SERVICE)
-    recall = _source_or_skip(RECALL)
+    tool = _source_or_skip(MEMORY)
     task = _source_or_skip(TASK)
 
-    for source, name in ((service, "service"), (recall, "recall"), (task, "task")):
+    for source, name in ((service, "service"), (tool, "tool"), (task, "task")):
         assert "memory_usage" in source, name
 
     # The service defines it and inserts the offer.
@@ -312,9 +443,10 @@ def test_offered_and_recalled_are_one_table():
     assert "recalled_at" in service
     assert "db.define" in _declarations(SERVICE)["requests"]
 
-    # The tool fills it in, or records a recall nobody offered.
-    assert "SET recalled_at = ?" in recall
-    assert "INSERT INTO memory_usage" in recall
+    # The tool fills it in, or records a recall nobody offered. That the same
+    # tool also writes *entries* now changes nothing about this table.
+    assert "SET recalled_at = ?" in tool
+    assert "INSERT INTO memory_usage" in tool
 
     # The task only reads. Its one write is the retention sweep.
     assert "SELECT DISTINCT name FROM memory_usage" in task
@@ -393,8 +525,8 @@ def test_the_service_can_inject_and_can_search():
     # nobody installed grants nothing — but which file supplies each is the
     # closure's business, pinned by
     # ``test_the_bundle_ships_every_tool_the_curator_profile_names``.
-    assert {"tools/tool_hybrid_search.py", "tools/tool_memory_recall.py",
-            "tools/tool_memory_curate.py"} <= set(declared["dependencies_files"])
+    assert {"tools/tool_hybrid_search.py",
+            "tools/tool_memory.py"} <= set(declared["dependencies_files"])
 
 
 def test_injecting_memory_pointers_raises_no_dialog():
@@ -495,7 +627,7 @@ def test_the_curator_listens_for_the_conversation_that_ended():
 
     declared = _declarations(TASK)
     assert declared["family"] == "task"
-    assert declared["name"] == "memory_reflect"
+    assert declared["name"] == "memory_curate"
     assert declared["trigger"] == "event"
     assert declared["trigger_channels"] == [SESSION_CONVERSATION_ENDED]
 
@@ -528,9 +660,13 @@ def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():
 
     A curator is a real agent turn running unattended. With the default profile
     it writes notes with ``edit_file``, which reaches every file in the
-    workspace including MEMORY.md. Named profile plus a curation tool that
+    workspace including MEMORY.md. Named profile plus a memory tool that
     derives its own paths is what confines it — and the two halves have to
     agree on the profile name or the spawn fails.
+
+    Both halves carry more weight since the merge. The one tool the profile
+    grants both reads and writes, so this blacklist and the tool's own path
+    derivation are now the whole of the confinement.
     """
     service = _source_or_skip(SERVICE)
     task = _source_or_skip(TASK)
@@ -543,12 +679,42 @@ def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():
     exec(compile(service, SERVICE, "exec"), namespace)
     allowed = set(namespace["CURATOR_TOOLS"])
     assert "edit_file" not in allowed
-    assert {"memory_recall", "memory_curate"} <= allowed
+    assert "memory" in allowed
+    # And the two names it replaced are gone, not merely joined by a third.
+    assert not {"memory_recall", "memory_curate"} & allowed
     # The list grows as the suite learns what a curator needs, and every
     # addition is a read. Stated as a rule rather than as a fixed list, so a
     # future writer has to be added deliberately and against this line.
     assert not {"edit_file", "write_file", "run_command", "delete_file",
                 "spawn_subagent"} & allowed
+
+
+def test_a_top_up_drops_the_tool_names_this_suite_retired():
+    """Additive is right for names the user added, wrong for names we retired.
+
+    ``_top_up_curator_tools`` exists because ``CURATOR_TOOLS`` grows, and it
+    leaves everything else alone on purpose — an unrecognised name the user
+    added is theirs. But ``memory_recall`` and ``memory_curate`` are names this
+    package *published* and then stopped shipping when they became one
+    ``memory`` tool, and a purely additive top-up would leave both in the
+    profile forever. They grant nothing (``scoped_registry`` matches against
+    what is registered), so this is tidiness rather than safety — which is why
+    it is scoped to a list of names the suite itself retired, and not to
+    anything unrecognised.
+    """
+    namespace = {}
+    exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), namespace)
+
+    retired = set(namespace["RETIRED_CURATOR_TOOLS"])
+    assert retired == {"memory_recall", "memory_curate"}
+    # Nothing retired may also be current, or a top-up would drop and re-add it
+    # on every update.
+    assert not retired & set(namespace["CURATOR_TOOLS"])
+
+    source = _source_or_skip(SERVICE)
+    top_up = source.split("def _top_up_curator_tools", 1)[1].split(
+        "\n    def ", 1)[0]
+    assert "RETIRED_CURATOR_TOOLS" in top_up, "the filter must be in the top-up"
 
 
 def test_the_bundle_ships_every_tool_the_curator_profile_names():
@@ -562,9 +728,13 @@ def test_the_bundle_ships_every_tool_the_curator_profile_names():
     unable to search at all.
 
     The question is asked of the *install closure*, not the manifest, because
-    the manifest deliberately names only the four memory plugins and lets
+    the manifest deliberately names only the three memory plugins and lets
     ``dependencies_files`` supply the rest — which is the same walk the package
     manager does.
+
+    One file now supplies one name where ``tool_memory_recall.py`` and
+    ``tool_memory_curate.py`` used to supply two; the stem derivation below is
+    unchanged by that.
     """
     namespace = {}
     exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), namespace)
@@ -626,10 +796,10 @@ def test_subagent_curation_is_opt_in_and_never_reaches_scheduled_ones():
     """
     declared = _declarations(TASK)
     keys = {entry[1] for entry in declared["config_settings"]}
-    assert "memory_reflect_include_subagents" in keys
+    assert "memory_curate_include_subagents" in keys
 
     setting = next(e for e in declared["config_settings"]
-                   if e[1] == "memory_reflect_include_subagents")
+                   if e[1] == "memory_curate_include_subagents")
     assert setting[3] is False, "opt-in: it costs a curator run per subagent"
 
     source = _source_or_skip(TASK)
@@ -692,7 +862,7 @@ def test_installing_the_bundle_does_not_reflect_on_the_whole_archive():
     """
     declared = _declarations(TASK)
     keys = {entry[1] for entry in declared["config_settings"]}
-    assert "memory_reflect_max_age_hours" in keys
+    assert "memory_curate_max_age_hours" in keys
 
     source = _source_or_skip(TASK)
     assert "MAX(COALESCE(m.timestamp, 0)) >= ?" in source
@@ -718,8 +888,9 @@ def test_the_watermark_is_a_table_the_task_owns():
     how the watermark advances without the task needing ``db.write`` at all.
     """
     declared = _declarations(TASK)
-    assert declared["writes"] == ["memory_reflections"]
-    assert "memory_reflections" in declared["output_schema"]
+    assert declared["writes"] == ["memory_curations"]
+    assert "memory_curations" in declared["output_schema"]
+    assert "curated_at" in declared["output_schema"]
     assert "agent.spawn" in declared["requests"]
 
     source = _source_or_skip(TASK)
@@ -734,11 +905,17 @@ def test_the_facts_job_is_gone_and_memory_md_is_the_agents_own():
     watches editing the one file everybody reads."""
     task = _source_or_skip(TASK)
 
+    # Both spellings of the retired setting. The prefix moved from
+    # ``memory_reflect_`` to ``memory_curate_`` when the task was renamed, so
+    # matching only the old one would stop catching a reintroduction — which is
+    # the entire job of this line.
     assert "memory_reflect_curate_facts" not in task
+    assert "curate_facts" not in task
     assert "memory_index_cap" not in task
     assert "Job three" not in task
     # And no tool the curator holds can address it: ``MEMORY.md`` is not a
-    # legal entry name, which ``test_a_name_cannot_be_a_path`` pins directly.
+    # legal entry name, which ``test_a_name_cannot_be_a_path`` pins directly —
+    # and that check now covers the writer too, since one tool does both.
 
 
 def test_the_event_task_implements_the_event_entry_point():
@@ -756,7 +933,7 @@ def test_the_event_task_implements_the_event_entry_point():
 # The manifest.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_the_manifest_names_the_four_and_lets_the_closure_do_the_rest():
+def test_the_manifest_names_the_three_and_lets_the_closure_do_the_rest():
     """A manifest is what this package *is*, not what it needs on the way.
 
     It listed all sixteen files for a while, which installed correctly and
@@ -784,15 +961,15 @@ def test_the_manifest_names_the_four_and_lets_the_closure_do_the_rest():
     files = manifest["files"]
     assert files == sorted(files), "manifest files must stay sorted"
     assert set(files) == set(SUITE), (
-        "the manifest is the four memory plugins; anything else they need is "
+        "the manifest is the three memory plugins; anything else they need is "
         "reached through dependencies_files")
 
     # Everything the bundle installs is still everything it needs, reached the
     # way the package manager reaches it.
     closure = _install_closure()
     assert "tools/tool_hybrid_search.py" in closure
-    # read_file is for a skill's own references, which memory_recall names but
-    # deliberately does not load.
+    # read_file is for a skill's own references, which the memory tool names
+    # but deliberately does not load.
     assert "tools/tool_read_file.py" in closure
     # And the one the curator must not have. Its absence is not the guard — the
     # profile is — but pulling it in here would make the restriction look
@@ -854,14 +1031,19 @@ class _Sdk:
             self._sdk.emitted.append((channel, payload))
 
 
-def _curate():
-    """The real ``MemoryCurate``, loaded the way a box loads it."""
-    return _load_store_class(CURATE, "MemoryCurate")()
+def _memory():
+    """The real ``Memory`` tool, loaded the way a box loads it.
+
+    Named for the tool rather than for the act: ``MemoryCurate`` is the *task*
+    class now, so a helper called ``_curate`` returning a tool would be
+    actively misleading.
+    """
+    return _load_store_class(MEMORY, "Memory")()
 
 
 def test_a_background_write_is_announced_to_the_chat():
     """The curator writes where nobody is looking; this is the only trace."""
-    tool = _curate()
+    tool = _memory()
     sdk = _Sdk(attended=False)
 
     tool._notify(sdk, "create", "retry-failed-uploads")
@@ -877,7 +1059,7 @@ def test_a_background_write_is_announced_to_the_chat():
 
 
 def test_every_action_has_its_own_word():
-    tool = _curate()
+    tool = _memory()
     for action, expected in (("create", "created"), ("update", "updated"),
                              ("delete", "deleted")):
         sdk = _Sdk(attended=False)
@@ -892,7 +1074,7 @@ def test_a_write_the_user_watched_is_not_announced():
     owns that question, and a concurrent multi-user frontend can override it
     per session — any guess made from a session key would be wrong there.
     """
-    tool = _curate()
+    tool = _memory()
     sdk = _Sdk(attended=True)
 
     tool._notify(sdk, "create", "x")
@@ -901,7 +1083,7 @@ def test_a_write_the_user_watched_is_not_announced():
 
 
 def test_the_setting_turns_it_off_and_defaults_on():
-    tool = _curate()
+    tool = _memory()
 
     off = _Sdk(attended=False, setting=False)
     tool._notify(off, "create", "x")
@@ -915,7 +1097,7 @@ def test_the_setting_turns_it_off_and_defaults_on():
 def test_the_two_unreadable_cases_fail_in_opposite_directions():
     """A spurious notification is worse than a missing one; a missing setting
     is not a refusal."""
-    tool = _curate()
+    tool = _memory()
 
     blind = _Sdk(attended="unreadable")
     tool._notify(blind, "create", "x")
@@ -929,7 +1111,7 @@ def test_the_two_unreadable_cases_fail_in_opposite_directions():
 def test_announcing_can_never_fail_the_write():
     """The entry is already on disk by the time this runs, so raising here
     would report an error for something that fully succeeded."""
-    tool = _curate()
+    tool = _memory()
     sdk = _Sdk(attended=False)
     sdk.events.emit = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bus"))
 
@@ -938,22 +1120,34 @@ def test_announcing_can_never_fail_the_write():
     assert any(level == "debug" for level, _ in sdk.logs)
 
 
-def test_all_three_operations_announce():
-    """The helper is only worth having if every write reaches it.
+def test_only_the_three_writes_announce():
+    """The helper is only worth having if every write reaches it — and if no
+    read does.
 
     Read off the source, because a missed call site is invisible from the
-    helper's own tests — the notification simply never happens for that one
-    action.
+    helper's own tests: the notification simply never happens for that one
+    action. The negative half is a hazard the merge created. Reads and writes
+    share a class now, so a ``_notify`` in ``_read`` or ``_list`` would put a
+    line in the user's chat every time the agent opened a memory — which is
+    noise that would get the setting turned off, taking the announcements that
+    matter with it.
     """
     import ast
 
-    tree = ast.parse(_source_or_skip(CURATE))
-    for method, action in (("_create", "create"), ("_update", "update"),
-                           ("_delete", "delete")):
+    tree = ast.parse(_source_or_skip(MEMORY))
+
+    def notifies(method):
         node = next(n for n in ast.walk(tree)
                     if isinstance(n, ast.FunctionDef) and n.name == method)
-        calls = [n for n in ast.walk(node)
-                 if isinstance(n, ast.Call)
-                 and getattr(n.func, "attr", "") == "_notify"]
+        return [n for n in ast.walk(node)
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", "") == "_notify"]
+
+    for method, action in (("_create", "create"), ("_update", "update"),
+                           ("_delete", "delete")):
+        calls = notifies(method)
         assert len(calls) == 1, f"{method} does not announce exactly once"
         assert calls[0].args[1].value == action, f"{method} announces the wrong action"
+
+    for method in ("_read", "_list", "_rendered", "_entries"):
+        assert not notifies(method), f"{method} is a read and must stay silent"
