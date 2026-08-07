@@ -70,6 +70,7 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        CONV_SET_NOTIFICATION_MODE, CONV_SET_TITLE,
                        CRON_CREATE, CRON_ENABLE, CRON_GET, CRON_LIST,
                        CONSOLE_READ, CONSOLE_WRITE,
+                       HTTP_CLOSE, HTTP_DRAIN, HTTP_PUSH, HTTP_RESPOND,
                        CRON_REMOVE, CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                        ENV_READ, EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
                        FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
@@ -1026,6 +1027,75 @@ class _Console(_Namespace):
             self._sdk, "_frontend_token", ""), text=str(text), end=end)
 
 
+class _Http(_Namespace):
+    """A listening port, if this frontend claimed one.
+
+    Declare ``serves_http = <port>`` and the kernel binds it on loopback and
+    lends it to you — to exactly one frontend, because two cannot bind one
+    port. Everything else reaches nothing here.
+
+    The kernel does the accepting and parsing, on its own threads. That is what
+    makes this usable from a poll loop: ``drain`` never blocks, and a child
+    process never opens a socket, so an HTTP frontend can be isolated. It is
+    also why ``socket`` stays refused — this is the mediated route, not an
+    exception to the rule.
+
+    The shape is inverted from what a web framework teaches. You are not handed
+    a request and asked for a response; you collect what arrived, answer by id,
+    and get on with the poll. A reply may outlive the drain that produced it::
+
+        for request in sdk.http.drain():
+            sdk.http.respond(request["id"], stream=True)   # an SSE stream
+            ...                                            # later, elsewhere
+            sdk.http.push(request["id"], json.dumps(event))
+            sdk.http.close(request["id"])
+    """
+
+    def _token(self) -> str:
+        """The handle on this frontend's claim, set when its box opened."""
+        return getattr(self._sdk, "_frontend_token", "")
+
+    def drain(self, limit: int = 0):
+        """Every request that has arrived since the last call.
+
+        Never blocks; answers ``[]`` when nothing has come in. Each item is
+        ``{id, method, path, query, headers, body}`` — the connection itself
+        stays kernel-side, so holding an id is enough to answer and only enough
+        to answer.
+        """
+        return self._ask(HTTP_DRAIN, token=self._token(), limit=int(limit))
+
+    def respond(self, request_id: str, status: int = 200, headers=None,
+                body: str = "", stream: bool = False):
+        """Answer a request, or open it as an event stream.
+
+        With ``stream=True`` the reply stays open for ``push`` and the SSE
+        headers are written for you; ``body`` is then an optional first frame.
+        Without it this is an ordinary one-shot response and the request is
+        finished.
+        """
+        return self._ask(HTTP_RESPOND, token=self._token(),
+                         request_id=str(request_id), status=int(status),
+                         headers=headers or {}, body=str(body),
+                         stream=bool(stream))
+
+    def push(self, request_id: str, data: str, event: str = ""):
+        """Write one frame to an open stream.
+
+        Fails once the client has gone, which is the ordinary end of a stream
+        rather than a fault — but it is told to you, because a frontend that
+        never hears it goes on rendering a whole turn into a closed socket.
+        """
+        return self._ask(HTTP_PUSH, token=self._token(),
+                         request_id=str(request_id), data=str(data),
+                         event=str(event))
+
+    def close(self, request_id: str):
+        """End a reply."""
+        return self._ask(HTTP_CLOSE, token=self._token(),
+                         request_id=str(request_id))
+
+
 class _Cron(_Namespace):
     """Scheduled jobs."""
 
@@ -1964,6 +2034,7 @@ class SDK:
         self._delta_token = ""
         self.frontend = _Frontend(self)
         self.console = _Console(self)
+        self.http = _Http(self)
         # Set once by BaseFrontend.__bind__ when this box opens, and it stays
         # for the box's life — unlike the hook token, a frontend is not visiting
         # a doorway, it *is* resident. The kernel parks the matching adapter and

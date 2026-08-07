@@ -110,10 +110,15 @@ def sandbox_sink(db):
     on a kernel table; ``sandbox/`` stays ignorant of the database, and the
     composition root hands this in like it hands in the approver.
     """
-    from sandbox.guest.requests import LLM_DELTA, READ_ONLY
+    from sandbox.guest.requests import HTTP_PUSH, LLM_DELTA, READ_ONLY
 
-    #: Reads, plus the one write too frequent to keep.
-    unrecorded = READ_ONLY | {LLM_DELTA}
+    #: Reads, plus the writes too frequent to keep. ``http.push`` is the same
+    #: token-by-token half of a stream one transport further out: an SSE
+    #: frontend sends one per ``llm.delta``, so keeping it would restore the
+    #: exact row-per-token flood dropping ``llm.delta`` was meant to end.
+    #: ``respond`` and ``close`` are per-request rather than per-token and stay
+    #: recorded — the sink's question is volume, not whether it is rendering.
+    unrecorded = READ_ONLY | {LLM_DELTA, HTTP_PUSH}
 
     def record(chain, request, decision, result) -> None:
         """Append one serviced Request. Never raises; never blocks a turn."""

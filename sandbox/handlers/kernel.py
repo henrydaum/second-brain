@@ -40,7 +40,9 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
                               FRONTEND_CANCEL, FRONTEND_PENDING,
                               FRONTEND_RESOLVE,
-                              FRONTEND_SUBMIT, LEDGER_READ, LEDGER_RECORD,
+                              FRONTEND_SUBMIT, HTTP_CLOSE, HTTP_DRAIN,
+                              HTTP_PUSH, HTTP_RESPOND,
+                              LEDGER_READ, LEDGER_RECORD,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
                               PLUGIN_REGISTER, PLUGIN_RELOAD,
@@ -2617,6 +2619,94 @@ def _console_write(ctx, args: dict) -> Result:
     return Result(data=True)
 
 
+def _server(args: dict):
+    """The server, if this caller is the frontend holding the port.
+
+    One check for four handlers, because the ownership question is identical
+    and writing it out four times is how the fourth copy comes to differ. The
+    refusal is a ``Result`` rather than an exception so a frontend whose claim
+    was lost mid-poll learns it the ordinary way.
+    """
+    from ..http_server import SERVER
+
+    token = args.get("token") or ""
+    if not token or SERVER.owner != token:
+        return None, Result.refusal(
+            "this port belongs to another frontend, or to none")
+    return SERVER, None
+
+
+def _http_drain(ctx, args: dict) -> Result:
+    """Take the requests that have arrived, if any.
+
+    Non-blocking on purpose, the same as ``console.read``: the kernel's
+    listener thread is what waits. If this blocked it would hold the calling
+    box for the duration and the frontend could not render — which for an SSE
+    transport means it could not answer the very request it is blocked on.
+    """
+    server, refusal = _server(args)
+    if refusal is not None:
+        return refusal
+    try:
+        limit = int(args.get("limit") or 0)
+    except (TypeError, ValueError):
+        return Result.failure("limit must be a number",
+                              code=ERROR_INVALID_ARGUMENT)
+    return Result(data=server.drain(limit))
+
+
+def _http_respond(ctx, args: dict) -> Result:
+    """Answer a request, or open it as an event stream."""
+    server, refusal = _server(args)
+    if refusal is not None:
+        return refusal
+    headers = args.get("headers") or {}
+    if not isinstance(headers, dict):
+        return Result.failure("headers must be a mapping",
+                              code=ERROR_INVALID_ARGUMENT)
+    try:
+        status = int(args.get("status") or 200)
+    except (TypeError, ValueError):
+        return Result.failure("status must be a number",
+                              code=ERROR_INVALID_ARGUMENT)
+    ok = server.respond(str(args.get("request_id") or ""), status=status,
+                        headers={str(k): str(v) for k, v in headers.items()},
+                        body=str(args.get("body") or ""),
+                        stream=bool(args.get("stream")))
+    if not ok:
+        return Result.failure("no request is open under that id",
+                              code=ERROR_NOT_FOUND)
+    return Result(data=True)
+
+
+def _http_push(ctx, args: dict) -> Result:
+    """Write one frame to an open stream."""
+    server, refusal = _server(args)
+    if refusal is not None:
+        return refusal
+    ok = server.push(str(args.get("request_id") or ""),
+                     str(args.get("data") or ""),
+                     event=str(args.get("event") or ""))
+    if not ok:
+        # Deliberately a failure rather than a silent success: a client that
+        # went away is the ordinary end of a stream, and a frontend that never
+        # hears about it goes on rendering a turn into a closed socket.
+        return Result.failure("no stream is open under that id",
+                              code=ERROR_NOT_FOUND)
+    return Result(data=True)
+
+
+def _http_close(ctx, args: dict) -> Result:
+    """End a reply."""
+    server, refusal = _server(args)
+    if refusal is not None:
+        return refusal
+    if not server.close(str(args.get("request_id") or "")):
+        return Result.failure("no request is open under that id",
+                              code=ERROR_NOT_FOUND)
+    return Result(data=True)
+
+
 def _task_enqueue(ctx, args: dict) -> Result:
     """Queue pipeline work."""
     db = _db(ctx)
@@ -3184,6 +3274,8 @@ HANDLERS = {
     FRONTEND_BIND: _frontend_bind, FRONTEND_ATTEND: _frontend_attend,
     FRONTEND_RESOLVE: _frontend_resolve, FRONTEND_PENDING: _frontend_pending,
     CONSOLE_READ: _console_read, CONSOLE_WRITE: _console_write,
+    HTTP_DRAIN: _http_drain, HTTP_RESPOND: _http_respond,
+    HTTP_PUSH: _http_push, HTTP_CLOSE: _http_close,
     TASK_ENQUEUE: _task_enqueue, TASK_STATUS: _task_status,
     TASK_OUTPUT: _task_output, TASK_LIST: _task_list,
     TASK_GRAPH: _task_graph, TASK_PAUSE: _task_pause,

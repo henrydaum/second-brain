@@ -565,6 +565,20 @@ ALWAYS_SAFE = {
     # front of them — neither reaches past the console, and gating them would
     # mean asking permission to show the prompt that asks permission.
     R.CONSOLE_READ, R.CONSOLE_WRITE,
+    # The port is scoped exactly like the console, and the reachability is what
+    # does the work: the kernel opened the socket, on loopback, because a
+    # frontend the user enabled declared it — and only the token that claimed
+    # it reaches these at all. Draining takes requests already accepted;
+    # responding, pushing and closing write back down a connection the kernel
+    # is holding. None of the four reaches past that socket, and none of them
+    # can open one: binding is the kernel's act, not a Request. Gating them
+    # would mean a dialog per SSE frame, which is the same nonsense as asking
+    # permission to show the prompt that asks permission.
+    #
+    # Worth being explicit that this is *not* an inbound ``net.http``. That
+    # Request dials out and is classified on where it is dialling; there is no
+    # destination here to classify, because the client came to us.
+    R.HTTP_DRAIN, R.HTTP_RESPOND, R.HTTP_PUSH, R.HTTP_CLOSE,
     R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,
     R.TASK_LIST, R.TASK_GRAPH, R.TASK_TRIGGER,
     # The three ways of speaking about a process this system already started.

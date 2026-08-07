@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import threading
 
-from .guest.requests import CONSOLE_WRITE, LLM_DELTA, READ_ONLY, UI_RENDER
+from .guest.requests import (CONSOLE_WRITE, HTTP_CLOSE, HTTP_PUSH,
+                             HTTP_RESPOND, LLM_DELTA, READ_ONLY, UI_RENDER)
 
 #: Showing the agent's output to a person. Writes, all three, and none of them
 #: in ``READ_ONLY`` — but **rendering is not a change**: they move text to a
@@ -49,7 +50,15 @@ from .guest.requests import CONSOLE_WRITE, LLM_DELTA, READ_ONLY, UI_RENDER
 #: ``llm.delta`` alone was the first version of this and was not enough: the
 #: two halves of one stream arrive as different Request types, and excluding
 #: the backend's half while counting the frontend's fixed nothing.
-RENDERING = {LLM_DELTA, CONSOLE_WRITE, UI_RENDER}
+#:
+#: The ``http.*`` three are that same second half for a frontend whose screen
+#: is somewhere else: an SSE ``http.push`` per token sits behind ``llm.delta``
+#: exactly where ``console.write`` sits for the REPL. ``respond`` and ``close``
+#: join them not by volume but by the same argument the set is named for —
+#: they finish moving text to a person and produce no state a prompt could read
+#: back. Only ``http.drain`` is left out, and it is a read.
+RENDERING = {LLM_DELTA, CONSOLE_WRITE, UI_RENDER,
+             HTTP_RESPOND, HTTP_PUSH, HTTP_CLOSE}
 
 #: Requests that do not tick the counter: reads, which change nothing by
 #: definition, plus the rendering family above.

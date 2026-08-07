@@ -169,6 +169,22 @@ FRONTEND_PENDING = "frontend.pending"
 CONSOLE_READ = "console.read"
 CONSOLE_WRITE = "console.write"
 
+# A listening socket, scoped the same way and for the same reason: the kernel
+# accepts and parses on its own thread, the guest drains what arrived. Four
+# rather than two because a reply can outlive the call that opened it — an SSE
+# stream is held open for a whole conversation and written to a frame at a
+# time, which no single answer-and-return Request expresses. Same argument
+# ``proc.start`` makes for not folding itself into ``proc.run``.
+HTTP_DRAIN = "http.drain"
+HTTP_RESPOND = "http.respond"
+# One frame. Sent per streamed token, which is what puts it in ``RENDERING``
+# rather than merely outside ``READ_ONLY`` — counting it would bump the epoch
+# per token and silently discard every cached ``agent_prompt``, and recording
+# it would write a ledger row per token. ``llm.delta`` has both exemptions for
+# exactly this reason; so does this.
+HTTP_PUSH = "http.push"
+HTTP_CLOSE = "http.close"
+
 # ── pipeline ──────────────────────────────────────────────────────────
 TASK_ENQUEUE = "task.enqueue"
 TASK_STATUS = "task.status"
@@ -273,6 +289,7 @@ ALL_TYPES = {
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
     FRONTEND_RESOLVE, FRONTEND_PENDING, CONSOLE_READ, CONSOLE_WRITE,
+    HTTP_DRAIN, HTTP_RESPOND, HTTP_PUSH, HTTP_CLOSE,
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     TASK_PAUSE, TASK_RESET, TASK_TRIGGER, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
@@ -293,7 +310,7 @@ READ_ONLY = {
     CRON_LIST, CRON_GET, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     FILE_LIST, PARSE_FILE,
     PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ, FRONTEND_PENDING,
-    PROC_STATUS, PROC_LIST,
+    PROC_STATUS, PROC_LIST, HTTP_DRAIN,
     # Taking a finished child's report changes nothing about the world; the
     # child already did whatever it was going to do. Listed here mainly so the
     # ledger's sandbox sink drops it: ``collect(timeout=0)`` is a poll, and a

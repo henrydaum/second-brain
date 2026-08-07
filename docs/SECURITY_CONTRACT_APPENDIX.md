@@ -645,6 +645,43 @@ worse than no rule. Inverting it — kernel reads, guest drains — removes all
 three, and lets a console frontend be subprocess-isolated, which `input()`
 never could.
 
+### The port
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `http.drain(limit)` | Take the requests that have arrived | token, claim | safe |
+| `http.respond(request_id, status, headers, body, stream)` | Answer one, or open a stream | token, claim | safe |
+| `http.push(request_id, data, event)` | Write one SSE frame | token, claim | safe |
+| `http.close(request_id)` | End a reply | token, claim | safe |
+
+The console's inversion one layer out, for the same reason and with the same
+scoping. `socket` and `http` are refused to a guest and `sdk.net.http` dials
+*out*, so a frontend could talk to the world and never be talked to — fine for
+a transport that polls somebody else's servers, impossible for one a client
+connects to. A frontend declares `serves_http = <port>`, the kernel binds it on
+**loopback**, accepts and parses on its own threads, and the guest drains what
+arrived. Exposing that port is a tunnel's job, not a declaration's.
+
+Four rather than two because **a reply may outlive the call that opened it**.
+An SSE stream stays open for a whole conversation and takes frames one at a
+time, which no answer-and-return Request expresses — the same argument
+`proc.start` makes for not folding itself into `proc.run`. The connection stays
+host-side and the guest holds only an id, so holding one is enough to answer
+and only enough to answer: the split `project_approval` already makes.
+
+Safe on reachability rather than on a verdict. Binding is the kernel's act and
+not a Request, so none of the four can open a port; each reaches only the
+socket the kernel already opened for the frontend that claimed it. Gating them
+would mean a dialog per SSE frame. Note this is **not** an inbound `net.http` —
+that Request dials out and is classified on where it is dialling, and there is
+no destination to classify here because the client came to us.
+
+`http.push` is in `epoch.RENDERING` and dropped by the ledger's sandbox sink,
+both for the reason `llm.delta` is: an SSE frontend sends one per token, so
+counting it would undo every cached `agent_prompt` and recording it would write
+a row per token. `http.drain` is a read; the other two are per-request and stay
+recorded.
+
 Rendering has no Request at all — the kernel calls `render` on the frontend.
 An `approval` crosses as a question (`id`, `title`, `body`, `type`, `enum`,
 `default`) and never as the decision: the pending action and the live

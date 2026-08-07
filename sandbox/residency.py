@@ -540,6 +540,18 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
     interval, max_failures = _poll_settings(declarations, 0.05)
 
     wants_console = bool(declarations.get("uses_console"))
+    # A port, or None. Declared as the number rather than as a flag plus a
+    # setting, because the kernel has to bind before the box opens and a
+    # config read at that moment would be answering for a frontend that does
+    # not exist yet. Zero means "any free port", which is what a test wants.
+    try:
+        serves_http = declarations.get("serves_http")
+        serves_http = None if serves_http is None else int(serves_http)
+    except (TypeError, ValueError):
+        logger.warning("frontend %s declared serves_http=%r, which is not a "
+                       "port; it will not serve", name,
+                       declarations.get("serves_http"))
+        serves_http = None
     restore_on_start = bool(declarations.get("restore_on_start"))
 
     def __init__(self, shutdown_event=None):
@@ -611,6 +623,19 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
                 logger.error("frontend %s wants the console but %s already "
                              "has it; it will not receive input", name,
                              "another frontend")
+        if serves_http is not None:
+            from .http_server import SERVER
+
+            if SERVER.claim(self._token, serves_http):
+                logger.info("frontend %s is serving on 127.0.0.1:%s", name,
+                            SERVER.port)
+            else:
+                # Not fatal: the rest of the frontend still loads, and the
+                # failure is worth surviving because both causes are ordinary
+                # — another frontend holds the port, or the port is in use by
+                # something outside this process entirely.
+                logger.error("frontend %s could not take port %s; it will "
+                             "receive no requests", name, serves_http)
         result = box.call("__bind__", token=self._token)
         if not result.ok:
             logger.error("frontend %s could not be bound: %s", name,
@@ -683,6 +708,13 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
             from .console import CONSOLE
 
             CONSOLE.release(self._token)
+        if serves_http is not None:
+            from .http_server import SERVER
+
+            # Names the token for the same reason the console release does: a
+            # frontend that already lost the claim must not be able to revoke
+            # its successor's.
+            SERVER.release(self._token)
         unpark(self._token)
         self._token = ""
         if box is not None:

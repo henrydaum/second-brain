@@ -388,6 +388,12 @@ GRANT_FAMILIES = {
     "ui": "ask you questions",
     "frontend": "act as a frontend",
     "console": "use the terminal",
+    # A family phrase rather than four entries, exactly as ``console`` gets
+    # one: the four differ in mechanism and not in what a person is being
+    # asked. "On this machine" is load-bearing — the kernel binds loopback, and
+    # a phrase that let someone picture a public server would overstate the
+    # grant as badly as ``script.run`` saying "run code" would.
+    "http": "serve a web interface on this machine",
     "event": "publish events",
     "llm": "talk to the model",
     "parse": "parse files",

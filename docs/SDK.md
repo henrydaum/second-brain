@@ -1058,6 +1058,70 @@ padded columns and code fences drop away. `sdk.md.align_tables(text)` is the
 first half alone, for a surface that renders fences itself and wants the tables
 padded inside one. Both pure, no Request.
 
+### A port
+
+A frontend a client connects *to* — a web UI, anything speaking SSE — declares
+`serves_http = <port>`. The kernel binds it on loopback, accepts and parses on
+its own threads, and you drain what arrived:
+
+```python
+import json
+
+
+class Web(BaseFrontend):
+    name = "web"
+    serves_http = 8787
+
+    def start(self, sdk):
+        self._streams = {}
+        return True
+
+    def poll(self, sdk):
+        requests = sdk.http.drain()        # a list, possibly empty. Never blocks.
+        if not requests:
+            return False
+        for request in requests:
+            if request["path"] == "/events":
+                # Held open. Renders push into it later, from render().
+                sdk.http.respond(request["id"], stream=True)
+                self._streams[request["id"]] = True
+            else:
+                sdk.frontend.submit_text("web", request["body"])
+                sdk.http.respond(request["id"], body='{"ok": true}')
+        return True
+
+    def render(self, sdk, session_key, kind, payload):
+        for stream_id in list(self._streams):
+            if not sdk.http.push(stream_id, json.dumps(
+                    {"kind": kind, "payload": payload})):
+                # The client went away. Ordinary, and you are told so you can
+                # stop rendering a whole turn into a closed socket.
+                self._streams.pop(stream_id, None)
+```
+
+**`socket` is refused and always will be**, and this is the mediated route
+rather than an exception to it. The reasoning is the console's: a guest that
+opened its own socket would block its box, and a rule that worked in-process
+and broke under isolation would be the worst kind. Inverting it means the child
+process never opens a socket at all, so an HTTP frontend can be
+subprocess-isolated.
+
+**A reply may outlive the call that opened it**, which is why there are four
+Requests and not two. `respond(..., stream=True)` writes the SSE headers and
+leaves the connection open; `push` adds one frame; `close` ends it. The
+connection stays kernel-side and you hold only an id — enough to answer, and
+only enough to answer.
+
+`drain()` returns `{id, method, path, query, headers, body}` and never blocks;
+return falsy from `poll` when it is empty and renders land in the pause.
+`push` returns falsy once the client has gone, which is the ordinary end of a
+stream rather than a fault.
+
+**The port is exclusive**, for a blunter reason than the console's: two
+frontends cannot bind one port. The kernel lends it to the first claimant and
+refuses the second. Binding is the kernel's act, so nothing you declare can
+reach a public interface — exposing the port is a tunnel's job.
+
 `bind` is the "whose data is this?" axis, not permissions. With no
 `external_id` the session takes your declared `default_user_id`; with one it is
 upgraded to that identity's own user, which is what a `per_user` frontend does
