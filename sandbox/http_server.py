@@ -85,9 +85,17 @@ class _Response:
         self.streaming = False
         self.closed = False
 
-    def send(self, status: int, headers: dict, body: str,
-             streaming: bool) -> None:
-        """Write the head, and the body if there is one to write now."""
+    def send(self, status: int, headers: dict, body, streaming: bool) -> None:
+        """Write the head, and the body if there is one to write now.
+
+        ``body`` may be ``str`` or ``bytes``. Bytes matter because a frontend
+        serving its own client has to hand back a PNG or a woff2, and
+        ``sdk.fs.read_bytes`` gives the guest real bytes —
+        ``protocol.pack``/``unpack`` already carry them across the wire, so the
+        only place that had to learn was here. Encoding them as text would
+        mangle every binary asset silently.
+        """
+        raw = body if isinstance(body, (bytes, bytearray)) else None
         lines = [f"HTTP/1.1 {int(status)} {_REASONS.get(int(status), 'OK')}"]
         sent = {key.lower() for key in (headers or {})}
         for key, value in (headers or {}).items():
@@ -103,8 +111,8 @@ class _Response:
             # *bytes*, because a multi-byte character would otherwise make the
             # header a lie.
             if "content-length" not in sent:
-                lines.append(
-                    f"Content-Length: {len(body.encode('utf-8'))}")
+                measured = raw if raw is not None else str(body).encode("utf-8")
+                lines.append(f"Content-Length: {len(measured)}")
         # One request per connection: nothing here loops back for a second, so
         # promising keep-alive would leave a client waiting on a socket that is
         # about to close.
@@ -115,8 +123,9 @@ class _Response:
         self._writer("\r\n".join(lines))
         self.streaming = streaming
         if body and not streaming:
-            self._writer(body)
+            self._writer(raw if raw is not None else body)
         elif body:
+            # A first SSE frame, which is text by definition.
             self.frame(body)
 
     def frame(self, data: str, event: str = "") -> None:
@@ -187,10 +196,11 @@ class _Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = (
         _take)
 
-    def _write(self, text: str) -> None:
+    def _write(self, data) -> None:
         """Put bytes on the wire, tolerating a client that has gone."""
         try:
-            self.wfile.write(text.encode("utf-8"))
+            self.wfile.write(data if isinstance(data, (bytes, bytearray))
+                             else str(data).encode("utf-8"))
             self.wfile.flush()
         except OSError:
             self.close_connection = True

@@ -2669,10 +2669,15 @@ def _http_respond(ctx, args: dict) -> Result:
     except (TypeError, ValueError):
         return Result.failure("status must be a number",
                               code=ERROR_INVALID_ARGUMENT)
+    # The body is passed through rather than coerced: bytes are how a frontend
+    # serves an image or a font, and ``protocol.pack`` already carries them
+    # across the wire. Coercing here turned every binary asset into mojibake.
+    body = args.get("body")
+    if not isinstance(body, (str, bytes, bytearray)):
+        body = "" if body is None else str(body)
     ok = server.respond(str(args.get("request_id") or ""), status=status,
                         headers={str(k): str(v) for k, v in headers.items()},
-                        body=str(args.get("body") or ""),
-                        stream=bool(args.get("stream")))
+                        body=body, stream=bool(args.get("stream")))
     if not ok:
         return Result.failure("no request is open under that id",
                               code=ERROR_NOT_FOUND)

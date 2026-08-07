@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Second Brain — AG-UI reference client</title>
+<!--
+  The smallest thing that exercises the whole bridge. No build step, no
+  dependencies, one file.
+
+  This is not the app. It is the analogue of ``tests/support``: something that
+  can drive the protocol in isolation, so "is the bridge working?" and "is the
+  app working?" are separable questions. When assistant-ui misbehaves, open
+  this first — if it works here, the bridge is fine.
+
+  Two ways to run it:
+
+    1. Same origin (no CORS). Point ``agui_static_dir`` at the folder holding
+       this file and open http://127.0.0.1:8787/agui_reference_client.html.
+    2. From disk. Set ``agui_allowed_origins`` to ``*`` first, or the browser
+       refuses the preflight and tells you almost nothing about why.
+
+  It speaks the contract in frontend_agui.py's docstring and nothing else.
+-->
+<style>
+  :root { color-scheme: light dark; --line: #8883; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, sans-serif;
+         max-width: 52rem; margin: 0 auto; padding: 1.5rem; }
+  header { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+           padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
+  input, button, textarea { font: inherit; padding: .4rem .6rem;
+           border: 1px solid var(--line); border-radius: 6px;
+           background: transparent; color: inherit; }
+  button { cursor: pointer; }
+  #log { margin: 1rem 0; display: flex; flex-direction: column; gap: .75rem; }
+  .msg { padding: .6rem .8rem; border-radius: 8px; border: 1px solid var(--line); }
+  .user { align-self: flex-end; max-width: 80%; }
+  .assistant { white-space: pre-wrap; }
+  .tool, .custom { font-family: ui-monospace, monospace; font-size: 13px;
+                   opacity: .85; }
+  .custom { border-style: dashed; }
+  .err { border-color: #d66; }
+  form { display: flex; gap: .5rem; }
+  form textarea { flex: 1; resize: vertical; min-height: 3rem; }
+  label { display: flex; gap: .35rem; align-items: center; font-size: 13px; }
+  pre { margin: .3rem 0 0; white-space: pre-wrap; word-break: break-word; }
+</style>
+
+<header>
+  <label>URL <input id="url" size="24" value="http://127.0.0.1:8787"></label>
+  <label>Token <input id="token" size="18" type="password"></label>
+  <label>Thread <input id="thread" size="8" value="default"></label>
+  <button id="probe">Probe</button>
+</header>
+
+<div id="log"></div>
+
+<form id="send">
+  <textarea id="text" placeholder="Type a message, or a slash command like /config"></textarea>
+  <button>Send</button>
+</form>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+
+function add(cls, text) {
+  const node = document.createElement("div");
+  node.className = "msg " + cls;
+  node.textContent = text;
+  log.appendChild(node);
+  node.scrollIntoView({ block: "end" });
+  return node;
+}
+
+function headers() {
+  return { "Content-Type": "application/json",
+           "Authorization": "Bearer " + $("token").value };
+}
+
+// The read API. AG-UI has no vocabulary for any of this, which is exactly why
+// the frontend serves it alongside rather than inventing events for it.
+$("probe").onclick = async () => {
+  for (const path of ["/commands", "/conversations", "/session"]) {
+    try {
+      const reply = await fetch($("url").value + path, { headers: headers() });
+      const body = await reply.text();
+      add("custom", `GET ${path} → ${reply.status}\n` + body.slice(0, 400));
+    } catch (err) {
+      add("msg err", `GET ${path} failed: ${err}`);
+    }
+  }
+};
+
+$("send").onsubmit = async (event) => {
+  event.preventDefault();
+  const text = $("text").value.trim();
+  if (!text) return;
+  $("text").value = "";
+  add("user", text);
+
+  // One POST per run, SSE until RUN_FINISHED. The whole thread is resent by
+  // spec; Second Brain keeps its own history and reads only the last user
+  // turn, so sending just this one is honest and sufficient.
+  const reply = await fetch($("url").value + "/agui", {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      threadId: $("thread").value || "default",
+      runId: "run-" + Math.random().toString(16).slice(2),
+      messages: [{ id: "m" + Date.now(), role: "user", content: text }],
+      state: {}, tools: [], context: [], forwardedProps: {},
+    }),
+  });
+
+  if (!reply.ok) {
+    add("msg err", `HTTP ${reply.status} — ${await reply.text()}`);
+    return;
+  }
+
+  const reader = reply.body.getReader();
+  const decoder = new TextDecoder();
+  const messages = new Map();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Frames are separated by a blank line; anything after the last one is a
+    // partial frame and waits for more bytes.
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop();
+    for (const frame of frames) {
+      const line = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) continue;
+      try { handle(JSON.parse(line.slice(6)), messages); }
+      catch (err) { add("msg err", "bad frame: " + err); }
+    }
+  }
+};
+
+function handle(event, messages) {
+  switch (event.type) {
+    case "RUN_STARTED":
+      break;
+    case "TEXT_MESSAGE_START":
+      messages.set(event.messageId, add("assistant", ""));
+      break;
+    case "TEXT_MESSAGE_CONTENT": {
+      const node = messages.get(event.messageId) || add("assistant", "");
+      messages.set(event.messageId, node);
+      node.textContent += event.delta;
+      break;
+    }
+    case "TEXT_MESSAGE_END":
+      break;
+    case "TOOL_CALL_START":
+      add("tool", `⚙ ${event.toolCallName}`);
+      break;
+    case "TOOL_CALL_ARGS":
+      break;
+    case "TOOL_CALL_RESULT":
+      if (event.content) add("tool", "→ " + event.content);
+      break;
+    case "RUN_ERROR":
+      add("msg err", "Error: " + event.message);
+      break;
+    case "RUN_FINISHED":
+      break;
+    case "CUSTOM":
+      custom(event);
+      break;
+    default:
+      add("custom", event.type + " " + JSON.stringify(event));
+  }
+}
+
+// The four things AG-UI has no words for. A real client renders these
+// properly; here they only have to be legible enough to prove they arrived
+// with their payloads intact.
+function custom(event) {
+  const value = event.value || {};
+  if (event.name === "second_brain.approval") {
+    const node = add("custom", `${value.title || "Approval"}\n${value.body || ""}`);
+    const choices = value.enum
+      ? value.enum.map((v, i) => [(value.enum_labels || [])[i] || String(v), v])
+      : [["Allow", "yes"], ["Deny", "no"]];
+    for (const [label, answer] of choices) {
+      const button = document.createElement("button");
+      button.textContent = label;
+      button.style.marginRight = ".4rem";
+      // Answered by submitting text, exactly as a person typing "yes" would:
+      // the frontend absorbs it into the waiting approval.
+      button.onclick = () => { $("text").value = String(answer);
+                               $("send").requestSubmit(); };
+      node.appendChild(document.createElement("br"));
+      node.appendChild(button);
+    }
+    return;
+  }
+  if (event.name === "second_brain.form") {
+    const field = value.field || {}, display = value.display || {};
+    add("custom", `Form · ${display.prompt || field.prompt || field.name}\n` +
+                  JSON.stringify(value, null, 2));
+    return;
+  }
+  add("custom", event.name + "\n" + JSON.stringify(value, null, 2));
+}
+</script>

@@ -1066,17 +1066,23 @@ class _Http(_Namespace):
         return self._ask(HTTP_DRAIN, token=self._token(), limit=int(limit))
 
     def respond(self, request_id: str, status: int = 200, headers=None,
-                body: str = "", stream: bool = False):
+                body="", stream: bool = False):
         """Answer a request, or open it as an event stream.
 
         With ``stream=True`` the reply stays open for ``push`` and the SSE
         headers are written for you; ``body`` is then an optional first frame.
         Without it this is an ordinary one-shot response and the request is
         finished.
+
+        ``body`` may be ``str`` or ``bytes``. Hand it the bytes from
+        ``sdk.fs.read_bytes`` to serve an image or a font — encoding those as
+        text mangles them, and nothing downstream would tell you.
         """
         return self._ask(HTTP_RESPOND, token=self._token(),
                          request_id=str(request_id), status=int(status),
-                         headers=headers or {}, body=str(body),
+                         headers=headers or {},
+                         body=(body if isinstance(body, (str, bytes, bytearray))
+                               else str(body)),
                          stream=bool(stream))
 
     def push(self, request_id: str, data: str, event: str = ""):
