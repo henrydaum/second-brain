@@ -327,10 +327,12 @@ file and both of which turned out slightly wrong:
 **Plan mode**, when it comes, is a fourth value of the same field plus a tool.
 Everything else it needs is built: a mode that refuses (`lockdown`), a
 turn-scoped yolo for the turn after approval, a Request that sets the mode, a
-per-turn prompt line stating it, and the clearing at turn end. The retired
-implementation on `origin/store` (`service_plan_mode.py`, `tool_propose_plan.py`)
-does not load under the current sandbox, but its three-choice approval is
-exactly the new turn option plus a `set_mode` call.
+per-turn prompt line stating it, and the clearing at turn end. There was an
+implementation on `origin/store` (`service_plan_mode.py`, `command_plan.py`,
+`tool_propose_plan.py`); it never migrated to the sandbox contract and has been
+deleted rather than ported, since every part of it except the tool is now
+kernel-owned. Its three-choice approval was exactly the new turn option plus a
+`set_mode` call.
 
 ---
 
