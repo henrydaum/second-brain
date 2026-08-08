@@ -420,6 +420,15 @@ class HTTP(BaseFrontend):
         key = self._session_of(request)
         args = self._sealed(self._body(request), request_type, key)
 
+        # A stream normally opens before its session exists. The first
+        # attendance declaration is therefore intentionally a no-op in the
+        # runtime; once an earlier Request (usually ``conv.create``) has made
+        # the session, refresh that declaration before acting again. Without
+        # this, the first unsafe click after boot is treated as unattended and
+        # refused, even though this exact stream is waiting to show its dialog.
+        if key in self._streams:
+            self._attend(sdk, key, True)
+
         try:
             handle = sdk.frontend.act(key, request_type, args)
         except Exception as exc:
