@@ -13,8 +13,6 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 # Second Brain
 
-<mark>*NEW!* You can now use Second Brain to replace Claude Code by installing the `claude_code` package! It's built on the same toolset which Claude Code uses, making Second Brain behave like Claude Code.</mark>
-
 <mark>*NEW!* Second Brain now has token streaming. Telegram now has silky smooth token streaming plus rich text.</mark>
 
 *For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
