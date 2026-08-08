@@ -275,11 +275,20 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def render_messages(self, session_key: str, messages: list[str]) -> None:
-        """Render messages."""
+        """Render messages: GitHub-flavored markdown, one string each.
+
+        Markdown is deliberately the interchange format — it is also what the
+        model emits, so a frontend needs exactly one rendering path. Tables
+        must start their own block or GFM folds them into the paragraph above.
+        """
         raise NotImplementedError
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
-        """Render attachments."""
+        """Render attachments: filesystem paths on the host, not bytes.
+
+        A transport that cannot reach the host's disk has to read them back
+        (``fs.read_bytes``) before it can show anything.
+        """
         raise NotImplementedError
 
     def render_form_field(self, session_key: str, form: dict) -> None:
@@ -312,11 +321,21 @@ class BaseFrontend:
         raise NotImplementedError
 
     def render_buttons(self, session_key: str, buttons: list[dict]) -> None:
-        """Render buttons."""
+        """Render quick replies, conventionally ``{value, label}`` each.
+
+        The same pairing a form's ``display["choices"]`` uses, and answered the
+        same way: submit the *value* as text. Nothing in the kernel currently
+        fills ``RuntimeResult.buttons`` — this exists for store plugins, which
+        is why the shape is a convention rather than a dataclass.
+        """
         raise NotImplementedError
 
     def render_error(self, session_key: str, error: dict) -> None:
-        """Render error."""
+        """Render an error: ``ActionError.to_dict()``.
+
+        ``{code, message, details, retry_phase}``. ``message`` is the part
+        meant for a person; ``code`` is what a client branches on.
+        """
         raise NotImplementedError
 
     def render_typing(self, session_key: str, on: bool) -> None:

@@ -1737,7 +1737,11 @@ kernel-owned and hook-*shaped*.
 **Docs:** `docs/SDK.md` (hand this to an agent writing sandbox code — its examples
 are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
 per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
-catalogue with policy inputs).
+catalogue with policy inputs), `docs/HTTP_PROTOCOL.md` (hand this to an agent
+writing a *client* — the nine render kinds with their real payload shapes, the
+Requests worth calling, and the half-dozen rules a working demo cannot show;
+`docs/http_reference_client.html` is that demo, for checking the bridge when
+the client misbehaves).
 
 **Injecting prompt text is owned by session, not refused outright.**
 `session.add_prompt_extra` was `ALWAYS_UNSAFE`, which sounds right and was
