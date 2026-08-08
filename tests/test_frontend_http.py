@@ -218,7 +218,12 @@ class _Desk:
 
     def mark_attended(self, session_key):
         """Somebody opened a stream for this session."""
-        self.runtime.sessions.setdefault(session_key, _Session()).attended = True
+        # The real runtime deliberately does not create sessions as a side
+        # effect of an attendance signal. EventSource opens before boot creates
+        # the conversation, so the frontend must refresh attendance later.
+        session = self.runtime.sessions.get(session_key)
+        if session is not None:
+            session.attended = True
         self.attendance.append((session_key, True))
 
     def mark_unattended(self, session_key):
@@ -479,6 +484,7 @@ def test_a_reconnecting_client_resumes_where_it_left_off(running):
 def test_opening_a_stream_says_somebody_is_watching(running):
     """Attendance is the whole reason an unsafe Request can be asked about
     rather than silently refused, and the stream is the honest signal for it."""
+    running.runtime.sessions["http:t4"] = _Session()
     conn = _open(running, _request("GET", "/events?thread=t4"))
     _read(conn, until=b"\r\n\r\n")
 
@@ -508,6 +514,36 @@ def test_a_client_that_leaves_stops_being_attended(running):
 
     assert ("http:t5", False) in running.desk.attendance
     assert not running.runtime.is_attended("http:t5")
+
+
+@pytest.mark.store
+def test_first_request_after_session_creation_refreshes_attendance(running):
+    """A browser opens EventSource before boot creates its conversation.
+
+    The runtime correctly ignores attendance for a session that does not yet
+    exist. Once boot has created it, the next Request must reassert that the
+    still-open stream has a person behind it; otherwise an immediate
+    ``conv.delete`` is refused instead of raising its approval dialog.
+    """
+    key = "http:new-session"
+    conn = _open(running, _request("GET", "/events?thread=new-session"))
+    _read(conn, until=b"\r\n\r\n")
+    assert key not in running.runtime.sessions
+
+    # ``conv.create`` has completed between HTTP Requests.
+    running.runtime.sessions[key] = _Session()
+    assert not running.runtime.is_attended(key)
+
+    request = _open(running, _request(
+        "POST", "/sdk/config.read?thread=new-session",
+        body=json.dumps({"key": "http_static_dir"})))
+    running.settle()
+    raw = _read(request, until=b"}", timeout=3.0)
+    request.close()
+
+    assert _status(raw) == 200
+    assert running.runtime.is_attended(key)
+    conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────────

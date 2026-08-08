@@ -83,6 +83,7 @@ class FakeRuntime:
     def __init__(self, sessions=None):
         self.sessions = sessions or {}
         self.active_session_key = "somebody-else"
+        self.mode = "lockdown"
 
     def is_attended(self, session_key):
         """The real rule: the frontend's opinion wins, else the active one."""
@@ -90,6 +91,13 @@ class FakeRuntime:
         if session is not None and session.attended is not None:
             return session.attended
         return session_key == self.active_session_key
+
+    def set_security_mode(self, session_key, mode, scope="conversation"):
+        """Record the mode the real runtime would set for this session."""
+        if session_key not in self.sessions:
+            return None
+        self.mode = mode
+        return mode
 
 
 class FakeAdapter:
@@ -307,6 +315,55 @@ def test_classification_is_untouched_by_act():
     assert classify(Request("fs.list", {"path": "."}), chain).safe
     assert not classify(Request("session.add_tool",
                                 {"key": "s1", "tool": "t"}), chain).safe
+
+
+def test_an_attended_mode_control_can_leave_lockdown(box, actor, runtime):
+    """The explicit Ask selector is the escape hatch the HTTP UI needs."""
+    asked = []
+    box.interpreter.set_approver(
+        lambda chain, request, decision: asked.append(request) or False)
+
+    handle = actor.call(
+        "kick", request_type="session.set_mode", args={"mode": "ask"}).data
+    answer = _collect(actor, handle)
+
+    assert answer["ok"] is True
+    assert answer["data"] == "ask"
+    assert runtime.mode == "ask"
+    assert not asked, "leaving Lockdown must not ask the mode being lifted"
+
+
+def test_yolo_from_a_mode_control_still_requires_approval(box, actor, runtime):
+    """The escape hatch is Ask only; it must not become a broad mode grant."""
+    asked = []
+
+    def decline(chain, request, decision):
+        asked.append((chain, request, decision))
+        return False
+
+    box.interpreter.set_approver(decline)
+    handle = actor.call(
+        "kick", request_type="session.set_mode", args={"mode": "yolo"}).data
+    answer = _collect(actor, handle)
+
+    assert answer["ok"] is False
+    assert answer["code"] == "approval_declined"
+    assert runtime.mode == "lockdown"
+    assert asked, "YOLO must still pass through the approver"
+
+
+def test_an_unattended_mode_control_cannot_claim_the_escape(box, actor, runtime):
+    """A frontend action only has user standing while its stream is attended."""
+    runtime.sessions["s1"].attended = False
+    box.interpreter.set_approver(lambda chain, request, decision: False)
+
+    handle = actor.call(
+        "kick", request_type="session.set_mode", args={"mode": "ask"}).data
+    answer = _collect(actor, handle)
+
+    assert answer["ok"] is False
+    assert answer["code"] == "approval_declined"
+    assert runtime.mode == "lockdown"
 
 
 # ──────────────────────────────────────────────────────────────────────

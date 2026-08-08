@@ -2667,7 +2667,7 @@ def _frontend_act(ctx, args: dict) -> Result:
 
     Detached, and that is correctness rather than speed: see ``Sandbox.act``.
     """
-    from ..policy import Chain
+    from ..policy import Chain, attended_now
 
     adapter, refusal = _at_desk(args)
     if refusal is not None:
@@ -2697,9 +2697,24 @@ def _frontend_act(ctx, args: dict) -> Result:
     if refusal is not None:
         return refusal
 
+    chain = Chain(root=session_key).push(f"frontend:{name}")
+
+    # A dedicated permission selector has to be able to leave Lockdown. The
+    # typed `/mode ask` command already has exactly that standing, but an HTTP
+    # control reaches the same Request through ``frontend.act`` and otherwise
+    # arrives as an ordinary unsafe action — which Lockdown refuses before the
+    # user can escape it. Give *only* an explicit, attended switch back to Ask
+    # the same narrow provenance as the typed command. Lockdown is already
+    # safe because it tightens; YOLO deliberately keeps the ordinary frontend
+    # chain so it still raises a real approval dialog.
+    if (request_type == SESSION_SET_MODE
+            and str(inner.get("mode") or "").strip().lower() == "ask"
+            and attended_now(chain, runtime=getattr(adapter, "runtime", None))):
+        chain = Chain(root="user:command").push("mode")
+
     return Result(data=sandbox.act(
         Request(request_type, inner),
-        Chain(root=session_key).push(f"frontend:{name}"),
+        chain,
         sandbox.interpreter.context_for_session(session_key),
         owner=name))
 
