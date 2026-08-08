@@ -175,13 +175,24 @@ def load_conversation(
         has_compaction_checkpoint=latest_compaction(rows) is not None,
         restore_notices=restore_notices,
     )
-    session.frontend_name = marker.get("frontend_name")
     # Identity is a live frontend binding, not conversation state — carry it from
     # the prior in-memory session so loading never silently drops (or, worse,
     # changes) who the session acts for. Ownership comes from the conversation
     # row + access guard, never from the marker.
+    #
+    # ``frontend_name`` is the same kind of fact and needs the same treatment.
+    # The marker records which frontend last had this conversation *open*, which
+    # says nothing about who is asking for it now: letting it win hands the
+    # session to somebody else. Loading a conversation last used from the REPL
+    # would stamp ``frontend_name = "repl"`` onto an ``http:`` session, and from
+    # then on every ``frontend.act`` against it is refused as another frontend's
+    # — permanently, since nothing puts the name back. So the marker is only a
+    # fallback, for restoring a session that has no live binding at all.
     if existing is not None:
         session.user_id = existing.user_id
+        session.frontend_name = existing.frontend_name
+    else:
+        session.frontend_name = marker.get("frontend_name")
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
     _sync_notification_mode(session)
@@ -215,10 +226,16 @@ def load_history(runtime, session_key: str, conversation_id: int):
     old_profile = (old.profile_override or old.active_agent_profile) if old else runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
     if old and old.conversation_id != conversation_id:
         # Identity is a live frontend binding; closing the session must not
-        # reset it to the default user before the reload carries it over.
+        # reset it to the default user before the reload carries it over. The
+        # owning frontend is the other half of that binding and travels the same
+        # way — ``set_session_user`` makes a bare session, so without this the
+        # reload below would find no live owner and fall back to the marker,
+        # which is exactly the hand-off this is here to prevent.
         user_id = old.user_id
+        frontend_name = old.frontend_name
         close_session(runtime, session_key)
         runtime.set_session_user(session_key, user_id)
+        get_or_create_session(runtime, session_key).frontend_name = frontend_name
     session = load_conversation(runtime, session_key, conversation_id)
     new_profile = session.profile_override or session.active_agent_profile
 

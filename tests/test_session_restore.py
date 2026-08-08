@@ -208,3 +208,64 @@ def test_cancelling_a_request_also_restores_priority(tmp_path):
     rt.handle_action("s", "cancel", None)
 
     assert session.cs.turn_priority == "user"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Whose session it is, across a load.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_loading_a_conversation_keeps_the_live_frontend(tmp_path):
+    """A load must not hand the session to another frontend.
+
+    The marker records which frontend last had the conversation *open*, which
+    says nothing about who is asking for it now. Letting it win meant loading a
+    conversation last used in the REPL stamped ``frontend_name = "repl"`` onto
+    an ``http:`` session — after which every ``frontend.act`` against it was
+    refused as another frontend's, permanently, since nothing put the name back.
+    """
+    from runtime.persistence import get_or_create_session
+
+    db = _db(tmp_path)
+    cid = db.create_conversation("elsewhere")
+    save_state_marker(db, cid, {"frontend_name": "repl"})
+
+    rt = plain_runtime(db)
+    # A live session with an owner but no conversation yet — what a frontend
+    # has after its first submit.
+    get_or_create_session(rt, "http:main").frontend_name = "http"
+
+    session = rt.load_conversation("http:main", cid)
+
+    assert session.frontend_name == "http"
+
+
+def test_switching_conversations_keeps_the_live_frontend(tmp_path):
+    """The same thing by the route a person actually takes.
+
+    ``load_history`` closes the session before reloading it, so the owner has to
+    survive that gap too — otherwise the reload finds no live binding and falls
+    back to the marker, which is the hand-off this is here to prevent.
+    """
+    db = _db(tmp_path)
+    mine = db.create_conversation("mine")
+    theirs = db.create_conversation("theirs")
+    save_state_marker(db, theirs, {"frontend_name": "agui"})
+
+    rt = plain_runtime(db)
+    rt.load_conversation("http:main", mine).frontend_name = "http"
+
+    assert rt.load_history("http:main", theirs).ok
+    assert rt.sessions["http:main"].conversation_id == theirs
+    assert rt.sessions["http:main"].frontend_name == "http"
+
+
+def test_a_restored_session_still_takes_its_frontend_from_the_marker(tmp_path):
+    """The fallback stays. With no live session there is nothing to preserve,
+    and the marker is the only record of who was serving this conversation."""
+    db = _db(tmp_path)
+    cid = db.create_conversation("restored")
+    save_state_marker(db, cid, {"frontend_name": "telegram"})
+
+    session = plain_runtime(db).load_conversation("tg:9", cid)
+
+    assert session.frontend_name == "telegram"
