@@ -262,10 +262,27 @@ def test_the_policy_resolves_the_name_the_handler_will(tree, named):
 
 @pytest.fixture
 def sb():
-    """A sandbox that refuses everything unsafe."""
+    """A sandbox that refuses everything unsafe, installed and then put back.
+
+    Installing it is what the handlers need — ``script.run`` and its
+    neighbours reach the process's sandbox through ``bridge.get_sandbox``, not
+    through anything passed in. Five tests used to call ``bridge.configure(sb)``
+    themselves and none of them restored it, so teardown shut this sandbox down
+    and left the global pointing at the corpse: every later ``get_sandbox()``
+    answered "sandbox is shutting down". It only ever showed up when something
+    using the real sandbox ran *after* this file, which alphabetical collection
+    happens to prevent — a passing suite resting on filename order.
+    """
+    from sandbox import bridge
+
     made = Sandbox()
-    yield made
-    made.shutdown()
+    previous = bridge._SANDBOX
+    bridge.configure(made)
+    try:
+        yield made
+    finally:
+        bridge.configure(previous)
+        made.shutdown()
 
 
 def test_a_script_runs_and_answers_with_its_return_value(sb, tree):
@@ -331,7 +348,6 @@ def test_cancelling_the_caller_tears_down_the_script(sb, tree, monkeypatch):
     spinner.write_text(SPINNER, encoding="utf-8")
     monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
-    bridge.configure(sb)
 
     execution = Execution(name="caller", chain=Chain(root="user"))
     threading.Timer(0.5, lambda: setattr(execution, "cancelled", True)).start()
@@ -377,7 +393,6 @@ def test_a_tool_runs_a_script_through_the_sdk(sb, tree, monkeypatch):
     tool.write_text(CALLER, encoding="utf-8")
     monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
-    bridge.configure(sb)
 
     try:
         result = sb.run(str(tool), "Caller", kwargs={"path": str(write(tree))},
@@ -402,7 +417,6 @@ def test_a_handler_with_no_provenance_still_runs(sb, tree, monkeypatch):
 
     monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
-    bridge.configure(sb)
 
     assert provenance.current() is None
     result = _script_run(None, {"path": str(write(tree)),
@@ -419,7 +433,6 @@ def test_a_bare_name_runs(sb, tree, monkeypatch):
     write(tree)
     monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
-    bridge.configure(sb)
 
     result = _script_run(None, {"path": "tally.py",
                                 "args": {"values": [1, 2, 3]}})
@@ -445,7 +458,6 @@ def wired(sb, tree, monkeypatch):
 
     monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
                         (tree.parent.resolve(),))
-    bridge.configure(sb)
     return sb
 
 

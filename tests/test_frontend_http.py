@@ -81,7 +81,17 @@ def test_the_declarations_the_bridge_reads(source):
 
 
 def test_it_declares_every_request_it_makes(source):
-    """A Request left undeclared is refused at runtime, not at load."""
+    """``requests`` is documentation plus a *load-time* name check.
+
+    Worth being exact, because the obvious reading is wrong and this file
+    inherited that wrong reading from its predecessor. Nothing enforces the
+    list at runtime for a frontend: ``bridge`` reads it into ``granted`` and
+    only ever spends it as ``Chain.approved``, which is set solely for a
+    command the state machine approved. What the declaration does buy is
+    ``validator._check_requests`` refusing a name that is not a real Request
+    type — so it catches a typo at load rather than a denial in production —
+    and it tells a reader what this plugin reaches for.
+    """
     declared = set(_declared_requests(source))
     for needed in ("http.drain", "http.respond", "http.push", "http.close",
                    "frontend.act", "frontend.collect", "frontend.attend",
@@ -177,6 +187,12 @@ class _Runtime:
     def __init__(self):
         self.sessions = {}
         self.active_session_key = "somebody-else"
+        #: Every ``session.state_set`` that landed, with the session it named.
+        self.state = []
+
+    def update_session_plugin_state(self, session_key, namespace, value):
+        """Record which session a state write actually reached."""
+        self.state.append((session_key, namespace, value))
 
     def is_attended(self, session_key):
         """The real rule: the frontend's opinion wins, else the active one."""
@@ -233,6 +249,11 @@ class _Frontend:
         self.token = token
         self.desk = desk
         self.runtime = runtime
+
+    @property
+    def state(self):
+        """Every ``session.state_set`` that landed, and where."""
+        return self.runtime.state
 
     def poll(self):
         """One turn of the loop, as the kernel's poll thread would."""
@@ -563,6 +584,46 @@ def test_a_client_cannot_name_its_own_session_or_token(running):
     # It resolved *our* adapter with *our* thread, which a spoofed token could
     # not have done and a spoofed session_key would have redirected.
     assert _status(raw) == 200
+
+
+@pytest.mark.store
+def test_a_client_cannot_reach_another_frontends_session_by_key(running):
+    """The other spelling, and the one that nearly got away.
+
+    ``session.*`` names a session with ``key``, not ``session_key``, and of the
+    eleven that accept one only ``add_prompt_extra`` checks it against the
+    caller. So ``session.cancel {"key": "telegram:12345"}`` would have stopped
+    a Telegram user's turn from a browser — unconditionally safe, no dialog,
+    nothing in the way. The kernel's asymmetry predates this file; a bearer
+    token reaching it does not.
+    """
+    running.runtime.sessions["telegram:12345"] = _Session("telegram")
+
+    conn = _open(running, _request(
+        "POST", "/sdk/session.state_set?thread=t9",
+        body=json.dumps({"key": "telegram:12345", "namespace": "sandbox",
+                         "value": "reached"})))
+    running.settle()
+    _read(conn, until=b"}", timeout=3.0)
+    conn.close()
+
+    # Rewritten to our own thread on the way through, so the other session was
+    # never named at all.
+    assert running.state == [("http:t9", "sandbox", "reached")]
+
+
+@pytest.mark.store
+def test_a_key_that_is_not_a_session_is_left_alone(running):
+    """``key`` means a *setting name* to ``config.read``, so the rule has to be
+    per-family. Stripping it everywhere would break ordinary reads."""
+    conn = _open(running, _request("POST", "/sdk/config.read?thread=t1",
+                                   body=json.dumps({"key": "http_static_dir"})))
+    running.settle()
+    raw = _read(conn, until=b"}", timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 200
+    assert _json_body(raw)["data"], "the setting name was stripped"
 
 
 # ──────────────────────────────────────────────────────────────────────

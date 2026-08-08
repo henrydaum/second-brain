@@ -2297,6 +2297,24 @@ def _at_desk(args: dict):
     return adapter, None
 
 
+def _the_sandbox(what: str):
+    """The process's sandbox, or a refusal saying it could not be reached.
+
+    Five handlers need this and each had its own copy of the same four lines.
+    Guarded rather than left to raise because ``get_sandbox`` *builds* one on
+    demand and the build can fail — an import error in the plugin roots, say —
+    and "the sandbox is not available" is a far more useful thing for a plugin
+    author to read than a traceback from the interpreter's generic net.
+    """
+    from ..bridge import get_sandbox
+
+    try:
+        return get_sandbox(), None
+    except Exception as exc:
+        logger.exception("%s could not reach the sandbox", what)
+        return None, Result.failure(f"the sandbox is not available: {exc}")
+
+
 def _not_yours(adapter, session_key: str) -> Result | None:
     """Refuse a session belonging to a *different* frontend, else None.
 
@@ -2649,7 +2667,6 @@ def _frontend_act(ctx, args: dict) -> Result:
 
     Detached, and that is correctness rather than speed: see ``Sandbox.act``.
     """
-    from ..bridge import get_sandbox
     from ..policy import Chain
 
     adapter, refusal = _at_desk(args)
@@ -2676,11 +2693,9 @@ def _frontend_act(ctx, args: dict) -> Result:
         inner["token"] = args.get("token")
 
     name = getattr(adapter, "name", "") or "frontend"
-    try:
-        sandbox = get_sandbox()
-    except Exception as exc:
-        logger.exception("frontend_act failed")
-        return Result.failure(f"the sandbox is not available: {exc}")
+    sandbox, refusal = _the_sandbox("frontend_act")
+    if refusal is not None:
+        return refusal
 
     return Result(data=sandbox.act(
         Request(request_type, inner),
@@ -2696,17 +2711,14 @@ def _frontend_collect(ctx, args: dict) -> Result:
     a refusal is an ordinary answer here: the frontend's job is to forward it
     to whoever asked, not to treat it as its own failure.
     """
-    from ..bridge import get_sandbox
 
     adapter, refusal = _at_desk(args)
     if refusal is not None:
         return refusal
 
-    try:
-        sandbox = get_sandbox()
-    except Exception as exc:
-        logger.exception("frontend_collect failed")
-        return Result.failure(f"the sandbox is not available: {exc}")
+    sandbox, refusal = _the_sandbox("frontend_collect")
+    if refusal is not None:
+        return refusal
 
     # Owned by the *frontend*, not by the session it was run as: one plugin,
     # one box, one memory — two of its threads sharing a namespace is not a
@@ -3167,7 +3179,6 @@ def _script_run(ctx, args: dict) -> Result:
     from plugins.plugin_paths import resolve_plugin_path
 
     from .. import provenance
-    from ..bridge import get_sandbox
     from ..isolation import is_script, resolve_script
 
     raw = (args.get("path") or "").strip()
@@ -3201,11 +3212,9 @@ def _script_run(ctx, args: dict) -> Result:
     entry = (args.get("entry") or "main").strip()
     kwargs = dict(args.get("args") or {})
 
-    try:
-        sandbox = get_sandbox()
-    except Exception as exc:
-        logger.exception("script_run failed")
-        return Result.failure(f"the sandbox is not available: {exc}")
+    sandbox, refusal = _the_sandbox("script_run")
+    if refusal is not None:
+        return refusal
 
     wait = args.get("wait", True)
     try:
@@ -3251,15 +3260,12 @@ def _script_collect(ctx, args: dict) -> Result:
     other route in.
     """
     from .. import provenance
-    from ..bridge import get_sandbox
 
     caller = provenance.current()
     owner = _script_owner(getattr(caller, "chain", None))
-    try:
-        sandbox = get_sandbox()
-    except Exception as exc:
-        logger.exception("script_collect failed")
-        return Result.failure(f"the sandbox is not available: {exc}")
+    sandbox, refusal = _the_sandbox("script_collect")
+    if refusal is not None:
+        return refusal
 
     runs = sandbox.collectable(owner, args.get("ids"))
     if not runs:
@@ -3298,15 +3304,12 @@ def _script_collect(ctx, args: dict) -> Result:
 def _script_stop(ctx, args: dict) -> Result:
     """Cancel a detached script. Answers whether there was one to cancel."""
     from .. import provenance
-    from ..bridge import get_sandbox
 
     caller = provenance.current()
     owner = _script_owner(getattr(caller, "chain", None))
-    try:
-        sandbox = get_sandbox()
-    except Exception as exc:
-        logger.exception("script_stop failed")
-        return Result.failure(f"the sandbox is not available: {exc}")
+    sandbox, refusal = _the_sandbox("script_stop")
+    if refusal is not None:
+        return refusal
 
     run = sandbox.find_run(args.get("id") or "", owner)
     if run is None:

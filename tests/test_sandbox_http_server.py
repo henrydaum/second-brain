@@ -3,8 +3,8 @@
 ``socket`` is refused to a guest and ``sdk.net.http`` dials *out*, so a
 frontend could talk to the world and never be talked to. That is fine for a
 transport which polls somebody else's servers and impossible for one a client
-connects to — which is every protocol where the UI opens the connection, AG-UI
-included. This suite is the argument that inverting it, exactly as the console
+connects to — which is every protocol where the UI opens the connection, an
+SSE render stream included. This suite is the argument that inverting it, exactly as the console
 inverts stdin, closes the gap without widening what a guest may reach.
 
 The inversion buys the same testability the console's does: the listener takes
@@ -41,7 +41,7 @@ def _sent(chunks):
     return lambda text: chunks.append(text)
 
 
-def _request(path="/agui", method="POST", body=""):
+def _request(path="/sdk/conv.list", method="POST", body=""):
     """One parsed request, as the socket path would have built it."""
     return {"id": "", "method": method, "path": path, "query": "",
             "headers": {}, "body": body}
@@ -243,7 +243,7 @@ def test_a_stream_stays_open_and_takes_frames(server):
     Requests rather than two."""
     server.claim("a", 0, source=iter(()))
     chunks = []
-    server._accept(_request(path="/agui/stream"), _wrap(chunks))
+    server._accept(_request(path="/events"), _wrap(chunks))
     rid = server.drain()[0]["id"]
     assert server.respond(rid, 200, {}, stream=True) is True
     assert server.push(rid, json.dumps({"type": "RUN_STARTED"})) is True
@@ -288,10 +288,10 @@ def test_it_binds_loopback_and_serves_a_real_request(server):
     conn = _connect(server)
     body = json.dumps({"hello": "there"})
     conn.sendall(
-        f"POST /agui HTTP/1.1\r\nHost: h\r\nContent-Length: {len(body)}"
+        f"POST /sdk/conv.list HTTP/1.1\r\nHost: h\r\nContent-Length: {len(body)}"
         f"\r\n\r\n{body}".encode())
     items = _await_drain(server)
-    assert [(i["method"], i["path"]) for i in items] == [("POST", "/agui")]
+    assert [(i["method"], i["path"]) for i in items] == [("POST", "/sdk/conv.list")]
     assert json.loads(items[0]["body"]) == {"hello": "there"}
     server.respond(items[0]["id"], 200, {"Content-Length": "2"}, "{}")
     assert conn.recv(200).startswith(b"HTTP/1.1 200 OK")
@@ -340,7 +340,7 @@ def test_an_oversized_request_is_refused_rather_than_truncated(server):
     server.claim("a", 0)
     conn = _connect(server)
     conn.sendall(
-        f"POST /agui HTTP/1.1\r\nHost: h\r\nContent-Length: "
+        f"POST /sdk/conv.list HTTP/1.1\r\nHost: h\r\nContent-Length: "
         f"{MAX_BODY * 2}\r\n\r\n".encode())
     assert b"413" in conn.recv(200)
     conn.close()
