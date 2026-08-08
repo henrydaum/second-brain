@@ -702,3 +702,104 @@ def test_an_error_ends_the_run_as_run_error(running):
     error = next(e for e in frames if e["type"] == "RUN_ERROR")
     assert error["message"] == "it broke"
     conn.close()
+
+
+# ── surviving a reload ───────────────────────────────────────────────
+
+@pytest.mark.store
+def test_session_reports_the_interrupt_a_reload_would_have_lost(running):
+    """The hole this closes is not exotic: somebody refreshes the page.
+
+    A client's interrupt list is populated by the live run, so a reload drops
+    the dialog while the agent stays parked in ``approving_request`` waiting
+    for an answer nobody can give. It sits there until it times out, showing
+    nothing.
+    """
+    conn, opened = _run(running, "t15")
+    running.desk.pending["agui:t15"] = "a5"
+    running.render("agui:t15", "approval",
+                   {"id": "a5", "title": "Run shell?", "type": "boolean"})
+    raised = _interrupts(_events(conn, opened))
+    conn.close()
+
+    # The reload: a fresh client asks what is waiting.
+    conn = _open(running, _request("GET", "/session?thread=t15"))
+    body = json.loads(_read(conn).split(b"\r\n\r\n", 1)[1].decode())
+    conn.close()
+
+    assert len(body["pending"]) == 1
+    # Same id, so the re-raised dialog answers the approval that is actually
+    # waiting rather than opening a second one.
+    assert body["pending"][0]["id"] == raised[0]["id"] == "a5"
+    assert body["pending"][0]["responseSchema"] == raised[0]["responseSchema"]
+
+
+@pytest.mark.store
+def test_an_answered_approval_is_no_longer_pending(running):
+    """Asked of the kernel, never answered from memory.
+
+    An approval can be resolved from another frontend or time out. Re-raising
+    a dead one would put a dialog in front of somebody whose answer would then
+    be taken as the reply to whatever came next.
+    """
+    conn, opened = _run(running, "t16")
+    running.desk.pending["agui:t16"] = "a6"
+    running.render("agui:t16", "approval",
+                   {"id": "a6", "title": "Run shell?", "type": "boolean"})
+    _events(conn, opened)
+    conn.close()
+
+    # Answered somewhere else entirely.
+    running.desk.pending.pop("agui:t16")
+
+    conn = _open(running, _request("GET", "/session?thread=t16"))
+    body = json.loads(_read(conn).split(b"\r\n\r\n", 1)[1].decode())
+    conn.close()
+    assert body["pending"] == []
+
+
+@pytest.mark.store
+def test_nothing_waiting_reports_nothing(running):
+    conn = _open(running, _request("GET", "/session?thread=t17"))
+    body = json.loads(_read(conn).split(b"\r\n\r\n", 1)[1].decode())
+    conn.close()
+    assert body["pending"] == []
+
+
+# ── conversations are switched by command, not by Request ────────────
+
+@pytest.mark.store
+def test_creating_a_conversation_targets_the_named_thread(running):
+    """``conv.create(activate=True)`` would activate in no session at all.
+
+    A frontend box's context is ``kernel_context()``, which names none, and
+    residency never lends it one — so the conversation would be created and
+    nothing pointed at it, reported as success. ``/new`` creates *and*
+    activates, in the session it is submitted to.
+    """
+    conn = _open(running, _request("POST", "/conversations?thread=t18",
+                                   body="{}"))
+    assert b"202" in _read(conn)
+    conn.close()
+    assert ("agui:t18", "/new") in running.desk.submitted
+
+
+@pytest.mark.store
+def test_loading_a_conversation_targets_the_named_thread(running):
+    """Same reason as creating: ``conv.load`` would load into no session."""
+    conn = _open(running, _request("POST", "/conversations/42/load?thread=t19",
+                                   body="{}"))
+    assert b"202" in _read(conn)
+    conn.close()
+    submitted = dict(running.desk.submitted).get("agui:t19", "")
+    assert submitted.startswith("/conversations ")
+    assert "conversation_id=42" in submitted
+    assert "action=Load conversation" in submitted
+
+
+@pytest.mark.store
+def test_a_non_numeric_conversation_id_is_refused(running):
+    conn = _open(running, _request("POST", "/conversations/abc/load",
+                                   body="{}"))
+    assert b"400" in _read(conn)
+    conn.close()
