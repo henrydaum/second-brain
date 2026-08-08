@@ -145,6 +145,17 @@ _FALSE = ("no", "n", "deny", "reject", "false", "cancel")
 _FORM_PHASES = ("filling_command_form", "filling_tool_form")
 
 
+def _quote(value) -> str:
+    """One shell-style token, for a command assembled as text.
+
+    ``parse_command_line`` lexes with ``shlex``, so a category containing a
+    space would otherwise arrive as two positional arguments and shift every
+    later one along. Written out rather than importing ``shlex`` because the
+    guest stays stdlib-light and this is the only token this file ever quotes.
+    """
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
 def _schema_for(field) -> dict:
     """The JSON Schema describing a valid answer to one interrupt.
 
@@ -440,10 +451,15 @@ class AGUI(BaseFrontend):
             # the sessionless kernel context and quietly load nothing.
             key = self._session_of(request)
             category = self._category_of(sdk, conversation_id)
+            # **Positional, not ``name=value``.** ``parse_command_line`` fills
+            # the form's steps in order, and a ``category=Main`` first token is
+            # taken as the whole of *category* — which then fails validation
+            # with "category must be one of: Main", naming the one value it was
+            # apparently given. ``runtime/notifications.py`` builds the same
+            # command and is the reference for the shape.
             sdk.frontend.submit_text(
-                key, f"/conversations category={category} "
-                     f"conversation_id={conversation_id} "
-                     f"action=Load conversation")
+                key, f"/conversations {_quote(category)} "
+                     f"{conversation_id} 'Load conversation'")
             return self._reply(sdk, request, 202,
                                {"loading": conversation_id})
         if not action and method == "GET":
@@ -464,7 +480,11 @@ class AGUI(BaseFrontend):
             listing = sdk.conv.list(details=True) or {}
         except Exception:
             return "Main"
-        for entry in listing.get("conversations") or []:
+        # ``conv.list`` answers ``{"items": [...]}``. The outer "conversations"
+        # key belongs to *this file's* JSON envelope, not to the SDK — reading
+        # it here always missed and silently fell through to "Main", which
+        # happens to be right until somebody files a conversation elsewhere.
+        for entry in listing.get("items") or []:
             if isinstance(entry, dict) and entry.get("id") == conversation_id:
                 return str(entry.get("category") or "Main")
         return "Main"
