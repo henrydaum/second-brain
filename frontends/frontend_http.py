@@ -418,14 +418,7 @@ class HTTP(BaseFrontend):
                                {"error": "name a Request type"})
 
         key = self._session_of(request)
-        args = self._body(request)
-        # Identity is ours to state, never the caller's. ``session_key`` comes
-        # from ``?thread=`` and the kernel fills in our token, so a body
-        # carrying either is claiming to be somebody it is not.
-        args.pop("token", None)
-        args.pop("session_key", None)
-        if request_type.startswith("frontend."):
-            args["session_key"] = key
+        args = self._sealed(self._body(request), request_type, key)
 
         try:
             handle = sdk.frontend.act(key, request_type, args)
@@ -435,6 +428,39 @@ class HTTP(BaseFrontend):
             return self._reply(sdk, request, 400, {"error": str(exc)})
         self._waiting[handle] = request["id"]
         return True
+
+    @staticmethod
+    def _sealed(args: dict, request_type: str, key: str) -> dict:
+        """Strip every way a body could name somebody other than its own thread.
+
+        Identity is ours to state. ``?thread=`` says which session and the
+        kernel fills in our desk token, so a body carrying either is claiming
+        to be somebody it is not.
+
+        The catch is that "which session" has **two spellings**, and one of
+        them is ambiguous. ``frontend.*`` and ``agent.complete`` say
+        ``session_key``; the ``session.*`` family says ``key``. But ``key``
+        means a *setting name* to ``config.read``, so stripping it everywhere
+        would quietly break ordinary reads — hence per-family rather than
+        blanket.
+
+        Why it matters: of the eleven session Requests that accept an explicit
+        key, only ``session.add_prompt_extra`` compares it against the caller's
+        own session. The rest — ``cancel``, ``push``, ``state_set``,
+        ``remove_tool``, ``add_attachment`` — are unconditionally safe, so a
+        body naming ``telegram:12345`` would reach straight into somebody
+        else's session with no dialog and nothing in the way. That asymmetry is
+        the kernel's and predates this file; what is new is that a bearer token
+        now reaches it, so this is where it gets closed.
+        """
+        sealed = {name: value for name, value in args.items()
+                  if name not in ("token", "session_key")}
+        if request_type.startswith("session."):
+            sealed["key"] = key
+        elif (request_type.startswith("frontend.")
+                or request_type == "agent.complete"):
+            sealed["session_key"] = key
+        return sealed
 
     def _answer(self, sdk, request_id, outcome):
         """Turn a finished Request's Result into an HTTP reply."""
