@@ -74,6 +74,26 @@ the REPL and Telegram already receive.
 there is nothing to interrupt for, and a client may render or ignore it without
 breaking a turn.
 
+**An interrupt outlives the page that was showing it.** A client's interrupt
+list is populated by the live run, so a reload loses whatever dialog was open
+while the agent stays parked in ``approving_request`` — waiting for an answer
+nobody can now give, until it times out, showing nothing. ``GET /session``
+therefore answers with ``pending``: the same interrupts, in the same shape,
+with the same ids, so a reloaded client re-raises exactly what it lost. What is
+still waiting is asked of the kernel rather than remembered, because an
+approval can be answered from another frontend or expire, and re-raising a dead
+one would take the person's next message as its answer.
+
+**A session cannot be named on a Request, which decides how writes are done.**
+``conv.load`` and ``conv.create(activate=True)`` act on ``ctx.session_key``,
+and a frontend box's context is ``kernel_context()`` — no session. Residency
+never passes ``for_session`` for a frontend either, so nothing this file can
+say would target one. Creating or loading that way changes a conversation
+nothing is pointed at and reports success. Both therefore go out as commands
+(``/new``, ``/conversations``) through ``submit_text``, which runs in the
+session it is submitted to. It is the same rule as everything else here, and
+this is the case that shows why the rule is not merely about approval gates.
+
 Text crosses **as markdown, verbatim**. Telegram needed a converter because its
 API wants HTML; assistant-ui renders markdown natively, so the kernel's own
 output format is already the right one.
@@ -84,7 +104,10 @@ requests = [
     "http.drain", "http.respond", "http.push", "http.close",
     "frontend.submit", "frontend.pending", "frontend.resolve",
     "secret.reveal", "config.read", "command.list",
-    "conv.list", "conv.read", "conv.create", "conv.load",
+    # create/load are gone on purpose: both act on ``ctx.session_key``,
+    # which is empty for a frontend box, so they are reached by submitting
+    # ``/new`` and ``/conversations`` instead.
+    "conv.list", "conv.read",
     "session.get", "user.read", "fs.read_bytes",
 ]
 
@@ -115,6 +138,11 @@ _MAX_BUFFERED = 500
 
 _TRUE = ("yes", "y", "allow", "approve", "true", "ok", "accept")
 _FALSE = ("no", "n", "deny", "reject", "false", "cancel")
+
+# The phases the state machine sits in while a form is half-filled. Spelled
+# out rather than imported: ``state_machine`` is a kernel module and a guest
+# that imports one cannot load in a subprocess.
+_FORM_PHASES = ("filling_command_form", "filling_tool_form")
 
 
 def _schema_for(field) -> dict:
@@ -344,11 +372,7 @@ class AGUI(BaseFrontend):
             return self._reply(sdk, request, 200,
                                {"conversations": sdk.conv.list(details=True)})
         if path == "/conversations" and method == "POST":
-            body = self._body(request)
-            return self._reply(sdk, request, 200, {
-                "conversation": sdk.conv.create(
-                    title=str(body.get("title") or ""),
-                    activate=bool(body.get("activate")))})
+            return self._new_conversation(sdk, request)
         if path.startswith("/conversations/"):
             return self._conversation(sdk, request, path, method)
         if path == "/commands" and method == "GET":
@@ -360,19 +384,48 @@ class AGUI(BaseFrontend):
         if path == "/session" and method == "GET":
             key = self._session_of(request)
             return self._reply(sdk, request, 200, {
-                "session": sdk.session.get(key, details=True),
-                "user": sdk.users.read()})
+                # Tolerated rather than fatal: this route's most important
+                # field is ``pending``, and a client that reloaded mid-approval
+                # needs it more than it needs the session dump.
+                "session": self._maybe(lambda: sdk.session.get(
+                    key, details=True)),
+                "user": self._maybe(sdk.users.read),
+                # What the agent is still blocked on, in the same shape the
+                # stream would have delivered it. A client that reloaded can
+                # re-raise the exact dialog it lost, with the same interrupt
+                # id, and answer it the ordinary way.
+                "pending": self._still_waiting(sdk, key)})
         if method == "GET" and self._static:
             return self._file(sdk, request, path)
         return self._reply(sdk, request, 404, {"error": "no such route"})
+
+    def _new_conversation(self, sdk, request):
+        """Start a conversation on a thread, in one call.
+
+        **Not ``sdk.conv.create``**, and the reason is the whole shape of this
+        file. ``conv.create(activate=True)`` and ``conv.load`` both act on
+        ``ctx.session_key`` — and a frontend box's context is
+        ``runtime.context.kernel_context()``, which names *no session*.
+        Residency never passes ``for_session`` for a frontend, so there is no
+        route by which this box could name one on a Request. Creating that way
+        made a conversation nothing was pointed at, and reported success.
+
+        ``/new`` creates *and* activates, and a submitted command runs in the
+        submitting session — so naming the thread is enough to put the new
+        conversation where the person is looking. Same rule as every other
+        mutation here: reads are an API, writes are a typed command.
+        """
+        key = self._session_of(request)
+        sdk.frontend.submit_text(key, "/new")
+        return self._reply(sdk, request, 202, {"thread": key.split(":", 1)[1]})
 
     def _conversation(self, sdk, request, path: str, method: str):
         """``/conversations/<id>`` and ``/conversations/<id>/load``.
 
         Deleting is deliberately absent: ``conv.delete`` is UNSAFE and this
         chain is unattended, so calling it would be refused rather than asked —
-        silently. ``/conversations delete`` submitted as text is the route that
-        works, and it asks the person first.
+        silently. ``/conversations`` submitted as text is the route that works,
+        and it asks the person first.
         """
         rest = path[len("/conversations/"):]
         ident, _, action = rest.partition("/")
@@ -382,12 +435,39 @@ class AGUI(BaseFrontend):
             return self._reply(sdk, request, 400,
                                {"error": "conversation id must be a number"})
         if action == "load" and method == "POST":
-            sdk.conv.load(conversation_id)
-            return self._reply(sdk, request, 200, {"loaded": conversation_id})
+            # Submitted rather than called, for the reason
+            # ``_new_conversation`` gives at length: ``conv.load`` would target
+            # the sessionless kernel context and quietly load nothing.
+            key = self._session_of(request)
+            category = self._category_of(sdk, conversation_id)
+            sdk.frontend.submit_text(
+                key, f"/conversations category={category} "
+                     f"conversation_id={conversation_id} "
+                     f"action=Load conversation")
+            return self._reply(sdk, request, 202,
+                               {"loading": conversation_id})
         if not action and method == "GET":
             return self._reply(sdk, request, 200, {
                 "conversation": sdk.conv.read(conversation_id, details=True)})
         return self._reply(sdk, request, 404, {"error": "no such route"})
+
+    @staticmethod
+    def _category_of(sdk, conversation_id: int) -> str:
+        """Which category a conversation is filed under.
+
+        ``/conversations`` asks for one before it will look at a conversation,
+        and its form validates against the live list — so guessing "Main"
+        would raise a form step for anything filed elsewhere and turn a
+        one-click switch into a picker. Looked up rather than assumed.
+        """
+        try:
+            listing = sdk.conv.list(details=True) or {}
+        except Exception:
+            return "Main"
+        for entry in listing.get("conversations") or []:
+            if isinstance(entry, dict) and entry.get("id") == conversation_id:
+                return str(entry.get("category") or "Main")
+        return "Main"
 
     # ──────────────────────────────────────────────────────────────────
     # The AG-UI run.
@@ -561,9 +641,59 @@ class AGUI(BaseFrontend):
         silence.
         """
         interrupt = self._describe(kind, payload)
+        # The built interrupt is kept, not just its inputs. ``/session`` hands
+        # this back verbatim after a reload, and rebuilding would mint a fresh
+        # id for a form — so the client would answer with an id the frontend
+        # had already forgotten and the turn would stay blocked.
         self._pending_interrupts.setdefault(session_key, {})[
-            interrupt["id"]] = {"kind": kind, "payload": payload}
+            interrupt["id"]] = {"kind": kind, "payload": payload,
+                                "interrupt": interrupt}
         return self._finish(sdk, session_key, interrupts=[interrupt])
+
+    def _still_waiting(self, sdk, session_key: str):
+        """The interrupts this session is *actually* still blocked on.
+
+        Asked of the kernel, never answered from memory alone. A reload is the
+        case this exists for: ``useAgUiInterrupts`` is populated by the live
+        run, so a refresh loses whatever was on screen while the agent stays
+        parked in ``approving_request`` waiting for an answer nobody can now
+        give — it sits there until it times out, showing nothing. Reloading a
+        page is not an exotic thing to do.
+
+        The kernel is the authority because an approval can be answered from
+        another frontend or expire, and re-raising a dialog that is no longer
+        live would take the person's next message as its answer.
+        """
+        held = self._pending_interrupts.get(session_key) or {}
+        if not held:
+            return []
+        # Only the form branch needs the phase, so a session that cannot be
+        # read costs the form case rather than the whole answer — an approval
+        # is checked against the kernel's own pending id and needs none of
+        # this. Unknown reads as "not waiting" deliberately: re-raising a form
+        # that has already been filled would have the person's answer eaten by
+        # a step nobody is on.
+        try:
+            phase = str((sdk.session.get(session_key) or {}).get("phase") or "")
+        except Exception:
+            phase = ""
+        waiting = []
+        for record in held.values():
+            if record["kind"] == "approval":
+                # ``pending_approval`` answers with the id still waiting, or
+                # None. Comparing it to ours is what keeps a *different*
+                # approval from being answered with this one's id.
+                live = sdk.frontend.pending_approval(session_key)
+                request_id = str(
+                    (record["payload"] or {}).get("id") or "")
+                if live and str(live) in (request_id, "True"):
+                    waiting.append(record["interrupt"])
+            elif phase in _FORM_PHASES:
+                # No kernel query exists for a half-filled form, so the phase
+                # is the closest thing to an authority — and it is a real one:
+                # the state machine is parked in it until the form resolves.
+                waiting.append(record["interrupt"])
+        return waiting
 
     def _describe(self, kind: str, payload) -> dict:
         """One interrupt, in the protocol's vocabulary.
@@ -856,6 +986,14 @@ class AGUI(BaseFrontend):
                 "Access-Control-Allow-Headers": "Content-Type, Authorization",
                 "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                 "Access-Control-Max-Age": "86400"}
+
+    @staticmethod
+    def _maybe(read):
+        """One optional read, or None. For fields a route can answer without."""
+        try:
+            return read()
+        except Exception:
+            return None
 
     @staticmethod
     def _body(request) -> dict:
