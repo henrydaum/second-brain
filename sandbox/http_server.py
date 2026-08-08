@@ -84,6 +84,26 @@ class _Response:
         self._closer = closer
         self.streaming = False
         self.closed = False
+        #: Set when a write failed because the client went away. Distinct from
+        #: ``closed``, which means *we* ended it — a frontend wants to tell the
+        #: two apart, since one is its own doing and the other means nobody is
+        #: watching that session any more.
+        self.gone = False
+
+    def fail(self) -> None:
+        """The far end is gone; stop pretending frames are being delivered.
+
+        Without this a departed client is invisible: the handler's writer
+        swallows the ``OSError`` (correctly — a dead socket must not raise into
+        the serving thread), so ``HttpServer.push`` went on answering True
+        forever. That was harmless while streams lasted one turn. It is not
+        harmless when the stream *is* how a frontend knows somebody is there:
+        attendance is what decides whether an unsafe Request gets a dialog or
+        a refusal, so a stream that never reports its own death leaves a
+        session marked attended with nobody in front of it.
+        """
+        self.gone = True
+        self.closed = True
 
     def send(self, status: int, headers: dict, body, streaming: bool) -> None:
         """Write the head, and the body if there is one to write now.
@@ -128,16 +148,25 @@ class _Response:
             # A first SSE frame, which is text by definition.
             self.frame(body)
 
-    def frame(self, data: str, event: str = "") -> None:
+    def frame(self, data: str, event: str = "", ident: str = "") -> None:
         """Write one SSE frame.
 
         The guest supplies the payload and the kernel supplies the framing,
         because which lines carry a ``data:`` prefix is transport mechanics and
         getting it wrong is invisible until a client silently sees nothing.
+
+        ``ident`` is the ``id:`` line, which is what a browser hands back as
+        ``Last-Event-ID`` when ``EventSource`` reconnects on its own. That
+        reconnect is free and automatic, so a frontend that numbers its frames
+        gets resumable delivery across a page refresh without the client
+        writing a line of code — and one that does not, silently loses whatever
+        was said while the page was reloading.
         """
         out = []
         if event:
             out.append(f"event: {event}")
+        if ident:
+            out.append(f"id: {ident}")
         out.extend(f"data: {line}" for line in str(data).split("\n"))
         out.append("")
         out.append("")
@@ -182,6 +211,9 @@ class _Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         done = threading.Event()
         response = _Response(self._write, done.set)
+        # The writer needs to be able to say the client left, and only the
+        # response knows who to tell.
+        self._response = response
         self.server.kernel._accept(
             {"id": "", "method": self.command, "path": path, "query": query,
              "headers": {k.lower(): v for k, v in self.headers.items()},
@@ -197,13 +229,22 @@ class _Handler(BaseHTTPRequestHandler):
         _take)
 
     def _write(self, data) -> None:
-        """Put bytes on the wire, tolerating a client that has gone."""
+        """Put bytes on the wire, tolerating a client that has gone.
+
+        Tolerating, and then *reporting* it: a stream whose client has hung up
+        must stop answering True to ``push``, or the frontend never learns the
+        person left. ``_refuse`` builds a response this handler does not hold,
+        so the mark is best-effort by design.
+        """
         try:
             self.wfile.write(data if isinstance(data, (bytes, bytearray))
                              else str(data).encode("utf-8"))
             self.wfile.flush()
         except OSError:
             self.close_connection = True
+            response = getattr(self, "_response", None)
+            if response is not None:
+                response.fail()
 
     def _refuse(self, status: int, message: str) -> None:
         """Answer a request that will not be served."""
@@ -412,13 +453,25 @@ class HttpServer:
             self.close(request_id)
         return True
 
-    def push(self, request_id: str, data: str, event: str = "") -> bool:
-        """Write one frame to an open stream. False if there is no stream."""
+    def push(self, request_id: str, data: str, event: str = "",
+             ident: str = "") -> bool:
+        """Write one frame to an open stream. False if there is no stream.
+
+        False also once the client has hung up, which is learned on the write
+        after it goes — the normal way with SSE, and enough: a frontend reads
+        the False, drops the stream and marks the session unattended. The dead
+        response is dropped here rather than left for ``close``, since nothing
+        is going to close a stream nobody is holding.
+        """
         with self._lock:
             response = self._open.get(request_id or "")
         if response is None or response.closed or not response.streaming:
             return False
-        response.frame(data, event)
+        response.frame(data, event, ident)
+        if response.gone:
+            with self._lock:
+                self._open.pop(request_id or "", None)
+            return False
         return True
 
     def close(self, request_id: str) -> bool:

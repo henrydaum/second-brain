@@ -73,9 +73,9 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        HTTP_CLOSE, HTTP_DRAIN, HTTP_PUSH, HTTP_RESPOND,
                        CRON_REMOVE, CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                        ENV_READ, EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
-                       FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
-                       FRONTEND_CANCEL, FRONTEND_PENDING, FRONTEND_RESOLVE,
-                       FRONTEND_SUBMIT,
+                       FILE_REGISTER, FRONTEND_ACT, FRONTEND_ATTEND,
+                       FRONTEND_BIND, FRONTEND_CANCEL, FRONTEND_COLLECT,
+                       FRONTEND_PENDING, FRONTEND_RESOLVE, FRONTEND_SUBMIT,
                        FS_DELETE, FS_LIST, FS_MOVE, FS_READ, FS_READ_BYTES,
                        FS_SEARCH, FS_STAT, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
@@ -998,6 +998,40 @@ class _Frontend(_Namespace):
                          session_key=session_key, value=value,
                          request_id=request_id)
 
+    def act(self, session_key: str, request_type: str, args=None) -> str:
+        """Run one Request *as* one of your sessions. Returns a handle.
+
+        Your own box is rooted ``frontend:<name>``, which names no session, so
+        it is unattended and anything unsafe it asks for is refused rather than
+        asked — there is nobody a dialog could be drawn for. This roots the
+        Request at a session you own instead, so attendance is resolved through
+        :meth:`attended`, which you declared. What that buys is a real dialog,
+        rendered back to you as an ``approval``, for the things a person should
+        be answering.
+
+        Nothing is exempted. The Request is classified exactly as it would be
+        anywhere else; only who is asking changes, and only to a session you
+        already own and have said somebody is watching.
+
+        It does not wait, because it must not: your box serves one call at a
+        time, and an approval has to render back into it to be seen. Collect
+        the answer with :meth:`collect`, which is what your next poll is for.
+        """
+        return self._ask(FRONTEND_ACT, token=self._token(),
+                         session_key=session_key, request_type=request_type,
+                         args=dict(args or {}))
+
+    def collect(self, handle: str):
+        """The result of an :meth:`act`, or ``None`` while it is still running.
+
+        Delivered once — the second call answers ``None`` — and dropped if
+        nobody comes back for it. A ``Result`` comes back as a plain dict
+        (``ok``, ``data``, ``error``, ``code``), never raised, because a
+        refusal is an ordinary answer to forward to whoever asked.
+        """
+        return self._ask(FRONTEND_COLLECT, token=self._token(),
+                         handle=str(handle))
+
 
 class _Console(_Namespace):
     """The machine's console, if this frontend claimed it.
@@ -1085,16 +1119,23 @@ class _Http(_Namespace):
                                else str(body)),
                          stream=bool(stream))
 
-    def push(self, request_id: str, data: str, event: str = ""):
+    def push(self, request_id: str, data: str, event: str = "",
+             ident: str = ""):
         """Write one frame to an open stream.
 
         Fails once the client has gone, which is the ordinary end of a stream
         rather than a fault — but it is told to you, because a frontend that
         never hears it goes on rendering a whole turn into a closed socket.
+
+        ``ident`` becomes the frame's ``id:``, which a browser hands straight
+        back as the ``Last-Event-ID`` header when ``EventSource`` reconnects.
+        Number your frames and a page refresh resumes where it left off with
+        no client code at all; leave it out and whatever was said during the
+        reload is gone.
         """
         return self._ask(HTTP_PUSH, token=self._token(),
                          request_id=str(request_id), data=str(data),
-                         event=str(event))
+                         event=str(event), ident=str(ident))
 
     def close(self, request_id: str):
         """End a reply."""

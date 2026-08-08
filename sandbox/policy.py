@@ -559,6 +559,18 @@ ALWAYS_SAFE = {
     # frontend doing it on another's behalf.
     R.FRONTEND_SUBMIT, R.FRONTEND_CANCEL, R.FRONTEND_BIND, R.FRONTEND_ATTEND,
     R.FRONTEND_RESOLVE, R.FRONTEND_PENDING,
+    # FRONTEND_ACT is safe *as a Request* and buys nothing on its own: it runs
+    # an inner Request, and that one is classified here like any other. What it
+    # changes is the chain — from ``frontend:<name>``, which names no session
+    # and is therefore unattended forever, to a session the frontend owns. The
+    # authority that follows is not this type's; it is whatever
+    # ``runtime.is_attended`` says about that session, which is the frontend's
+    # own declaration through FRONTEND_ATTEND. So the widening is exactly "act
+    # as a session you own while somebody is watching it", and it ends when the
+    # frontend says nobody is. Ownership is checked host-side against the
+    # adapter's live sessions, which the guest cannot state about itself.
+    # FRONTEND_COLLECT only takes an answer already produced.
+    R.FRONTEND_ACT, R.FRONTEND_COLLECT,
     # The console is scoped harder still: not merely "a frontend", but the one
     # frontend that claimed it. Reading takes only what a person already typed
     # at this machine's own keyboard, and writing puts text on the screen in

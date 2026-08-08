@@ -162,6 +162,24 @@ FRONTEND_RESOLVE = "frontend.resolve"
 # is answered somewhere else or times out — and a frontend acting on a stale
 # one would swallow the next thing a person typed as a yes/no.
 FRONTEND_PENDING = "frontend.pending"
+# Acting *as* one of your own sessions. A frontend box is rooted
+# ``frontend:<name>``, which names no session, so it is unattended forever and
+# every unsafe Request it makes is refused rather than asked — there is nobody
+# the dialog could be drawn for. But a frontend serving an authenticated
+# request is not acting on its own initiative: a person clicked something. So
+# ``act`` runs one Request with the chain rooted at a session this frontend
+# owns and the context built for that same session, which makes attendance
+# resolve through ``runtime.is_attended`` — the frontend's *own* declaration,
+# via ``frontend.attend``. Say nobody is watching and the authority goes away
+# again.
+#
+# It runs **detached**, and that is a correctness requirement rather than a
+# speed one. A box serves one call at a time; an unsafe Request made from
+# inside ``poll`` holds that lock, and the approval dialog has to render back
+# into the same box to be seen. Inline, it deadlocks until the dialog times
+# out. Same reason ``frontend.submit`` is detached.
+FRONTEND_ACT = "frontend.act"
+FRONTEND_COLLECT = "frontend.collect"
 
 # The machine's console. Scoped like the rest of the family — the kernel reads
 # stdin on its own thread and the guest drains what arrived, so nothing blocks
@@ -288,7 +306,8 @@ ALL_TYPES = {
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
-    FRONTEND_RESOLVE, FRONTEND_PENDING, CONSOLE_READ, CONSOLE_WRITE,
+    FRONTEND_RESOLVE, FRONTEND_PENDING, FRONTEND_ACT, FRONTEND_COLLECT,
+    CONSOLE_READ, CONSOLE_WRITE,
     HTTP_DRAIN, HTTP_RESPOND, HTTP_PUSH, HTTP_CLOSE,
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     TASK_PAUSE, TASK_RESET, TASK_TRIGGER, FILE_REGISTER, FILE_LIST,
@@ -325,6 +344,12 @@ READ_ONLY = {
     # the same trap ``llm.delta`` is excluded from the ledger sink for: a
     # Request issued per iteration must never be treated as a change.
     SCRIPT_COLLECT, SELF_BUDGET,
+    # Same argument once more. A frontend polls for its detached Requests every
+    # tick — fifty times a second at the default ``poll_interval`` — so a
+    # collect that counted as a change would bump the epoch continuously. The
+    # *inner* Request is recorded on its own, by its own chain, which is the
+    # row anybody auditing this actually wants.
+    FRONTEND_COLLECT,
 }
 
 

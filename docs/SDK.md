@@ -997,6 +997,58 @@ sdk.frontend.submit_attachment(key, temp, file_name=name,
                                caption=caption, ingest=True)
 ```
 
+### Acting as one of your sessions
+
+A frontend often has to do something a person asked for that is not "carry this
+line into the state machine" — load a conversation, read the command list,
+write a setting. Calling the SDK directly gets you the read-only half and
+silently nothing else, because your box's chain is rooted `frontend:<name>`,
+which names no session: nobody is watching it, so anything unsafe is **refused
+rather than asked**, and anything reading `ctx.session_key` acts on nothing.
+
+`act` says whose request this actually is:
+
+```python
+handle = sdk.frontend.act(session_key, "conv.load", {"id": 7})
+...
+result = sdk.frontend.collect(handle)     # None until it finishes
+```
+
+The Request runs rooted at that session, with that session's context, and is
+classified exactly as it would be anywhere else. What changes is that
+attendance now decides — and attendance is *what you declared*:
+
+```python
+sdk.frontend.attended(key, True)      # a socket connected
+sdk.frontend.attended(key, False)     # it went away
+```
+
+So an unsafe Request raises a real dialog, which arrives back at you as an
+`approval` render for the same session, and you answer it with
+`sdk.frontend.resolve`. Say nobody is watching and the authority goes with it.
+
+**It does not wait, and must not.** Your box serves one call at a time, and the
+dialog has to render *into that box* to be seen — so waiting inline would
+deadlock until the dialog timed out. Start it, return from `poll`, and collect
+on a later tick:
+
+```python
+def poll(self, sdk):
+    for handle, waiting_on in list(self._waiting.items()):
+        outcome = sdk.frontend.collect(handle)
+        if outcome is not None:              # a dict: ok, data, error, code
+            del self._waiting[handle]
+            self._answer(sdk, waiting_on, outcome)
+    ...
+```
+
+`collect` hands back the `Result` as a plain dict rather than raising, because
+a refusal is an ordinary answer to pass on to whoever asked — not a failure of
+yours. Delivery is one-shot, and an answer nobody collects is swept.
+
+Two things `act` will not carry: itself (recursion) and the `http.*` family,
+which belongs to your transport rather than to any session.
+
 **Ask what is pending; do not remember it.** A transport where a person answers
 by typing "yes" has to know whether a yes/no is what the next line means. You
 are told an approval exists — you were handed one to render — but not when it
@@ -1074,6 +1126,7 @@ class Web(BaseFrontend):
 
     def start(self, sdk):
         self._streams = {}
+        self._seq = 0
         return True
 
     def poll(self, sdk):
@@ -1091,9 +1144,12 @@ class Web(BaseFrontend):
         return True
 
     def render(self, sdk, session_key, kind, payload):
+        self._seq += 1
         for stream_id in list(self._streams):
-            if not sdk.http.push(stream_id, json.dumps(
-                    {"kind": kind, "payload": payload})):
+            try:
+                sdk.http.push(stream_id, json.dumps(
+                    {"kind": kind, "payload": payload}), ident=str(self._seq))
+            except sdk.Failed:
                 # The client went away. Ordinary, and you are told so you can
                 # stop rendering a whole turn into a closed socket.
                 self._streams.pop(stream_id, None)
@@ -1114,8 +1170,18 @@ only enough to answer.
 
 `drain()` returns `{id, method, path, query, headers, body}` and never blocks;
 return falsy from `poll` when it is empty and renders land in the pause.
-`push` returns falsy once the client has gone, which is the ordinary end of a
-stream rather than a fault.
+`push` **fails** once the client has gone — the ordinary end of a stream rather
+than a fault, but told to you, because a frontend that never hears it goes on
+rendering a whole turn into a closed socket. It is learned on the write *after*
+they left, which is how SSE works everywhere and is soon enough.
+
+**Number your frames.** `push(..., ident=...)` becomes the frame's `id:`, which
+a browser hands straight back as `Last-Event-ID` when `EventSource` reconnects
+— and `EventSource` reconnects on its own, for free. Keep a short per-session
+buffer, replay from that header, and a page refresh resumes instead of losing
+whatever was said while it was reloading. Note the browser cannot send an
+`Authorization` header on an `EventSource` at all, so a token-protected stream
+needs it in the query string; that is the API, not an oversight.
 
 `Content-Length` and `Connection` are computed for you on a non-streaming
 response, and the SSE content type on a streaming one. Anything you put in

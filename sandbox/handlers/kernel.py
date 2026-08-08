@@ -37,8 +37,9 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               CONSOLE_READ, CONSOLE_WRITE,
                               CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                               EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
-                              FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
-                              FRONTEND_CANCEL, FRONTEND_PENDING,
+                              FILE_REGISTER, FRONTEND_ACT, FRONTEND_ATTEND,
+                              FRONTEND_BIND, FRONTEND_CANCEL,
+                              FRONTEND_COLLECT, FRONTEND_PENDING,
                               FRONTEND_RESOLVE,
                               FRONTEND_SUBMIT, HTTP_CLOSE, HTTP_DRAIN,
                               HTTP_PUSH, HTTP_RESPOND,
@@ -63,7 +64,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               TASK_STATUS, TASK_TRIGGER, TOOL_CALL, TOOL_LIST,
                               UI_APPROVE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
-                              USER_WRITE, Result)
+                              USER_WRITE, ALL_TYPES, Request, Result)
 from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
                           ERROR_NOT_PERMITTED, ERROR_UNAVAILABLE)
 from .args import float_arg, int_arg
@@ -2296,6 +2297,34 @@ def _at_desk(args: dict):
     return adapter, None
 
 
+def _not_yours(adapter, session_key: str) -> Result | None:
+    """Refuse a session belonging to a *different* frontend, else None.
+
+    The token says which frontend is asking; this says which sessions it may
+    say things about. Both halves are needed, and only the first was there:
+    ``mark_attended`` takes any string, so one frontend could declare another's
+    session attended — and attendance is what decides whether an unsafe Request
+    gets a dialog rather than a refusal.
+
+    A session that does not exist yet is *allowed*, deliberately, and for the
+    reason ``_live_session_keys`` includes untagged ones: ``_tag_session``
+    stamps ownership when a frontend first submits, so a brand-new thread has
+    no owner and refusing it would mean a frontend could never act on the first
+    request of a conversation.
+    """
+    if not session_key:
+        return Result.refusal("name the session to act as",
+                              code=ERROR_INVALID_ARGUMENT)
+    runtime = getattr(adapter, "runtime", None)
+    session = (getattr(runtime, "sessions", None) or {}).get(session_key)
+    owner = (None if session is None
+             else getattr(session, "frontend_name", None))
+    if owner is not None and owner != getattr(adapter, "name", ""):
+        return Result.refusal(
+            f"session {session_key} belongs to the {owner} frontend")
+    return None
+
+
 def _prepare_attachment(ctx, args: dict):
     """Build the richer send_attachment payload, or None for the plain path.
 
@@ -2512,6 +2541,8 @@ def _frontend_attend(ctx, args: dict) -> Result:
         return refusal
 
     session_key = str(args.get("session_key") or "")
+    if (refusal := _not_yours(adapter, session_key)) is not None:
+        return refusal
     if args.get("present"):
         adapter.mark_attended(session_key)
     else:
@@ -2582,6 +2613,108 @@ def _frontend_pending(ctx, args: dict) -> Result:
     # The id is enough to answer and only enough to answer — the same
     # projection the ``approval`` render makes.
     return Result(data=waiting[0] if waiting else True)
+
+
+#: Requests ``frontend.act`` will not carry. ``frontend.act``/``collect`` would
+#: recurse; the ``http.*`` family belongs to the *transport*, which is the
+#: frontend's own possession rather than anything a session may reach — a
+#: client closing the socket it is talking over is the shape to avoid.
+_ACT_REFUSED = frozenset({FRONTEND_ACT, FRONTEND_COLLECT,
+                          HTTP_DRAIN, HTTP_RESPOND, HTTP_PUSH, HTTP_CLOSE})
+
+
+def _frontend_act(ctx, args: dict) -> Result:
+    """Run one Request as a session this frontend owns. Returns a handle.
+
+    A frontend box is rooted ``frontend:<name>``, which names no session, so
+    ``attended_now`` answers False for it forever and every unsafe Request it
+    makes is refused rather than asked — correctly, since there is nobody a
+    dialog could be drawn for. But a frontend serving an authenticated request
+    is not acting on its own initiative: somebody clicked something. This says
+    so, by rooting the Request at the session instead.
+
+    That is the whole of the widening, and it is self-limiting. Rooting at a
+    session makes ``attended_now`` ask ``runtime.is_attended``, which reads
+    what this same frontend declared through ``frontend.attend``. Say nobody
+    is watching and the authority goes with it. Rooting at ``user`` would have
+    been unconditionally attended and would have taken the decision away from
+    the mechanism built to hold it.
+
+    Chain *and* context both move, unlike ``PersistentBox.call(for_session=)``,
+    which deliberately moves only the context. Its argument is that a service
+    standing at a hook doorway is still acting on its own initiative; a
+    frontend serving a person is not, so the answer differs. The context has to
+    move regardless — ``conv.load`` and its neighbours read ``ctx.session_key``
+    and would otherwise act on nothing and report success.
+
+    Detached, and that is correctness rather than speed: see ``Sandbox.act``.
+    """
+    from ..bridge import get_sandbox
+    from ..policy import Chain
+
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    session_key = str(args.get("session_key") or "")
+    if (refusal := _not_yours(adapter, session_key)) is not None:
+        return refusal
+
+    request_type = str(args.get("request_type") or "")
+    if request_type not in ALL_TYPES:
+        return Result.failure(f"no such Request type: {request_type!r}",
+                              code=ERROR_INVALID_ARGUMENT)
+    if request_type in _ACT_REFUSED:
+        return Result.refusal(f"{request_type} cannot be run through act")
+
+    inner = dict(args.get("args") or {})
+    if request_type.startswith("frontend."):
+        # The *kernel* supplies the identity, never the caller: these resolve
+        # an adapter by token, and one arriving in the args would be somebody
+        # else's claim about who they are. We already know — it is the token
+        # that got us here.
+        inner["token"] = args.get("token")
+
+    name = getattr(adapter, "name", "") or "frontend"
+    try:
+        sandbox = get_sandbox()
+    except Exception as exc:
+        logger.exception("frontend_act failed")
+        return Result.failure(f"the sandbox is not available: {exc}")
+
+    return Result(data=sandbox.act(
+        Request(request_type, inner),
+        Chain(root=session_key).push(f"frontend:{name}"),
+        sandbox.interpreter.context_for_session(session_key),
+        owner=name))
+
+
+def _frontend_collect(ctx, args: dict) -> Result:
+    """Take the answer to a ``frontend.act``, or None while it is still going.
+
+    The Result comes back as a plain dict rather than being unwrapped, because
+    a refusal is an ordinary answer here: the frontend's job is to forward it
+    to whoever asked, not to treat it as its own failure.
+    """
+    from ..bridge import get_sandbox
+
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    try:
+        sandbox = get_sandbox()
+    except Exception as exc:
+        logger.exception("frontend_collect failed")
+        return Result.failure(f"the sandbox is not available: {exc}")
+
+    # Owned by the *frontend*, not by the session it was run as: one plugin,
+    # one box, one memory — two of its threads sharing a namespace is not a
+    # boundary worth drawing. What matters is that another frontend's handle
+    # answers None rather than a result.
+    outcome = sandbox.collect_act(str(args.get("handle") or ""),
+                                  getattr(adapter, "name", "") or "frontend")
+    return Result(data=None if outcome is None else outcome.to_dict())
 
 
 def _console_read(ctx, args: dict) -> Result:
@@ -2691,7 +2824,8 @@ def _http_push(ctx, args: dict) -> Result:
         return refusal
     ok = server.push(str(args.get("request_id") or ""),
                      str(args.get("data") or ""),
-                     event=str(args.get("event") or ""))
+                     event=str(args.get("event") or ""),
+                     ident=str(args.get("ident") or ""))
     if not ok:
         # Deliberately a failure rather than a silent success: a client that
         # went away is the ordinary end of a stream, and a frontend that never
@@ -3278,6 +3412,7 @@ HANDLERS = {
     FRONTEND_SUBMIT: _frontend_submit, FRONTEND_CANCEL: _frontend_cancel,
     FRONTEND_BIND: _frontend_bind, FRONTEND_ATTEND: _frontend_attend,
     FRONTEND_RESOLVE: _frontend_resolve, FRONTEND_PENDING: _frontend_pending,
+    FRONTEND_ACT: _frontend_act, FRONTEND_COLLECT: _frontend_collect,
     CONSOLE_READ: _console_read, CONSOLE_WRITE: _console_write,
     HTTP_DRAIN: _http_drain, HTTP_RESPOND: _http_respond,
     HTTP_PUSH: _http_push, HTTP_CLOSE: _http_close,

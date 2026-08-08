@@ -65,6 +65,28 @@ WAIT_CEILING = 660.0
 COLLECT_RETENTION = 1800.0
 
 
+class _Act:
+    """One Request a frontend detached, and its answer when it has one.
+
+    Not a :class:`Run`: no code executes, so there is no box, no watchdog and
+    nothing to cancel — just a Request making its ordinary way through the
+    gate on a thread of its own, so the caller's box is free to render the
+    dialog it may raise.
+    """
+
+    _next_id = 0
+    _id_lock = threading.Lock()
+
+    def __init__(self, owner: str, request_type: str):
+        with _Act._id_lock:
+            _Act._next_id += 1
+            self.id = f"act-{_Act._next_id}"
+        self.owner = owner
+        self.type = request_type
+        self.result: Result | None = None
+        self.finished_at: float | None = None
+
+
 class Run:
     """An ephemeral execution in flight.
 
@@ -223,6 +245,12 @@ class Sandbox:
         #: before anyone can ask. Only a run started with ``collect_owner``
         #: lands here, so ordinary tool and command runs still cost nothing.
         self._collectable: dict[str, Run] = {}
+        #: Detached *Requests* a frontend asked for, by handle. Separate from
+        #: ``_collectable`` because these run no code at all — there is no box,
+        #: no deadline and no cancellation of guest work, only one Request
+        #: through the ordinary gate — so a ``Run`` would be almost entirely
+        #: empty fields. Same one-shot, owner-scoped, swept contract though.
+        self._acts: dict[str, _Act] = {}
         self._lock = threading.Lock()
 
     def bind_runtime(self, runtime, session_key=None) -> None:
@@ -568,6 +596,70 @@ class Sandbox:
         with self._lock:
             run = self._collectable.get(str(run_id))
         return run if run is not None and run.owner == owner else None
+
+    # ──────────────────────────────────────────────────────────────
+    # Detached Requests, for a frontend acting as one of its sessions.
+    # ──────────────────────────────────────────────────────────────
+
+    def act(self, request, chain: Chain, context, owner: str) -> str:
+        """Send one Request on its own thread. Returns a handle to collect by.
+
+        The thread is the whole point. The caller is a resident frontend
+        holding its box's single call lock, and this Request may be unsafe —
+        in which case the approver draws a dialog by calling ``render`` back
+        into that same box. Answering inline would deadlock until the dialog
+        expired, which is the same shape ``handlers.kernel._drive`` exists to
+        prevent for anything that drives the state machine.
+
+        Nothing here decides authority. ``chain`` and ``context`` are built by
+        the handler from facts the kernel owns, and the Request goes through
+        :meth:`Interpreter.submit` like any other — same gate, same
+        ``classify``, same ledger row.
+        """
+        act = _Act(owner, getattr(request, "type", ""))
+        execution = Execution(name=f"act:{act.type}", chain=chain)
+        execution.context = context
+
+        def run():
+            """Answer the handle, whatever happens. A lost act never returns."""
+            try:
+                result = self.interpreter.submit(execution, request)
+            except Exception as exc:
+                logger.exception("detached %s failed", act.type)
+                result = Result.failure(f"{act.type} failed: {exc}")
+            with self._lock:
+                act.result = result
+                act.finished_at = time.monotonic()
+
+        with self._lock:
+            self._acts[act.id] = act
+            self._sweep_acts()
+        threading.Thread(target=run, name=f"sandbox-act-{act.id}",
+                         daemon=True).start()
+        return act.id
+
+    def collect_act(self, handle: str, owner: str) -> Result | None:
+        """A detached Request's answer, once, or ``None`` while it runs.
+
+        An unknown or somebody else's handle answers ``None`` for the reason
+        :meth:`collectable` skips rather than refuses: naming a handle you do
+        not own is a mistake about *which* one, and saying so should not also
+        disclose that it exists.
+        """
+        with self._lock:
+            act = self._acts.get(str(handle))
+            if act is None or act.owner != owner or act.result is None:
+                return None
+            del self._acts[act.id]
+            return act.result
+
+    def _sweep_acts(self) -> None:
+        """Forget answers nobody came back for. Caller holds ``_lock``."""
+        cutoff = time.monotonic() - COLLECT_RETENTION
+        for handle, act in list(self._acts.items()):
+            if act.finished_at is not None and act.finished_at < cutoff:
+                del self._acts[handle]
+                logger.debug("swept uncollected act %s (%s)", handle, act.type)
 
     # ──────────────────────────────────────────────────────────────
     # Resident.

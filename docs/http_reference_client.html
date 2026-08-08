@@ -1,0 +1,278 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Second Brain — HTTP reference client</title>
+<!--
+  The smallest thing that exercises the whole bridge. No build step, no
+  dependencies, one file.
+
+  This is not the app. It is the analogue of ``tests/support``: something that
+  can drive the surface in isolation, so "is the bridge working?" and "is the
+  app working?" are separable questions. When a real client misbehaves, open
+  this first — if it works here, the bridge is fine.
+
+  There are only two things to speak:
+
+    GET  /events?thread=X&token=T     every render, verbatim, as SSE
+    POST /sdk/<request.type>?thread=X the whole SDK, body = arguments
+
+  Everything below is a rendering of the nine render kinds and a form for
+  typing Request types into. That is genuinely all there is.
+
+  Two ways to run it:
+
+    1. Same origin (no CORS). Point ``http_static_dir`` at the folder holding
+       this file and open http://127.0.0.1:8787/http_reference_client.html.
+    2. From disk. Set ``http_allowed_origins`` to ``*`` first, or the browser
+       refuses the preflight and tells you almost nothing about why.
+-->
+<style>
+  :root { color-scheme: light dark; --line: #8883; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, sans-serif;
+         max-width: 54rem; margin: 0 auto; padding: 1.5rem; }
+  header { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+           padding-bottom: 1rem; border-bottom: 1px solid var(--line); }
+  input, button, textarea, select { font: inherit; padding: .4rem .6rem;
+           border: 1px solid var(--line); border-radius: 6px;
+           background: transparent; color: inherit; }
+  button { cursor: pointer; }
+  #log { margin: 1rem 0; display: flex; flex-direction: column; gap: .6rem; }
+  .msg { padding: .55rem .8rem; border-radius: 8px;
+         border: 1px solid var(--line); }
+  .user { align-self: flex-end; max-width: 80%; }
+  .assistant { white-space: pre-wrap; }
+  .kind { font-family: ui-monospace, monospace; font-size: 12.5px;
+          opacity: .8; }
+  .kind.dim { border-style: dashed; }
+  .err { border-color: #d66; }
+  form { display: flex; gap: .5rem; margin-bottom: .6rem; }
+  form textarea { flex: 1; resize: vertical; min-height: 3rem; }
+  form input.grow { flex: 1; }
+  label { display: flex; gap: .35rem; align-items: center; font-size: 13px; }
+  pre { margin: .3rem 0 0; white-space: pre-wrap; word-break: break-word; }
+  #state { font-size: 12.5px; opacity: .75; margin-left: auto; }
+</style>
+
+<header>
+  <label>URL <input id="url" size="22" value="http://127.0.0.1:8787"></label>
+  <label>Token <input id="token" size="16" type="password"></label>
+  <label>Thread <input id="thread" size="8" value="main"></label>
+  <button id="connect">Connect</button>
+  <span id="state">not connected</span>
+</header>
+
+<div id="log"></div>
+
+<form id="say">
+  <textarea id="text" placeholder="Type a message, or a slash command like /config"></textarea>
+  <button>Send</button>
+</form>
+
+<form id="call">
+  <input id="type" size="18" value="conv.list" placeholder="conv.list">
+  <input id="args" class="grow" value='{"details": true}' placeholder='{"id": 7}'>
+  <button>POST /sdk</button>
+</form>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+let stream = null;
+// stream_id -> the node its deltas are accumulating into.
+const streams = new Map();
+
+function add(cls, text) {
+  const node = document.createElement("div");
+  node.className = "msg " + cls;
+  node.textContent = text;
+  log.appendChild(node);
+  node.scrollIntoView({ block: "end" });
+  return node;
+}
+
+function show(label, value) {
+  return add("kind dim", label + "\n" + JSON.stringify(value, null, 2));
+}
+
+// ── The outbound half ────────────────────────────────────────────────
+// EventSource, deliberately: it reconnects on its own and replays from the
+// last id it saw, which is why the frontend numbers its frames. A fetch-based
+// reader would have to reimplement both.
+
+$("connect").onclick = () => {
+  if (stream) stream.close();
+  const url = new URL($("url").value + "/events");
+  url.searchParams.set("thread", $("thread").value || "default");
+  url.searchParams.set("token", $("token").value);
+  stream = new EventSource(url);
+  stream.onopen = () => { $("state").textContent = "connected"; };
+  stream.onerror = () => { $("state").textContent = "reconnecting…"; };
+  stream.onmessage = (event) => {
+    try { render(JSON.parse(event.data)); }
+    catch (err) { add("msg err", "bad frame: " + err); }
+  };
+};
+
+// One function, nine kinds, no translation anywhere. This is the entire
+// outbound contract — a client that handles these handles everything.
+function render({ kind, payload }) {
+  switch (kind) {
+    case "messages":
+      for (const text of payload) add("assistant", text);
+      break;
+
+    case "stream_delta": {
+      // {stream_id, seq, delta, done}. Deltas accumulate into one node.
+      let node = streams.get(payload.stream_id);
+      if (!node) {
+        node = add("assistant", "");
+        streams.set(payload.stream_id, node);
+      }
+      node.textContent += payload.delta || "";
+      if (payload.done) streams.delete(payload.stream_id);
+      break;
+    }
+
+    case "typing":
+      $("state").textContent = payload ? "thinking…" : "connected";
+      break;
+
+    case "tool_status":
+      add("kind", `⚙ ${payload.tool_name || "tool"} — ${payload.status || ""}`);
+      break;
+
+    case "attachments":
+      show("attachments", payload);
+      break;
+
+    case "error":
+      add("msg err", "Error: " + (payload.message || JSON.stringify(payload)));
+      break;
+
+    // The three that need an answer. All three are answered the same way:
+    // by making an ordinary Request back through /sdk.
+    case "approval":
+      ask(payload);
+      break;
+
+    case "form_field":
+      fillIn(payload);
+      break;
+
+    case "buttons":
+      choose(payload);
+      break;
+
+    default:
+      show(kind, payload);
+  }
+}
+
+// ── The inbound half ─────────────────────────────────────────────────
+
+async function sdk(type, args = {}) {
+  const url = new URL($("url").value + "/sdk/" + type);
+  url.searchParams.set("thread", $("thread").value || "default");
+  const reply = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json",
+               "Authorization": "Bearer " + $("token").value },
+    body: JSON.stringify(args),
+  });
+  const body = await reply.json().catch(() => ({}));
+  if (!reply.ok) {
+    // A refusal is an ordinary answer, not a transport failure. 403 with
+    // approval_declined is what "nobody was there to ask, or they said no"
+    // looks like from out here.
+    add("msg err", `${type} → ${reply.status} ${body.code || ""} ${body.error || ""}`);
+    return null;
+  }
+  return body.data;
+}
+
+$("say").onsubmit = async (event) => {
+  event.preventDefault();
+  const text = $("text").value.trim();
+  if (!text) return;
+  $("text").value = "";
+  add("user", text);
+  // Exactly what the REPL does with a typed line, including slash commands —
+  // the state machine decides which it was.
+  await sdk("frontend.submit", { input_kind: "text", text });
+};
+
+$("call").onsubmit = async (event) => {
+  event.preventDefault();
+  let args = {};
+  try { args = JSON.parse($("args").value || "{}"); }
+  catch (err) { return add("msg err", "arguments must be JSON: " + err); }
+  const data = await sdk($("type").value.trim(), args);
+  if (data !== null) show($("type").value.trim(), data);
+};
+
+// ── Answering the three interactive kinds ────────────────────────────
+
+function ask(approval) {
+  const node = add("kind", approval.title || "Allow this?");
+  if (approval.body) node.appendChild(document.createElement("br"));
+  if (approval.body) node.appendChild(document.createTextNode(approval.body));
+  node.appendChild(document.createElement("br"));
+
+  // ``enum`` and ``enum_labels`` pair *by index*: answer with the value, show
+  // the label. Showing the value puts internal spellings on a person's buttons.
+  const values = approval.enum || [true, false];
+  const labels = approval.enum_labels || ["Allow", "Deny"];
+  values.forEach((value, i) => {
+    const button = document.createElement("button");
+    button.textContent = labels[i] !== undefined ? labels[i] : String(value);
+    button.style.marginRight = ".4rem";
+    button.onclick = async () => {
+      node.querySelectorAll("button").forEach((el) => el.disabled = true);
+      await sdk("frontend.resolve", { value, request_id: approval.id });
+    };
+    node.appendChild(button);
+  });
+}
+
+function fillIn(form) {
+  // {name, field, collected, display}. The display half is what to draw; a
+  // real client would honour allow_back / allow_skip / allow_cancel too.
+  const display = form.display || {};
+  const node = add("kind", display.prompt || form.name || "Answer:");
+  node.appendChild(document.createElement("br"));
+
+  const answer = async (value) => {
+    node.querySelectorAll("button, input").forEach((el) => el.disabled = true);
+    await sdk("frontend.submit", { input_kind: "text", text: String(value) });
+  };
+
+  if ((display.choices || []).length) {
+    for (const choice of display.choices) {
+      const button = document.createElement("button");
+      button.textContent = choice.label ?? String(choice.value);
+      button.style.marginRight = ".4rem";
+      button.onclick = () => answer(choice.value);
+      node.appendChild(button);
+    }
+  } else {
+    const input = document.createElement("input");
+    input.onkeydown = (e) => { if (e.key === "Enter") answer(input.value); };
+    node.appendChild(input);
+  }
+}
+
+function choose(buttons) {
+  const node = add("kind", "Choose:");
+  node.appendChild(document.createElement("br"));
+  for (const button of buttons) {
+    const el = document.createElement("button");
+    el.textContent = button.label ?? String(button.value);
+    el.style.marginRight = ".4rem";
+    el.onclick = async () => {
+      node.querySelectorAll("button").forEach((b) => b.disabled = true);
+      await sdk("frontend.submit",
+                { input_kind: "text", text: String(button.value) });
+    };
+    node.appendChild(el);
+  }
+}
+</script>

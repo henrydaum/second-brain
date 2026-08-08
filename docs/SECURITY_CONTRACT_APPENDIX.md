@@ -596,6 +596,8 @@ the same shape but a worse failure mode: handlers run on the thread that
 | `frontend.attend(session_key, present)` | Say whether a person is watching | token | safe |
 | `frontend.pending(session_key)` | Whether an approval is still waiting | token | safe |
 | `frontend.resolve(session_key, value, request_id)` | Answer a pending approval | token, request_id | safe |
+| `frontend.act(session_key, request_type, args)` | Run one Request as one of your sessions | token, session ownership | safe |
+| `frontend.collect(handle)` | Take that Request's answer | token, owner | safe |
 
 These are the same shape as `llm.proceed`: **scoped by reachability, not by a
 verdict.** When a frontend's box opens, its native adapter is parked under a
@@ -618,6 +620,43 @@ Authentication is deliberately outside this boundary. The kernel stores
 `password_hash` opaquely and ships no crypto; a frontend that binds a session
 is asserting it did the work, and the kernel takes its word. `user_type` is
 frontend-defined metadata, never a kernel admin bypass.
+
+### `frontend.act`, and why it is safe
+
+`act` looks like the widest thing in this document — it runs *any* Request —
+and buys no authority at all on its own. The Request it carries goes through
+the same gate and the same `classify` as one made from anywhere else. The only
+thing it changes is the **chain**, from `frontend:<name>` to the session.
+
+That matters because `frontend:<name>` names no session, so `attended_now`
+answers False for it forever: a frontend's own Requests are unattended, and
+anything unsafe is refused rather than asked. Correct for a frontend acting on
+its own initiative — a poll tick nobody caused — and wrong for one serving a
+request a person just made. Rooted at the session, `attended_now` instead asks
+`runtime.is_attended`, which reads what *this same frontend* declared through
+`frontend.attend`. So the grant is exactly:
+
+> a frontend may act as a session it owns, while it says somebody is watching.
+
+Declare the session unattended and the authority is gone. That self-limiting
+property is the argument for rooting at the session rather than at `user`,
+which would be unconditionally attended and would take the decision away from
+the mechanism built to hold it.
+
+Three things are host-side and cannot be stated by the guest. **Ownership**:
+the token says which frontend is asking, and the runtime's session tags say
+which sessions it may speak about — a session belonging to another frontend is
+refused, and so is `frontend.attend` on one, which was previously unchecked.
+**Identity**: for an inner `frontend.*` Request the kernel supplies the token
+itself, so a caller cannot claim to be somebody else. **Reach**: `act` refuses
+itself, `frontend.collect`, and the whole `http.*` family, which belongs to the
+frontend's transport rather than to any session.
+
+It is also **detached**, which is a correctness requirement rather than a
+performance one. A box serves one call at a time and an approval dialog renders
+back *into the calling box* to be seen, so answering inline deadlocks until the
+dialog expires — the same failure `handlers.kernel._drive` exists to prevent.
+The answer is collected later by handle, one-shot, swept if nobody comes back.
 
 ### The console
 
@@ -651,7 +690,7 @@ never could.
 |---|---|---|---|
 | `http.drain(limit)` | Take the requests that have arrived | token, claim | safe |
 | `http.respond(request_id, status, headers, body, stream)` | Answer one, or open a stream | token, claim | safe |
-| `http.push(request_id, data, event)` | Write one SSE frame | token, claim | safe |
+| `http.push(request_id, data, event, ident)` | Write one SSE frame | token, claim | safe |
 | `http.close(request_id)` | End a reply | token, claim | safe |
 
 The console's inversion one layer out, for the same reason and with the same

@@ -123,17 +123,20 @@ future store) — *not* by deleting them. What remains:
   authoring tools are package capabilities unless discovery shows they are
   installed.
 - **Frontend:** `frontend_repl` only. Telegram (`frontend_telegram`, migrated
-  to the SDK) and the MCP server (`frontend_mcp_server` — exposes Second Brain
+  to the SDK), the MCP server (`frontend_mcp_server` — exposes Second Brain
   to external MCP clients over streamable HTTP, and **not** yet migrated: it
   still imports `logging`, `pipeline.database` and
-  `state_machine.conversation_phases`) live on the store branch. Testing them
+  `state_machine.conversation_phases`) and `frontend_http` live on the store
+  branch. Testing them
   is split by whose behaviour is under test. What the *kernel* claims about
   them — the validator's verdict, the declarations the bridge reads, the
   isolation the tree resolves — is `tests/test_store_frontend_contracts.py`
+  (plus `tests/test_frontend_http.py`, which has its own file because that
+  plugin is the whole of what a web or native app can reach)
   and runs by default. Their own behaviour (markdown rendering, chunking, the
   streamed-reply tracker, media planning, MCP session identity) is marked
   `store` in `pytest.ini` and deselected, since a kernel change cannot break
-  it; run it with `pytest -m store`. Both reach the store branch through
+  it; run it with `pytest -m store`. They reach the store branch through
   `tests/support.store_source`, which prefers a store *worktree* when the
   clone has one, so it checks the file being edited rather than the last
   commit. `enabled_frontends`
@@ -1147,6 +1150,51 @@ leaked token reaches nothing. `frontend.bind` sits here rather than with
 frontend unusable, and which native path runs is decided by whether an
 `external_id` was named rather than by the plugin picking a method.
 
+**A frontend may act *as* one of its sessions, and that is what made a real
+client possible** (`frontend.act` / `frontend.collect`). A frontend box is
+rooted `frontend:<name>`, which names no session, so `attended_now` answers
+False for it forever: everything unsafe is refused rather than asked, and
+everything reading `ctx.session_key` acts on nothing and reports success. Right
+for a frontend acting on its own initiative, wrong for one serving a request a
+person just made — and it left an HTTP frontend able only to *read*, with every
+write routed back through `submit_text("/command …")`, i.e. through a `FormStep`
+flow built for a human. The store's AG-UI plugin was synthesizing
+`/conversations 'Main' 7 'Load conversation'`, positionally, with hand-rolled
+shell quoting, because `parse_command_line` lexes with `shlex`.
+
+`act` runs one Request rooted at the session, with that session's context. It
+exempts nothing: same gate, same `classify`, same ledger row. What changes is
+that **attendance now decides, and attendance is what that frontend declared**
+through `frontend.attend`. So the grant is exactly "act as a session you own
+while somebody is watching it", and marking it unattended takes the authority
+back. That self-limiting property is why the chain roots at the session rather
+than at `user`, which would be unconditionally attended and would take the
+decision away from the mechanism built to hold it. A `frontend:<name>` link is
+pushed on top so the ledger can still tell this apart from an agent tool call
+in the same session.
+
+It moves **both** chain and context, unlike `PersistentBox.call(for_session=)`
+one file over, which deliberately moves only the context because a service
+standing at a hook doorway is still acting on its own initiative. A frontend
+serving a person is not, so the answer differs — and the context has to move
+regardless, or `conv.load` and its neighbours go on acting on nothing.
+
+Three things are host-side and unstatable by the guest. **Ownership** — the
+token says who is asking, the runtime's session tags say which sessions they
+may speak about; this also closed a gap in `frontend.attend`, which took any
+key at all, so one frontend could declare another's session attended and thereby
+arrange for somebody else's user to be asked. **Identity** — the kernel supplies
+the token for an inner `frontend.*` Request. **Reach** — `act` refuses itself,
+`collect`, and the whole `http.*` family, which belongs to the transport rather
+than to any session.
+
+And it is **detached**, which is correctness rather than speed: a box serves one
+call at a time and the dialog renders back *into the calling box*, so inline it
+deadlocks until the dialog expires. Same shape as `_drive`. The proof is
+`tests/test_sandbox_frontend_act.py`, whose approver calls into the asking box
+exactly as a real one does — with `Sandbox.act` made inline, that test hangs
+rather than fails, which is the bug it exists for.
+
 **The console is the kernel's, lent to one frontend.** `input()` is refused and
 stays refused, for three compounding reasons: it blocks (holding the box, so
 the frontend cannot render until the next keypress), a subprocess box's stdin
@@ -2106,7 +2154,8 @@ move between built-in, sandbox, and installed trees.
   sandbox hangs off: serial gate, parallel execution.
 - [sandbox/facade.py](sandbox/facade.py) — `Sandbox`: the one API.
   `run()` blocks, `start()` returns a `Run` to wait on or cancel, `open()`
-  loads a resident box.
+  loads a resident box, `act()` sends one Request on its own thread so the
+  box that asked stays free to render the dialog it may raise.
 - [sandbox/bridge.py](sandbox/bridge.py) — the only doorway a plugin enters
   by: SDK code in, a native-looking adapter out. Tools, tasks and commands
   in full; services and frontends hand off to `residency.py`.
