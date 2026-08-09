@@ -453,3 +453,77 @@ def test_an_empty_push_still_does_nothing():
     frontend.on_bus_message_pushed({"session_key": "s"})
 
     assert frontend.rendered == [] and frontend.files == []
+
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Where a bus-announced question goes. Both callers name a target, and the
+# fallback used to fire exactly when that target belonged to *another*
+# frontend — so a question asked at the REPL raised a dialog in the browser,
+# in a conversation it had nothing to do with, and answering it there drove
+# the REPL's session.
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _TargetedFrontend(_CaptureFrontend):
+    """One session of its own, and a broadcast that would be visible."""
+
+    def __init__(self):
+        super().__init__()
+        self.approvals: list[tuple[str, object]] = []
+        self.forms: list[tuple[str, dict]] = []
+
+    def _live_session_keys(self):
+        return ["mine"]
+
+    def render_approval_request(self, key, req):
+        self.approvals.append((key, req))
+
+    def render_form_field(self, key, form):
+        self.forms.append((key, dict(form)))
+
+
+def _asked(session_key):
+    return StateMachineApprovalRequest(
+        title="Run a shell command", body="rm -rf /tmp/x",
+        metadata={"session_key": session_key})
+
+
+def test_a_question_reaches_the_session_it_names():
+    frontend = _TargetedFrontend()
+
+    frontend.on_bus_approval_requested(_asked("mine"))
+
+    assert [key for key, _ in frontend.approvals] == ["mine"]
+
+
+def test_another_frontends_question_reaches_nobody_here():
+    """The REPL asks; the browser must not answer for it."""
+    frontend = _TargetedFrontend()
+
+    frontend.on_bus_approval_requested(_asked("default"))
+
+    assert frontend.approvals == []
+    # Nor may it be registered, or ``frontend.pending`` would report somebody
+    # else's question as this session's and keep the dialog alive.
+    assert not frontend.has_pending_approval("mine")
+
+
+def test_an_untargeted_question_still_broadcasts():
+    """The fallback keeps the case it was written for: nothing to name."""
+    frontend = _TargetedFrontend()
+
+    frontend.on_bus_approval_requested(_asked(""))
+
+    assert [key for key, _ in frontend.approvals] == ["mine"]
+
+
+def test_a_restored_form_follows_the_same_rule():
+    frontend = _TargetedFrontend()
+
+    frontend.on_bus_form_requested(
+        {"session_key": "default", "form": {"name": "packages"}})
+    frontend.on_bus_form_requested(
+        {"session_key": "mine", "form": {"name": "packages"}})
+
+    assert [key for key, _ in frontend.forms] == ["mine"]

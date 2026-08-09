@@ -632,9 +632,7 @@ class BaseFrontend:
     def on_bus_approval_requested(self, req) -> None:
         """Handle on bus approval requested."""
         target = ((getattr(req, "metadata", None) or {}).get("session_key"))
-        live = self._live_session_keys()
-        keys = [target] if target in live else self._broadcast_session_keys()
-        for key in keys:
+        for key in self._announce_to(target):
             try:
                 self._register_pending_approval(key, req)
                 self.render_approval_request(key, req)
@@ -651,14 +649,36 @@ class BaseFrontend:
         form = payload.get("form")
         if not form:
             return
-        target = payload.get("session_key")
-        live = self._live_session_keys()
-        keys = [target] if target in live else self._broadcast_session_keys()
-        for key in keys:
+        for key in self._announce_to(payload.get("session_key")):
             try:
                 self.render_form_field(key, dict(form))
             except Exception:
                 logger.exception(f"render_form_field failed for '{self.name}'")
+
+    def _announce_to(self, target: str | None) -> list[str]:
+        """Which of this frontend's sessions a bus event should reach.
+
+        **A named target this frontend does not have reaches nothing.** Both
+        callers carry one — ``request_input`` always stamps ``session_key`` into
+        the request's metadata — so the old fallback to
+        :meth:`_broadcast_session_keys` fired precisely when the question
+        belonged to *somebody else's* session, and fanned it across every
+        session of ours instead of dropping it. A question asked at the REPL
+        raised a dialog in the browser, in a conversation it had nothing to do
+        with, and answering it there drove the REPL's session.
+
+        The generosity that remains is deliberate and lives one level down:
+        :meth:`_live_session_keys` keeps *untagged* sessions, because a session
+        nobody has claimed may be one this frontend is about to receive. A
+        question aimed at one of those still reaches here. What no longer
+        happens is a question aimed at a session another frontend owns.
+
+        Broadcasting is left for the genuinely untargeted case, which is what
+        it was written for.
+        """
+        if not target:
+            return self._broadcast_session_keys()
+        return [target] if target in self._live_session_keys() else []
 
     def resolve_approval(self, session_key: str, request_id: str, value, resolved_by: str | None = None) -> bool:
         """Resolve approval."""
