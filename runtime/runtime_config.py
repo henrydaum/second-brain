@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from state_machine.conversation import CallableSpec, ConversationState, Participant
-from runtime.conversation_loop import ConversationLoop
+from runtime.conversation_loop import ConversationLoop, tool_summary
 from state_machine.conversation_phases import BASE_PHASE
 from state_machine.forms import schema_to_form_steps
 from runtime.security_modes import YOLO, prompt_note
@@ -461,6 +461,35 @@ def tool_blurb(raw) -> str:
     return f"{text[:77]}..." if len(text) > 80 else text
 
 
+def tool_outcome(tool_result) -> str:
+    """The finished event's ``summary``, or "" when there is nothing to say.
+
+    Wraps ``conversation_loop.tool_summary`` in the two answers a *frontend*
+    needs and the transcript does not. A tool with nothing to report gets an
+    empty string rather than ``"null"``, since the alternative is a renderer
+    drawing a heading over the word null. And a payload that will not
+    serialize is dropped rather than raised: the transcript has to tell the
+    model its result was lost, but here the tool genuinely succeeded, and
+    failing the whole status event over an unprintable blob would take the
+    ✓ down with it.
+    """
+    if tool_result is None:
+        return ""
+    # Neither half filled in. Checked on the fields rather than on the result,
+    # because ``json.dumps(None)`` is the string "null" — which the transcript
+    # keeps sending (an empty tool row is invalid to some providers) and a
+    # person must never be shown.
+    if (not getattr(tool_result, "llm_summary", "")
+            and getattr(tool_result, "data", None) is None):
+        return ""
+    try:
+        return tool_summary(tool_result, ConversationLoop.MAX_TOOL_RESULT_CHARS)
+    except (TypeError, ValueError):
+        logger.debug("tool result could not be summarized for frontends",
+                     exc_info=True)
+        return ""
+
+
 def tool_callbacks(runtime, session_key: str | None):
     """Handle tool callbacks."""
     def started(name, call_id="tc_unknown", args=None):
@@ -495,6 +524,7 @@ def tool_callbacks(runtime, session_key: str | None):
                 "session_key": session_key, "call_id": call_id,
                 "tool_name": name, "ok": ok, "error": err,
                 "narration": tool_blurb(narration),
+                "summary": tool_outcome(tool_result) if ok else "",
             })
 
     return started, finished

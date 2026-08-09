@@ -1214,3 +1214,74 @@ def test_an_overlong_narration_is_capped_before_any_frontend_sees_it():
     assert tool_blurb("") == ""
     assert len(tool_blurb("x" * 500)) == 80
     assert tool_blurb("x" * 500).endswith("...")
+
+
+def _finished_payload(tool_result, ok=True, **kwargs):
+    """Emit one TOOL_CALL_FINISHED for ``tool_result`` and hand back its payload."""
+    from runtime.runtime_config import tool_callbacks
+
+    emitted = []
+    runtime = SimpleNamespace(
+        on_tool_start=None, on_tool_result=None,
+        emit_event=lambda channel, payload: emitted.append(payload))
+    _, finished = tool_callbacks(runtime, "http:1")
+    result = SimpleNamespace(ok=ok, error=None, data={"result": tool_result})
+    finished("search", "c1", result=result, **kwargs)
+    return emitted[0]
+
+
+def test_the_finished_event_carries_what_the_tool_actually_returned():
+    """The bug this exists for: a frontend could only see a tool *fail*.
+
+    ``ok`` and ``error`` were on the event and the result itself was not, so
+    every client rendered a successful call as a checkmark with nothing behind
+    it — the outcome was legible only when there was an error to print.
+    """
+    payload = _finished_payload(ToolResult(llm_summary="Found 3 files."))
+    assert payload["summary"] == "Found 3 files."
+    assert payload["ok"] is True
+
+
+def test_a_tool_that_filled_in_only_the_structured_half_still_says_something():
+    """``data`` is documented as being for frontends. Let it reach one."""
+    payload = _finished_payload(ToolResult(data={"files": 3}))
+    assert payload["summary"] == '{"files": 3}'
+
+
+def test_nothing_to_report_is_empty_rather_than_the_word_null():
+    """``json.dumps(None)`` is "null", which no person should ever be shown."""
+    assert _finished_payload(ToolResult())["summary"] == ""
+
+
+def test_a_failed_call_leaves_the_summary_to_the_error():
+    """Two fields saying the same thing is how they come to disagree."""
+    payload = _finished_payload(
+        ToolResult(success=False, error="No such path."), ok=False)
+    assert payload["summary"] == ""
+    assert payload["error"] == "No such path."
+
+
+def test_an_unserializable_result_costs_the_summary_and_not_the_event():
+    """The call succeeded. Losing its ✓ over an unprintable blob would lie."""
+    class Unprintable:
+        def __repr__(self):
+            raise ValueError("no")
+
+    payload = _finished_payload(ToolResult(data={"x": {Unprintable()}}))
+    assert payload["summary"] == ""
+    assert payload["ok"] is True
+
+
+def test_the_wire_and_the_transcript_cap_a_long_result_identically():
+    """A frontend showing one live and the other on reload must not appear to
+    change its mind about what happened."""
+    from runtime.conversation_loop import ConversationLoop
+
+    tool_result = ToolResult(llm_summary="x" * 20000)
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, "prompt")
+    stored, _ = loop._format_tool_result(
+        "search", SimpleNamespace(ok=True, error=None,
+                                  data={"result": tool_result}), {})
+
+    assert _finished_payload(tool_result)["summary"] == stored
+    assert len(stored) < 20000

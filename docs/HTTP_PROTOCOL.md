@@ -127,6 +127,14 @@ Fires for tool calls and slash commands alike.
 | `narration` | `str` | Short human blurb. Repeated on `finished`, deliberately, so a client overwriting one line still has it. |
 | `ok` | `bool` | On `finished`. |
 | `error` | `str \| None` | On `finished`. |
+| `summary` | `str` | On `finished`. What the call amounted to. `""` on failure — `error` is the outcome then — and `""` for a tool that reported nothing. |
+
+`summary` is the tool's own account of its result, capped exactly as the
+transcript row is, so a client that renders it live and re-reads it from
+`conv.read` shows the same bytes both times. It is written for the model, so
+expect a sentence of prose rather than raw output. **`narration` and `summary`
+are not interchangeable**: the first is what the agent set out to do, sent on
+`started` and repeated here; the second is what came back.
 
 #### `approval` — `dict`
 

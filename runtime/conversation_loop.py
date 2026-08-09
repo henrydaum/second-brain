@@ -85,6 +85,30 @@ def _truncate_middle(text: str, max_chars: int) -> str:
     return f"{text[:head]}\n…[truncated {len(text) - max_chars} chars]…\n{text[-tail:]}"
 
 
+def tool_summary(tool_result, max_chars: int) -> str:
+    """What a *successful* tool call amounts to, as one string.
+
+    Public and module-level because two different consumers need the same
+    answer and used to have only one of them: the transcript row the model
+    reads back next turn (``_format_tool_result``), and the ``tool_status``
+    event a frontend renders (``runtime_config.tool_callbacks``). The event
+    carried no result at all, so every frontend showed a tool call whose
+    outcome was visible only when it failed.
+
+    Same cap for both, so the copy on the wire and the copy in the database
+    are byte-identical rather than merely similar — a frontend that shows one
+    live and the other on reload must not appear to change its mind.
+
+    ``llm_summary`` is what a tool is meant to fill in; the ``data`` fallback
+    is for tools that filled in only the structured half. Raises whatever
+    ``json.dumps`` raises on a payload it cannot serialize — both callers
+    already have to answer for that, and differently.
+    """
+    text = (getattr(tool_result, "llm_summary", None)
+            or json.dumps(getattr(tool_result, "data", None), default=str))
+    return _truncate_middle(text, max_chars)
+
+
 def _prompt_sections(prompt: Any) -> list[dict[str, Any]]:
     """Normalize legacy string prompts and sectioned prompt messages.
 
@@ -649,11 +673,7 @@ class ConversationLoop:
 
         paths = list(getattr(tool_result, "attachment_paths", []) or [])
         try:
-            text = (
-                getattr(tool_result, "llm_summary", None)
-                or json.dumps(getattr(tool_result, "data", None), default=str)
-            )
-            return _truncate_middle(text, self.MAX_TOOL_RESULT_CHARS), paths
+            return tool_summary(tool_result, self.MAX_TOOL_RESULT_CHARS), paths
         except (TypeError, ValueError) as e:
             return json.dumps({"error": f"Result serialization failed: {e}"}), []
 

@@ -153,7 +153,12 @@ Payload:
     error:       str (optional)
     narration:   str — byte-identical to the started event's, because a
                  frontend that overwrites its status line in place no longer
-                 has the started payload to read it from"""
+                 has the started payload to read it from
+    summary:     str — what the call amounted to: the tool's ``llm_summary``,
+                 or its ``data`` as JSON when only that was filled in, capped
+                 exactly as the transcript row is so the two cannot disagree.
+                 "" on failure (``error`` is the outcome then) and "" when the
+                 tool reported neither half"""
 
 COMMAND_CALL_STARTED = "command_call_started"
 """The runtime started a slash command.
