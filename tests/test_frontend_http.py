@@ -765,3 +765,285 @@ def test_an_unknown_route_says_so(running):
     conn.close()
 
     assert _status(raw) == 404
+
+
+# ──────────────────────────────────────────────────────────────────────
+# GET /files — host files as a URL.
+#
+# A client can already read any file through ``POST /sdk/fs.read_bytes``, so
+# this grants nothing new. What it adds is a *transport*: a Request answers
+# base64 inside JSON, and an ``<img>``, ``<video>`` or ``<audio>`` wants a URL.
+# Assembling a Blob works for a picture and is hopeless for media — it buffers
+# the whole file before the first frame and cannot seek.
+# ──────────────────────────────────────────────────────────────────────
+
+def _body(raw: bytes) -> bytes:
+    return raw.partition(b"\r\n\r\n")[2]
+
+
+def _header(raw: bytes, name: str) -> str:
+    head = raw.partition(b"\r\n\r\n")[0].decode("utf-8", "replace")
+    for line in head.split("\r\n")[1:]:
+        key, _, value = line.partition(":")
+        if key.strip().lower() == name.lower():
+            return value.strip()
+    return ""
+
+
+def _files_url(path) -> str:
+    from urllib.parse import quote
+
+    return f"/files?path={quote(str(path), safe='')}"
+
+
+@pytest.mark.store
+def test_a_host_file_is_served_with_its_type(running, tmp_path):
+    """The whole point: a real body with a real ``Content-Type``, so the
+    browser decodes it natively instead of the client rebuilding a Blob."""
+    target = tmp_path / "chart.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"pixels" * 100)
+
+    conn = _open(running, _request("GET", _files_url(target)))
+    raw = _read(conn, until=b"pixels", timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 200
+    assert _header(raw, "Content-Type") == "image/png"
+    assert _body(raw) == target.read_bytes()
+    # Advertised unconditionally: a media element looks for this before it
+    # decides whether it may seek.
+    assert _header(raw, "Accept-Ranges") == "bytes"
+
+
+@pytest.mark.store
+def test_a_range_request_gets_only_that_span(running, tmp_path):
+    """What a Blob can never do. ``<video>`` seeks by asking for the bytes it
+    landed on rather than everything before them."""
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(bytes(range(256)) * 8)
+
+    conn = _open(running, _request("GET", _files_url(target),
+                                   extra=["Range: bytes=10-19"]))
+    raw = _read(conn, until=b"\r\n\r\n", timeout=3.0)
+    time.sleep(0.2)
+    raw += _read(conn, until=b"~never~", timeout=0.5)
+    conn.close()
+
+    assert _status(raw) == 206
+    assert _header(raw, "Content-Range") == f"bytes 10-19/{target.stat().st_size}"
+    assert _body(raw) == bytes(range(10, 20))
+
+
+@pytest.mark.store
+def test_a_suffix_range_reads_from_the_end(running, tmp_path):
+    """``bytes=-N`` is how a player reads a trailing index (an MP4 ``moov``
+    atom) without downloading the file to find it."""
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"HEAD" + b"x" * 100 + b"TAIL")
+
+    conn = _open(running, _request("GET", _files_url(target),
+                                   extra=["Range: bytes=-4"]))
+    raw = _read(conn, until=b"TAIL", timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 206 and _body(raw) == b"TAIL"
+
+
+@pytest.mark.store
+def test_a_range_past_the_end_is_refused_with_the_real_size(running, tmp_path):
+    """416 carries ``Content-Range: bytes *–/size``, which is how a player
+    learns the length it guessed wrong about."""
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"12345")
+
+    conn = _open(running, _request("GET", _files_url(target),
+                                   extra=["Range: bytes=900-999"]))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 416 and _header(raw, "Content-Range") == "bytes */5"
+
+
+@pytest.mark.store
+def test_a_file_too_big_for_one_message_comes_back_in_windows(running, tmp_path):
+    """One response body crosses in one wire message, and that message is
+    capped — so a large file is answered as 206 whether or not a Range was
+    asked for, and the client comes back for the rest. A media element does
+    that by itself; serving a truncated 200 instead would look like a file
+    that simply ends early, which nothing downstream would report."""
+    window = (16 * 1024 * 1024 - 1024 * 1024) * 3 // 4
+    size = window + 4096
+    target = tmp_path / "big.bin"
+    target.write_bytes(b"\xa5" * size)
+
+    conn = _open(running, _request("HEAD", _files_url(target)))
+    head = _read(conn, timeout=3.0)
+    conn.close()
+    assert _status(head) == 200
+    # HEAD answers the *whole* length, which is what a client sizes against.
+    assert _header(head, "Content-Length") == str(size)
+
+    conn = _open(running, _request("GET", _files_url(target)))
+    raw = _read(conn, until=b"~never~", timeout=15.0)
+    conn.close()
+    assert _status(raw) == 206
+    assert _header(raw, "Content-Range") == f"bytes 0-{window - 1}/{size}"
+    assert len(_body(raw)) == window
+
+    # And the tail is one more request, which is the whole point of 206.
+    conn = _open(running, _request("GET", _files_url(target),
+                                   extra=[f"Range: bytes={window}-"]))
+    raw = _read(conn, until=b"~never~", timeout=15.0)
+    conn.close()
+    assert _status(raw) == 206 and len(_body(raw)) == 4096
+
+
+@pytest.mark.store
+def test_a_missing_file_is_a_404_not_a_crash(running, tmp_path):
+    conn = _open(running, _request("GET", _files_url(tmp_path / "ghost.png")))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 404
+
+
+@pytest.mark.store
+def test_a_directory_is_not_a_file(running, tmp_path):
+    conn = _open(running, _request("GET", _files_url(tmp_path)))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 400
+
+
+@pytest.mark.store
+def test_it_needs_the_bearer_token_like_everything_else(running, tmp_path):
+    """The route sits *after* the auth check. A byte transport that skipped it
+    would be the one way to read a file without the token."""
+    target = tmp_path / "secret.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    conn = _open(running, _request("GET", _files_url(target), token=None))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 401
+
+
+@pytest.mark.store
+def test_asking_for_nothing_says_what_was_missing(running):
+    conn = _open(running, _request("GET", "/files"))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 400 and "path" in _json_body(raw)["error"]
+
+
+@pytest.mark.store
+def test_a_media_element_can_authenticate_at_all(running, tmp_path):
+    """``?token=`` is accepted here for the same reason ``/events`` accepts it:
+    the browser issues the request itself and there is nowhere to put a header.
+
+    An ``<img>`` or ``<video>`` fetches its own ``src``. Without this the route
+    could only be reached by ``fetch`` — which means rebuilding a Blob, which
+    is the thing it exists to avoid and which cannot seek. So the header-only
+    version of this route is one that cannot do its job.
+    """
+    target = tmp_path / "chart.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\npixels")
+
+    conn = _open(running, _request(
+        "GET", f"{_files_url(target)}&token={TOKEN}", token=None))
+    raw = _read(conn, until=b"pixels", timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 200 and _body(raw) == target.read_bytes()
+
+
+@pytest.mark.store
+def test_a_wrong_query_token_is_still_refused(running, tmp_path):
+    """The concession is to where the token may travel, never to whether one
+    is needed."""
+    target = tmp_path / "chart.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    conn = _open(running, _request(
+        "GET", f"{_files_url(target)}&token=wrong", token=None))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 401
+
+
+@pytest.mark.store
+def test_no_other_route_takes_a_query_token(running):
+    """A token in a URL reaches logs and history, so the list stays at two."""
+    conn = _open(running, _request(
+        "POST", f"/sdk/conv.list?thread=main&token={TOKEN}", token=None,
+        body="{}"))
+    raw = _read(conn, timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 401
+
+
+@pytest.mark.store
+def test_every_native_modality_gets_a_playable_type(running, tmp_path):
+    """The two tables must agree, because a client uses both.
+
+    Second Brain's ``parsing._NATIVE_DEFAULTS`` says what *kind* of file this
+    is — the map a client categorises by, so it knows to reach for ``<video>``
+    rather than ``<img>``. This route says how to *decode* it. Those are
+    different questions with different answers, which is fine, right up until
+    one recognises an extension the other does not: the client picks
+    ``<video>``, the response says ``application/octet-stream``, and the
+    element refuses to play a file that is perfectly good.
+
+    So every extension the kernel can name a modality for must come back
+    labelled with a matching top-level type. This found `.avi`, `.heic`,
+    `.heif`, `.aac` and `.wma` missing.
+    """
+    from parsing.registry import _NATIVE_DEFAULTS
+
+    mislabelled = []
+    for extension, modality in sorted(_NATIVE_DEFAULTS.items()):
+        target = tmp_path / f"probe{extension}"
+        target.write_bytes(b"\x00\x01\x02\x03")
+        conn = _open(running, _request("HEAD", _files_url(target)))
+        raw = _read(conn, timeout=3.0)
+        conn.close()
+        served = _header(raw, "Content-Type")
+        if served.partition("/")[0] != modality:
+            mislabelled.append(f"{extension}: {modality} served as {served!r}")
+
+    assert not mislabelled, (
+        "a client categorising by modality would hand these to an element "
+        "that will not play them:\n  " + "\n  ".join(mislabelled))
+
+
+@pytest.mark.store
+def test_an_unknown_extension_is_still_served(running, tmp_path):
+    """Bytes for every extension; only the *label* falls back. A file the
+    browser cannot render is a download, not an error."""
+    target = tmp_path / "model.q4_k_m.gguf"
+    target.write_bytes(b"GGUF\x00weights")
+
+    conn = _open(running, _request("GET", _files_url(target)))
+    raw = _read(conn, until=b"weights", timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 200
+    assert _header(raw, "Content-Type") == "application/octet-stream"
+    assert _body(raw) == target.read_bytes()
+
+
+@pytest.mark.store
+def test_a_file_with_no_extension_is_served_too(running, tmp_path):
+    target = tmp_path / "LICENSE"
+    target.write_bytes(b"MIT")
+
+    conn = _open(running, _request("GET", _files_url(target)))
+    raw = _read(conn, until=b"MIT", timeout=3.0)
+    conn.close()
+
+    assert _status(raw) == 200 and _body(raw) == b"MIT"

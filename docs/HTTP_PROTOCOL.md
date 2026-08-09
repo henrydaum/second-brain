@@ -8,11 +8,12 @@ Served by the `frontend_http` store package. Hand this document to whoever is
 building the client; `docs/http_reference_client.html` is a working example to
 check the bridge against when the client misbehaves.
 
-There are two endpoints.
+There are three endpoints.
 
 ```
 GET  /events?thread=<t>&token=<T>      every render, as it happens (SSE)
 POST /sdk/<request.type>?thread=<t>    any of the 121 Requests
+GET  /files?path=<absolute path>       one host file, as a real HTTP body
 ```
 
 Plus static hosting on `GET /*` when `http_static_dir` is configured, and
@@ -398,6 +399,68 @@ successive `offset`/`length` windows and join them; a short read means you
 reached the end, so the loop terminates without your having to learn the size
 first.
 
+## 4. `GET /files` — a host file as a URL
+
+Everything else here answers JSON. This answers **bytes**, because some things
+are not renderable any other way.
+
+`fs.read_bytes` already reads any file a client is allowed to read, so this
+grants nothing new — it is the same read, through the same policy, recorded in
+the same ledger. What it adds is a *transport*. A Request answers base64 inside
+JSON, and `<img>`, `<video>` and `<audio>` want a URL. Rebuilding a Blob works
+for a picture and is hopeless for media: it buffers the whole file before the
+first frame and cannot seek.
+
+```
+GET /files?path=%2Fsrv%2Fapp%2Fchart.png
+Authorization: Bearer <secret_http_token>
+```
+
+Percent-encode the path (`encodeURIComponent`) — it is an absolute host path,
+and on Windows it contains `\` and `:`. Same bearer token as every other route.
+
+| Answer | When |
+|---|---|
+| `200` + body | The whole file, when it fits in one message |
+| `206` + `Content-Range` | A `Range` was asked for, **or** the file is larger than one message |
+| `400` | No `?path=`, or it names a directory |
+| `401` | Missing or wrong token |
+| `403` | Policy refused the read |
+| `404` | No such file |
+| `416` + `Content-Range: bytes */<size>` | The range starts past the end |
+
+`Accept-Ranges: bytes` is always sent, and `Range` is honored in the single-range
+forms (`bytes=0-1023`, `bytes=1024-`, `bytes=-4`). That is what lets a `<video>`
+seek instead of downloading everything before the point you clicked.
+
+**A large file always comes back `206`, even with no `Range` header.** One
+response body crosses the box boundary in one wire message and that message is
+capped, so the route serves the first window and advertises the real total in
+`Content-Range`. Media elements follow up on their own; a plain `fetch` should
+loop on `Content-Range` until it has the whole length. `HEAD` answers the full
+`Content-Length` without a body, which is the cheap way to size a file first.
+
+**Every extension works.** The bytes are served whatever the file is; the
+extension only decides the `Content-Type` label. A small explicit table is
+consulted first — so the answer is identical on every host — then Python's
+`mimetypes`, then `application/octet-stream`, which the browser treats as a
+download rather than a guess.
+
+Every extension in the kernel's own modality map (`parsing._NATIVE_DEFAULTS`,
+what `parse.modality` answers from) is guaranteed a label whose top-level type
+matches its modality, so a client that categorises by modality and then picks
+an element will never hand a `<video>` something it refuses to play. That
+agreement is pinned by
+`test_every_native_modality_gets_a_playable_type` — two tables answering one
+question is how they drift.
+
+Use it for anything the browser renders natively: images, video, audio, PDF,
+SVG, plain text. For formats it cannot — `.docx`, `.xlsx`, `.pptx` — use
+`parse.file` with `modality: "text"` instead; that is what the parser packages
+are for, and text is one of the two things a parse result may carry.
+
+---
+
 **What the agent did** — the flight recorder, and the only place some of it is
 kept.
 
@@ -447,7 +510,7 @@ Naming a conversation you do not own is refused, not asked about.
 
 ---
 
-## 4. Building a client: the short version
+## 5. Building a client: the short version
 
 1. `GET /events?thread=main&token=…` with `EventSource`. Handle `messages`,
    `stream_delta` and `typing` first — that is a working chat.
