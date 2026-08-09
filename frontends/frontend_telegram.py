@@ -464,9 +464,11 @@ class TelegramFrontend(BaseFrontend):
         text = item.get("text") or ""
         if item["kind"] == "callback" and item.get("approval"):
             request_id, answer = item["approval"]
+            shown = dict(self._approvals.get(key) or {})
             value = self._approval_value(key, answer)
             if sdk.frontend.resolve(key, value, request_id):
                 self._approvals.pop(key, None)
+                self._acknowledge_approval(sdk, key, shown, value)
                 return None
             # It was already answered or timed out. If the session is *still*
             # blocked on an approval it is a different one, and the state
@@ -477,7 +479,44 @@ class TelegramFrontend(BaseFrontend):
                     else "no" if value is False else str(value))
         if self._absorb_approval(sdk, key, text):
             return None
-        return sdk.frontend.submit_text(key, text)
+        # In ``approving_request`` the state machine collects the answer itself:
+        # text is coerced into ``answer_approval`` rather than reaching the
+        # agent, so this submit *is* the answer and saying so is ours to do.
+        # ``_absorb_approval`` above declines exactly that phase, which is why
+        # the acknowledgement has to be made here as well as there.
+        shown = (dict(self._approvals.get(key) or {})
+                 if (sdk.session.get(key) or {}).get("phase") == "approving_request"
+                 else None)
+        outcome = sdk.frontend.submit_text(key, text)
+        if shown is not None:
+            self._acknowledge_approval(sdk, key, shown, text, submitted=True)
+        return outcome
+
+    def _acknowledge_approval(self, sdk, key: str, shown: dict, value,
+                              submitted: bool = False) -> None:
+        """Say what an answer did to the question it answered.
+
+        **The kernel no longer narrates this.** An approval's outcome crosses as
+        the phase leaving ``approving_request`` and as ``ActionResult.data``, not
+        as prose on the ``messages`` kind — which is also what the agent's own
+        words ride, and which a frontend that draws its own buttons cannot tell
+        apart from them. Wording it is each frontend's own business now; this is
+        Telegram's, and it deliberately reuses the vocabulary ``_absorb_approval``
+        already sends so a tap and a typed reply read the same.
+
+        ``submitted`` means the answer went through ``submit_text`` and may have
+        been refused as invalid input, in which case the kernel has already sent
+        the error and adding to it would only disagree with it.
+        """
+        if submitted and (sdk.session.get(key) or {}).get("phase") == "approving_request":
+            return
+        if shown.get("enum") or (shown.get("type") or "boolean") != "boolean":
+            self._deliver_message(self._chat_id(key), f"Answered: {value}.")
+            return
+        decided = value if isinstance(value, bool) else _parse_approval(str(value))
+        if decided is not None:
+            self._deliver_message(self._chat_id(key),
+                                  "Approved." if decided else "Denied.")
 
     def _approval_value(self, key: str, answer: str):
         """What a tapped button answers with, in the shape that frame accepts.
@@ -525,7 +564,11 @@ class TelegramFrontend(BaseFrontend):
                 return True
         if sdk.frontend.resolve(key, value, str(request_id)):
             self._approvals.pop(key, None)
-            self._deliver_message(self._chat_id(key), "Received.")
+            # One voice for all three ways in — tapped button, typed reply here,
+            # typed reply the state machine coerced. A bare "Received." said the
+            # same thing for a grant and a refusal, which is the one distinction
+            # anybody reading it back needs.
+            self._acknowledge_approval(sdk, key, request, value)
         return True
 
     def _deliver_file(self, sdk, item: dict):
