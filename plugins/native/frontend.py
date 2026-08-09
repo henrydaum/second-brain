@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from dataclasses import dataclass
 
 from events.event_bus import bus
@@ -466,12 +467,17 @@ class BaseFrontend:
         if phase == PHASE_APPROVING_REQUEST:
             if (text or "").strip() == "/cancel" and ACTION_CANCEL in legal:
                 result = self.submit(session_key, ACTION_CANCEL)
-                self._clear_pending_approval(session_key)
+                if self._current_phase(session_key) != PHASE_APPROVING_REQUEST:
+                    self._clear_pending_approval(session_key)
                 return result
             if (text or "").lstrip().startswith("/"):
                 return self._unknown_command(session_key, (text or "").lstrip()[1:].partition(" ")[0])
             result = self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
-            self._clear_pending_approval(session_key)
+            # Invalid input leaves the state machine on the approval frame.
+            # Keep its rich prompt registered so a stray chat message cannot
+            # make the permission dialog disappear.
+            if self._current_phase(session_key) != PHASE_APPROVING_REQUEST:
+                self._clear_pending_approval(session_key)
             return result
 
         stripped = (text or "").lstrip()
@@ -630,9 +636,7 @@ class BaseFrontend:
         keys = [target] if target in live else self._broadcast_session_keys()
         for key in keys:
             try:
-                with self._approval_lock:
-                    self._pending_approvals.setdefault(key, {})[req.id] = req
-                    self._pending_approval_order.setdefault(key, []).append(req.id)
+                self._register_pending_approval(key, req)
                 self.render_approval_request(key, req)
             except Exception:
                 logger.exception(f"render_approval_request failed for '{self.name}'")
@@ -665,8 +669,18 @@ class BaseFrontend:
             if resolved_by and hasattr(req, "metadata"):
                 req.metadata["resolved_by"] = resolved_by
             target = (getattr(req, "metadata", {}) or {}).get("session_key") or session_key
-        result = self.runtime.handle_action(target, ACTION_ANSWER_APPROVAL, {"value": value, "request_id": request_id})
-        self._clear_pending_approval(session_key, request_id)
+        payload = {"value": value, "request_id": request_id}
+        if (getattr(req, "metadata", {}) or {}).get("render_result_on_resolve"):
+            # Callable approvals already returned "Approval required" to the
+            # transport, so nothing else will render their resumed result.
+            result = self.submit(target, ACTION_ANSWER_APPROVAL, payload)
+        else:
+            # Tool/policy approvals have an original sandbox call blocked on
+            # the answer. It still owns the guest renderer lock; attempting to
+            # render here would wait on that call while that call waits on us.
+            result = self.runtime.handle_action(target, ACTION_ANSWER_APPROVAL, payload)
+        if self._current_phase(target) != PHASE_APPROVING_REQUEST:
+            self._clear_pending_approval(session_key, request_id)
         return bool(result and result.ok)
 
     def resolve_next_approval(self, session_key: str, value, resolved_by: str | None = None) -> bool:
@@ -708,6 +722,15 @@ class BaseFrontend:
                 return
             self._pending_approvals.get(session_key, {}).pop(request_id, None)
             self._pending_approval_order[session_key] = [item for item in self._pending_approval_order.get(session_key, []) if item != request_id]
+
+    def _register_pending_approval(self, session_key: str, req) -> None:
+        """Register an approval once, preserving its display order."""
+        with self._approval_lock:
+            pending = self._pending_approvals.setdefault(session_key, {})
+            pending[req.id] = req
+            order = self._pending_approval_order.setdefault(session_key, [])
+            if req.id not in order:
+                order.append(req.id)
 
     def on_bus_message_pushed(self, payload: dict) -> None:
         """Handle on bus message pushed."""
@@ -900,6 +923,11 @@ class BaseFrontend:
             self.render_error(session_key, dict(result.error))
         req = self._current_approval_request(session_key)
         if req:
+            # Callable approvals arrive on RuntimeResult rather than the
+            # APPROVAL_REQUESTED bus used by tool-originated requests. They
+            # still need to be registered or frontend.pending/resolve cannot
+            # see the very request we just rendered.
+            self._register_pending_approval(session_key, req)
             self.render_approval_request(session_key, req)
 
     def _current_phase(self, session_key: str) -> str:
@@ -918,16 +946,21 @@ class BaseFrontend:
             return None
         frame = self.runtime.get_session(session_key).cs.frame
         data = getattr(frame, "data", {}) or {}
+        if not data.get("request_id"):
+            data["request_id"] = f"approve_{uuid.uuid4().hex}"
         return StateMachineApprovalRequest(
             title=data.get("title") or frame.name or "Input required",
             body=_approval_body(data.get("prompt") or ""),
             pending_action=data.get("pending"),
-            id=data.get("request_id") or "pending",
+            id=data["request_id"],
             type=data.get("type", "boolean"),
             enum=data.get("enum"),
             enum_labels=data.get("enum_labels"),
             default=data.get("default"),
-            metadata={"session_key": session_key},
+            metadata={
+                "session_key": session_key,
+                "render_result_on_resolve": True,
+            },
         )
 
     def _live_session_keys(self) -> list[str]:

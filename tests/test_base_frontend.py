@@ -10,8 +10,12 @@ CHAT_MESSAGE_PUSHED (mid-turn narration). Frontends without
 # package-init circular import (state_machine/__init__ pulls in the runtime).
 import state_machine  # noqa: F401
 
+from types import SimpleNamespace
+
 from plugins.native.frontend import BaseFrontend, FrontendCapabilities
 from runtime.session import RuntimeResult
+from state_machine.approval import StateMachineApprovalRequest
+from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
 
 
 class _CaptureFrontend(BaseFrontend):
@@ -129,6 +133,104 @@ def test_non_streaming_frontend_ignores_channel():
     assert f.stream_events == []
     f._render_result("s", RuntimeResult(messages=["Hello there"]))
     assert f.rendered == ["Hello there"]
+
+
+# Action-originated approvals (commands with require_approval=True) return on
+# RuntimeResult instead of entering through the APPROVAL_REQUESTED bus.
+class _ApprovalFrontend(BaseFrontend):
+    name = "approval-test"
+    capabilities = FrontendCapabilities(supports_buttons=True)
+
+    def __init__(self):
+        super().__init__()
+        frame = SimpleNamespace(
+            phase=PHASE_APPROVING_REQUEST,
+            name="packages",
+            step=None,
+            data={"title": "packages", "prompt": "Install a package?", "type": "boolean"},
+        )
+        self.session = SimpleNamespace(
+            cs=SimpleNamespace(phase=PHASE_APPROVING_REQUEST, frame=frame),
+            conversation_id=7,
+            frontend_name=self.name,
+            user_id=1,
+        )
+        self.runtime = SimpleNamespace(get_session=lambda _key: self.session)
+        self.approvals = []
+        self.messages = []
+        self.errors = []
+
+    def render_approval_request(self, _key, req):
+        self.approvals.append(req)
+
+    def render_messages(self, _key, messages):
+        self.messages.extend(messages)
+
+    def render_error(self, _key, error):
+        self.errors.append(error)
+
+
+def test_result_approval_gets_a_stable_registered_request_id():
+    frontend = _ApprovalFrontend()
+
+    frontend._render_result("s", RuntimeResult(messages=["Approval required."]))
+    frontend._render_result("s", RuntimeResult())
+
+    request_id = frontend.session.cs.frame.data["request_id"]
+    assert request_id.startswith("approve_")
+    assert frontend.is_approval_pending("s", request_id)
+    assert frontend._pending_approval_order["s"] == [request_id]
+    assert [req.id for req in frontend.approvals] == [request_id, request_id]
+
+
+def test_invalid_typed_approval_keeps_the_request_pending():
+    frontend = _ApprovalFrontend()
+    frontend._render_result("s", RuntimeResult())
+    request_id = frontend.approvals[-1].id
+    frontend.runtime.handle_action = lambda *_args: RuntimeResult(
+        False, error={"code": "invalid_input", "message": "Approval needs yes or no."})
+
+    result = frontend.submit_text("s", "Hey")
+
+    assert not result.ok
+    assert frontend.is_approval_pending("s", request_id)
+
+
+def test_rich_approval_renders_the_approved_actions_result():
+    frontend = _ApprovalFrontend()
+    frontend._render_result("s", RuntimeResult())
+    request_id = frontend.approvals[-1].id
+
+    def handle(_key, action, payload):
+        assert action == "answer_approval"
+        assert payload == {"value": True, "request_id": request_id}
+        frontend.session.cs.phase = BASE_PHASE
+        frontend.session.cs.frame = None
+        return RuntimeResult(True, messages=["Installed."])
+
+    frontend.runtime.handle_action = handle
+
+    assert frontend.resolve_approval("s", request_id, True)
+    assert frontend.messages == ["Installed."]
+    assert not frontend.is_approval_pending("s", request_id)
+
+
+def test_bus_approval_does_not_render_while_original_call_is_blocked():
+    frontend = _ApprovalFrontend()
+    request = StateMachineApprovalRequest(
+        title="Delete?", body="Delete conversation?", id="approve_policy",
+        metadata={"session_key": "s"})
+    frontend._register_pending_approval("s", request)
+
+    def handle(_key, _action, _payload):
+        frontend.session.cs.phase = BASE_PHASE
+        frontend.session.cs.frame = None
+        return RuntimeResult(True, messages=["Must be returned by the original call."])
+
+    frontend.runtime.handle_action = handle
+
+    assert frontend.resolve_approval("s", request.id, True)
+    assert frontend.messages == []
 
 
 # ────────────────────────────────────────────────────────────────────
