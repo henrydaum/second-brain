@@ -1115,9 +1115,9 @@ back. Adding either means growing `KINDS` in `sandbox/frontends.py`, the
 `native_names` map in `_adapt_frontend`, and the test that pins the set.
 
 `BaseFrontend` itself is **not** migrated and should not be: its 880 lines are
-host-side routing — fourteen bus subscriptions funnelling into nine `render_*`
+host-side routing — fifteen bus subscriptions funnelling into ten `render_*`
 methods, and `submit_*` funnelling into `runtime.handle_action`. The base owns
-*when*, the guest owns *how*, so the base becomes the adapter. The nine
+*when*, the guest owns *how*, so the base becomes the adapter. The ten
 `render_*` collapse to one `render(kind, payload)` box call (`sandbox/
 frontends.py` holds the `KINDS` both sides must agree on); `capabilities`
 crosses as a literal dict and is rebuilt into `FrontendCapabilities`.
@@ -1738,7 +1738,7 @@ kernel-owned and hook-*shaped*.
 are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
 per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs), `docs/HTTP_PROTOCOL.md` (hand this to an agent
-writing a *client* — the nine render kinds with their real payload shapes, the
+writing a *client* — the ten render kinds with their real payload shapes, the
 Requests worth calling, and the half-dozen rules a working demo cannot show;
 `docs/http_reference_client.html` is that demo, for checking the bridge when
 the client misbehaves).
