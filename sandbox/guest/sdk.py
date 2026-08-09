@@ -1338,9 +1338,29 @@ class _Ledger(_Namespace):
         """Note something that is not itself a Request."""
         return self._ask(LEDGER_RECORD, action=action, ok=ok, data=data)
 
-    def read(self, limit: int = 50):
-        """Read recent rows. Query it targeted, never linearly."""
-        return self._ask(LEDGER_READ, limit=limit)
+    def read(self, limit: int = 50, *, conversation_id: int | None = None,
+             origin: str = "", session_key: str = "",
+             action_types=None, since_id: int | None = None):
+        """Read recent rows, newest first. Query it targeted, never linearly.
+
+        Every argument narrows in SQL, which is what makes "targeted" possible
+        rather than merely advised — the ledger is write-optimized filler by
+        volume, so an unfiltered read scans the whole flight recorder.
+
+            # what this conversation touched on disk
+            sdk.ledger.read(conversation_id=7,
+                            action_types=["fs.write", "fs.delete"])
+
+            # and, later, only what has happened since
+            sdk.ledger.read(conversation_id=7, since_id=rows[0]["id"])
+
+        Naming a conversation somebody else owns is refused.
+        """
+        return self._ask(LEDGER_READ, limit=limit,
+                         conversation_id=conversation_id, origin=origin,
+                         session_key=session_key,
+                         action_types=list(action_types or []),
+                         since_id=since_id)
 
 
 class _Net(_Namespace):

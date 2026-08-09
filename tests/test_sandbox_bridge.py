@@ -335,7 +335,7 @@ class ReadSetting(BaseTool):
 def test_the_chain_records_what_caused_the_call(tmp_path, box):
     """Provenance has to survive the bridge, or the dialog loses its root."""
     seen = []
-    box.interpreter._record = lambda chain, req, dec, res: seen.append(
+    box.interpreter._record = lambda chain, req, dec, res, ctx=None: seen.append(
         chain.render())
 
     source = MIGRATED_TOOL.replace(

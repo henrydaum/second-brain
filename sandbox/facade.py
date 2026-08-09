@@ -293,11 +293,16 @@ class Sandbox:
     def bind_ledger(self, record) -> None:
         """Wire the flight recorder.
 
-        ``record(chain, request, decision, result)``. Without it every effect
-        a plugin performs is invisible to the action ledger, which is the one
-        place unattended work is supposed to be reconstructable from. Injected
-        for the same reason the context is: the sink writes to a kernel table
-        and the sandbox does not know what a database is.
+        ``record(chain, request, decision, result, context=None)``. Without it
+        every effect a plugin performs is invisible to the action ledger, which
+        is the one place unattended work is supposed to be reconstructable
+        from. Injected for the same reason the context is: the sink writes to a
+        kernel table and the sandbox does not know what a database is.
+
+        The trailing context is the one the execution's handlers answered from.
+        It is optional because a sink recording only *what* happened needs
+        nothing else; the kernel's own reads it to say *whose* conversation the
+        effect belonged to, which no other argument can answer.
         """
         self.interpreter.set_record(record)
 

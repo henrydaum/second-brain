@@ -15,7 +15,7 @@
     GET  /events?thread=X&token=T     every render, verbatim, as SSE
     POST /sdk/<request.type>?thread=X the whole SDK, body = arguments
 
-  Everything below is a rendering of the nine render kinds and a form for
+  Everything below is a rendering of the ten render kinds and a form for
   typing Request types into. That is genuinely all there is.
 
   Two ways to run it:
@@ -112,7 +112,7 @@ $("connect").onclick = () => {
   };
 };
 
-// One function, nine kinds, no translation anywhere. This is the entire
+// One function, ten kinds, no translation anywhere. This is the entire
 // outbound contract — a client that handles these handles everything.
 function render({ kind, payload }) {
   switch (kind) {
@@ -160,6 +160,14 @@ function render({ kind, payload }) {
 
     case "buttons":
       choose(payload);
+      break;
+
+    // The fourth of that group, and the one with nothing to answer: a question
+    // stopped waiting. It arrives when *something else* settled it — another
+    // frontend answered, or the turn was cancelled — so a client that ignores
+    // it leaves live buttons under a question nobody is listening to any more.
+    case "approval_settled":
+      settle(payload);
       break;
 
     default:
@@ -211,8 +219,14 @@ $("call").onsubmit = async (event) => {
 
 // ── Answering the three interactive kinds ────────────────────────────
 
+// Questions still on screen, by the id they were asked under. A dialog can be
+// settled by somebody else — another frontend answering it, or the turn being
+// cancelled — so the node has to be findable again once it is no longer live.
+const pending = new Map();
+
 function ask(approval) {
   const node = add("kind", approval.title || "Allow this?");
+  if (approval.id !== undefined) pending.set(approval.id, node);
   if (approval.body) node.appendChild(document.createElement("br"));
   if (approval.body) node.appendChild(document.createTextNode(approval.body));
   node.appendChild(document.createElement("br"));
@@ -231,6 +245,15 @@ function ask(approval) {
     };
     node.appendChild(button);
   });
+}
+
+function settle({ request_id, reason }) {
+  // {request_id, reason} — reason is "answered" or "cancelled".
+  const node = pending.get(request_id);
+  if (!node) return;
+  pending.delete(request_id);
+  node.querySelectorAll("button").forEach((el) => el.disabled = true);
+  node.appendChild(document.createTextNode(` — ${reason || "settled"}`));
 }
 
 function fillIn(form) {

@@ -109,6 +109,20 @@ def tool_summary(tool_result, max_chars: int) -> str:
     return _truncate_middle(text, max_chars)
 
 
+def _attachment_paths(result) -> list[str]:
+    """Files an enact's underlying ``ToolResult`` put in front of the person.
+
+    The ``call_tool`` action carries the real ``ToolResult`` under its own
+    ``data["result"]``, which is the same unwrap ``_format_tool_result`` does.
+    Every other action type has no such payload and answers with nothing.
+    """
+    payload = getattr(result, "data", None)
+    if not isinstance(payload, dict):
+        return []
+    tool_result = payload.get("result")
+    return [str(p) for p in (getattr(tool_result, "attachment_paths", None) or [])]
+
+
 def _prompt_sections(prompt: Any) -> list[dict[str, Any]]:
     """Normalize legacy string prompts and sectioned prompt messages.
 
@@ -460,6 +474,16 @@ class ConversationLoop:
         forced_by = (content or {}).get("_forced_by") if isinstance(content, dict) else None
         if forced_by:
             data["hook"] = forced_by
+        # Files the tool put in front of the person. These reach a frontend as
+        # an ``attachments`` render frame and are then *gone*:
+        # ``conversation_messages`` has no metadata column, and
+        # ``serialization._record`` writes only role/content/tool_call_id/
+        # tool_name — so a reload cannot tell that a turn showed anything at
+        # all. The same paths ``_format_tool_result`` pulls for the live frame,
+        # kept where they outlive the event.
+        paths = _attachment_paths(result)
+        if paths:
+            data["attachments"] = paths
         record_enact(
             self._active_db, origin="agent_enact",
             session_key=self.session_key,

@@ -232,8 +232,12 @@ class Interpreter:
             absent, unsafe Requests are refused — the safe default, and the
             same one the kernel uses when every permission hook abstains.
         record:
-            callable(chain, request, decision, result) -> None. The ledger
-            sink. Best-effort: the ledger observes the system, never breaks it.
+            callable(chain, request, decision, result, context=None) -> None.
+            The ledger sink. Best-effort: the ledger observes the system, never
+            breaks it. The context is the one *this execution's* handlers
+            answered from, which is the only thing that knows which session and
+            conversation the effect belongs to — the chain answers what caused
+            the work, which is a different question.
         context:
             The kernel's context object, handed to every handler. This is
             Second Brain's ``SecondBrainContext`` — the same bag plugins used
@@ -493,7 +497,14 @@ class Interpreter:
         """
         if self._record is not None:
             try:
-                self._record(execution.chain, request, decision, result)
+                # ``_context_for``, not ``execution.context`` — the same
+                # resolution the handler answered from. An execution often
+                # carries none of its own and falls back to the interpreter's,
+                # so reading the attribute directly saw ``None`` for exactly
+                # the ordinary case and quietly recorded a row belonging to
+                # nobody.
+                self._record(execution.chain, request, decision, result,
+                             self._context_for(execution))
             except Exception:
                 logger.exception("ledger write failed")
         try:

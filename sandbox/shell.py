@@ -484,3 +484,81 @@ def classify_shell(kind: str, args: dict) -> Decision:
     return Decision(UNSAFE,
                     f"{verb} shell command: {shown[:200]}"
                     + (f" (in {where})" if where else ""))
+
+
+# ── what a command line did to files (display only) ───────────────────
+#
+# This answers a *third* question, and it is neither of the two above: not
+# "may this run" but "what did that probably touch", asked after the fact so a
+# frontend can show the agent deleting a directory the way it shows the agent
+# writing a file. Nothing here reaches :func:`classify_shell`, and it must
+# stay that way — the moment an authorization decision reads it, this is the
+# dead classifier again. ``tests/test_shell_files.py`` pins the separation.
+#
+# The failure profile is what makes a table like this acceptable here and not
+# there. A miss is a row the drawer does not show; a false positive is a file
+# it shows that did not change. Both are cosmetic and both are visible to the
+# person reading the panel, whereas a wrong "safe" was silent.
+
+#: program → (which operands are the target, whether they are removed).
+#:
+#: ``all`` — every operand. ``last`` — the final operand only, the earlier ones
+#: being sources that are read rather than changed.
+_FILE_COMMANDS = {
+    "rm": ("all", True), "rmdir": ("all", True), "del": ("all", True),
+    "erase": ("all", True), "unlink": ("all", True),
+    "mkdir": ("all", False), "md": ("all", False), "touch": ("all", False),
+    "cp": ("last", False), "copy": ("last", False), "ln": ("last", False),
+    "mv": ("last", True), "move": ("last", True),
+}
+
+#: Characters that mean an operand is not confidently a path.
+#:
+#: Two cases, one rule. Under a shell these are *unexpanded* — ``rm *.log``
+#: names nothing until the shell expands it, and we are not the shell. With
+#: ``shell=None`` there is no expansion, so ``rm $(cat x)`` really does mean
+#: two files literally called ``$(cat`` and ``x)``; recording them would be
+#: accurate and would read as a bug to anyone looking at the panel. Either way
+#: the honest answer is to abstain, so the same set covers both.
+_UNEXPANDED = frozenset("*?[]~$`&|;<>()")
+
+
+def files_touched(args: dict) -> tuple[list, list]:
+    """``(paths, deleted)`` for a shell Request — both empty when unknowable.
+
+    ``paths`` is every file the line touched and ``deleted`` the subset that no
+    longer exists, so a caller that only wants "which files" reads one list.
+    Paths are resolved against the Request's ``cwd``, because a relative
+    ``build/`` means nothing to whoever reads the row later.
+
+    Abstains on any segment it cannot read: an unlisted program, a glob, and —
+    via :func:`_command_segments` — redirection, substitution, subshells and
+    anything the lexer refuses. Partial answers are not offered; a line that
+    both deletes and does something unknown reports nothing at all, since
+    "these are the files" is a claim and a half-true one is worse than none.
+    """
+    segments = _command_segments(args)
+    if not segments:
+        return [], []
+
+    cwd = str(args.get("cwd") or "") or None
+    paths, deleted = [], []
+    for argv in segments:
+        program = os.path.basename(str(argv[0])).lower()
+        program = program[:-4] if program.endswith(".exe") else program
+        if (spec := _FILE_COMMANDS.get(program)) is None:
+            continue                      # not a file command; says nothing
+        which, removes = spec
+        operands = [str(a) for a in argv[1:] if not str(a).startswith("-")]
+        if not operands:
+            continue
+        if any(set(a) & _UNEXPANDED for a in operands):
+            return [], []                 # a glob: the whole line is a guess
+        targets = operands if which == "all" else operands[-1:]
+        sources = [] if which == "all" else operands[:-1]
+        for operand in targets + (sources if removes else []):
+            full = os.path.abspath(os.path.join(cwd, operand)) if cwd else operand
+            paths.append(full)
+            if removes and (which == "all" or operand in sources):
+                deleted.append(full)
+    return paths, deleted

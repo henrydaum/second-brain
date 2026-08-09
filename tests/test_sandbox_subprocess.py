@@ -241,7 +241,7 @@ def test_requests_are_ledgered_from_a_subprocess(tmp_path):
     target.write_text("x", encoding="utf-8")
     rows = []
 
-    it = Interpreter(record=lambda chain, req, dec, res: rows.append(
+    it = Interpreter(record=lambda chain, req, dec, res, ctx=None: rows.append(
         (chain.render(), req.type, dec.level, res.ok)))
     try:
         run_in_subprocess(it, str(FIXTURE), "read_and_truncate",

@@ -787,12 +787,47 @@ so asking what a backend can do never costs a provider-library import.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `ledger.record(...)` | Write an audit row | — | safe |
-| `ledger.read(filters)` | Targeted query | user, conversation | safe (own), unsafe (other users) |
+| `ledger.record(action, ok, data)` | Write an audit row | — | safe |
+| `ledger.read(limit, conversation_id, origin, session_key, action_types, since_id)` | Targeted query | conversation ownership | safe; a conversation the user does not own is **refused** |
 
 Every Request that reaches the kernel is itself a ledger row, with its chain of
 provenance as a column. `ledger.record` exists for plugin-level events that are
 not Requests.
+
+Both carry the asking session's `session_key`, `conversation_id` and `user_id`,
+so a row says *whose* work it was and not only what happened. That is what makes
+`conversation_id` a usable filter — it seeks `idx_ledger_conv` — and what lets
+`my_action_ledger` show a plugin the rows describing its own effects.
+
+Every filter narrows in SQL rather than in the caller. The guidance to read this
+table targeted rather than linearly is only actionable if there is something to
+target with: the ledger is write-optimized filler by volume, so an unfiltered
+read scans the whole flight recorder. `since_id` is the incremental form, for a
+reader that already holds rows up to *N*.
+
+Naming another user's conversation is refused rather than asked about, matching
+`conv.read` — ownership is not a thing an approval dialog should be able to
+grant. Filtering alone raises no dialog: this only ever reads.
+
+The four filesystem Requests (`fs.write`, `fs.write_bytes`, `fs.delete`,
+`fs.move`) additionally copy their path arguments into `data_json.paths`, and a
+successful write its byte count into `data_json.bytes`. A `proc.run` /
+`proc.start` that exited zero does the same for the paths its command line
+names (`shell.files_touched`), tagged `data_json.via: "shell"` because a path
+read out of a command line is a weaker claim than one the kernel serviced, with
+`data_json.deleted` for the subset removed.
+
+That extractor is **display only and must stay so** — nothing in `classify` or
+either recognizer may read it, pinned by `tests/test_shell_files.py`. It is a
+table of command names, which is what the dead classifier was, and the only
+thing separating them is the question asked: that one decided *safety*, where a
+wrong "safe" is silent and grants something, while this decides *what to draw*,
+where a miss is an absent row and a false positive is a file shown that did not
+change. It abstains on an unlisted program, a glob, a redirect, substitution, a
+subshell, and any command that failed. `args_json` is capped and
+past the cap the *object* is replaced by a `head`/`tail` wrapper — and the
+argument that blows the cap is the file's own contents, so the rows whose paths
+are hardest to recover would otherwise be exactly the largest edits.
 
 ## 17. Network
 

@@ -3272,32 +3272,89 @@ def _parse_modality(ctx, args: dict) -> Result:
 
 
 def _ledger_record(ctx, args: dict) -> Result:
-    """Write an audit row for something that is not itself a Request."""
+    """Write an audit row for something that is not itself a Request.
+
+    The identity comes from the same place ``sandbox_sink`` reads it, so a row
+    a plugin writes about itself sits alongside the rows the kernel wrote about
+    it, answerable to the same queries.
+    """
+    from runtime.ledger import identity_of
+
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
+    session_key, conversation_id, user_id = identity_of(ctx)
     try:
+        # ``data=``, not ``data_json=``. It was the latter for a long time, and
+        # ``record_action`` has no such parameter — so every call raised
+        # ``TypeError`` at binding, the guard below swallowed it, and the
+        # Request answered ``False``. A best-effort write reporting failure
+        # looks exactly like a database that was busy, so nothing ever
+        # surfaced: ``sdk.ledger.record`` had never once written a row.
         db.record_action(origin="sandbox",
                          action_type=args.get("action") or "note",
                          ok=bool(args.get("ok", True)),
-                         session_key=getattr(ctx, "session_key", None),
-                         data_json=args.get("data"))
+                         session_key=session_key,
+                         conversation_id=conversation_id,
+                         user_id=user_id,
+                         data=args.get("data"))
         return Result(data=True)
     except Exception:
         # Ledger writes are best-effort at every layer: the ledger observes
         # the system and must never break it.
+        logger.exception("ledger.record failed")
         return Result(data=False)
 
 
 def _ledger_read(ctx, args: dict) -> Result:
-    """Query the ledger, targeted rather than linearly."""
+    """Query the ledger, targeted rather than linearly.
+
+    Every filter narrows in SQL. That is the whole point of the Request rather
+    than a nicety: the ledger is write-optimized filler by volume, so an
+    unfiltered read is a linear scan of the flight recorder, and "read it
+    targeted" is only advice until there is something to target *with*.
+    ``conversation_id`` seeks ``idx_ledger_conv``; ``since_id`` is its
+    incremental form, for a reader that already holds rows up to N.
+
+    Arguments rather than new Request types, and the classification does not
+    move: this still only ever reads, so it stays ``ALWAYS_SAFE`` and raises no
+    dialog. What *does* move is ownership — the rows now carry ``user_id`` and
+    ``conversation_id``, so naming a conversation is answerable for, and is
+    answered by the same ``_check_access`` ``conv.read`` uses.
+    """
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
-    limit, bad = int_arg(args, "limit", 50, lo=1)
+    limit, bad = int_arg(args, "limit", 50, lo=1, hi=500)
     if bad is not None:
         return bad
-    return Result(data=_rows(db.get_ledger_rows(limit=limit)))
+
+    conversation_id = None
+    if args.get("conversation_id") not in (None, ""):
+        conversation_id, bad = int_arg(args, "conversation_id", 0)
+        if bad is not None:
+            return bad
+        if (refusal := _check_access(ctx, conversation_id)) is not None:
+            return refusal
+
+    since_id = None
+    if args.get("since_id") not in (None, ""):
+        since_id, bad = int_arg(args, "since_id", 0, lo=0)
+        if bad is not None:
+            return bad
+
+    raw_types = args.get("action_types")
+    if isinstance(raw_types, str):
+        raw_types = [raw_types]
+    action_types = [str(t) for t in raw_types if t] if raw_types else None
+
+    origin = str(args.get("origin") or "") or None
+    session_key = str(args.get("session_key") or "") or None
+
+    return Result(data=_rows(db.get_ledger_rows(
+        conversation_id=conversation_id, origin=origin,
+        session_key=session_key, action_types=action_types,
+        since_id=since_id, limit=limit)))
 
 
 # How often the wait below looks up to see whether the caller still wants an

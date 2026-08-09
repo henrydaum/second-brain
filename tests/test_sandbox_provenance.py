@@ -118,7 +118,7 @@ def test_a_nested_run_extends_its_parents_chain(sb, tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("a b c", encoding="utf-8")
     seen = []
-    sb.interpreter._record = lambda chain, req, dec, res: seen.append(
+    sb.interpreter._record = lambda chain, req, dec, res, ctx=None: seen.append(
         chain.render())
 
     parent = Chain(root="user").push("tool_outer")
@@ -166,7 +166,7 @@ def test_a_resident_boxs_requests_carry_its_chain(sb, tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("resident", encoding="utf-8")
     seen = []
-    sb.interpreter._record = lambda chain, req, dec, res: seen.append(
+    sb.interpreter._record = lambda chain, req, dec, res, ctx=None: seen.append(
         chain.render())
 
     box = sb.open(FIXTURES / "service_counter.py", "Counter",

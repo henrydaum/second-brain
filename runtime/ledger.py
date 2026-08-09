@@ -25,6 +25,26 @@ logger = logging.getLogger("Ledger")
 #: from the ones you go looking for.
 SANDBOX_ORIGIN = "sandbox"
 
+#: Which arguments of a filesystem Request name a file, so the sink can lift
+#: them somewhere nothing truncates.
+#:
+#: ``record_action`` caps ``args_json`` at ``LEDGER_JSON_CAP`` and past that
+#: **replaces the object** with a ``head``/``tail`` wrapper — and the argument
+#: that pushes a write over the cap is the file's own contents. So the rows
+#: whose paths are hardest to recover are exactly the big edits somebody most
+#: wants to see. Copying the paths into ``data`` costs a few bytes and makes
+#: them unconditional; a reader never has to parse ``args_json`` at all.
+FILE_ARGS = {
+    "fs.write": ("path",),
+    "fs.write_bytes": ("path",),
+    "fs.delete": ("path",),
+    "fs.move": ("src", "dst"),
+}
+
+#: Requests whose file effects are inside a command line rather than an
+#: argument, so the paths have to be read out of it (``shell.files_touched``).
+SHELL_REQUESTS = ("proc.run", "proc.start")
+
 
 def _args_of(content: Any) -> Any:
     """Ledger-facing view of an action's content. Private plumbing keys
@@ -79,13 +99,59 @@ def record_enact(db, *, origin: str, session_key: str | None,
         logger.warning(f"Ledger enact record failed (ignored): {e}")
 
 
+def identity_of(context) -> tuple:
+    """Whose work an effect was, from the context that answered it.
+
+    ``(session_key, conversation_id, user_id)``. Public because two callers ask
+    it — the sandbox sink, about a Request the kernel serviced, and
+    ``ledger.record``, about a note a plugin wrote itself. One spelling, so a
+    plugin's own row lands in the same conversation as the rows written about
+    it and answers to the same queries.
+
+    Read from the **context** rather than from ``chain.root``, which is the
+    other candidate and the wrong one. The root answers what *caused* the work,
+    and ``policy.chain_session`` only recovers a session from it for
+    agent-caused calls — a person's own action roots at ``user`` and names no
+    session at all. The context is the kernel's own answer about whose call
+    this is, and it is right in both directions that matter: ``frontend.act``
+    moves chain and context together, while a resident service polling on its
+    own initiative is handed ``kernel_context(None)`` and correctly records
+    nothing, because a service poll belongs to no conversation.
+
+    The conversation is resolved through the live session rather than stored on
+    the context, because a session's conversation changes underneath it — a
+    ``/new`` or a ``conv.load`` rebinds it — and the row should say which
+    conversation the effect actually landed in.
+    """
+    key = getattr(context, "session_key", None)
+    runtime = getattr(context, "runtime", None)
+    sessions = getattr(runtime, "sessions", None) or {}
+    session = sessions.get(key) if key else None
+    return (key, getattr(session, "conversation_id", None),
+            getattr(context, "user_id", None))
+
+
 def sandbox_sink(db):
     """Build the ledger sink an :class:`~sandbox.interpreter.Interpreter` takes.
 
-    Returns ``callable(chain, request, decision, result)``. Without one the
-    sandbox records nothing at all, which left the flight recorder blind to
-    every effect a plugin performed — the one part of the system where
-    unattended operation most needs to be reconstructable after the fact.
+    Returns ``callable(chain, request, decision, result, context=None)``.
+    Without one the sandbox records nothing at all, which left the flight
+    recorder blind to every effect a plugin performed — the one part of the
+    system where unattended operation most needs to be reconstructable after
+    the fact.
+
+    **A row says whose work it was**, via ``identity_of`` on the trailing
+    context. It did not for a long time, and the omission was invisible because
+    the columns existed and simply held NULL: ``action_ledger`` carries
+    ``session_key``/``conversation_id``/``user_id`` and an index on
+    ``(conversation_id, id)`` built for exactly this, and the sandbox origin —
+    the highest-volume one, and the only per-effect record the system has — was
+    the one origin that filled none of them. So ``get_ledger_rows(
+    conversation_id=…)`` answered nothing for plugin effects and the index was
+    dead weight, while ``my_action_ledger`` (which scopes on ``user_id``) hid
+    every sandbox row from plugin code including its own. The enact sites had
+    supplied all three since the beginning; this is the sandbox catching up
+    rather than a new claim.
 
     **Reads are not recorded, effects and refusals always are.** A console
     frontend issues a ``console.read`` Request every poll; at the 50 ms default
@@ -110,6 +176,7 @@ def sandbox_sink(db):
     on a kernel table; ``sandbox/`` stays ignorant of the database, and the
     composition root hands this in like it hands in the approver.
     """
+    from sandbox import shell
     from sandbox.guest.requests import HTTP_PUSH, LLM_DELTA, READ_ONLY
 
     #: Reads, plus the writes too frequent to keep. ``http.push`` is the same
@@ -120,7 +187,7 @@ def sandbox_sink(db):
     #: recorded — the sink's question is volume, not whether it is rendering.
     unrecorded = READ_ONLY | {LLM_DELTA, HTTP_PUSH}
 
-    def record(chain, request, decision, result) -> None:
+    def record(chain, request, decision, result, context=None) -> None:
         """Append one serviced Request. Never raises; never blocks a turn."""
         write = getattr(db, "record_action", None)
         if write is None:
@@ -129,10 +196,41 @@ def sandbox_sink(db):
             ok = bool(getattr(result, "ok", False))
             if request.type in unrecorded and ok and decision.safe:
                 return
+            session_key, conversation_id, user_id = identity_of(context)
+            data = {"chain": chain.render(), "level": decision.level,
+                    "reason": decision.reason}
+            if (named := FILE_ARGS.get(request.type)) is not None:
+                args = request.args or {}
+                if paths := [args[k] for k in named if args.get(k)]:
+                    data["paths"] = paths
+                # The write's own answer, so a size does not cost a second
+                # read. Absent on a refusal, which has no answer to give.
+                written = getattr(result, "data", None)
+                if ok and isinstance(written, dict) and "bytes" in written:
+                    data["bytes"] = written["bytes"]
+            elif request.type in SHELL_REQUESTS and ok:
+                # Only a command that *succeeded*, and for ``proc.run`` only
+                # one that exited cleanly: a failed ``rm`` deleted nothing, and
+                # a row claiming otherwise is worse than a missing one.
+                answer = getattr(result, "data", None) or {}
+                if answer.get("code", 0) == 0:
+                    paths, deleted = shell.files_touched(request.args or {})
+                    if paths:
+                        data["paths"] = paths
+                        # Weaker than a path the kernel serviced: this was read
+                        # out of a command line, so say where it came from
+                        # rather than letting it pass as the same claim.
+                        data["via"] = "shell"
+                        data["command"] = shell.render_command(request.args or {})
+                        if deleted:
+                            data["deleted"] = deleted
             write(
                 origin=SANDBOX_ORIGIN,
                 action_type=request.type,
                 ok=ok,
+                session_key=session_key,
+                conversation_id=conversation_id,
+                user_id=user_id,
                 name=chain.links[-1] if chain.links else chain.root,
                 actor_id=chain.root,
                 args=request.args,
@@ -144,8 +242,7 @@ def sandbox_sink(db):
                 error_code=None if ok else (
                     getattr(result, "code", "") or "failed"),
                 error_message=getattr(result, "error", None) or None,
-                data={"chain": chain.render(), "level": decision.level,
-                      "reason": decision.reason},
+                data=data,
             )
         except Exception as exc:
             logger.warning(f"Sandbox ledger record failed (ignored): {exc}")

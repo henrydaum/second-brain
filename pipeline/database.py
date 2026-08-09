@@ -1283,8 +1283,18 @@ class Database:
 							   data={k: v for k, v in deleted.items() if v})
 		return total
 
-	def get_ledger_rows(self, conversation_id=None, origin=None, session_key=None, limit=100) -> list[dict]:
-		"""Read recent ledger rows, newest first. For tests and inspection UX."""
+	def get_ledger_rows(self, conversation_id=None, origin=None, session_key=None,
+						action_types=None, since_id=None, limit=100) -> list[dict]:
+		"""Read recent ledger rows, newest first. For tests and inspection UX.
+
+		Every filter is applied in SQL rather than by the caller, because the
+		guidance is to read this table *targeted*: `idx_ledger_conv` makes
+		`conversation_id` an index seek, and narrowing there is the difference
+		between reading one conversation's rows and reading the whole flight
+		recorder to throw most of it away. `since_id` is the incremental form of
+		the same idea — a reader that already has rows up to N asks only for
+		what followed.
+		"""
 		clauses, params = [], []
 		if conversation_id is not None:
 			clauses.append("conversation_id = ?"); params.append(conversation_id)
@@ -1292,6 +1302,13 @@ class Database:
 			clauses.append("origin = ?"); params.append(origin)
 		if session_key is not None:
 			clauses.append("session_key = ?"); params.append(session_key)
+		if action_types:
+			# Built from the count rather than interpolated: the values are
+			# still bound, so a caller-supplied type can never be SQL.
+			clauses.append(f"action_type IN ({','.join('?' * len(action_types))})")
+			params.extend(str(t) for t in action_types)
+		if since_id is not None:
+			clauses.append("id > ?"); params.append(int(since_id))
 		where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 		with self.lock:
 			cur = self.conn.execute(

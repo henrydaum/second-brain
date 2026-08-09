@@ -294,7 +294,7 @@ def test_a_box_that_will_not_start_raises(interp):
 def test_requests_from_a_resident_box_carry_its_chain(tmp_path):
     """A service's Requests are gated like anyone else's."""
     seen = {}
-    it = Interpreter(record=lambda chain, req, dec, res: seen.setdefault(
+    it = Interpreter(record=lambda chain, req, dec, res, ctx=None: seen.setdefault(
         "chain", chain.render()))
     target = tmp_path / "f.txt"
     target.write_text("x", encoding="utf-8")

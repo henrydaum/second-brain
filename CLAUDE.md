@@ -599,6 +599,76 @@ fact. Four origins:
   for an uncoded failure — it used to be a two-value vocabulary
   reverse-engineered from whether the *message* started with "denied".
 
+**A row says whose work it was**, and for a long time the sandbox origin was
+the one that did not. `session_key`/`conversation_id`/`user_id` are columns
+every enact site had filled since the beginning; the sink filled none of them,
+which is invisible because a NULL column looks exactly like a table that has
+not been asked yet. So `idx_ledger_conv` — an index on `(conversation_id, id)`,
+built for this exact seek — was dead weight for the *only per-effect record the
+system has*, and `my_action_ledger` (which scopes on `user_id`, `sandbox/
+users.py`) hid every sandbox row from plugin code including its own. The fix is
+`identity_of(context)`, read from the **context** rather than `chain.root`: the
+root answers what *caused* the work and `policy.chain_session` recovers a
+session from it only for agent-caused calls, while the context is the kernel's
+own answer about whose call this is. It is right in both directions — a
+`frontend.act` moves chain and context together, and a service polling on its
+own initiative is handed `kernel_context(None)` and correctly records nothing,
+because a service poll belongs to no conversation.
+
+The context is the one `Interpreter._context_for` resolves, **not**
+`execution.context`. Most executions carry none of their own and fall back to
+the interpreter's, so reading the attribute directly answers `None` for the
+ordinary case — and every unit test passes a context explicitly, so it takes
+driving a real write through a real `Sandbox` to see it.
+
+**The four filesystem Requests also copy their paths into `data_json.paths`**
+(`FILE_ARGS`), plus `data_json.bytes` from a successful write's own answer.
+That is not tidiness: `args_json` is capped at `LEDGER_JSON_CAP` and past the
+cap the *object* is replaced by a `head`/`tail` wrapper, and the argument that
+blows the cap is the file's own contents — so a reader parsing `args_json` for
+a path loses exactly the largest edits. `fs.temp` is deliberately not among
+them; its path is in the Result, which the sink does not record, so a scratch
+file first appears as the `path` of the write that follows.
+
+**`proc.run` and `proc.start` do the same through `shell.files_touched`**, and
+the argument for a command-name table living *next to* the place a command-name
+table was deliberately killed is the question it answers. `classify_shell`
+decides **safety**, where a wrong "safe" is silent and grants something — Rice's
+theorem, and the reason the ~500-line classifier had to go. This decides **what
+to draw**, after the fact, where a miss is a row the drawer omits and a false
+positive is a file shown that did not change. Both cosmetic, both visible to
+whoever is reading the panel. So it is **display-only**, nothing in `classify`
+or either recognizer may read it, and
+`tests/test_shell_files.py::test_no_authorization_path_reads_the_file_table`
+pins that structurally rather than describing it — the drift that undoes this
+is one import, and it would look like a simplification at the time.
+
+It abstains generously, which is what makes the table affordable: an unlisted
+program, a glob (`rm *.log` names nothing until a shell expands it), and — by
+building on `_command_segments` — redirection, substitution, subshells and
+anything the lexer refuses. A command that exited non-zero deleted nothing, so
+it records nothing. Paths resolve against the Request's `cwd`, and a recorded
+path carries `data_json.via = "shell"`, because one read out of a command line
+is a weaker claim than one the kernel serviced and the two must not pass as the
+same thing. Note `cmd /c rmdir …` abstains correctly — the program is `cmd` —
+which is what the `shell` argument exists to avoid writing.
+
+The counterpart on the enact side is `data_json.attachments`, written by
+`ConversationLoop._record_ledger` from the tool's `attachment_paths`. Files the
+agent *showed* reach a frontend as an `attachments` render frame and were then
+gone — `conversation_messages` has seven columns and no metadata blob, so a
+reload could not tell that a turn had shown anything. Between the two, one
+query answers "what did this conversation do to files", which is what a client
+needs and could not previously ask.
+
+`ledger.read` grew the arguments to ask it (`conversation_id`, `action_types`,
+`since_id`, `origin`, `session_key`) — every one narrowing in SQL, because
+"read it targeted, never linearly" is only advice until there is something to
+target with. It stays `ALWAYS_SAFE`; what it gained is `_check_access`, since
+rows carrying an owner make naming somebody else's conversation a question
+worth refusing. Same shape as `fs.search`/`fs.list`: a Request grew arguments
+rather than the vocabulary growing a type.
+
 Failure policy: ledger writes are best-effort at every layer
 (`db.record_action` swallows + logs; `runtime/ledger.py` helpers tolerate
 missing/stubbed dbs) — the ledger observes the system and must never break

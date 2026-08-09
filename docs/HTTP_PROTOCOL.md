@@ -398,6 +398,50 @@ successive `offset`/`length` windows and join them; a short read means you
 reached the end, so the loop terminates without your having to learn the size
 first.
 
+**What the agent did** — the flight recorder, and the only place some of it is
+kept.
+
+| Request | Arguments |
+|---|---|
+| `ledger.read` | `conversation_id`, `action_types`, `since_id`, `origin`, `session_key`, `limit` |
+
+Renders are events, not state, so anything a frontend only *saw* is gone on
+reload — and two of those things are worth getting back. Files the agent
+**edited** arrive as `attachments` render frames and are recorded as
+`origin: "sandbox"` rows for `fs.write` / `fs.write_bytes` / `fs.delete` /
+`fs.move`; files it **showed** you are on the `origin: "agent_enact"` row for the
+tool call, under `data_json.attachments`. Neither is in `conv.read`: the messages
+table has no metadata column.
+
+Shell commands count too. A successful `proc.run` / `proc.start` whose line is
+a recognised file command — `rm`, `mv`, `cp`, `mkdir`, `touch`, `rmdir`, `ln`
+and the Windows spellings — records the paths it touched, tagged
+`data_json.via: "shell"` because a path read out of a command line is a weaker
+claim than one the kernel serviced. `data_json.deleted` is the subset that no
+longer exists. Anything it cannot read honestly records no paths at all: an
+unlisted program, a glob (`rm *.log` names nothing until a shell expands it),
+a redirect, `$(…)`, a subshell, or a command that exited non-zero.
+
+Read the paths from `data_json.paths`, never by parsing `args_json` — that field
+is capped, and past the cap the object is replaced by a `head`/`tail` wrapper.
+The argument that blows the cap is the file's own contents, so parsing it would
+lose exactly the largest edits. `data_json.bytes` carries the size of a
+successful write.
+
+```jsonc
+// "which files has this conversation touched?"
+POST /sdk/ledger.read
+{"conversation_id": 7, "action_types": ["fs.write", "fs.delete", "fs.move"]}
+```
+
+Rows come back newest first. Keep the highest `id` you have seen and pass it as
+`since_id` to ask only for what followed, rather than re-reading the
+conversation every time a `tool_status` frame lands. A row with `ok: 0` and
+`error_code: "approval_declined"` is a change you refused — worth showing, since
+nothing else records that it was attempted.
+
+Naming a conversation you do not own is refused, not asked about.
+
 **Consequential** — all raise a dialog: `config.write`, `plugin.install`,
 `plugin.uninstall`, `proc.run`, `session.set_mode`, `agent.spawn`.
 
