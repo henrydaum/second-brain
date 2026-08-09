@@ -143,16 +143,38 @@ def current_request_id(session: RuntimeSession, action_type: str) -> str | None:
     return (getattr(frame, "data", {}) or {}).get("request_id")
 
 
-def resolve_answered_request(runtime, request_id: str | None, result: ActionResult) -> None:
+def resolve_answered_request(runtime, session_key: str, request_id: str | None,
+                             result: ActionResult) -> None:
     """If the just-enacted action resolved an approval request, fulfill the
-    in-memory request object so any blocked tool call can return."""
+    in-memory request object so any blocked tool call can return, and announce
+    that the question stopped waiting.
+
+    **The announcement is the point of doing both here.** This runs after the
+    action has been enacted and only when it succeeded, which is exactly when
+    the phase frame is gone — so ``approval_settled`` means "there is nothing
+    left to answer" rather than "somebody called resolve". Every way a question
+    ends funnels through this one call: an answer, a cancel, and the approver's
+    300s timeout, which denies by name through ``answer_request``.
+
+    It fires for a *callable* approval too, where there is no live request
+    object to fulfil (those are rebuilt from the phase frame rather than held
+    in ``_approval_requests``). The id is what a frontend is holding, so the id
+    is what it needs to hear about.
+    """
     if not request_id or not result.ok:
         return
     req = runtime._approval_requests.pop(request_id, None)
+    cancelled = result.action == "cancel"
     if req and not req.is_resolved:
         data = result.data or {}
-        if result.action == "cancel":
+        if cancelled:
             req.metadata["cancelled"] = True
             req.resolve(None)
-            return
-        req.resolve(data.get("value", True))
+        else:
+            req.resolve(data.get("value", True))
+    if runtime.emit_event:
+        runtime.emit_event("approval_settled", {
+            "session_key": session_key,
+            "request_id": request_id,
+            "reason": "cancelled" if cancelled else "answered",
+        })

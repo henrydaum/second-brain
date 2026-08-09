@@ -2646,15 +2646,27 @@ def _frontend_pending(ctx, args: dict) -> Result:
     session_key = str(args.get("session_key") or "")
     detailed = bool(args.get("details"))
 
+    order = getattr(adapter, "_pending_approval_order", None) or {}
+    waiting = list(order.get(session_key) or [])
+
     if adapter.has_pending_approval(session_key):
-        order = getattr(adapter, "_pending_approval_order", None) or {}
-        waiting = list(order.get(session_key) or [])
         if not detailed:
             # The id is enough to answer and only enough to answer — the same
             # projection the ``approval`` render makes.
             return Result(data=waiting[0] if waiting else True)
-        if (request := _pending_approval(adapter, session_key, waiting)) is None:
+        request = _pending_approval(adapter, session_key, waiting)
+        if request is None:
             return Result(data=None)
+        from ..frontends import project_approval
+        return Result(data={"kind": "approval",
+                            "payload": project_approval(request)})
+
+    # Nothing registered. That is not the same as nothing waiting: the table is
+    # process memory and the phase stack is persisted, so ask the session
+    # itself before concluding a client should take its dialog down.
+    if (request := _approval_from_phase(adapter, session_key)) is not None:
+        if not detailed:
+            return Result(data=getattr(request, "id", "") or True)
         from ..frontends import project_approval
         return Result(data={"kind": "approval",
                             "payload": project_approval(request)})
@@ -2667,13 +2679,15 @@ def _frontend_pending(ctx, args: dict) -> Result:
 
 
 def _pending_approval(adapter, session_key: str, waiting: list):
-    """The live request a ``details`` read should project, or None.
+    """The question this session is blocked on, or None.
 
-    The *registered* object rather than a rebuild from the phase frame: it is
-    the one ``resolve`` will answer, so projecting anything else risks handing
-    back a question that does not match the id travelling with it. Order first,
-    since that is the queue ``resolve_next_approval`` works down; the unordered
-    fallback exists for the same reason the id branch above answers ``True``.
+    The *registered* object first: it is the one ``resolve`` will answer, so
+    projecting anything else risks handing back a question that does not match
+    the id travelling with it. Order before the unordered fallback, since that
+    is the queue ``resolve_next_approval`` works down.
+
+    Then the phase stack, which is the authority the registration is only a
+    cache of — see :func:`_approval_from_phase`.
     """
     registered = (getattr(adapter, "_pending_approvals", None) or {}).get(session_key) or {}
     for request_id in waiting:
@@ -2683,7 +2697,53 @@ def _pending_approval(adapter, session_key: str, waiting: list):
     for request in registered.values():
         if not getattr(request, "is_resolved", False):
             return request
-    return None
+    return _approval_from_phase(adapter, session_key)
+
+
+def _approval_from_phase(adapter, session_key: str):
+    """Rebuild the question from the session's own phase frame, or None.
+
+    **The registration table is process memory; the phase stack is persisted.**
+    A kernel restart, or a frontend loaded after its session was restored,
+    leaves the table empty while the stack still says the session is blocked —
+    and the bus announcement that would have filled it fired once, before there
+    was anything live to catch it. Answering ``None`` there tells a client to
+    take down a dialog for a question that is still waiting, which is the exact
+    failure this Request exists to prevent.
+
+    **Registering what it rebuilds, which is why a read writes.** An id nobody
+    has registered is an id ``frontend.resolve`` refuses: it settles existence
+    against this same table before it drives anything, so handing back a
+    projection without one would answer "here is your question" and then "no
+    such question" to the very next call.
+
+    A live object beats a rebuild when the process still holds one. A tool
+    blocked inside ``request_input`` is waiting on *that* request, and the
+    rebuild carries ``render_result_on_resolve``, whose render path waits on the
+    guest lock the blocked call is holding — answering it would deadlock against
+    the call it was answering.
+    """
+    runtime = getattr(adapter, "runtime", None)
+    build = getattr(adapter, "_current_approval_request", None)
+    if runtime is None or build is None:
+        return None
+    try:
+        from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
+
+        frame = runtime.get_session(session_key).cs.frame
+        if frame is None or getattr(frame, "phase", "") != PHASE_APPROVING_REQUEST:
+            return None
+        held = (getattr(runtime, "_approval_requests", None) or {}).get(
+            (getattr(frame, "data", None) or {}).get("request_id") or "")
+        request = (held if held is not None and not held.is_resolved
+                   else build(session_key))
+        if request is None:
+            return None
+        adapter._register_pending_approval(session_key, request)
+        return request
+    except Exception:
+        logger.exception("frontend_pending could not rebuild the pending approval")
+        return None
 
 
 def _pending_form(adapter, session_key: str):

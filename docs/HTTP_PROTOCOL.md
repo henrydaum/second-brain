@@ -51,8 +51,8 @@ id: 41
 data: {"kind":"stream_delta","session_key":"http:main","payload":{…}}
 ```
 
-There is no translation layer. These are the same nine payloads a native
-frontend receives, so a client that handles all nine can do what the REPL can.
+There is no translation layer. These are the same ten payloads a native
+frontend receives, so a client that handles all ten can do what the REPL can.
 
 **Use `EventSource`.** It reconnects on its own and sends back the last `id:`
 it saw as `Last-Event-ID`; the server replays from there, so a page refresh
@@ -69,7 +69,7 @@ outright. No stream, no dialogs.
 **One stream per thread.** A second `GET /events` for the same thread replaces
 the first.
 
-### The nine kinds
+### The ten kinds
 
 Handle what you can show and ignore the rest; a client that only renders
 `messages` is a working client.
@@ -138,8 +138,19 @@ are not interchangeable**: the first is what the agent set out to do, sent on
 
 #### `approval` — `dict`
 
-The agent (or a plugin) wants permission. **A turn is blocked until this is
-answered**, so a client that ignores this kind will appear to hang.
+A question the kernel is blocking a turn on.
+
+> **The invariant everything below follows from.** A session in the
+> `approving_request` phase is stopped until somebody answers or cancels.
+> Nothing times it out except the kernel's own 300-second deadline, and until
+> then the agent is not slow — it is waiting on you. Making sure that answer
+> happens is the client's job, and a client that ignores this kind is
+> indistinguishable from one that has hung.
+
+That single rule is why the dialog cannot be dismissed without settling
+something, why the composer should be disabled while one is up (plain text in
+that phase is coerced into the *answer*), and why the `approval_settled` frame
+below exists.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -176,6 +187,21 @@ Answers `false` if there was nothing left to answer (already resolved
 elsewhere, or timed out — dialogs expire after 300s). Treat that as "the
 dialog is stale", not as an error.
 
+#### `approval_settled` — `dict`
+
+A question stopped waiting. `{request_id, reason}`, where `reason` is
+`"answered"` or `"cancelled"`.
+
+**The counterpart to `approval`, and the only thing that says a dialog may come
+down.** You will get one for a question you answered yourself, and — the reason
+this kind exists — for one you did not: another client can answer the same
+question, and the kernel denies by name after 300 seconds. Neither is something
+you did, and before this frame existed neither was something you could learn
+except by asking on a timer.
+
+It says how the question ended, not what the answer was. The answer went to
+whoever was blocked on it and is not repeated to a bystander.
+
 ##### Getting back to one after a reload
 
 A render is an event, and events are not re-sent on demand. A client that was not
@@ -198,12 +224,23 @@ client that restores one but not the other still strands people. Approvals are
 reported first, because they nest: a form step can raise one, and the inner
 question is the one to answer.
 
-**Ask on every reconnect, not once at boot.** The 500-frame replay usually
-re-delivers a live `approval`, but it is a race against your own startup reads,
-and a kernel restart empties the buffer entirely. Asking again is also the only
-way a client learns a dialog went away — there is no "withdrawn" frame, so a
-`null` answer while you are showing one means it timed out or was answered
-somewhere else, and the dialog should close.
+**Ask on every reconnect, not once at boot, and act on `null` as well as on an
+answer.** The 500-frame replay usually re-delivers a live `approval`, but it is
+a race against your own startup reads, and a kernel restart empties the buffer
+entirely. `null` while you are showing a dialog means it was settled while you
+were not listening, and the dialog should close.
+
+It is answered from the session's own persisted phase stack when the frontend
+has no record of one, so a restart does not report a blocked session as an idle
+one. That distinction is the whole reason to prefer this over remembering: a
+frontend's memory of what it rendered dies with its process, and the question
+does not.
+
+**Once connected, stop asking.** `approval` and `approval_settled` cover the
+whole life of a question between them; this call is for the gap a stream cannot
+cover, which is what happened while nobody was listening. Polling it on a timer
+is a client working around a protocol that could announce a question and not its
+end, and that is no longer the protocol you have.
 
 #### `form_field` — `dict`
 
@@ -370,15 +407,17 @@ first.
 
 1. `GET /events?thread=main&token=…` with `EventSource`. Handle `messages`,
    `stream_delta` and `typing` first — that is a working chat.
-2. Wire `approval` early. Without it, the first consequential thing the agent
-   does hangs with no explanation.
+2. Wire `approval` **and `approval_settled`** early. Without the first, the
+   first consequential thing the agent does hangs with no explanation; without
+   the second, a question somebody else answers leaves a dialog on your screen
+   that can no longer be answered.
 3. Send chat with `frontend.submit` / `input_kind: "text"`. Slash commands go
    through the same call; the state machine works out which it was.
 4. Add `form_field` when you want `/config`, `/packages`, `/llm` and the rest
    to be usable — they are all one generic renderer.
-5. Call `frontend.pending {details: true}` on every reconnect, and act on `null`
-   as well as on an answer. Without this, an unanswered question does not
-   survive a page reload and a stale dialog never closes.
+5. Call `frontend.pending {details: true}` on every reconnect — not on a timer —
+   and act on `null` as well as on an answer. Without this, an unanswered
+   question does not survive a page reload.
 6. Build the rest of the UI from `conv.list`, `command.list`, `session.get`.
 7. Render `messages` as GitHub markdown.
 
@@ -397,3 +436,6 @@ first.
   `frontend.pending {details: true}`.
 - **`approval` is not only permission.** The same kind carries any question a
   tool asks, so do not word the dialog as a permission grant.
+- **You are not the only one who can answer.** A question raised on your session
+  can be settled from another client or by the 300s timeout, which is what
+  `approval_settled` is for.

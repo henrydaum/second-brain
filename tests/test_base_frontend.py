@@ -527,3 +527,72 @@ def test_a_restored_form_follows_the_same_rule():
         {"session_key": "mine", "form": {"name": "packages"}})
 
     assert [key for key, _ in frontend.forms] == ["mine"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Settling. The half APPROVAL_REQUESTED was missing: a frontend learned a
+# question existed by being handed one, and had no way at all to learn it had
+# stopped existing -- another frontend can answer it, and the approver denies
+# by name after 300s. A surface that cannot be told has to poll to find out.
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _SettlingFrontend(_TargetedFrontend):
+    def __init__(self):
+        super().__init__()
+        self.settled: list[tuple[str, dict]] = []
+
+    def render_approval_settled(self, key, payload):
+        self.settled.append((key, dict(payload)))
+
+
+def test_settling_forgets_the_question_and_says_so():
+    frontend = _SettlingFrontend()
+    request = _asked("mine")
+    frontend.on_bus_approval_requested(request)
+    assert frontend.has_pending_approval("mine")
+
+    frontend.on_bus_approval_settled({"session_key": "mine",
+                                      "request_id": request.id,
+                                      "reason": "answered"})
+
+    assert frontend.settled == [("mine", {"request_id": request.id,
+                                          "reason": "answered"})]
+    # The forgetting matters as much as the telling: `frontend.pending` and
+    # `frontend.resolve` both settle existence against this table, so a
+    # registration left behind reports an answered question as live.
+    assert not frontend.has_pending_approval("mine")
+
+
+def test_settling_follows_the_same_routing_as_asking():
+    """Another frontend's question was never ours to take down."""
+    frontend = _SettlingFrontend()
+
+    frontend.on_bus_approval_settled({"session_key": "default",
+                                      "request_id": "approve_x",
+                                      "reason": "answered"})
+
+    assert frontend.settled == []
+
+
+def test_a_settlement_without_an_id_says_nothing():
+    """There would be nothing for a frontend to match it against."""
+    frontend = _SettlingFrontend()
+
+    frontend.on_bus_approval_settled({"session_key": "mine"})
+
+    assert frontend.settled == []
+
+
+def test_an_older_frontend_survives_a_kind_it_has_never_heard_of():
+    """`render_approval_settled` defaults to nothing rather than raising,
+    unlike its neighbours: a frontend written before this kind existed is
+    correct as it stands, just chattier than it needs to be."""
+    frontend = _TargetedFrontend()          # no render_approval_settled
+    request = _asked("mine")
+    frontend.on_bus_approval_requested(request)
+
+    frontend.on_bus_approval_settled({"session_key": "mine",
+                                      "request_id": request.id})
+
+    assert not frontend.has_pending_approval("mine")

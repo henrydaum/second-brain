@@ -386,7 +386,7 @@ class ConversationRuntime:
         )
 
         out.add_action_result(result)
-        _approvals.resolve_answered_request(self, request_id, result)
+        _approvals.resolve_answered_request(self, session.key, request_id, result)
         text = _disp.text_after_action(action_type, text, result)
         _disp.absorb_user_action(self, session, action_type, text, result)
         _disp.emit_state_change(session, old_phase, old_priority)

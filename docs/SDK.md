@@ -961,7 +961,7 @@ sdk.frontend.submit_action(session_key, action_type, payload=None)
 sdk.frontend.cancel(session_key)
 sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
 sdk.frontend.attended(session_key, present=True)
-sdk.frontend.pending_approval(session_key, details=False)   # an id, or None
+sdk.frontend.pending_input(session_key, details=False)      # an id, or None
                                                 # details=True: the question,
                                                 # {"kind": "approval"|"form_field",
                                                 #  "payload": {...}}, or None
@@ -1056,7 +1056,7 @@ which belongs to your transport rather than to any session.
 by typing "yes" has to know whether a yes/no is what the next line means. You
 are told an approval exists — you were handed one to render — but not when it
 stops existing: another frontend can answer it, or it can time out. Call
-`sdk.frontend.pending_approval(key)` at the moment you need to decide, and
+`sdk.frontend.pending_input(key)` at the moment you need to decide, and
 check `sdk.session.get(key)["phase"]` too: when the state machine is already
 collecting the answer itself, interpreting the line as well consumes one
 keystroke twice.
@@ -1070,9 +1070,19 @@ beside the dialog that already said so. Word it however your transport should.
 
 **A render is an event, not state.** Nothing is re-sent because you asked. A
 transport that can reconnect — a browser, a socket that dropped — needs
-`pending_approval(key, details=True)` to get back to a question it was never
+`pending_input(key, details=True)` to get back to a question it was never
 handed, and it covers a suspended form as well as an approval, because both are
-"this session is blocked until a person answers".
+"this session is blocked until a person answers". It is answered from the
+session's own persisted phase stack when you have no record of one, so a restart
+does not report a blocked session as an idle one.
+
+**And you are told when a question stops waiting.** `render_approval_settled`
+is the counterpart to `render_approval_request`, and the only way a surface that
+drew a dialog learns it may take it down: another frontend can answer the same
+question, and the approver denies by name after 300 seconds. Neither is
+something you did. It is defaulted to nothing rather than raising, so a frontend
+written before it existed is correct as it stands — just chattier than it needs
+to be, since it has to keep asking to find out.
 
 ### The console
 

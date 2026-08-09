@@ -46,7 +46,7 @@ class ReplFrontend(BaseFrontend):
 
         key = "default"
         session = sdk.session.get(key) or {}
-        pending = sdk.frontend.pending_approval(key)
+        pending = sdk.frontend.pending_input(key)
         if pending and session.get("phase") != "approving_request":
             request_id = pending if isinstance(pending, str) else ""
             # A multi-choice dialog cannot be answered yes/no. Without this the

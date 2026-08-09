@@ -33,6 +33,7 @@ from events.event_bus import bus
 from events.event_channels import (
     AGENT_TEXT_DELTA,
     APPROVAL_REQUESTED,
+    APPROVAL_SETTLED,
     CHAT_MESSAGE_PUSHED,
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
@@ -321,6 +322,26 @@ class BaseFrontend:
         """
         raise NotImplementedError
 
+    def render_approval_settled(self, session_key: str, settled: dict) -> None:
+        """A question stopped waiting. ``{request_id, reason}``.
+
+        The counterpart to :meth:`render_approval_request`, and **the only way a
+        surface that draws a dialog learns it may take it down.** Another
+        frontend can answer the same question, and the approver denies by name
+        after 300 seconds; neither of those is something this frontend did, and
+        without this neither is something it could find out except by asking on
+        a timer.
+
+        ``reason`` is ``"answered"`` or ``"cancelled"``. It says how the question
+        ended, not what the answer was — the answer went to whoever was blocked
+        on it, and is deliberately not repeated to a bystander.
+
+        Defaulted to nothing rather than ``NotImplementedError``, unlike its
+        neighbours: a frontend written before this kind existed is correct as it
+        stands, just chattier than it needs to be.
+        """
+        return
+
     def render_buttons(self, session_key: str, buttons: list[dict]) -> None:
         """Render quick replies, conventionally ``{value, label}`` each.
 
@@ -378,6 +399,7 @@ class BaseFrontend:
         self.config = config or {}
         self._unsubs = [
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
+            bus.subscribe(APPROVAL_SETTLED, self.on_bus_approval_settled),
             bus.subscribe(FORM_REQUESTED, self.on_bus_form_requested),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
             bus.subscribe(AGENT_TEXT_DELTA, self.on_bus_agent_text_delta),
@@ -638,6 +660,28 @@ class BaseFrontend:
                 self.render_approval_request(key, req)
             except Exception:
                 logger.exception(f"render_approval_request failed for '{self.name}'")
+
+    def on_bus_approval_settled(self, payload) -> None:
+        """Forget a question that stopped waiting, and say so.
+
+        The forgetting matters as much as the telling: ``frontend.pending`` and
+        ``frontend.resolve`` both settle existence against this table, so a
+        registration left behind reports an answered question as live and hands
+        out an id that ``resolve`` then refuses.
+        """
+        payload = payload or {}
+        request_id = payload.get("request_id")
+        if not request_id:
+            return
+        for key in self._announce_to(payload.get("session_key")):
+            try:
+                self._clear_pending_approval(key, request_id)
+                self.render_approval_settled(key, {
+                    "request_id": request_id,
+                    "reason": payload.get("reason") or "answered",
+                })
+            except Exception:
+                logger.exception(f"render_approval_settled failed for '{self.name}'")
 
     def on_bus_form_requested(self, payload) -> None:
         """Re-prompt a form restored onto a session after a restart.

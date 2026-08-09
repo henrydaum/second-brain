@@ -26,6 +26,23 @@ APPROVAL_REQUESTED = "approval_requested"
 """A conversation session is waiting for user approval or typed input.
 Payload: a StateMachineApprovalRequest object."""
 
+APPROVAL_SETTLED = "approval_settled"
+"""A question stopped waiting: answered, cancelled, or denied by timeout.
+
+The counterpart to APPROVAL_REQUESTED, and the half that was missing. A
+frontend learns a question exists by being handed one to render, and used to
+have no way at all to learn it had stopped existing — another frontend can
+answer it, the 300s dialog timeout denies it by name, and neither of those
+sends anything. A surface that cannot be told has to poll to find out, and a
+surface that does not poll shows a dialog that can no longer be answered.
+
+Emitted from the one place every resolution funnels through, so "settled" means
+the phase frame is gone rather than "somebody called resolve".
+Payload:
+    session_key: str
+    request_id:  str
+    reason:      str — "answered" | "cancelled\""""
+
 FORM_REQUESTED = "form_requested"
 """A restored session is sitting on a suspended command/tool form and needs the
 current field re-prompted. Used only on restore: in normal flow the form rides

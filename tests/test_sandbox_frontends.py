@@ -340,8 +340,8 @@ def test_the_render_kinds_are_the_documented_ones():
     """The guest documents these and the adapter emits them; a typo on either
     side would silently show a person nothing."""
     assert set(KINDS) == {"messages", "attachments", "form_field", "approval",
-                          "buttons", "error", "typing", "tool_status",
-                          "stream_delta"}
+                          "approval_settled", "buttons", "error", "typing",
+                          "tool_status", "stream_delta"}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -597,7 +597,7 @@ def test_pending_approval_is_asked_not_remembered(box, tmp_path):
         '    def token(self, sdk):',
         '    def pending(self, sdk):\n'
         '        """Ask what is waiting."""\n'
-        '        return sdk.frontend.pending_approval("s1")\n\n'
+        '        return sdk.frontend.pending_input("s1")\n\n'
         '    def token(self, sdk):')
     path = tmp_path / "frontend_talker.py"
     path.write_text(source, encoding="utf-8")
@@ -623,26 +623,57 @@ def test_pending_approval_is_asked_not_remembered(box, tmp_path):
 
 
 class _Waiting:
-    """An adapter blocked on whatever it is handed."""
+    """An adapter blocked on whatever it is handed.
 
-    def __init__(self, approval=None, step=None):
+    ``registered`` is what separates the two ways a session can be blocked: a
+    question this frontend was handed and remembers, or one only the phase
+    stack knows about — which is what a restart, or a frontend loaded after its
+    session was restored, actually leaves behind.
+    """
+
+    def __init__(self, approval=None, step=None, registered=True):
         from state_machine.conversation import PhaseFrame
         from state_machine.conversation_phases import (
             PHASE_APPROVING_REQUEST, PHASE_FILLING_COMMAND_FORM)
 
-        self._pending_approvals = {"s1": {approval.id: approval}} if approval else {}
-        self._pending_approval_order = {"s1": [approval.id]} if approval else {}
+        remember = approval is not None and registered
+        self._pending_approvals = {"s1": {approval.id: approval}} if remember else {}
+        self._pending_approval_order = {"s1": [approval.id]} if remember else {}
+        data = {"args": {"name": "requests"}}
+        if approval is not None:
+            data |= {"request_id": approval.id, "title": approval.title,
+                     "prompt": approval.body, "type": approval.type,
+                     "enum": approval.enum, "enum_labels": approval.enum_labels}
         frame = PhaseFrame(
             PHASE_APPROVING_REQUEST if approval else PHASE_FILLING_COMMAND_FORM,
             "answer_approval" if approval else "call_command",
-            "user", "packages", {"args": {"name": "requests"}},
-            [step] if step else None)
-        self.runtime = SimpleNamespace(get_session=lambda _key: SimpleNamespace(
-            cs=SimpleNamespace(frame=frame)))
+            "user", "packages", data, [step] if step else None)
+        self.runtime = SimpleNamespace(
+            _approval_requests={},
+            get_session=lambda _key: SimpleNamespace(
+                cs=SimpleNamespace(phase=frame.phase, frame=frame)))
 
     def has_pending_approval(self, session_key):
         """Whether anything is waiting."""
         return bool(self._pending_approvals.get(session_key))
+
+    def _register_pending_approval(self, session_key, req):
+        """Remember one, exactly as ``BaseFrontend`` does."""
+        self._pending_approvals.setdefault(session_key, {})[req.id] = req
+        order = self._pending_approval_order.setdefault(session_key, [])
+        if req.id not in order:
+            order.append(req.id)
+
+    def _current_approval_request(self, session_key):
+        """Rebuild from the phase frame, as ``BaseFrontend`` does."""
+        from state_machine.approval import StateMachineApprovalRequest
+
+        data = self.runtime.get_session(session_key).cs.frame.data
+        return StateMachineApprovalRequest(
+            title=data["title"], body=data["prompt"], id=data["request_id"],
+            type=data["type"], enum=data["enum"],
+            enum_labels=data["enum_labels"],
+            metadata={"render_result_on_resolve": True})
 
 
 def _pending(adapter, **args):
@@ -701,6 +732,63 @@ def test_a_pending_form_stays_invisible_without_details():
 
 def test_details_answers_none_when_nothing_is_waiting():
     assert _pending(_Waiting(), details=True).data is None
+
+
+def test_a_question_only_the_phase_stack_remembers_is_still_reported():
+    """The registration table is process memory; the phase stack is persisted.
+
+    A kernel restart, or a frontend loaded after its session was restored,
+    leaves the table empty while the session is still blocked — and the bus
+    announcement that would have filled it fired once, before there was
+    anything live to catch it. Answering ``None`` there tells a client to take
+    down a dialog for a question that is still waiting, which is the failure
+    this Request exists to prevent.
+    """
+    from state_machine.approval import StateMachineApprovalRequest
+
+    request = StateMachineApprovalRequest(
+        title="packages", body="Install a package?", type="boolean")
+    adapter = _Waiting(approval=request, registered=False)
+
+    assert adapter.has_pending_approval("s1") is False
+    assert _pending(adapter).data == request.id
+    assert _pending(adapter, details=True).data["payload"]["id"] == request.id
+
+
+def test_rebuilding_one_registers_it_so_it_can_be_answered():
+    """An id nobody registered is an id ``frontend.resolve`` refuses: it settles
+    existence against this same table before it drives anything. Handing back a
+    projection without registering it would answer "here is your question" and
+    then "no such question" to the very next call."""
+    from state_machine.approval import StateMachineApprovalRequest
+
+    request = StateMachineApprovalRequest(
+        title="packages", body="Install a package?", type="boolean")
+    adapter = _Waiting(approval=request, registered=False)
+
+    _pending(adapter, details=True)
+
+    assert adapter.has_pending_approval("s1")
+    assert adapter._pending_approval_order["s1"] == [request.id]
+
+
+def test_a_live_blocked_request_beats_the_rebuild():
+    """A tool blocked inside ``request_input`` is waiting on *that* object. The
+    rebuild carries ``render_result_on_resolve``, whose render path waits on the
+    guest lock the blocked call holds — answering it would deadlock against the
+    call it was answering."""
+    from state_machine.approval import StateMachineApprovalRequest
+
+    request = StateMachineApprovalRequest(
+        title="packages", body="Install a package?", type="boolean")
+    adapter = _Waiting(approval=request, registered=False)
+    adapter.runtime._approval_requests[request.id] = request
+
+    _pending(adapter, details=True)
+
+    handed = adapter._pending_approvals["s1"][request.id]
+    assert handed is request
+    assert not handed.metadata.get("render_result_on_resolve")
 
 
 def test_a_session_reports_its_phase(box, tmp_path):

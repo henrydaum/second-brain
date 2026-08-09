@@ -42,8 +42,8 @@ _DESK_LOCK = threading.Lock()
 # The kinds a ``render`` call can carry. Named here because both halves have to
 # agree and only this module knows both — the guest documents them, the native
 # adapter emits them, and a typo on either side would silently show nothing.
-KINDS = ("messages", "attachments", "form_field", "approval", "buttons",
-         "error", "typing", "tool_status", "stream_delta")
+KINDS = ("messages", "attachments", "form_field", "approval", "approval_settled",
+         "buttons", "error", "typing", "tool_status", "stream_delta")
 
 
 def park(adapter) -> str:
