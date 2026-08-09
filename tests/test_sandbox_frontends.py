@@ -614,6 +614,95 @@ def test_pending_approval_is_asked_not_remembered(box, tmp_path):
         unload_box("frontend_talker")
 
 
+# ──────────────────────────────────────────────────────────────────────
+# ``frontend.pending {details: true}`` — getting back to a question nobody
+# was connected for. A render is an event and events are not re-sent, so a
+# frontend that reconnected has no other route to one, and an id alone only
+# buys the ability to answer something nobody can read.
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _Waiting:
+    """An adapter blocked on whatever it is handed."""
+
+    def __init__(self, approval=None, step=None):
+        from state_machine.conversation import PhaseFrame
+        from state_machine.conversation_phases import (
+            PHASE_APPROVING_REQUEST, PHASE_FILLING_COMMAND_FORM)
+
+        self._pending_approvals = {"s1": {approval.id: approval}} if approval else {}
+        self._pending_approval_order = {"s1": [approval.id]} if approval else {}
+        frame = PhaseFrame(
+            PHASE_APPROVING_REQUEST if approval else PHASE_FILLING_COMMAND_FORM,
+            "answer_approval" if approval else "call_command",
+            "user", "packages", {"args": {"name": "requests"}},
+            [step] if step else None)
+        self.runtime = SimpleNamespace(get_session=lambda _key: SimpleNamespace(
+            cs=SimpleNamespace(frame=frame)))
+
+    def has_pending_approval(self, session_key):
+        """Whether anything is waiting."""
+        return bool(self._pending_approvals.get(session_key))
+
+
+def _pending(adapter, **args):
+    """Call the handler the way a parked frontend reaches it."""
+    from sandbox.handlers.kernel import _frontend_pending
+
+    token = park(adapter)
+    try:
+        return _frontend_pending(SimpleNamespace(),
+                                 {"token": token, "session_key": "s1", **args})
+    finally:
+        unpark(token)
+
+
+def test_details_hands_back_the_question_not_just_its_id():
+    """The same projection the ``approval`` render made, so a client that
+    reconnected draws the real dialog rather than a reconstruction of one."""
+    from state_machine.approval import StateMachineApprovalRequest
+
+    request = StateMachineApprovalRequest(
+        title="Run a shell command", body="rm -rf /tmp/x", type="string",
+        enum=["allow", "deny"], enum_labels=["Allow", "Deny"])
+    adapter = _Waiting(approval=request)
+
+    assert _pending(adapter).data == request.id          # unchanged without it
+    assert _pending(adapter, details=True).data == {
+        "kind": "approval", "payload": project_approval(request)}
+
+
+def test_details_hands_back_a_pending_form_too():
+    """A suspended callable's form is the same thing as an approval — a session
+    blocked until a person answers — and a client that restores one but not the
+    other still strands people."""
+    from state_machine.conversation import FormStep
+
+    adapter = _Waiting(step=FormStep("version", prompt="Which version?"))
+    answer = _pending(adapter, details=True).data
+
+    assert answer["kind"] == "form_field"
+    assert answer["payload"]["name"] == "packages"
+    assert answer["payload"]["field"]["name"] == "version"
+    assert answer["payload"]["collected"] == {"name": "requests"}
+    assert answer["payload"]["display"]["prompt"] == "Which version?"
+
+
+def test_a_pending_form_stays_invisible_without_details():
+    """This Request has only ever spoken about approvals. Widening what it says
+    by default would change what an existing frontend believes it is holding —
+    the REPL and Telegram both read a falsy answer as "nothing to answer"."""
+    from state_machine.conversation import FormStep
+
+    adapter = _Waiting(step=FormStep("version", prompt="Which version?"))
+
+    assert _pending(adapter).data is None
+
+
+def test_details_answers_none_when_nothing_is_waiting():
+    assert _pending(_Waiting(), details=True).data is None
+
+
 def test_a_session_reports_its_phase(box, tmp_path):
     """A frontend needs the phase to know whether the state machine is already
     collecting an answer — if it is, interpreting the line too would consume

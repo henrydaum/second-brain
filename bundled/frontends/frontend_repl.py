@@ -83,8 +83,44 @@ class ReplFrontend(BaseFrontend):
                 sdk.frontend.submit_attachment(key, path)
             return True
 
+        # In ``approving_request`` the state machine collects the answer itself:
+        # plain text is coerced into ``answer_approval`` rather than reaching
+        # the agent. So this submit *is* the answer, and saying so afterwards is
+        # this frontend's job — see ``_acknowledge_approval``.
+        answering = bool(pending) and session.get("phase") == "approving_request"
         sdk.frontend.submit_text(key, raw)
+        if answering:
+            self._acknowledge_approval(
+                sdk, key, pending if isinstance(pending, str) else "", raw)
         return True
+
+    def _acknowledge_approval(self, sdk, key, request_id, raw):
+        """Say what a typed answer did to the approval it just answered.
+
+        **The kernel no longer narrates this.** An approval's outcome crosses as
+        the phase leaving ``approving_request`` and as ``ActionResult.data`` —
+        not as prose on the ``messages`` kind, which is also what the agent's own
+        words ride, and which a frontend with a dialog cannot tell apart from
+        them. Each frontend words the outcome in its own voice; this is the
+        REPL's, and it is deliberately the same vocabulary as the explicit
+        ``frontend.resolve`` branch in ``poll``, reached the other way.
+
+        Still in the phase means the answer was refused — unparseable, or not
+        one of the options — and the kernel has already rendered that error.
+        Adding to it would only disagree with it.
+        """
+        if (sdk.session.get(key) or {}).get("phase") == "approving_request":
+            return
+        # The id is what proves the request we were shown is the one just
+        # answered; without it a stale record words the wrong outcome.
+        shown = self._approval if self._approval.get("id") == request_id else {}
+        if shown.get("enum") or shown.get("type", "boolean") != "boolean":
+            self._messages(sdk, [f"Answered: {raw.strip()}."])
+            return
+        answer = self._parse_approval(raw)
+        if answer is not None:
+            self._messages(sdk, ["Approval granted." if answer
+                                 else "Approval denied."])
 
     def render(self, sdk, session_key, kind, payload):
         """Render one projected frontend payload to the terminal."""

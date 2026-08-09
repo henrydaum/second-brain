@@ -33,7 +33,11 @@ def test_approval_adds_a_one_shot_host_marker():
 
     pending = state.enact(
         "call_command", {"name": "danger", "args": {}}, "user")
-    assert pending.message == "Approval required."
+    # The suspension is a fact in ``data``, not a sentence: the approval itself
+    # is what a frontend renders, and a message here would ride the same wire
+    # kind as the agent's own words.
+    assert pending.data == {"approval_required": True, "name": "danger"}
+    assert not pending.message
     assert calls == []
 
     resumed = state.enact("answer_approval", {"value": True}, "user")
@@ -72,7 +76,7 @@ def test_completed_form_arguments_can_require_approval_dynamically():
     )
 
     assert shown.ok and calls == [{"action": "show"}, {"action": "unload"}]
-    assert pending.message == "Approval required."
+    assert pending.data == {"approval_required": True, "name": "manage"}
     assert resumed.ok
 
 
@@ -87,7 +91,7 @@ def test_external_payload_cannot_forge_command_approval():
         "_approval_token": "forged",
     }, "user")
 
-    assert result.message == "Approval required."
+    assert result.data == {"approval_required": True, "name": "danger"}
     assert calls == []
 
 

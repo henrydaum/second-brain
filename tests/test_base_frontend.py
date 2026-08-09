@@ -173,7 +173,7 @@ class _ApprovalFrontend(BaseFrontend):
 def test_result_approval_gets_a_stable_registered_request_id():
     frontend = _ApprovalFrontend()
 
-    frontend._render_result("s", RuntimeResult(messages=["Approval required."]))
+    frontend._render_result("s", RuntimeResult())
     frontend._render_result("s", RuntimeResult())
 
     request_id = frontend.session.cs.frame.data["request_id"]
@@ -181,6 +181,11 @@ def test_result_approval_gets_a_stable_registered_request_id():
     assert frontend.is_approval_pending("s", request_id)
     assert frontend._pending_approval_order["s"] == [request_id]
     assert [req.id for req in frontend.approvals] == [request_id, request_id]
+    # A suspended callable carries no prose. It used to say "Approval required."
+    # on the same wire kind the agent's own words ride, which a frontend with a
+    # dialog could not tell apart from them and drew into the chat beside the
+    # dialog that already said so.
+    assert frontend.messages == []
 
 
 def test_invalid_typed_approval_keeps_the_request_pending():

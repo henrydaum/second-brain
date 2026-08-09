@@ -380,7 +380,15 @@ class _CallableAction(Action):
         }))
         self.cs.set_priority(approver)
         event = self.cs.event("approval_requested", self.actor_id, name=spec.name, approver=approver, payload=payload)
-        return ActionResult(True, self.action_type, "Approval required.", events=[event])
+        # **No message.** The approval itself is the notification: every frontend
+        # is handed the request through ``render_approval_request``, which is the
+        # primitive. A sentence here would ride the ``messages`` kind — the same
+        # one the agent's own words use — so a frontend with a dialog could not
+        # tell the two apart and printed "Approval required." into the chat
+        # beside the dialog that already said so. What happened is in ``data``;
+        # how to say it is the frontend's to decide.
+        return ActionResult(True, self.action_type, events=[event],
+                            data={"approval_required": True, "name": spec.name})
 
     def _run(
         self,
@@ -572,7 +580,11 @@ class AnswerApproval(Action):
         if pending and frame.data.get("type", "boolean") == "boolean":
             if not value:
                 self.cs.reset_phase()
-                return ActionResult(True, self.action_type, "Denied.", events=[event], data={"approved": False, "value": False})
+                # No message, for the reason given in ``_CallableAction._approval``:
+                # the outcome is in ``data`` and in the ``approval_answered``
+                # event, and how to acknowledge a refusal — closing a dialog,
+                # editing a chat bubble, printing a line — is the frontend's call.
+                return ActionResult(True, self.action_type, events=[event], data={"approved": False, "value": False})
             content = dict(pending["content"])
             token = frame.data.get("approval_token")
             self.cs.cache["_approved_callable_token"] = token
@@ -583,9 +595,10 @@ class AnswerApproval(Action):
             result.events.insert(0, event)
             return result
 
-        # Free-form typed input: just return the value.
+        # Free-form typed input: just return the value. No message, for the
+        # reason given in ``_CallableAction._approval``.
         self.cs.reset_phase()
-        return ActionResult(True, self.action_type, "Received.", events=[event], data={"value": value, "approved": bool(value)})
+        return ActionResult(True, self.action_type, events=[event], data={"value": value, "approved": bool(value)})
 
     def _coerce(self, frame) -> Any:
         """Coerce raw content into the requested type using FormStep semantics."""

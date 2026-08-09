@@ -154,6 +154,19 @@ answered**, so a client that ignores this kind will appear to hang.
 Answer the **value**, show the **label** — putting internal spellings on a
 person's buttons is the failure this pairing exists to prevent.
 
+**This frame is the whole notification.** The approval lifecycle sends no
+`messages` frame — not when a question is raised, not when it is answered or
+refused. It used to, and the prose rode the same kind the agent's own words ride,
+so a client with a dialog could not tell them apart and drew "Approval required."
+into the chat beside the dialog that already said so. Whatever a person should
+read about an approval is the client's to write.
+
+**This kind is not only about permission.** `runtime.request_input` backs all of
+it — a sandbox permission gate, `ui.ask`, a tool asking the person a question —
+so `type` may be any of `boolean`, `string`, `integer`, `number`, `array` or
+`object`, with or without an `enum`. A client that renders this as a permission
+prompt will mislabel an ordinary question as a permission grant.
+
 ```
 POST /sdk/frontend.resolve?thread=main
 {"value": true, "request_id": "<id>"}
@@ -162,6 +175,35 @@ POST /sdk/frontend.resolve?thread=main
 Answers `false` if there was nothing left to answer (already resolved
 elsewhere, or timed out — dialogs expire after 300s). Treat that as "the
 dialog is stale", not as an error.
+
+##### Getting back to one after a reload
+
+A render is an event, and events are not re-sent on demand. A client that was not
+connected when the question was asked — a browser that reloaded, a transport that
+dropped — has one route back to it:
+
+```
+POST /sdk/frontend.pending?thread=main
+{"details": true}
+
+→ {"kind": "approval",   "payload": {id, title, body, type, enum, …}}
+→ {"kind": "form_field", "payload": {name, field, collected, display}}
+→ null
+```
+
+The payloads are the same projections the two renders make, so what comes back
+draws the real dialog rather than a reconstruction of one. Both kinds are here
+because they are one thing — a session blocked until a person answers — and a
+client that restores one but not the other still strands people. Approvals are
+reported first, because they nest: a form step can raise one, and the inner
+question is the one to answer.
+
+**Ask on every reconnect, not once at boot.** The 500-frame replay usually
+re-delivers a live `approval`, but it is a race against your own startup reads,
+and a kernel restart empties the buffer entirely. Asking again is also the only
+way a client learns a dialog went away — there is no "withdrawn" frame, so a
+`null` answer while you are showing one means it timed out or was answered
+somewhere else, and the dialog should close.
 
 #### `form_field` — `dict`
 
@@ -286,7 +328,7 @@ catalogues all of them with their policy inputs. The useful subset:
 | `frontend.submit` | `input_kind: "attachment"`, `path`, `file_name`, `caption`, `ingest` |
 | `frontend.resolve` | `value`, `request_id` |
 | `frontend.cancel` | — stop the current turn |
-| `frontend.pending` | — the id of the approval still waiting, or `null` |
+| `frontend.pending` | — the id of the approval still waiting, or `null`. With `details: true`, the question itself as `{kind, payload}` — approval **or** form step — which is how a reconnecting client gets back to one |
 
 **Introspection**
 
@@ -334,8 +376,11 @@ first.
    through the same call; the state machine works out which it was.
 4. Add `form_field` when you want `/config`, `/packages`, `/llm` and the rest
    to be usable — they are all one generic renderer.
-5. Build the rest of the UI from `conv.list`, `command.list`, `session.get`.
-6. Render `messages` as GitHub markdown.
+5. Call `frontend.pending {details: true}` on every reconnect, and act on `null`
+   as well as on an answer. Without this, an unanswered question does not
+   survive a page reload and a stale dialog never closes.
+6. Build the rest of the UI from `conv.list`, `command.list`, `session.get`.
+7. Render `messages` as GitHub markdown.
 
 ### Things that will bite
 
@@ -347,3 +392,8 @@ first.
 - **Paths are host paths.** `attachments` are not URLs.
 - **The replay buffer is 500 frames.** Long disconnects lose the middle.
 - **A POST can block on a human.** That is the design, not a hang.
+- **Renders are events, not state.** Nothing is re-sent because you asked; a
+  question you were not connected for is reachable only through
+  `frontend.pending {details: true}`.
+- **`approval` is not only permission.** The same kind carries any question a
+  tool asks, so do not word the dialog as a permission grant.

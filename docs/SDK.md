@@ -961,7 +961,10 @@ sdk.frontend.submit_action(session_key, action_type, payload=None)
 sdk.frontend.cancel(session_key)
 sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
 sdk.frontend.attended(session_key, present=True)
-sdk.frontend.pending_approval(session_key)      # an id, or None
+sdk.frontend.pending_approval(session_key, details=False)   # an id, or None
+                                                # details=True: the question,
+                                                # {"kind": "approval"|"form_field",
+                                                #  "payload": {...}}, or None
 sdk.frontend.resolve(session_key, value, request_id="")
 ```
 
@@ -1057,6 +1060,19 @@ stops existing: another frontend can answer it, or it can time out. Call
 check `sdk.session.get(key)["phase"]` too: when the state machine is already
 collecting the answer itself, interpreting the line as well consumes one
 keystroke twice.
+
+**And say what an answer did — the kernel no longer does.** An approval's
+outcome crosses as the phase leaving `approving_request` and as
+`ActionResult.data`, not as prose. It used to be a sentence on the `messages`
+kind, which is what the agent's own words ride, so a frontend that draws its own
+dialog could not tell them apart and printed "Approval required." into the chat
+beside the dialog that already said so. Word it however your transport should.
+
+**A render is an event, not state.** Nothing is re-sent because you asked. A
+transport that can reconnect — a browser, a socket that dropped — needs
+`pending_approval(key, details=True)` to get back to a question it was never
+handed, and it covers a suspended form as well as an approval, because both are
+"this session is blocked until a person answers".
 
 ### The console
 

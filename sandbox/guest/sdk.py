@@ -977,16 +977,24 @@ class _Frontend(_Namespace):
         return self._ask(FRONTEND_ATTEND, token=self._token(),
                          session_key=session_key, present=bool(present))
 
-    def pending_approval(self, session_key: str):
-        """The id of the approval this session is waiting on, or None.
+    def pending_approval(self, session_key: str, details: bool = False):
+        """What input this session is waiting on, or None.
 
         Ask rather than remember. You are told an approval exists — you were
         handed one to render — but not when it stops existing: another frontend
         can answer it, or it can time out. Acting on a stale record means
         swallowing the next thing a person types as a yes or no.
+
+        Plain, this is the approval's *id*, which is all it takes to answer one.
+        With ``details`` it is the question itself, tagged with the render kind
+        that carried it — ``{"kind": "approval"|"form_field", "payload": {...}}``
+        — or None. Renders are events and are not re-sent, so ``details`` is how
+        a frontend that reconnected gets back to a question it never saw: the
+        payloads are the same ones the render made, so the dialog it draws is
+        the real one rather than a reconstruction.
         """
         return self._ask(FRONTEND_PENDING, token=self._token(),
-                         session_key=session_key)
+                         session_key=session_key, details=bool(details))
 
     def resolve(self, session_key: str, value, request_id: str = ""):
         """Answer the approval a ``render`` of kind ``approval`` showed.

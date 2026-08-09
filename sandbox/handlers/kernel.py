@@ -2618,19 +2618,95 @@ def _frontend_pending(ctx, args: dict) -> Result:
     handed one to render — but not when it stops existing: another frontend can
     answer it, or it can time out. A frontend acting on a stale record would
     swallow the next thing a person typed as a yes/no.
+
+    With ``details``, the *question* rather than its id, tagged with the render
+    kind that would have carried it::
+
+        {"kind": "approval",   "payload": {id, title, body, type, enum, …}}
+        {"kind": "form_field", "payload": {name, field, collected, display}}
+        None
+
+    **A render is an event, and events are not re-sent on demand.** A frontend
+    that was not connected when the question was asked — a browser that
+    reloaded, a transport that dropped — cannot get back to it any other way,
+    and an id alone only buys the ability to answer a question nobody can read.
+    So this hands back the same projections the two renders made, and a
+    reconnecting client shows the real dialog instead of a reconstruction of one.
+
+    Both kinds are here because they are one thing: ``runtime.request_input``
+    and a suspended callable's form are both "this session is blocked until a
+    person answers", and a client that restores one and not the other still
+    strands people. Approvals are asked for first because they nest — a form
+    step can raise one, and the inner question is the one to answer.
     """
     adapter, refusal = _at_desk(args)
     if refusal is not None:
         return refusal
 
     session_key = str(args.get("session_key") or "")
-    if not adapter.has_pending_approval(session_key):
-        return Result(data=None)
-    order = getattr(adapter, "_pending_approval_order", None) or {}
-    waiting = list(order.get(session_key) or [])
-    # The id is enough to answer and only enough to answer — the same
-    # projection the ``approval`` render makes.
-    return Result(data=waiting[0] if waiting else True)
+    detailed = bool(args.get("details"))
+
+    if adapter.has_pending_approval(session_key):
+        order = getattr(adapter, "_pending_approval_order", None) or {}
+        waiting = list(order.get(session_key) or [])
+        if not detailed:
+            # The id is enough to answer and only enough to answer — the same
+            # projection the ``approval`` render makes.
+            return Result(data=waiting[0] if waiting else True)
+        if (request := _pending_approval(adapter, session_key, waiting)) is None:
+            return Result(data=None)
+        from ..frontends import project_approval
+        return Result(data={"kind": "approval",
+                            "payload": project_approval(request)})
+
+    # Without ``details`` this Request has only ever spoken about approvals,
+    # and answering None for a session sitting on a form is what its callers
+    # already expect. Widening that silently would change what an existing
+    # frontend believes it is holding.
+    return Result(data=_pending_form(adapter, session_key) if detailed else None)
+
+
+def _pending_approval(adapter, session_key: str, waiting: list):
+    """The live request a ``details`` read should project, or None.
+
+    The *registered* object rather than a rebuild from the phase frame: it is
+    the one ``resolve`` will answer, so projecting anything else risks handing
+    back a question that does not match the id travelling with it. Order first,
+    since that is the queue ``resolve_next_approval`` works down; the unordered
+    fallback exists for the same reason the id branch above answers ``True``.
+    """
+    registered = (getattr(adapter, "_pending_approvals", None) or {}).get(session_key) or {}
+    for request_id in waiting:
+        request = registered.get(request_id)
+        if request is not None and not getattr(request, "is_resolved", False):
+            return request
+    for request in registered.values():
+        if not getattr(request, "is_resolved", False):
+            return request
+    return None
+
+
+def _pending_form(adapter, session_key: str):
+    """The form step a session is sitting on, drawn as ``render_form_field`` drew it.
+
+    Built through ``decorate_form`` rather than read off the phase frame, so
+    the ``display`` block a client renders is the same one the live path
+    produces — a second spelling of it would drift, and the drift would only
+    show up after a reload, which is the one moment nobody is watching for it.
+    """
+    runtime = getattr(adapter, "runtime", None)
+    if runtime is None:
+        return None
+    try:
+        from runtime.dispatch import decorate_form
+        from runtime.session import RuntimeResult
+
+        out = RuntimeResult()
+        decorate_form(runtime.get_session(session_key), out)
+    except Exception:
+        logger.exception("frontend_pending could not read the pending form")
+        return None
+    return {"kind": "form_field", "payload": dict(out.form)} if out.form else None
 
 
 #: Requests ``frontend.act`` will not carry. ``frontend.act``/``collect`` would
