@@ -568,21 +568,40 @@ def test_config_moves_the_port_without_editing_the_plugin(tmp_path):
     path = tmp_path / "frontend_web.py"
     path.write_text(SERVING_FRONTEND, encoding="utf-8")
     module = adapt(path)
+
+    # Naming a port means racing for it. The probe takes a free one and gives
+    # it straight back, so the number is real but unheld, and between the give
+    # back and the claim anybody may take it — which under ``-n auto`` is
+    # nineteen other workers binding ephemeral ports out of the same range.
+    # A lost race is not this test's subject: ``SERVER.start`` logs the OSError
+    # and returns False, leaving ``port`` at 0, so it is distinguishable from
+    # the failure that *is* the subject — a port that came up somewhere other
+    # than where config said. Retry the race; assert the claim.
     made = module.SandboxedWeb()
-    # A free port, taken and given back, so the number is real but unheld.
-    probe = socket.socket()
-    probe.bind(("127.0.0.1", 0))
-    chosen = probe.getsockname()[1]
-    probe.close()
-    made.bind(None, None, {"web_port": chosen})
-    thread = threading.Thread(target=made.start, daemon=True)
-    thread.start()
-    try:
+
+    def claim():
+        """Take a free port, give it back, and try to come up on it again."""
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        chosen = probe.getsockname()[1]
+        probe.close()
+        made.bind(None, None, {"web_port": chosen})
+        threading.Thread(target=made.start, daemon=True).start()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not SERVER.port:
             time.sleep(0.01)
-        # The declaration says 0 (ephemeral); config said otherwise.
-        assert SERVER.port == chosen
+        return chosen
+
+    try:
+        for remaining in reversed(range(5)):
+            chosen = claim()
+            if SERVER.port:
+                # The declaration says 0 (ephemeral); config said otherwise.
+                assert SERVER.port == chosen
+                break
+            made.stop()
+            SERVER.stop()
+            assert remaining, f"never won a free port to claim (last: {chosen})"
     finally:
         made.stop()
         SERVER.stop()

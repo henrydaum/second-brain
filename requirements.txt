@@ -12,4 +12,10 @@ cron-descriptor
 croniter
 
 # --- Pytest ---
+#
+# xdist is not optional tooling: `pytest.ini` runs `-n auto` by default,
+# because the suite is ~2200 tests whose cost is real subprocess boxes and
+# deliberate timeout waits. Serial it is 74s, parallel it is 16s. Pass `-n0`
+# to turn it off for a debugging run.
 pytest
+pytest-xdist
