@@ -551,7 +551,7 @@ class TelegramFrontend(BaseFrontend):
         """
         if (sdk.session.get(key) or {}).get("phase") == "approving_request":
             return False
-        request_id = sdk.frontend.pending_approval(key)
+        request_id = sdk.frontend.pending_input(key)
         if not request_id:
             return False
         request = self._approvals.get(key) or {}

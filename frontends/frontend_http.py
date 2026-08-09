@@ -19,8 +19,9 @@ The outbound half
 --------------------------------------------------------------------------
 
 The kernel calls ``render(session_key, kind, payload)`` on a frontend. There
-are nine kinds (``messages``, ``attachments``, ``form_field``, ``approval``,
-``buttons``, ``error``, ``typing``, ``tool_status``, ``stream_delta``) and each
+are ten kinds (``messages``, ``attachments``, ``form_field``, ``approval``,
+``approval_settled``, ``buttons``, ``error``, ``typing``, ``tool_status``,
+``stream_delta``) and each
 already crosses to the guest as plain JSON-safe data — ``approval`` in
 particular arrives already projected to id/title/body/type/enum/enum_labels/
 default, with the kernel's live objects stripped.
@@ -29,7 +30,7 @@ So this frontend does no mapping at all. One render, one SSE frame::
 
     data: {"kind": "stream_delta", "session_key": "http:main", "payload": {…}}
 
-A client that can read those nine can do everything the REPL can.
+A client that can read those ten can do everything the REPL can.
 
 **The stream is the attendance signal.** Opening it declares that somebody is
 watching (``sdk.frontend.attended``); a push that comes back False means the
@@ -346,7 +347,7 @@ class HTTP(BaseFrontend):
     def render(self, sdk, session_key, kind, payload):
         """One render, one frame. No translation, on purpose.
 
-        The nine kinds are the kernel's own vocabulary and they are already
+        The ten kinds are the kernel's own vocabulary and they are already
         JSON-safe by the time they reach a guest, so a client sees precisely
         what a native frontend would be handed. Anything that wants a different
         shape can build it; nothing has to un-build ours first.
