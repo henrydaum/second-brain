@@ -76,10 +76,15 @@ the only thing that reconnects on its own.
 The kernel binds loopback only; expose it with a tunnel. Set
 ``http_allowed_origins`` when the app is served from anywhere but this same
 port, or the browser refuses the preflight and tells you very little about why.
-``http_static_dir`` serves a built app from disk.
+``http_static_dir`` serves a built app from disk, and ``GET /files?path=`` one
+file from anywhere the kernel will allow — the transport a client needs to put
+a host file in an ``<img>``, a ``<video>`` or an ``<audio>``, since a Request
+answers base64 inside JSON and those want a URL.
 """
 
 import json
+import mimetypes
+from urllib.parse import unquote
 
 from guest.bases import BaseFrontend
 
@@ -92,7 +97,56 @@ _TYPES = {"html": "text/html; charset=utf-8", "js": "text/javascript",
           "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
           "gif": "image/gif", "webp": "image/webp", "ico": "image/x-icon",
           "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf",
-          "map": "application/json", "txt": "text/plain; charset=utf-8"}
+          "map": "application/json", "txt": "text/plain; charset=utf-8",
+          # Types a built app never contains but a *host file* often is. These
+          # are what ``GET /files`` exists for: name the type and the browser
+          # renders it natively, which is the whole reason not to hand a client
+          # base64 and make it assemble a Blob.
+          "pdf": "application/pdf", "md": "text/plain; charset=utf-8",
+          "csv": "text/csv; charset=utf-8", "bmp": "image/bmp",
+          "avif": "image/avif", "tif": "image/tiff", "tiff": "image/tiff",
+          "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+          "mkv": "video/x-matroska", "mp3": "audio/mpeg", "wav": "audio/wav",
+          "ogg": "audio/ogg", "oga": "audio/ogg", "m4a": "audio/mp4",
+          "flac": "audio/flac", "opus": "audio/opus",
+          # The rest of what the kernel's modality map names. `mimetypes` reads
+          # the *host's* mime database, so what it knows differs between a dev
+          # box and the machine this actually runs on; these are stated so the
+          # answer is the same on both. An element handed
+          # `application/octet-stream` refuses to play whatever the bytes are.
+          "heic": "image/heic", "heif": "image/heif", "avi": "video/x-msvideo",
+          "aac": "audio/aac", "wma": "audio/x-ms-wma"}
+
+# The most a single ``fs.read_bytes`` answer can carry, mirroring the kernel's
+# ``MAX_READ_BINARY`` — one wire message less a megabyte of headroom, times
+# three quarters for base64. Windowed reads are what let a 200 MB video be
+# served at all, and what makes a Range request cheap: a seek asks for the
+# bytes it lands on rather than everything before them.
+_WINDOW = (16 * 1024 * 1024 - 1024 * 1024) * 3 // 4
+
+
+def _content_type(path: str) -> str:
+    """What to label a host file, so the browser decodes it natively.
+
+    ``_TYPES`` first, because :mod:`mimetypes` reads the *host's* database and
+    therefore answers differently on different machines — a built app's assets
+    and anything the kernel can name a modality for must be labelled the same
+    way everywhere. ``mimetypes`` then covers the long tail, which is what
+    keeps this table from having to grow a row per format.
+
+    Two tables answering one question is how they drift, so the fallback is a
+    library rather than more rows here — and
+    ``test_every_native_modality_gets_a_playable_type`` checks the pair against
+    ``parsing._NATIVE_DEFAULTS`` so a modality the kernel recognises can never
+    arrive unlabelled.
+
+    Bytes are served for **every** extension either way; this only decides the
+    label, and an unknown one is an honest download rather than a guess.
+    """
+    guessed = _TYPES.get(path.rpartition(".")[2].lower())
+    if guessed:
+        return guessed
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 _JSON = {"Content-Type": "application/json"}
 
@@ -155,7 +209,7 @@ class HTTP(BaseFrontend):
     requests = [
         "http.drain", "http.respond", "http.push", "http.close",
         "frontend.act", "frontend.collect", "frontend.attend",
-        "secret.reveal", "config.read", "fs.read_bytes",
+        "secret.reveal", "config.read", "fs.read_bytes", "fs.stat",
     ]
 
     agent_prompt = (
@@ -288,13 +342,16 @@ class HTTP(BaseFrontend):
             return sdk.http.respond(request["id"], status=204,
                                     headers=self._cors())
 
-        if not self._authorized(request, stream=(path == "/events")):
+        if not self._authorized(request,
+                                query_token=path in ("/events", "/files")):
             return self._reply(sdk, request, 401, {"error": "unauthorized"})
 
         if path == "/events" and method == "GET":
             return self._open_stream(sdk, request)
         if path.startswith("/sdk/") and method == "POST":
             return self._sdk(sdk, request, path[len("/sdk/"):])
+        if path == "/files" and method in ("GET", "HEAD"):
+            return self._host_file(sdk, request, head=(method == "HEAD"))
         if method == "GET" and self._static:
             return self._file(sdk, request, path)
         return self._reply(sdk, request, 404, {"error": "no such route"})
@@ -513,17 +570,151 @@ class HTTP(BaseFrontend):
         return sdk.http.respond(request["id"], status=200, headers=headers,
                                 body=data)
 
+    # ──────────────────────────────────────────────────────────────────
+    # Host files.
+    # ──────────────────────────────────────────────────────────────────
+
+    def _host_file(self, sdk, request, head: bool = False):
+        """Serve one file from the host by absolute path.
+
+        The point is the *transport*, not new authority. A client can already
+        read any file through ``POST /sdk/fs.read_bytes``; what it cannot do is
+        hand the result to an ``<img>``, a ``<video>`` or an ``<audio>``
+        element, because a Request answers base64 inside JSON and those want a
+        URL. Assembling a Blob works for a picture and is hopeless for media:
+        it buffers the whole file before the first frame and cannot seek.
+
+        So this reads through exactly the same ``fs.read_bytes`` — same
+        classification, same ledger row, a refusal still refused — and spends
+        the answer on a real HTTP body with a real ``Content-Type``. What that
+        buys is native decoding, browser caching, and Range requests.
+
+        **Every read is still policy's to allow.** ``fs.read`` is safe except
+        for protected files, so the kernel already refuses Second Brain's own
+        source and data directories; this route inherits that and adds no
+        exemption of its own.
+        """
+        path = unquote(self._query(request, "path"))
+        if not path:
+            return self._reply(sdk, request, 400,
+                               {"error": "GET /files requires ?path="})
+
+        info = self._stat(sdk, path)
+        if info is None:
+            return self._reply(sdk, request, 404, {"error": "not found"})
+        if not info.get("is_file"):
+            return self._reply(sdk, request, 400, {"error": "not a file"})
+        size = int(info.get("size") or 0)
+
+        headers = dict(self._cors())
+        headers["Content-Type"] = _content_type(path)
+        # Advertised unconditionally: a media element decides whether to seek
+        # by looking for this before it asks for anything.
+        headers["Accept-Ranges"] = "bytes"
+
+        window = self._wanted(request, size)
+        if window is None:
+            headers["Content-Range"] = f"bytes */{size}"
+            return sdk.http.respond(request["id"], status=416,
+                                    headers=headers, body=b"")
+        start, end = window
+        # Clamped whether or not a Range was asked for, because one response
+        # body has to cross the wire in one message — and if this frontend is
+        # ever subprocessed, that message is capped. So a large file always
+        # comes back as 206 and the client asks for the rest; a media element
+        # does that by itself, which is the case this route exists for.
+        end = min(end, start + _WINDOW - 1)
+        partial = (start, end) != (0, size - 1) and size > 0
+
+        if head:
+            headers["Content-Length"] = str(size)
+            return sdk.http.respond(request["id"], status=200,
+                                    headers=headers, body=b"")
+
+        data = self._read_span(sdk, path, start, end - start + 1)
+        if data is None:
+            return self._reply(sdk, request, 403, {"error": "not readable"})
+
+        headers["Content-Length"] = str(len(data))
+        if partial:
+            headers["Content-Range"] = (
+                f"bytes {start}-{start + len(data) - 1}/{size}")
+        return sdk.http.respond(request["id"], status=206 if partial else 200,
+                                headers=headers, body=data)
+
     @staticmethod
-    def _read(sdk, path: str):
+    def _wanted(request, size: int):
+        """``(start, end)`` inclusive for this request, or ``None`` if
+        unsatisfiable.
+
+        Only the single-range form, which is the only one a media element
+        sends. A multipart range would need a different body shape for a case
+        that does not arise, so an unreadable header is treated as no header
+        at all — serving the whole file is always a valid answer to a Range
+        request, where guessing at one is not.
+        """
+        raw = str((request.get("headers") or {}).get("range") or "").strip()
+        whole = (0, max(0, size - 1))
+        if not raw.startswith("bytes=") or "," in raw:
+            return whole
+        first, _, last = raw[len("bytes="):].partition("-")
+        try:
+            if not first:                     # bytes=-500: the final 500
+                length = int(last)
+                if length <= 0:
+                    return whole
+                return (max(0, size - length), size - 1)
+            start = int(first)
+            end = int(last) if last else size - 1
+        except ValueError:
+            return whole
+        if start >= size or start > end:
+            return None
+        return (start, min(end, size - 1))
+
+    def _read_span(self, sdk, path: str, offset: int, length: int):
+        """``length`` bytes from ``offset``, or None if the file will not open.
+
+        One ``fs.read_bytes`` answer is capped, so a long span arrives as
+        several and is joined here. A short read means end of file, which is
+        the documented way to stop without having to trust the size first —
+        so a file being written underneath this returns what exists rather
+        than hanging or lying about the length.
+        """
+        chunks, taken = [], 0
+        while taken < length:
+            piece = self._read(sdk, path, offset + taken,
+                               min(_WINDOW, length - taken))
+            if piece is None:
+                return None if not chunks else b"".join(chunks)
+            if not piece:
+                break
+            chunks.append(piece)
+            taken += len(piece)
+        return b"".join(chunks)
+
+    @staticmethod
+    def _stat(sdk, path: str):
+        """Metadata for one path, or None if it is missing or refused."""
+        try:
+            return sdk.fs.stat(path)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read(sdk, path: str, offset: int = 0, length: int = 0):
         """A file's bytes, or None if it is not there.
 
         Bytes rather than text for every asset, not just the obviously binary
         ones: a build's fonts and images would be mangled by a UTF-8 decode,
         and deciding per extension would be one more table to get wrong.
         ``http.respond`` takes bytes, so nothing has to decode at all.
+
+        ``offset``/``length`` are how a span longer than one answer is read;
+        the static path passes neither and is unchanged.
         """
         try:
-            return sdk.fs.read_bytes(path)
+            return sdk.fs.read_bytes(path, offset=offset, length=length)
         except Exception:
             return None
 
@@ -531,28 +722,39 @@ class HTTP(BaseFrontend):
     # Plumbing.
     # ──────────────────────────────────────────────────────────────────
 
-    def _authorized(self, request, stream: bool = False) -> bool:
+    def _authorized(self, request, query_token: bool = False) -> bool:
         """Whether this request carries the configured token.
 
         Checked on every route including the static one. A token checked on
         some paths is not a perimeter, and the app's own HTML is as much a
         thing worth not serving to strangers as the conversation is.
 
-        ``stream`` allows ``?token=`` as well, and only for ``/events``. The
-        browser's ``EventSource`` cannot send headers at all — that is the API,
-        not an oversight — and it is the only thing that gives automatic
-        reconnection with ``Last-Event-ID``, which is what makes a page refresh
-        resume rather than lose the turn it happened during. The alternative is
-        a hand-written ``fetch`` reader that reimplements both. Narrow rather
-        than general because a token in a URL can reach logs and history: any
-        other route wanting one should send the header.
+        ``query_token`` allows ``?token=`` as well, and the rule for granting
+        it is narrow and mechanical: **the browser issues the request itself
+        and cannot be given a header.** Two routes qualify and no others.
+
+        ``/events`` is one — ``EventSource`` cannot send headers at all, and it
+        is the only thing that gives automatic reconnection with
+        ``Last-Event-ID``, which is what makes a page refresh resume rather
+        than lose the turn it happened during.
+
+        ``/files`` is the other, for exactly the same reason one step over: an
+        ``<img>``, ``<video>`` or ``<audio>`` element fetches its own ``src``
+        and there is nowhere to put a header. Without this the route could only
+        be reached by ``fetch``, which means rebuilding a Blob — which is the
+        thing it exists to avoid, and which cannot seek.
+
+        A token in a URL can reach logs and history, so this stays a list of
+        two rather than a general option. Any route a *script* calls should
+        send the header.
         """
         if not self._token:
             return False
         header = str((request.get("headers") or {}).get("authorization") or "")
         if header.strip() == f"Bearer {self._token}":
             return True
-        return bool(stream) and self._query(request, "token") == self._token
+        return (bool(query_token)
+                and self._query(request, "token") == self._token)
 
     def _cors(self) -> dict:
         """Headers letting a browser on another origin talk to us.
