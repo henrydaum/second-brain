@@ -996,11 +996,11 @@ class _Sdk:
     def __init__(self, attended=False, setting=True):
         self._attended = attended
         self._setting = setting
-        self.emitted = []
+        #: Every ``session.push`` this tool made, as ``(message, kwargs)``.
+        self.pushed = []
         self.logs = []
         self.session = self._Session(self)
         self.config = self._Config(self)
-        self.events = self._Events(self)
 
     def log(self, message, level="info"):
         self.logs.append((level, message))
@@ -1014,6 +1014,9 @@ class _Sdk:
                 raise _Failed("no runtime")
             return {"key": "k", "attended": self._sdk._attended}
 
+        def push(self, message, key="", **kwargs):
+            self._sdk.pushed.append((message, kwargs))
+
     class _Config:
         def __init__(self, sdk):
             self._sdk = sdk
@@ -1022,13 +1025,6 @@ class _Sdk:
             if self._sdk._setting == "unreadable":
                 raise _Failed("no config")
             return self._sdk._setting
-
-    class _Events:
-        def __init__(self, sdk):
-            self._sdk = sdk
-
-        def emit(self, channel, payload=None):
-            self._sdk.emitted.append((channel, payload))
 
 
 def _memory():
@@ -1041,21 +1037,45 @@ def _memory():
     return _load_store_class(MEMORY, "Memory")()
 
 
-def test_a_background_write_is_announced_to_the_chat():
-    """The curator writes where nobody is looking; this is the only trace."""
+def test_a_background_write_is_announced_as_a_notification():
+    """The curator writes where nobody is looking; this is the only trace.
+
+    A *notification*, not a chat message. This used to emit
+    ``chat_message_pushed`` by literal channel name — reaching around
+    ``session.push`` to a bus channel the tool does not own, for the one thing
+    that channel offered and the Request did not: a ``source`` field. Nothing
+    read it, so the note arrived as an ordinary line of chat anyway.
+    """
     tool = _memory()
     sdk = _Sdk(attended=False)
 
     tool._notify(sdk, "create", "retry-failed-uploads")
 
-    assert len(sdk.emitted) == 1
-    channel, payload = sdk.emitted[0]
-    assert channel == "chat_message_pushed"
-    assert payload["message"] == "Memory created: retry-failed-uploads"
-    # No ``session_key``: the frontend reads that field to target one session
-    # and broadcasts to every live one without it. The write happened in a
-    # session with no person on it, so there is nothing to reply *to*.
-    assert "session_key" not in payload
+    assert len(sdk.pushed) == 1
+    message, kwargs = sdk.pushed[0]
+    assert message == "retry-failed-uploads"
+    assert kwargs["title"] == "Memory created"
+    assert kwargs["notify"] is True
+    # No ``key``: that targets one session, and the kernel broadcasts without
+    # it. The write happened in a session with no person on it, so there is
+    # nothing to reply *to* — the note goes wherever the user actually is.
+    assert not kwargs.get("key")
+
+
+def test_the_tool_does_not_state_its_own_source():
+    """Attribution is the kernel's to stamp, off the provenance chain.
+
+    The old emit passed ``"source": "memory"`` in the payload, which the new
+    design specifically does not allow: a plugin that can name its own source
+    can claim to be the plugin watcher. Pinned as a negative because the
+    failure is silent — a forged source looks exactly like a true one.
+    """
+    tool = _memory()
+    sdk = _Sdk(attended=False)
+
+    tool._notify(sdk, "create", "x")
+
+    assert "source" not in sdk.pushed[0][1]
 
 
 def test_every_action_has_its_own_word():
@@ -1064,7 +1084,7 @@ def test_every_action_has_its_own_word():
                              ("delete", "deleted")):
         sdk = _Sdk(attended=False)
         tool._notify(sdk, action, "x")
-        assert sdk.emitted[0][1]["message"] == f"Memory {expected}: x"
+        assert sdk.pushed[0][1]["title"] == f"Memory {expected}"
 
 
 def test_a_write_the_user_watched_is_not_announced():
@@ -1079,7 +1099,7 @@ def test_a_write_the_user_watched_is_not_announced():
 
     tool._notify(sdk, "create", "x")
 
-    assert sdk.emitted == []
+    assert sdk.pushed == []
 
 
 def test_the_setting_turns_it_off_and_defaults_on():
@@ -1087,11 +1107,11 @@ def test_the_setting_turns_it_off_and_defaults_on():
 
     off = _Sdk(attended=False, setting=False)
     tool._notify(off, "create", "x")
-    assert off.emitted == []
+    assert off.pushed == []
 
     unset = _Sdk(attended=False, setting=None)
     tool._notify(unset, "create", "x")
-    assert len(unset.emitted) == 1, "unset means default, and the default is on"
+    assert len(unset.pushed) == 1, "unset means default, and the default is on"
 
 
 def test_the_two_unreadable_cases_fail_in_opposite_directions():
@@ -1101,11 +1121,11 @@ def test_the_two_unreadable_cases_fail_in_opposite_directions():
 
     blind = _Sdk(attended="unreadable")
     tool._notify(blind, "create", "x")
-    assert blind.emitted == [], "not knowing where we are means staying quiet"
+    assert blind.pushed == [], "not knowing where we are means staying quiet"
 
     no_config = _Sdk(attended=False, setting="unreadable")
     tool._notify(no_config, "create", "x")
-    assert len(no_config.emitted) == 1, "the default is on"
+    assert len(no_config.pushed) == 1, "the default is on"
 
 
 def test_announcing_can_never_fail_the_write():
@@ -1113,7 +1133,7 @@ def test_announcing_can_never_fail_the_write():
     would report an error for something that fully succeeded."""
     tool = _memory()
     sdk = _Sdk(attended=False)
-    sdk.events.emit = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bus"))
+    sdk.session.push = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("bus"))
 
     tool._notify(sdk, "create", "x")     # must not raise
 
