@@ -1224,6 +1224,20 @@ def _plugin_list(ctx, args: dict) -> Result:
                     package_manager.removable_packages()
                     + package_manager.search_bundles(root)
                 )
+            elif source in ("info", "installed_info"):
+                # One package rather than a list. An argument on the listing
+                # Request rather than a Request of its own: it is the same
+                # question about the same catalogue, narrowed to one row, and
+                # the vocabulary is the last thing to grow.
+                name = args.get("name") or ""
+                if not name:
+                    return Result.failure(
+                        "plugin list source 'info' needs a name",
+                        code=ERROR_INVALID_ARGUMENT)
+                return Result(data=(
+                    package_manager.installed_package_info(name, root)
+                    if source == "installed_info"
+                    else package_manager.package_info(root, name)))
             else:
                 return Result.failure(
                     f"unknown plugin list source {source!r}")

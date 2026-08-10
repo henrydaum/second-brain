@@ -584,11 +584,18 @@ class _Plugins(_Namespace):
         category: str = "",
         role: str = "",
         details: bool = False,
+        name: str = "",
     ):
-        """List plugins, optionally narrowed by a kernel-defined role."""
+        """List plugins, optionally narrowed by a kernel-defined role.
+
+        ``source="info"`` (store) and ``source="installed_info"`` (the
+        installed tree) narrow all the way to one package named by ``name``,
+        answering with a single dict carrying its description and
+        dependencies rather than a list.
+        """
         return self._ask(
             PLUGIN_LIST, source=source, category=category or None,
-            role=role or None, details=details)
+            role=role or None, details=details, name=name or None)
 
     def describe(self, name: str):
         """Metadata for one plugin."""

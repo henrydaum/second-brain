@@ -37,6 +37,9 @@ TREE_ROOTS = {root.name for root in trees.ROOTS}
 EXTRA_FAMILIES = ("bundles",)
 
 DEPENDENCY_FIELDS = ("dependencies_files", "dependencies_pip")
+#: Read from the same AST pass, for the card `/packages` shows before you
+#: commit. Not dependencies — nothing installs differently for them.
+DESCRIPTIVE_FIELDS = ("name", "description")
 _PACKAGE_LOCK = threading.RLock()
 Progress = Callable[[str], None]
 
@@ -61,6 +64,11 @@ class DependencyMeta:
     path: str
     dependencies_files: tuple[str, ...] = ()
     dependencies_pip: tuple[str, ...] = ()
+    # What the file calls itself. Read from the same AST pass and never
+    # required: a package with no description is one the card describes by
+    # its stem, not one that refuses to install.
+    name: str = ""
+    description: str = ""
 
 
 @dataclass
@@ -123,9 +131,63 @@ def removable_packages() -> list[dict]:
 
 
 def package_info(root_dir: str | Path, target: str) -> dict:
+    store = GitStoreBackend(root_dir)
+    # A bundle is a manifest rather than a plugin file, so it answers from
+    # what it lists. It is also the thing a browsing user is most likely to
+    # click, which is why it is handled here rather than left to fail.
+    bundle = _resolve_bundle_target(store, target)
+    if bundle:
+        manifest = _read_bundle_manifest(store, bundle)
+        stem = PurePosixPath(bundle).stem
+        return {
+            "id": stem, "name": manifest.get("name") or stem,
+            "description": manifest.get("description", ""),
+            "path": bundle, "family": "bundles", "helper": False,
+            "installed": False,
+            "dependencies_files": list(manifest["files"]),
+            "dependencies_pip": [],
+        }
     rel = _resolve_store_target(root_dir, target)
-    meta = _meta_from_bytes(rel, GitStoreBackend(root_dir).get_tree_file_bytes(rel))
-    return {**_item(rel, installed=False), "dependencies_files": list(meta.dependencies_files), "dependencies_pip": list(meta.dependencies_pip)}
+    meta = _meta_from_bytes(rel, store.get_tree_file_bytes(rel))
+    item = _item(rel, installed=False)
+    return {
+        **item,
+        "name": meta.name or item["name"],
+        "description": meta.description,
+        "dependencies_files": list(meta.dependencies_files),
+        "dependencies_pip": list(meta.dependencies_pip),
+    }
+
+
+def installed_package_info(target: str, root_dir: str | Path | None = None) -> dict:
+    """The same card, read off the installed tree rather than the store.
+
+    Uninstall has to answer from what is on disk: the store copy may have
+    moved on, and the fact that matters — what else comes out with it — is a
+    property of the tree, not of the branch. ``also_removes`` is the
+    *backwards* dependency closure the uninstall plan already computes.
+    """
+    bundle = (_resolve_bundle_target(GitStoreBackend(root_dir), target)
+              if root_dir is not None else None)
+    if bundle:
+        plan = build_uninstall_plan(target, root_dir=root_dir)
+        info = package_info(root_dir, target)
+        return {**info, "installed": True,
+                "also_removes": list(plan.remove_files),
+                "removes_pip": list(plan.pip_packages)}
+    rel = _resolve_installed_target(target)
+    meta = _meta_from_installed(rel)
+    item = _item(rel, installed=True)
+    plan = build_uninstall_plan(target, root_dir=root_dir)
+    return {
+        **item,
+        "name": meta.name or item["name"],
+        "description": meta.description,
+        "dependencies_files": list(meta.dependencies_files),
+        "dependencies_pip": list(meta.dependencies_pip),
+        "also_removes": [other for other in plan.remove_files if other != rel],
+        "removes_pip": list(plan.pip_packages),
+    }
 
 
 def install_package(root_dir: str | Path, target: str, context=None, *, requested: bool = True, progress: Progress | None = None) -> PackageActionResult:
@@ -413,6 +475,7 @@ def read_dependency_meta(path: str | Path, content: bytes | str) -> DependencyMe
     except SyntaxError as e:
         raise PackageError(f"Cannot parse dependency metadata from {rel}: {e}") from e
     found = {name: [] for name in DEPENDENCY_FIELDS}
+    described = {name: "" for name in DESCRIPTIVE_FIELDS}
 
     def collect(assign):
         targets = []
@@ -426,6 +489,8 @@ def read_dependency_meta(path: str | Path, content: bytes | str) -> DependencyMe
         for name in targets:
             if name in found:
                 found[name].extend(_literal_str_list(value, name, rel))
+            elif name in described and not described[name]:
+                described[name] = _literal_str(value)
 
     for node in tree.body:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -434,7 +499,29 @@ def read_dependency_meta(path: str | Path, content: bytes | str) -> DependencyMe
             for item in node.body:
                 if isinstance(item, (ast.Assign, ast.AnnAssign)):
                     collect(item)
-    return DependencyMeta(rel, tuple(_validate_rel_path(p) for p in found["dependencies_files"]), tuple(_unique(found["dependencies_pip"])))
+    return DependencyMeta(
+        rel,
+        tuple(_validate_rel_path(p) for p in found["dependencies_files"]),
+        tuple(_unique(found["dependencies_pip"])),
+        described["name"],
+        described["description"],
+    )
+
+
+def _literal_str(node) -> str:
+    """A literal string assignment, or "" for anything else.
+
+    Deliberately lenient where ``_literal_str_list`` raises: a dependency the
+    manager cannot read is a package it cannot install correctly, but a
+    description it cannot read is only a card with one line missing.
+    """
+    if node is None:
+        return ""
+    try:
+        value = ast.literal_eval(node)
+    except Exception:
+        return ""
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _literal_str_list(node, field: str, rel: str) -> list[str]:

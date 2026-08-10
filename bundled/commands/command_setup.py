@@ -105,8 +105,8 @@ TELEGRAM_USER_PROMPT = (
 
 PACKAGES_SECTION = (
     "Get more with /packages:\n"
-    "  /packages available        — browse the store by category\n"
-    "  /packages install <id>     — install a package or bundle\n"
+    "  /packages install          — browse by category and pick a package\n"
+    "  /packages install <id>     — install a package or bundle by name\n"
     f"  Next step: `{KNOWLEDGEBASE_BUNDLE}` — parsers, OCR, transcription, "
     "embeddings and the three search tools, so the agent can find things in "
     "your own files. Individual packages (gmail, google_drive, mcp, "
@@ -367,7 +367,7 @@ class SetupCommand(BaseCommand):
             "When you're ready:\n"
             f"  /packages install {ESSENTIALS_BUNDLE}      — the recommended baseline\n"
             f"  /packages install {KNOWLEDGEBASE_BUNDLE}   — then this, to index and search your files\n"
-            "  /packages available             — browse the store by category\n\n"
+            "  /packages install               — browse the store by category\n\n"
             "Then run /setup again to configure your LLM and Telegram."
         )
 

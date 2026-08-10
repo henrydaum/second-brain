@@ -73,10 +73,10 @@ The **essentials** bundle is the recommended first install: an LLM backend (Lite
 Browse and manage packages anytime:
 
 ```
-/packages                      # interactive: browse / install / uninstall
-/packages available tools      # list installable tools (or tasks/services/commands/frontends/bundles)
-/packages installed            # what you currently have
-/packages install <stem>       # install one file by stem, e.g. tool_web_search or parse_pdf
+/packages                      # interactive: pick install / uninstall / update
+/packages install              # then a category, then a package, then a card to confirm
+/packages install tools        # start at a category (tasks/services/commands/frontends/parsers/llm/bundles)
+/packages install <stem>       # or name it outright, e.g. tool_web_search or parse_pdf
 /packages uninstall <stem>     # remove it, plus dependencies nothing else still needs
 ```
 
