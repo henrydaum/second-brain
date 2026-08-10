@@ -200,11 +200,64 @@ def test_the_ledger_only_sweep_leaves_notifications_alone(db):
 
 # ── reading back ───────────────────────────────────────────────────────
 
+def test_every_persisted_producer_reaches_the_panel(db):
+    """The end-to-end read, driven by the *real* emitters.
+
+    The test that was missing, and its absence hid a bug that made three of
+    the four persisted sources unreachable. Everything below writes
+    ``user_id = NULL`` — none of these belong to a person — and a panel
+    filtering on ``user_id = ?`` returned exactly none of them. Nothing failed:
+    the rows were written, the read came back empty, and an empty panel looks
+    just like a system with nothing to say.
+
+    The earlier scoping test passed throughout, because it wrote its own rows
+    with an explicit ``user_id``. It proved the mechanism and never touched the
+    seam.
+    """
+    N.notify(title="Plugin registered", body="tool_x", source="plugin_watcher",
+             level="success")
+    N.announce_config_change({"keys": ["theme"], "scope": "core"},
+                             session_key="s")
+    N.emit_fallback_push(session_key="spawn_subagent:7", conversation_id=None,
+                         title="Nightly", final_text="Indexed 12 files.",
+                         db=db, user_id=1)
+
+    seen = {r["source"] for r in db.get_notifications(user_id=1)}
+    assert seen == {"plugin_watcher", "config", "session"}
+
+
 def test_reads_are_scoped_to_one_user(db):
+    """A row belonging to somebody stays theirs; a system row is everyone's."""
     N.notify(title="mine", body="b", source="s", user_id=1)
     N.notify(title="theirs", body="b", source="s", user_id=2)
+    N.notify(title="everyones", body="b", source="plugin_watcher")
 
-    assert [r["title"] for r in db.get_notifications(user_id=1)] == ["mine"]
+    assert {r["title"] for r in db.get_notifications(user_id=1)} == {
+        "mine", "everyones"}
+    assert {r["title"] for r in db.get_notifications(user_id=2)} == {
+        "theirs", "everyones"}
+
+
+def test_a_system_notification_can_be_dismissed(db):
+    """Shown to everyone, so settleable by anyone who was shown it.
+
+    Excluding NULL rows from the update left every plugin registration
+    permanently unread — drawn, clicked, and still there on the next load,
+    with the count honestly reporting that nothing changed.
+    """
+    nid = N.notify(title="Plugin registered", body="tool_x",
+                   source="plugin_watcher")
+
+    assert db.mark_notifications_read([nid], user_id=1) == 1
+    assert db.get_notifications(user_id=1, unread_only=True) == []
+
+
+def test_one_user_still_cannot_settle_anothers(db):
+    """The NULL widening must not have widened this too."""
+    nid = N.notify(title="mine", body="b", source="s", user_id=1)
+
+    assert db.mark_notifications_read([nid], user_id=2) == 0
+    assert len(db.get_notifications(user_id=1, unread_only=True)) == 1
 
 
 def test_since_id_is_the_incremental_read(db):

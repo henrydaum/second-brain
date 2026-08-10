@@ -1317,10 +1317,19 @@ class Database:
 		follows: ``idx_notifications_user`` makes the ``user_id`` + ``since_id``
 		pair an index seek, which is what a client reconnecting with rows up to
 		N actually asks for.
+
+		**A NULL ``user_id`` means the system, and everybody sees it.** Most
+		notifications belong to no user — a plugin registering, a setting
+		changing — and they already broadcast on the bus with no session to aim
+		at, so the stored form matches the delivered one. Filtering on equality
+		alone made every one of those rows unreachable: they were written, they
+		were never returned, and an empty panel is indistinguishable from a
+		quiet system.
 		"""
 		clauses, params = [], []
 		if user_id is not None:
-			clauses.append("user_id = ?"); params.append(int(user_id))
+			clauses.append("(user_id = ? OR user_id IS NULL)")
+			params.append(int(user_id))
 		if since_id is not None:
 			clauses.append("id > ?"); params.append(int(since_id))
 		if unread_only:
@@ -1342,6 +1351,12 @@ class Database:
 		another's — the handler passes it from the context rather than trusting
 		an argument.
 
+		System rows (NULL ``user_id``) are settleable by anyone, matching
+		``get_notifications``: they are shown to everyone, so anyone who was
+		shown one may dismiss it. Excluding them made every plugin
+		registration permanently unread — the row was drawn, clicked, and
+		stayed exactly where it was.
+
 		Already-read rows are excluded rather than restamped, so the count is
 		what actually changed and a repeated call is idempotent.
 		"""
@@ -1353,7 +1368,8 @@ class Database:
 		if before_id is not None:
 			clauses.append("id <= ?"); params.append(int(before_id))
 		if user_id is not None:
-			clauses.append("user_id = ?"); params.append(int(user_id))
+			clauses.append("(user_id = ? OR user_id IS NULL)")
+			params.append(int(user_id))
 		if not ids and before_id is None:
 			return 0  # refuse to settle the whole table by omission
 		with self.lock:

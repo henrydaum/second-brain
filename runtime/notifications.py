@@ -200,12 +200,18 @@ def emit_fallback_push(
     title: str,
     final_text: str,
     db,
+    user_id: int | None = None,
 ) -> None:
     """Notify with a background turn's final answer.
 
     The conversation's own reply, surfaced somewhere it can be seen. It is the
     agent speaking, but not into the chat the reader is looking at — which is
     what makes it a notification rather than conversation.
+
+    ``user_id`` is the one notification here that belongs to somebody: it is
+    the answer to a question that person's conversation asked, and in a
+    multi-user frontend it must not surface on anybody else's panel. Everything
+    else raised from this module is genuinely the system's and stays NULL.
     """
     text = (final_text or "").strip()
     if not text:
@@ -218,6 +224,7 @@ def emit_fallback_push(
         level="info",
         source_session_key=session_key,
         conversation_id=conversation_id,
+        user_id=user_id,
         db=db,
     )
 

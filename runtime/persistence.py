@@ -368,6 +368,7 @@ def iterate_agent_turn(
             title=conversation_title(runtime, session.conversation_id) if session.conversation_id else "",
             final_text=final_text,
             db=runtime.db,
+            user_id=session.user_id,
         )
     return out
 
