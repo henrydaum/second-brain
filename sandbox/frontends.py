@@ -22,9 +22,9 @@ anything — it is resident, and its authority is its identity rather than a
 moment.
 
 **Rendering is a projection.** ``BaseFrontend`` hands its subclasses live
-kernel objects; a box can only be handed data, so the nine ``render_*`` methods
-collapse to one ``render(kind, payload)`` call here — and a guest that only
-understands ``messages`` is still a working frontend.
+kernel objects; a box can only be handed data, so the eleven ``render_*``
+methods collapse to one ``render(kind, payload)`` call here — and a guest that
+only understands ``messages`` is still a working frontend.
 """
 
 from __future__ import annotations
@@ -43,7 +43,8 @@ _DESK_LOCK = threading.Lock()
 # agree and only this module knows both — the guest documents them, the native
 # adapter emits them, and a typo on either side would silently show nothing.
 KINDS = ("messages", "attachments", "form_field", "approval", "approval_settled",
-         "buttons", "error", "typing", "tool_status", "stream_delta")
+         "buttons", "error", "typing", "tool_status", "stream_delta",
+         "notification")
 
 
 def park(adapter) -> str:

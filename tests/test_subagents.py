@@ -88,6 +88,15 @@ class FakeRuntime:
     def push_message(self, key, text, **kw):
         self.pushed.append(text)
 
+    def notify(self, *, title="", body="", **kw):
+        # A subagent notice is a notification, not conversation: nobody asked
+        # for it and it arrives while they are doing something else. Recorded
+        # into the same list because what these tests check is that it was
+        # surfaced at all — a scheduled failure nobody collects and nobody is
+        # told about is one nobody ever learns happened.
+        self.pushed.append(f"{title}\n\n{body}" if body else title)
+        return 1
+
 
 def registry_for(turn=None, config=None):
     """A registry over a fake runtime, ready to spawn."""

@@ -8,7 +8,8 @@ The design it pins is deliberately thin. There are two surfaces:
 
 * ``GET /events`` streams every ``render`` the kernel makes, **verbatim**. No
   mapping table, no protocol vocabulary, no message-id bookkeeping. A client
-  that can read the nine kinds can do what the REPL can.
+  that can read the eleven kinds can do what the REPL can — and more, since
+  ``notification`` is a kind the REPL flattens back into chat.
 * ``POST /sdk/<type>`` runs any Request, through ``frontend.act``, rooted at
   the session named by ``?thread=``. Nothing is allowlisted, because policy
   already decides — and an unsafe one raises a dialog that arrives on the very
@@ -428,16 +429,19 @@ def test_every_render_kind_crosses_unchanged(running):
         ("attachments", ["/tmp/a.png"]),
         ("form_field", {"name": "category", "display": {"prompt": "Which?"}}),
         ("approval", {"id": "r1", "title": "Run it?", "type": "boolean"}),
+        ("approval_settled", {"request_id": "r1", "reason": "answered"}),
         ("buttons", [{"label": "Yes", "value": "yes"}]),
         ("error", {"message": "it broke"}),
         ("typing", True),
         ("tool_status", {"call_id": "c1", "tool_name": "search"}),
         ("stream_delta", {"stream_id": "s1", "seq": 0, "delta": "hi"}),
+        ("notification", {"title": "Plugin registered", "body": "tool_x",
+                          "source": "plugin_watcher", "level": "success"}),
     ]
     for kind, payload in sent:
         assert running.render("http:t1", kind, payload).ok
 
-    frames = _frames(_read(conn, until=b"stream_delta", timeout=3.0))
+    frames = _frames(_read(conn, until=b"notification", timeout=3.0))
     conn.close()
 
     assert [f["kind"] for f in frames] == [kind for kind, _ in sent]

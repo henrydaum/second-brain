@@ -9,7 +9,7 @@ scan/add/edit/delete/ignore paths and the user-facing chat notices.
 from pathlib import Path
 
 from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED
+from events.event_channels import NOTIFICATION_PUSHED
 from plugins import plugin_discovery
 from plugins.plugin_watcher import PluginWatcher
 
@@ -172,7 +172,7 @@ def test_plugin_watcher_emits_registered_and_edit_messages(tmp_path, monkeypatch
     messages = []
     path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
     path.write_text("x", encoding="utf-8")
-    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
+    unsub = bus.subscribe(NOTIFICATION_PUSHED, messages.append)
     try:
         monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: ("demo", None))
         monkeypatch.setattr("plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config", lambda self: None)
@@ -182,7 +182,13 @@ def test_plugin_watcher_emits_registered_and_edit_messages(tmp_path, monkeypatch
         service._known_mtimes[str(path.resolve())] = path.stat().st_mtime - 1
         service.handle_create_or_modify(str(path))
 
-        assert messages == ["✓ Registered plugin: demo", "✓ Registered plugin edit: demo"]
+        # A registry change is the system announcing itself, not the
+        # conversation, so it travels as a notification — and the source is
+        # stamped rather than described in the text.
+        assert [(m["title"], m["body"]) for m in messages] == [
+            ("Plugin registered", "demo"), ("Plugin reloaded", "demo")]
+        assert {m["source"] for m in messages} == {"plugin_watcher"}
+        assert {m["level"] for m in messages} == {"success"}
     finally:
         unsub()
 
@@ -192,14 +198,18 @@ def test_plugin_watcher_emits_registration_failed_message(tmp_path, monkeypatch)
     messages = []
     path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
     path.write_text("x", encoding="utf-8")
-    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
+    unsub = bus.subscribe(NOTIFICATION_PUSHED, messages.append)
     try:
         monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: (None, "boom"))
         service = PluginWatcher({})
 
         service.handle_create_or_modify(str(path))
 
-        assert messages == ["✕ Plugin registration failed: tool_demo.py\nboom"]
+        # The ✕ is gone from the text because ``level`` carries it now: a
+        # frontend styles a failure rather than reading a glyph out of a string.
+        assert messages[0]["title"] == "Plugin registration failed"
+        assert messages[0]["body"] == "tool_demo.py\n\nboom"
+        assert messages[0]["level"] == "error"
     finally:
         unsub()
 
@@ -224,7 +234,7 @@ def test_plugin_watcher_delete_unloads_by_source(tmp_path, monkeypatch):
     messages = []
     path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
     path.write_text("x", encoding="utf-8")
-    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
+    unsub = bus.subscribe(NOTIFICATION_PUSHED, messages.append)
     try:
         service = PluginWatcher({})
         registry = _ToolRegistry()
@@ -239,7 +249,8 @@ def test_plugin_watcher_delete_unloads_by_source(tmp_path, monkeypatch):
 
         assert calls and calls[0][0][0] == "tool"
         assert calls[0][1]["source_path"] == str(path.resolve())
-        assert messages == ["Deregistered plugin: demo"]
+        assert [(m["title"], m["body"]) for m in messages] == [
+            ("Plugin removed", "demo")]
     finally:
         unsub()
 

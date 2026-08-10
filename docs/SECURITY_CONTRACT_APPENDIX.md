@@ -292,7 +292,7 @@ never silently filtered.
 |---|---|---|---|
 | `session.get(key)` / `session.list()` | Inspect live sessions | — | safe |
 | `session.open(key)` / `session.close(key)` | Session lifecycle | key | safe |
-| `session.push(key, message)` | Proactive message to the user | key, attendance | safe |
+| `session.push(key, message, title, notify, level)` | Proactive message to the user, or a notification when `notify` | key, attendance | safe |
 | `session.state_get/set/clear(key, ns)` | Per-session plugin scratch state | namespace | safe |
 | `session.set_attended(key, bool)` | Declare human presence | key | unsafe |
 | `session.cancel(key)` | Cancel the running turn | key | safe |
@@ -793,6 +793,33 @@ so asking what a backend can do never costs a provider-library import.
 Every Request that reaches the kernel is itself a ledger row, with its chain of
 provenance as a column. `ledger.record` exists for plugin-level events that are
 not Requests.
+
+## 16a. Notifications
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `notification.list(limit, since_id, unread_only)` | Read this user's notifications | — (scoped to `ctx.user_id` in SQL) | safe |
+| `notification.mark_read(ids, before_id)` | Settle notifications | — (scoped to `ctx.user_id` in SQL) | safe |
+
+Raising one is `session.push(notify=True)`, not a Request of its own: pushing
+text and raising a notification are the same act aimed at a different surface,
+and growing an argument is cheaper than growing the vocabulary. Reading them
+back is not the same act, and there is no existing Request whose subject is
+notifications — the same standing `ledger.read` has.
+
+Neither takes a `user_id`, which is a stronger arrangement than checking one.
+`_check_access` exists because `conv.read` must *name* a conversation; nothing
+here has to name anybody, so there is no argument to refuse and none to get
+wrong. `mark_read` narrows by user inside the same `UPDATE`, so naming another
+user's row changes nothing rather than being refused — there is no information
+in the difference, and the returned count already says what happened.
+
+**`source` is never stated by the caller.** The handler reads the leaf of the
+live provenance chain (`_notification_source`), exactly as
+`approval.describe_asker` does and for the same reason the ledger takes
+`actor_id` from the chain: a plugin naming its own source could claim to be the
+plugin watcher, and attribution is what a reader leans on to decide whether to
+care. It is the part of a chain a box cannot state about itself.
 
 Both carry the asking session's `session_key`, `conversation_id` and `user_id`,
 so a row says *whose* work it was and not only what happened. That is what makes

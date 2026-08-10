@@ -490,6 +490,18 @@ ALWAYS_SAFE = {
     R.CONV_SET_TITLE, R.CONV_SET_CATEGORY, R.CONV_SET_NOTIFICATION_MODE,
     R.CONV_LOAD, R.CONV_CLEAR,
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
+    # Reading and settling notifications the kernel wrote *about this user*,
+    # scoped in SQL by the context's own ``user_id`` rather than by an argument
+    # anybody could name. LIST reads; MARK_READ writes one timestamp whose only
+    # effect is that a panel stops highlighting a row. Neither is reach: the
+    # contents were already delivered to this user's own surfaces.
+    #
+    # SESSION_PUSH covers *raising* one, and stays exactly where it was. It
+    # grew a ``notify`` argument, not a capability — showing the user text is
+    # the same act whichever surface it lands on, and the argument that made it
+    # safe (you can reach a person, you cannot reach anything of theirs) is
+    # untouched by which pane draws it.
+    R.NOTIFICATION_LIST, R.NOTIFICATION_MARK_READ,
     R.SESSION_STATE_GET, R.SESSION_STATE_SET, R.SESSION_REMOVE_TOOL,
     R.SESSION_REMOVE_PROMPT,
     # Staging a file for the model to look at is safe for the reason FS_READ

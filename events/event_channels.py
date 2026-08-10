@@ -114,8 +114,19 @@ Payload:
     action: str — 'registered' or 'unregistered'"""
 
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
-"""Something in the system wants to proactively surface a message in the user's
-chat view. Used by any background producer that needs to reach the user.
+"""Text belonging to the conversation that has no ``RuntimeResult`` to ride on.
+
+Narrower than it once was. This used to be the channel for anything reaching
+the user out of band, which meant it carried both halves of a distinction
+frontends needed and could not make; the announcement half moved to
+NOTIFICATION_PUSHED. What is left is conversation: the model's mid-turn
+narration alongside a tool call, and the files a tool shows through
+``sdk.ui.render``. Both are the agent's turn speaking, and both belong in the
+chat view of every frontend, which is why they are still here.
+
+``kind`` / ``source`` / ``source_id`` are vestigial — ``BaseFrontend`` reads
+none of them, and a producer that wants attribution shown wants
+NOTIFICATION_PUSHED instead.
 Payload:
     message:  str            — the body text to display (required)
     title:    str (optional) — rendered as a header above the message
@@ -128,6 +139,49 @@ Payload:
                                the text. A push may carry these with no
                                message at all, which is what ``sdk.ui.render``
                                with no caption sends."""
+
+NOTIFICATION_PUSHED = "notification_pushed"
+"""Something the user should be *told about*, as distinct from something said
+to them in conversation.
+
+The distinction CHAT_MESSAGE_PUSHED could not draw. That channel carries two
+populations: text belonging to the agent's own turn — the model's mid-turn
+narration, a tool showing a file through ``sdk.ui.render`` — and announcements
+from elsewhere in the system that merely have nowhere else to appear. A
+frontend receiving only ``render_messages`` cannot tell them apart, so a plugin
+registering itself and the agent answering a question arrive as the same kind
+of thing.
+
+The line is *who was speaking*: a push made while the agent's turn owns the
+session is conversation and stays on CHAT_MESSAGE_PUSHED; everything else is a
+notification. That is decided at each emit site rather than inferred from the
+channel, so a future producer cannot land on the wrong side by accident.
+
+``source`` is stamped by the kernel, never by the producer that asked. For
+sandboxed code it is read off the live provenance chain (see
+``runtime.notifications.notify``), which is precisely the part of a chain a box
+cannot state about itself — the same property ``sandbox.approval.describe_asker``
+and the ledger's ``actor_id`` rely on.
+
+Delivery and origin are different fields, and both are needed. A scheduled
+agent's result belongs to a background session nobody is watching; it has to be
+*shown* on whatever surface the user is actually looking at.
+Payload:
+    title:      str            — short header; what the notification is
+    body:       str            — the text (required unless title carries it)
+    source:     str            — kernel-stamped producer identity
+    source_id:  str (optional) — producer-specific id
+    level:      str            — 'info' | 'success' | 'warning' | 'error'
+    session_key:str (optional) — delivery target; absent means broadcast
+    source_session_key: str (optional) — the session it came *from*
+    conversation_id: int (optional) — the conversation it is about
+    load_hint:  str (optional) — pre-rendered text affordance for reaching
+                                 that conversation, for frontends with no
+                                 richer way to offer it. Structured clients
+                                 should use conversation_id and ignore this.
+    notification_id: int (optional) — the persisted row's id, absent when the
+                                 notification was not persisted
+    sent_at:    float          — epoch seconds"""
 
 AGENT_TEXT_DELTA = "agent_text_delta"
 """A fragment of streamed assistant text (emitted only when the session's

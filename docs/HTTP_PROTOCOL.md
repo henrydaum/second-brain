@@ -70,7 +70,7 @@ outright. No stream, no dialogs.
 **One stream per thread.** A second `GET /events` for the same thread replaces
 the first.
 
-### The ten kinds
+### The eleven kinds
 
 Handle what you can show and ignore the rest; a client that only renders
 `messages` is a working client.
@@ -289,6 +289,59 @@ the kernel currently emits this; it exists for store plugins. Submit the
 Filesystem paths on the host, not URLs and not bytes. A browser client cannot
 open them directly; fetch the contents with `POST /sdk/fs.read_bytes`
 (base64-encoded in the response) if you want to display them.
+
+#### `notification` — `dict`
+
+The system telling the user something, as distinct from the conversation
+saying it: a plugin registering, a scheduled agent finishing, a setting
+changing, a background write completing.
+
+```json
+{"title": "Nightly index finished", "body": "Indexed 12 files.",
+ "source": "session", "source_id": "spawn_subagent:41", "level": "info",
+ "conversation_id": 41, "notification_id": 108,
+ "load_hint": "/conversations Main 41 'Load conversation'",
+ "sent_at": 1765412880.4}
+```
+
+**You only get this kind if you ask for it.** Declare
+`supports_notifications` in `capabilities`; without it the kernel flattens
+each notification into markdown and sends it as a `messages` render, which is
+what every frontend saw before this kind existed. That is the same bargain
+`stream_delta` offers, and for the same reason — a client that quietly ignored
+the kind would look merely quiet rather than broken.
+
+`source` is stamped by the kernel, never by whoever raised it. For a plugin it
+is read off the live provenance chain, so a plugin cannot claim to be the
+plugin watcher. Treat it as trustworthy attribution and show it.
+
+`level` is `info` | `success` | `warning` | `error` and only styles the result.
+
+`load_hint` is a pre-rendered slash command, there for surfaces with no better
+way to reach a conversation. **Ignore it** — you have `conversation_id` and can
+open the conversation yourself; rendering a terminal command in a web UI is the
+failure it exists to avoid.
+
+`notification_id` is absent when the notification was not persisted (transient
+progress, e.g. "Compacting conversation…"). Everything else is in the
+`notifications` table and can be read back — see below.
+
+#### Filling the panel on a fresh load
+
+The stream only ever answers "what happened since you connected". A panel that
+draws notifications needs the rest:
+
+```
+POST /sdk/notification.list    {"limit": 50}
+POST /sdk/notification.list    {"since_id": 108}      # incremental
+POST /sdk/notification.list    {"unread_only": true}
+POST /sdk/notification.mark_read {"ids": [108, 109]}
+POST /sdk/notification.mark_read {"before_id": 109}   # mark all read
+```
+
+Both are scoped to the thread's own user in SQL — there is no `user_id`
+argument to pass and none to get wrong. `mark_read` answers with how many rows
+actually changed, so calling it twice is idempotent rather than double-counted.
 
 ---
 
@@ -527,6 +580,11 @@ Naming a conversation you do not own is refused, not asked about.
    question does not survive a page reload.
 6. Build the rest of the UI from `conv.list`, `command.list`, `session.get`.
 7. Render `messages` as GitHub markdown.
+8. Declare `supports_notifications` and give `notification` its own area —
+   otherwise plugin registrations and scheduled-agent results land in the chat
+   alongside the agent's replies, which is where they used to have to go.
+   Backfill the area with `notification.list` on load; the stream only carries
+   what happened while you were connected.
 
 ### Things that will bite
 
@@ -543,6 +601,11 @@ Naming a conversation you do not own is refused, not asked about.
   `frontend.pending {details: true}`.
 - **`approval` is not only permission.** The same kind carries any question a
   tool asks, so do not word the dialog as a permission grant.
+- **`notification` needs `supports_notifications`.** Without it you still get
+  every notification, flattened into a `messages` render — which looks like
+  nothing is wrong and is the reason the opt-in is worth checking.
+- **Not every notification is persisted.** `notification_id` is absent for
+  transient progress, so keying a panel's list on it will silently drop those.
 - **You are not the only one who can answer.** A question raised on your session
   can be settled from another client or by the 300s timeout, which is what
   `approval_settled` is for.

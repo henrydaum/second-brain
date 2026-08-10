@@ -553,6 +553,8 @@ sdk.ui.render(paths, caption="")     # show files in the chat
 sdk.session.get(key="")              # defaults to this session
 sdk.session.list()
 sdk.session.push(message, key="")    # message the user out of band
+sdk.session.push(message, title="Indexed", notify=True, level="success")
+                                     # ...or as a *notification*: see below
 sdk.session.state_get(namespace="sandbox")
 sdk.session.state_set(value, namespace="sandbox")
 sdk.session.cancel(key="")
@@ -584,6 +586,46 @@ You never need to check whether the model can read the modality. If it cannot,
 the kernel substitutes the file's parsed text, and failing that a line naming
 where the file is — so staging is always the right call, and a capability test
 in your plugin would only get the answer wrong.
+
+### Notifications
+
+`notify=True` turns a push into a **notification**: the system telling the user
+something, rather than something said in the conversation. A frontend with
+somewhere to put those — a panel, a badge, a toast — draws it there; one
+without shows it in the chat exactly as a plain push would. Nothing is lost by
+asking, so the question is only which it *is*.
+
+```python
+sdk.session.push("Indexed 12 files.", title="Nightly index",
+                 notify=True, level="success")
+```
+
+Reach for it when the user did not just ask for this and is not watching: a
+background write finishing, something needing their attention later. A plain
+push is right when you are speaking *into* the conversation — a tool narrating
+what it is doing mid-turn is not a notification.
+
+`level` is `info` | `success` | `warning` | `error` and only styles the result.
+`title` is what a collapsed panel shows, so make it say what happened.
+
+**You cannot state who sent it.** The kernel stamps `source` from the
+provenance chain, so a plugin cannot claim to be the plugin watcher and a
+reader can trust the attribution. Same reason a box cannot state its own chain
+root.
+
+Reading them back is for a frontend drawing a panel, not for an ordinary tool:
+
+```python
+sdk.notifications.list(limit=50, since_id=None, unread_only=False)
+sdk.notifications.mark_read(ids=None, before_id=None)
+```
+
+Both are scoped to the calling user in SQL — there is no `user_id` argument to
+pass and none to get wrong. `mark_read` answers with how many rows actually
+changed, so calling it twice is idempotent. Persisted notifications survive a
+restart and are swept by `data_retention_days` like everything else; transient
+ones (progress, e.g. "Compacting conversation…") are delivered and never
+stored.
 
 ### Other code
 
@@ -1360,6 +1402,9 @@ sdk.parse.modality(extension)
 
 sdk.ledger.record(action, ok=True, data=None)
 sdk.ledger.read(limit=50)
+
+sdk.notifications.list(limit=50, since_id=None, unread_only=False)
+sdk.notifications.mark_read(ids=None, before_id=None)
 ```
 
 ---

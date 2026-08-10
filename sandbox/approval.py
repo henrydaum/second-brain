@@ -340,6 +340,12 @@ GRANT_PHRASES = {
     "task.reset": "re-run work already done",
     "task.pause": "pause or resume background work",
     "task.trigger": "start background work now",
+    # Notifications the kernel wrote to *this user*. Split rather than given a
+    # family phrase because the family has only these two and they differ:
+    # reading them is not the same offer as settling them, and "manage
+    # notifications" would cover both by covering neither.
+    "notification.list": "read your notifications",
+    "notification.mark_read": "mark your notifications as read",
     "conv.list": "list conversations", "conv.read": "read conversations",
     "user.read": "read user accounts", "user.list": "read user accounts",
     "config.read": "read settings",

@@ -72,6 +72,7 @@ from runtime import runtime_approvals as _approvals
 from runtime import runtime_config as _cfg
 from runtime import dispatch as _disp
 from runtime import ledger as _ledger
+from runtime import notifications as _notifications
 from runtime import persistence as _persist
 from pipeline.database import DEFAULT_USER_ID
 
@@ -1212,6 +1213,37 @@ class ConversationRuntime:
         if attachments:
             payload["attachments"] = [str(p) for p in attachments]
         bus.emit(CHAT_MESSAGE_PUSHED, payload)
+
+    def notify(self, *, title: str = "", body: str = "", source: str = "system",
+               source_id: str | None = None, level: str = "info",
+               session_key: str | None = None,
+               source_session_key: str | None = None,
+               conversation_id: int | None = None,
+               persist: bool = True) -> int | None:
+        """Raise a notification, filling in what only the runtime knows.
+
+        The counterpart to :meth:`push_message`, and the distinction between
+        them is *who is speaking*. A push is the conversation — the model's
+        narration, a tool's files — and belongs in the chat view of every
+        frontend. A notification is the system telling the user something, and
+        a frontend may put it wherever it likes.
+
+        Everything this adds over ``notifications.notify`` is context the
+        module-level function has no way to reach: the database to persist to,
+        and whose notification it is. ``user_id`` is read from the originating
+        session rather than accepted as an argument, for the same reason the
+        ledger's ``identity_of`` reads it from the context — ownership is the
+        kernel's answer, not the caller's.
+        """
+        origin = source_session_key or session_key
+        session = self.sessions.get(origin) if origin else None
+        return _notifications.notify(
+            title=title, body=body, source=source, source_id=source_id,
+            level=level, session_key=session_key,
+            source_session_key=source_session_key,
+            conversation_id=conversation_id,
+            user_id=getattr(session, "user_id", None),
+            persist=persist, db=self.db)
 
     def set_agent_profile(self, session_key: str, profile: str) -> bool:
         """Switch the active agent profile for one live session."""

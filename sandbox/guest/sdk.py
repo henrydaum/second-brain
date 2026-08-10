@@ -79,7 +79,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        FS_DELETE, FS_LIST, FS_MOVE, FS_READ, FS_READ_BYTES,
                        FS_SEARCH, FS_STAT, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
-                       LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
+                       LEDGER_RECORD, NET_HTTP, NOTIFICATION_LIST,
+                       NOTIFICATION_MARK_READ, PARSE_FILE, PARSE_MODALITY,
                        LLM_DELTA, LLM_LIST, LLM_LOAD, LLM_PROCEED,
                        LLM_UNLOAD, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
@@ -404,9 +405,29 @@ class _Session(_Namespace):
         """Every live session key."""
         return self._ask(SESSION_LIST)
 
-    def push(self, message: str, key: str = ""):
-        """Send the user a message out of band."""
-        return self._ask(SESSION_PUSH, message=message, key=key)
+    def push(self, message: str, key: str = "", *, title: str = "",
+             notify: bool = False, level: str = "info"):
+        """Send the user a message out of band.
+
+        ``notify=True`` raises it as a *notification* instead: the system
+        telling the user something, rather than something said in the
+        conversation. A frontend with somewhere to put those — a panel, a
+        badge, a toast — draws it there; one without shows it in the chat
+        exactly as a plain push would, so nothing is lost by asking.
+
+        Use it for work the user did not just ask for and is not watching: a
+        background write finishing, something that needs their attention later.
+        A plain push is right when you are speaking *into* the conversation.
+
+        ``level`` is ``info`` / ``success`` / ``warning`` / ``error`` and only
+        styles the result. ``title`` is the header; with ``notify`` it is what
+        the panel shows collapsed, so make it say what happened.
+
+        You cannot state who sent it — the kernel stamps that from the
+        provenance chain, so attribution is something a reader can trust.
+        """
+        return self._ask(SESSION_PUSH, message=message, key=key, title=title,
+                         notify=notify, level=level)
 
     def state_get(self, namespace: str = "sandbox", key: str = ""):
         """Read per-session scratch state."""
@@ -1370,6 +1391,44 @@ class _Ledger(_Namespace):
                          since_id=since_id)
 
 
+class _Notifications(_Namespace):
+    """What the system has told the user.
+
+    Raising one is ``sdk.session.push(..., notify=True)`` — it lives with the
+    other ways of reaching a person, because that is what it is. This namespace
+    is the other direction: reading back what was raised, for a surface that
+    draws them in a panel.
+
+    A panel needs this because the bus only ever answers "what happened since
+    you connected". Everything from before that — which is most of it, for a
+    client that was closed while the work ran — is only here.
+    """
+
+    def list(self, limit: int = 50, *, since_id: int | None = None,
+             unread_only: bool = False):
+        """Read notifications, newest first. Only ever your own user's.
+
+        ``since_id`` is the incremental form: a client holding rows up to N
+        asks for what followed, which is what a reconnect wants rather than the
+        whole history again.
+
+            recent = sdk.notifications.list(limit=20)
+            fresh  = sdk.notifications.list(since_id=recent[0]["id"])
+        """
+        return self._ask(NOTIFICATION_LIST, limit=limit, since_id=since_id,
+                         unread_only=unread_only)
+
+    def mark_read(self, ids=None, *, before_id: int | None = None):
+        """Settle notifications, by id or everything up to one.
+
+        ``before_id`` is the "mark all read" spelling. Returns how many rows
+        actually changed, so calling it twice is idempotent rather than
+        double-counted. Naming another user's rows changes nothing.
+        """
+        return self._ask(NOTIFICATION_MARK_READ, ids=list(ids or []),
+                         before_id=before_id)
+
+
 class _Net(_Namespace):
     """Network Requests — always classified, never auto-safe."""
 
@@ -2139,6 +2198,7 @@ class SDK:
         self.files = _Files(self)
         self.parse = _Parse(self)
         self.ledger = _Ledger(self)
+        self.notifications = _Notifications(self)
         self.net = _Net(self)
         self.proc = _Proc(self)
         self.scripts = _Scripts(self)

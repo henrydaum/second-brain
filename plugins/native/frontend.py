@@ -40,6 +40,7 @@ from events.event_channels import (
     COMMAND_CALL_STARTED,
     CONVERSATION_CHANGED,
     FORM_REQUESTED,
+    NOTIFICATION_PUSHED,
     SESSION_CONVERSATION_CHANGED,
     SESSION_TURN_CHANGED,
     TASKS_CHANGED,
@@ -136,6 +137,14 @@ class FrontendCapabilities:
     # as whole messages exactly as before. Kept LAST so existing positional
     # FrontendCapabilities(...) constructions keep their meaning.
     supports_streaming: bool = False
+    # Frontend draws notifications on a surface of its own (and implements
+    # render_notification). False = the base formats each one into markdown and
+    # sends it through render_messages, which is exactly what every frontend did
+    # before notifications existed — so a transport whose only surface is the
+    # chat needs no edits and loses nothing. Same arrangement as
+    # supports_streaming above: declaring it opts into a structured channel,
+    # declining it opts into the path that was always there.
+    supports_notifications: bool = False
 
 
 class BaseFrontend:
@@ -377,6 +386,28 @@ class BaseFrontend:
         let the whole-message path deliver whatever follows)."""
         return
 
+    def render_notification(self, session_key: str, payload: dict) -> None:
+        """Default no-op; frontends with ``supports_notifications`` override.
+
+        Receives NOTIFICATION_PUSHED payloads: ``title``, ``body``, ``source``,
+        ``level`` (``info``/``success``/``warning``/``error``), and optionally
+        ``source_id``, ``conversation_id``, ``load_hint``, ``notification_id``.
+
+        A notification is the system telling the user something, as opposed to
+        the conversation saying it — a plugin registering, a scheduled agent
+        finishing, a setting changing. What to *do* with that is the whole
+        reason the kind exists, so this method is deliberately empty: a
+        transport with a notification area draws one, and a transport without
+        never reaches here at all, because the base sends it down the message
+        path instead (see :meth:`on_bus_notification_pushed`).
+
+        ``load_hint`` is a pre-rendered slash command for reaching
+        ``conversation_id``, there for surfaces that have no richer way to
+        offer it. A client that can open a conversation itself should use the
+        id and ignore the hint.
+        """
+        return
+
     # ──────────────────────────────────────────────────────────────────────
     # Wiring — provided by the base.
     # ──────────────────────────────────────────────────────────────────────
@@ -402,6 +433,7 @@ class BaseFrontend:
             bus.subscribe(APPROVAL_SETTLED, self.on_bus_approval_settled),
             bus.subscribe(FORM_REQUESTED, self.on_bus_form_requested),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
+            bus.subscribe(NOTIFICATION_PUSHED, self.on_bus_notification_pushed),
             bus.subscribe(AGENT_TEXT_DELTA, self.on_bus_agent_text_delta),
             bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
             bus.subscribe(COMMAND_CALL_PROGRESSED, self.on_bus_command_call_progressed),
@@ -826,6 +858,56 @@ class BaseFrontend:
                     self.render_attachments(key, list(paths))
                 except Exception:
                     logger.exception(f"render_attachments (push) failed for '{self.name}'")
+
+    def on_bus_notification_pushed(self, payload: dict) -> None:
+        """Route a notification to whichever surface this frontend has for one.
+
+        Targeting is the same as a push: a named ``session_key`` goes there,
+        an unnamed one broadcasts to this frontend's own sessions. That
+        distinction matters more here than it does for chat, because the
+        notifications worth having are mostly raised *by* sessions nobody is
+        watching — a scheduled agent's conversation has no frontend attached,
+        so delivering to its origin would deliver to nowhere.
+
+        A frontend that declared ``supports_notifications`` gets the payload
+        whole. One that did not gets it flattened into markdown through
+        ``render_messages``, which is byte-for-byte the path these
+        announcements took before the kind existed.
+        """
+        payload = payload or {}
+        if not payload.get("title") and not payload.get("body"):
+            return
+        target = payload.get("session_key")
+        keys = [target] if target else self._broadcast_session_keys()
+        live = self._live_session_keys()
+        rich = getattr(self.capabilities, "supports_notifications", False)
+        text = None if rich else self._notification_markdown(payload)
+        for key in keys:
+            if key not in live:
+                continue
+            try:
+                if rich:
+                    self.render_notification(key, dict(payload))
+                elif text:
+                    self.render_messages(key, [text])
+            except Exception:
+                logger.exception(f"render notification failed for '{self.name}'")
+
+    @staticmethod
+    def _notification_markdown(payload: dict) -> str:
+        """Flatten a notification into the one thing every frontend can show.
+
+        Deliberately plain. The markdown-on-the-wire convention means each
+        frontend renders by policy, so anything cleverer here — a table, a
+        detail card — would be a formatting decision made on behalf of
+        transports that have their own opinion about it.
+        """
+        title = (payload.get("title") or "").strip()
+        body = (payload.get("body") or "").strip()
+        parts = [f"{title}\n\n{body}" if title and body else (title or body)]
+        if hint := (payload.get("load_hint") or "").strip():
+            parts.append(f"Load this conversation: `{hint}`")
+        return "\n\n".join(p for p in parts if p)
 
     def on_bus_agent_text_delta(self, payload: dict) -> None:
         """Route streamed text deltas to ``render_stream_delta`` with dedup

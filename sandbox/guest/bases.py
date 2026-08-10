@@ -405,12 +405,23 @@ class BaseFrontend(BasePlugin):
         """Show one thing to a person. ``kind`` says what.
 
         ``messages`` (list[str] of markdown) · ``attachments`` (list of paths)
-        · ``form_field`` · ``approval`` · ``buttons`` · ``error`` · ``typing``
-        (bool) · ``tool_status`` · ``stream_delta``.
+        · ``form_field`` · ``approval`` · ``approval_settled`` · ``buttons`` ·
+        ``error`` · ``typing`` (bool) · ``tool_status`` · ``stream_delta`` ·
+        ``notification``.
 
         Handle the kinds your transport can show and ignore the rest — a
         frontend that only renders ``messages`` is a working frontend.
         Answer an ``approval`` with ``sdk.frontend.resolve``.
+
+        Two kinds arrive only if you asked for them in ``capabilities``, and
+        both are opt-in for the same reason: each has a plain-text path that
+        already works, so a transport that ignored them silently would look
+        merely quiet rather than broken. ``stream_delta`` needs
+        ``supports_streaming``; without it the same text arrives whole through
+        ``messages``. ``notification`` needs ``supports_notifications``;
+        without it the kernel flattens each one to markdown and sends it as a
+        ``messages`` render, which is what every frontend saw before the kind
+        existed.
         """
         raise NotImplementedError
 

@@ -63,6 +63,15 @@ SESSION_REMOVE_PROMPT = "session.remove_prompt_extra"
 SESSION_ADD_ATTACHMENT = "session.add_attachment"
 SESSION_SET_MODE = "session.set_mode"
 
+# ── notifications ─────────────────────────────────────────────────────
+# Raising one is ``session.push(notify=True)`` — a grown argument rather than a
+# type, because pushing text and pushing a notification are the same act aimed
+# at a different surface. Reading them back is not: it is a targeted query
+# against a kernel-owned table with no existing Request whose subject it is,
+# the same standing ``ledger.read`` has.
+NOTIFICATION_LIST = "notification.list"
+NOTIFICATION_MARK_READ = "notification.mark_read"
+
 # ── user interaction ──────────────────────────────────────────────────
 UI_ASK = "ui.ask"
 UI_APPROVE = "ui.approve"
@@ -293,6 +302,7 @@ ALL_TYPES = {
     SESSION_STATE_SET, SESSION_CANCEL, SESSION_ADD_TOOL, SESSION_REMOVE_TOOL,
     SESSION_ADD_PROMPT, SESSION_REMOVE_PROMPT, SESSION_ADD_ATTACHMENT,
     SESSION_SET_MODE,
+    NOTIFICATION_LIST, NOTIFICATION_MARK_READ,
     UI_ASK, UI_APPROVE, UI_RENDER,
     CONFIG_READ, CONFIG_WRITE, PATH_GET,
     USER_READ, USER_LIST, USER_WRITE,
@@ -330,6 +340,9 @@ READ_ONLY = {
     FILE_LIST, PARSE_FILE,
     PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ, FRONTEND_PENDING,
     PROC_STATUS, PROC_LIST, HTTP_DRAIN,
+    # A notification panel refills on every reconnect and may poll besides, so
+    # this is the same per-tick Request the entries below are here for.
+    NOTIFICATION_LIST,
     # Taking a finished child's report changes nothing about the world; the
     # child already did whatever it was going to do. Listed here mainly so the
     # ledger's sandbox sink drops it: ``collect(timeout=0)`` is a poll, and a

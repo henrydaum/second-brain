@@ -44,6 +44,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               FRONTEND_SUBMIT, HTTP_CLOSE, HTTP_DRAIN,
                               HTTP_PUSH, HTTP_RESPOND,
                               LEDGER_READ, LEDGER_RECORD,
+                              NOTIFICATION_LIST, NOTIFICATION_MARK_READ,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
                               PLUGIN_REGISTER, PLUGIN_RELOAD,
@@ -598,15 +599,114 @@ def _session_list(ctx, args: dict) -> Result:
     return Result(data=list(getattr(runtime, "sessions", None) or {}))
 
 
+def _notification_source(default: str = "plugin") -> str:
+    """Who is raising this, read off the live provenance chain.
+
+    The leaf, exactly as ``approval.describe_asker`` takes it: the innermost
+    link is the thing that actually acted, while the root is what *caused* the
+    work and is usually a session key nobody wants attributed.
+
+    Read here rather than accepted as an argument, and that is the whole
+    property worth having. A notification's attribution is the part a reader
+    leans on to decide whether to care about it, so a plugin naming its own
+    source could claim to be the plugin watcher, or the kernel. This is the
+    same reason the ledger takes ``actor_id`` from the chain and the same
+    reason a box cannot state its own root.
+    """
+    from .. import provenance
+
+    caller = provenance.current()
+    chain = getattr(caller, "chain", None)
+    if chain is None:
+        return default
+    return (chain.links[-1] if chain.links else chain.root) or default
+
+
 def _session_push(ctx, args: dict) -> Result:
-    """Send a message to the user out of band."""
+    """Send a message to the user out of band, or raise a notification.
+
+    One Request for two surfaces, because they are the same act — reaching a
+    person who is not mid-sentence with you — aimed differently. ``notify``
+    picks which, and everything else about the call is unchanged; growing an
+    argument is cheaper than growing the vocabulary, and the alternative would
+    have been a second type whose handler differed by one branch.
+    """
     runtime = _runtime(ctx)
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    message = args.get("message") or ""
+
+    if args.get("notify"):
+        notify = getattr(runtime, "notify", None)
+        if (bad := _need(notify, "notifications")) is not None:
+            return bad
+        notification_id = notify(
+            title=str(args.get("title") or ""),
+            body=message,
+            source=_notification_source(),
+            level=str(args.get("level") or "info"),
+            source_session_key=key,
+            conversation_id=getattr(ctx, "conversation_id", None))
+        return Result(data=notification_id if notification_id else True)
+
     push = getattr(runtime, "push_message", None)
     if (bad := _need(push, "proactive messages")) is not None:
         return bad
-    key = args.get("key") or getattr(ctx, "session_key", None)
-    push(key, args.get("message") or "")
+    push(key, message, title=str(args.get("title") or "") or None)
     return Result(data=True)
+
+
+def _notification_list(ctx, args: dict) -> Result:
+    """Read this user's notifications, newest first.
+
+    Scoped to ``ctx.user_id`` rather than to an argument. There is no
+    ``user_id`` parameter to refuse, which is a stronger arrangement than
+    checking one — ``_check_access`` exists because ``conv.read`` must name a
+    conversation, and nothing here has to name anybody.
+    """
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    limit, bad = int_arg(args, "limit", 50, lo=1, hi=500)
+    if bad is not None:
+        return bad
+    since_id = None
+    if args.get("since_id") not in (None, ""):
+        since_id, bad = int_arg(args, "since_id", 0, lo=0)
+        if bad is not None:
+            return bad
+    return Result(data=_rows(db.get_notifications(
+        user_id=getattr(ctx, "user_id", None), since_id=since_id,
+        unread_only=bool(args.get("unread_only")), limit=limit)))
+
+
+def _notification_mark_read(ctx, args: dict) -> Result:
+    """Settle notifications by id, or everything up to one.
+
+    Narrowed by ``ctx.user_id`` in the same statement, so naming somebody
+    else's row updates nothing rather than being refused — there is no
+    information in the difference, and the count already says what happened.
+    """
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    before_id = None
+    if args.get("before_id") not in (None, ""):
+        before_id, bad = int_arg(args, "before_id", 0, lo=0)
+        if bad is not None:
+            return bad
+    raw = args.get("ids")
+    if isinstance(raw, (int, str)):
+        raw = [raw]
+    try:
+        ids = [int(i) for i in (raw or [])]
+    except (TypeError, ValueError):
+        return Result.failure("ids must be integers",
+                              code=ERROR_INVALID_ARGUMENT)
+    if not ids and before_id is None:
+        return Result.failure("name ids or a before_id",
+                              code=ERROR_INVALID_ARGUMENT)
+    return Result(data=db.mark_notifications_read(
+        ids, user_id=getattr(ctx, "user_id", None), before_id=before_id))
 
 
 def _session_state_get(ctx, args: dict) -> Result:
@@ -3648,6 +3748,8 @@ HANDLERS = {
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,
     PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
     LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,
+    NOTIFICATION_LIST: _notification_list,
+    NOTIFICATION_MARK_READ: _notification_mark_read,
     SCRIPT_RUN: _script_run, SCRIPT_COLLECT: _script_collect,
     SCRIPT_STOP: _script_stop,
     SELF_BUDGET: _self_budget,

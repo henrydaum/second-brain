@@ -522,15 +522,28 @@ class SubagentRegistry:
             # surfaced here is a failure nobody ever learns about.
             logger.error("scheduled subagent '%s' failed: %s",
                          handle.title, error)
-            self._push(f"Scheduled agent '{handle.title}' failed: {error}")
+            self._notify(f"Scheduled agent '{handle.title}' failed",
+                         str(error), handle, level="error")
 
-    def _push(self, message: str) -> None:
-        """Tell the user something, best-effort."""
+    def _notify(self, title: str, body: str, handle=None,
+                level: str = "info") -> None:
+        """Tell the user something, best-effort.
+
+        Delivery is deliberately left unset. This used to target
+        ``active_session_key``, which names one session on one transport; a
+        scheduled agent's failure should reach whatever surface the user is
+        actually at, and each frontend already knows which of its own sessions
+        that is. The child's session travels as *origin* instead, which is what
+        makes the notification traceable back to a conversation nobody was
+        watching.
+        """
         try:
-            key = getattr(self.runtime, "active_session_key", None)
-            self.runtime.push_message(key, message, source="subagents")
+            self.runtime.notify(
+                title=title, body=body, source="subagents",
+                source_id=getattr(handle, "id", None), level=level,
+                conversation_id=getattr(handle, "conversation_id", None))
         except Exception:
-            logger.exception("could not push a subagent notice")
+            logger.exception("could not raise a subagent notification")
 
     # --- collecting -----------------------------------------------------
 
@@ -752,7 +765,8 @@ class SubagentRegistry:
             )
         except Exception as exc:
             logger.error("scheduled subagent did not start: %s", exc)
-            self._push(f"Scheduled agent did not start: {exc}")
+            self._notify("Scheduled agent did not start", str(exc),
+                         level="error")
             return
         # Off this thread, always. See ``_remember_conversation``.
         threading.Thread(

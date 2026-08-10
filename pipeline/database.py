@@ -371,6 +371,37 @@ class Database:
 		""")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_ts ON action_ledger(ts)")
 
+		# What the system told the user about, as opposed to what it did (the
+		# ledger above) or what was said in conversation (conversation_messages).
+		# A notification is delivered over the bus the moment it happens, but a
+		# surface that draws them in a panel needs to fill that panel on a fresh
+		# load — the bus only ever answers "what happened since you connected".
+		# Same no-foreign-keys rule as the ledger: a notification about a
+		# conversation must outlive that conversation being deleted, or the row
+		# vanishes exactly when its explanation is most wanted.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS notifications (
+				id              INTEGER PRIMARY KEY AUTOINCREMENT,
+				ts              REAL NOT NULL,
+				title           TEXT,
+				body            TEXT,
+				source          TEXT,
+				source_id       TEXT,
+				level           TEXT,
+				session_key     TEXT,
+				conversation_id INTEGER,
+				user_id         INTEGER,
+				read_at         REAL
+			)
+		""")
+		# The backfill seek: one user's notifications, newest first, optionally
+		# from an id they already have.
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_notifications_user
+			ON notifications(user_id, id)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_ts ON notifications(ts)")
+
 		self.conn.commit()
 
 	# =================================================================
@@ -1248,11 +1279,96 @@ class Database:
 		except Exception as e:
 			logger.warning(f"Action-ledger write failed (ignored): {e}")
 
+	# =================================================================
+	# NOTIFICATIONS
+	# =================================================================
+
+	def record_notification(self, *, title=None, body=None, source=None,
+							source_id=None, level="info", session_key=None,
+							conversation_id=None, user_id=None) -> int | None:
+		"""Append one notification and return its id, or None if it failed.
+
+		Best-effort for the same reason the ledger is: telling the user
+		something must never break the thing that had something to tell them.
+		A failure costs the panel one row on the next reload, and the live bus
+		delivery still happens — the caller emits regardless of what this
+		answered.
+		"""
+		try:
+			with self.lock:
+				cur = self.conn.execute("""
+					INSERT INTO notifications
+					(ts, title, body, source, source_id, level, session_key,
+					 conversation_id, user_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""", (time.time(), title, body, source, source_id, str(level),
+					  session_key, conversation_id, user_id))
+				self.conn.commit()
+				return int(cur.lastrowid)
+		except Exception as e:
+			logger.warning(f"Notification write failed (ignored): {e}")
+			return None
+
+	def get_notifications(self, user_id=None, since_id=None, unread_only=False,
+						  limit=100) -> list[dict]:
+		"""Read notifications, newest first.
+
+		Every filter is applied in SQL, the same discipline ``get_ledger_rows``
+		follows: ``idx_notifications_user`` makes the ``user_id`` + ``since_id``
+		pair an index seek, which is what a client reconnecting with rows up to
+		N actually asks for.
+		"""
+		clauses, params = [], []
+		if user_id is not None:
+			clauses.append("user_id = ?"); params.append(int(user_id))
+		if since_id is not None:
+			clauses.append("id > ?"); params.append(int(since_id))
+		if unread_only:
+			clauses.append("read_at IS NULL")
+		where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+		with self.lock:
+			cur = self.conn.execute(
+				f"SELECT * FROM notifications{where} ORDER BY id DESC LIMIT ?",
+				(*params, int(limit)))
+			return [dict(row) for row in cur.fetchall()]
+
+	def mark_notifications_read(self, ids=None, *, user_id=None,
+								before_id=None) -> int:
+		"""Stamp ``read_at``. Returns how many rows changed.
+
+		Two spellings because a panel needs both: ``ids`` for dismissing what
+		was clicked, ``before_id`` for "mark everything up to here read" after
+		a scroll. ``user_id`` narrows either, so one user can never settle
+		another's — the handler passes it from the context rather than trusting
+		an argument.
+
+		Already-read rows are excluded rather than restamped, so the count is
+		what actually changed and a repeated call is idempotent.
+		"""
+		clauses, params = ["read_at IS NULL"], []
+		if ids:
+			ids = [int(i) for i in ids]
+			clauses.append(f"id IN ({','.join('?' * len(ids))})")
+			params.extend(ids)
+		if before_id is not None:
+			clauses.append("id <= ?"); params.append(int(before_id))
+		if user_id is not None:
+			clauses.append("user_id = ?"); params.append(int(user_id))
+		if not ids and before_id is None:
+			return 0  # refuse to settle the whole table by omission
+		with self.lock:
+			cur = self.conn.execute(
+				f"UPDATE notifications SET read_at = ? WHERE {' AND '.join(clauses)}",
+				(time.time(), *params))
+			self.conn.commit()
+			return int(cur.rowcount)
+
 	def prune_expired(self, days, *, ledger_only: bool = False) -> int:
 		"""Delete data older than ``days`` — the single retention knob.
 
 		Covers everything that accumulates without bound: action-ledger rows,
-		finished task runs, and idle conversations (their messages cascade).
+		notifications, finished task runs, and idle conversations (their
+		messages cascade).
 		A conversation's ``updated_at`` is bumped on every message, so
 		anything still in use is never eligible. ``ledger_only`` restricts to
 		the cheap ledger sweep (used opportunistically from record_action;
@@ -1266,6 +1382,8 @@ class Database:
 			deleted["action_ledger"] = self.conn.execute(
 				"DELETE FROM action_ledger WHERE ts < ?", (cutoff,)).rowcount
 			if not ledger_only:
+				deleted["notifications"] = self.conn.execute(
+					"DELETE FROM notifications WHERE ts < ?", (cutoff,)).rowcount
 				deleted["task_runs"] = self.conn.execute(
 					"DELETE FROM task_runs WHERE finished_at IS NOT NULL AND finished_at < ?",
 					(cutoff,)).rowcount

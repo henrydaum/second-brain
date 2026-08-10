@@ -2030,6 +2030,83 @@ on every load/mutate-by-id path (`load_history`, `load_conversation`, `open_sess
 `set_conversation_notification_mode`) — listing filters are convenience only;
 `override=True` (or using the raw `db.*` methods) is the system path.
 
+## Notifications
+
+**Telling the user something is not the same as saying it to them**, and for a
+long time the system had no way to draw that line. Everything out of band went
+through one channel — `CHAT_MESSAGE_PUSHED` → `runtime.push_message` →
+`BaseFrontend.on_bus_message_pushed` → `render_messages` — so a plugin
+registering itself and the agent answering a question arrived as the same call.
+A frontend could not separate them because it was never told they were
+different. The channel's payload had documented `title`/`kind`/`source`/
+`source_id` from the beginning and producers set them; `on_bus_message_pushed`
+read `message`, `attachments`, `title`, `session_key` and nothing else, so the
+attribution half of the contract existed and had zero readers.
+
+`NOTIFICATION_PUSHED` is the second channel, `notification` the eleventh render
+kind, and `notifications` a table.
+
+**The split is by who was speaking, and it is drawn at each emit site.** Two
+things on the old channel are the agent's own turn and stay there: the model's
+mid-turn narration (`conversation_loop.py`, deduped against streaming by
+`_consume_streamed`) and `sdk.ui.render`, a tool showing the user a file.
+Everything else — the plugin watcher, config announcements, a scheduled agent's
+result or failure, compaction notices — is the system, and moved. The rule
+"a push made while the agent's turn owns the session" is real but is
+deliberately *not* what the code tests, because a future producer would land on
+the wrong side of it silently: guidance that never appears looks exactly like a
+plugin with nothing to say. `runtime/notifications.notify` is the one door, and
+`ConversationRuntime.notify` the delegate that fills in the database and the
+`user_id` off the originating session, the same way the ledger's `identity_of`
+reads ownership from a context rather than from the caller.
+
+**Frontends opt in, which is what made this cost nothing.** A transport
+declaring `supports_notifications` receives the payload whole; one that does
+not gets it flattened into markdown and sent through `render_messages` — byte
+for byte what it saw before the kind existed. So the REPL and Telegram needed
+no edits, and `frontend_http` needed none either, since it forwards any kind
+generically. Exactly the bargain `supports_streaming` already makes for deltas,
+and for the same reason: a client quietly ignoring a kind looks merely quiet.
+Note the fallback has to live on the *bus handler*, not on `render_notification`
+— `residency.native_names` replaces that method wholesale with the box
+forwarder, so a default implementation there would never run for a sandboxed
+frontend, which is all of them.
+
+**`source` is stamped by the kernel, never stated by whoever asked.** For
+sandboxed code `handlers/kernel._notification_source` reads the leaf of the live
+provenance chain — available because `interpreter._execute` holds
+`provenance.serving(...)` around every handler call — exactly as
+`approval.describe_asker` does. Attribution is what a reader leans on to decide
+whether to care, so a plugin able to name itself `plugin_watcher` would be
+forging the only field that makes the panel worth reading. Kernel producers pass
+a literal they do not choose at runtime.
+
+**Raising one grew an argument; reading them back needed types.**
+`sdk.session.push(..., notify=True, title=…, level=…)` — pushing text and
+raising a notification are the same act aimed at a different surface, so the
+vocabulary did not grow. `notification.list` / `notification.mark_read` are two
+new types because no existing Request's subject is notifications, the same
+standing `ledger.read` has. Neither takes a `user_id`: they scope to
+`ctx.user_id` in SQL, which is stronger than checking an argument because there
+is no argument to get wrong.
+
+**Persistence is what a panel needs and a bus cannot give.** The stream only
+ever answers "what happened since you connected", so a fresh page load would
+start empty. Rows carry no foreign keys, for the ledger's reason — a
+notification about a conversation must outlive that conversation being deleted,
+or it vanishes exactly when its explanation is wanted. The write is guarded
+*separately* from the emit, so losing the panel's copy never costs the live
+delivery. Retention folds into the single `data_retention_days` sweep; don't add
+a knob. `persist=False` exists for progress ("Compacting conversation…"), which
+is worth interrupting for and worth nothing an hour later.
+
+**One thing moved out of the message text.** `emit_fallback_push` used to weld
+``Load this conversation: `/conversations 'Main' 7 'Load conversation'` `` into
+the body — a terminal affordance inside prose. `conversation_id` is structured
+on the payload now and `load_hint` carries the pre-rendered command for surfaces
+with no better way; a client that can open a conversation itself uses the id and
+ignores the hint.
+
 ## Command lifecycle (current)
 
 A command emits two events: `COMMAND_CALL_STARTED` (first invocation, even if

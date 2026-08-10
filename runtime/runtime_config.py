@@ -27,7 +27,6 @@ from runtime.security_modes import YOLO, prompt_note
 from runtime.session import RuntimeSession
 from events.event_bus import bus
 from events.event_channels import (
-    CHAT_MESSAGE_PUSHED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
 )
@@ -417,14 +416,35 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
         )
 
     def notice(text: str):
-        """Handle notice."""
+        """Tell the user what the loop is doing to their conversation.
+
+        Compaction and overflow recovery: the turn is still running, but the
+        history behind it just changed under the user's feet, which is worth
+        interrupting for and is not something the agent said.
+
+        ``persist=False`` — this is progress, not a record. "Compacting
+        conversation…" is worth seeing while it happens and worth nothing an
+        hour later, and a notification panel that fills up with them is one
+        nobody reads.
+        """
         if runtime.on_notice:
             runtime.on_notice(text)
-        if session_key:
-            bus.emit(CHAT_MESSAGE_PUSHED, {
-                "session_key": session_key, "message": text,
-                "source": "runtime", "kind": "alert",
-            })
+        if not session_key:
+            return
+        # Guarded because this is called from inside compaction, mid-turn. The
+        # module-level ``notify`` swallows its own failures, but reaching it
+        # through the runtime does not — a background driver standing in for a
+        # ConversationRuntime need not have the method, and losing the turn
+        # because we could not narrate it is the wrong failure of the two.
+        raise_notification = getattr(runtime, "notify", None)
+        if raise_notification is None:
+            return
+        try:
+            raise_notification(title="Conversation", body=text,
+                               source="runtime", level="info",
+                               session_key=session_key, persist=False)
+        except Exception:
+            logger.exception("could not raise a compaction notice (ignored)")
 
     on_delta = None
     if session_key and _frontend_streams(runtime, session):

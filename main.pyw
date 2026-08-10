@@ -175,6 +175,7 @@ from typing import Any
 import llm
 import parsing
 from config import config_manager
+from runtime import notifications
 from pipeline.database import Database
 from pipeline.orchestrator import Orchestrator
 from pipeline.watcher import Watcher
@@ -241,6 +242,12 @@ def main():
 	t0 = time.time()
 	database = Database(config["db_path"])
 	logger.info(f"Database ready: {config['db_path']} ({time.time() - t0:.2f}s)")
+
+	# Notifications persist so a panel can be filled on a fresh load rather than
+	# only from the moment a client connected. A reference, not a lifecycle —
+	# the same arrangement parsing.bind_services makes below. Wired here because
+	# the plugin watcher raises notifications and holds no runtime to reach.
+	notifications.bind_db(database)
 
 	# --- 3. Initialize services ---
 	# The sandbox's host context is wired *first*. Handlers answer Requests

@@ -341,7 +341,7 @@ def test_the_render_kinds_are_the_documented_ones():
     side would silently show a person nothing."""
     assert set(KINDS) == {"messages", "attachments", "form_field", "approval",
                           "approval_settled", "buttons", "error", "typing",
-                          "tool_status", "stream_delta"}
+                          "tool_status", "stream_delta", "notification"}
 
 
 # ──────────────────────────────────────────────────────────────────────

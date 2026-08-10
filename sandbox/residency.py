@@ -833,7 +833,8 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
                     "error": "render_error",
                     "typing": "render_typing",
                     "tool_status": "render_tool_status",
-                    "stream_delta": "render_stream_delta"}
+                    "stream_delta": "render_stream_delta",
+                    "notification": "render_notification"}
     for kind, method in native_names.items():
         attributes[method] = _renderer(kind)
 

@@ -7,8 +7,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED
+from runtime.notifications import notify
 import trees
 from plugins.plugin_paths import plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin
@@ -143,24 +142,21 @@ class PluginWatcher:
         path = Path(raw_path).resolve()
         if not path.exists() or path.suffix != ".py":
             error = f"Plugin file does not exist: {path}"
-            self._notify(f"✕ Plugin registration failed: {path.name}\n{error}")
+            self._notify("Plugin registration failed", f"{path.name}\n\n{error}",
+                         level="error")
             return {"ok": False, "error": error}
         root = self._root_of(path)
+        verb = "reloaded" if edited else "registered"
         if root == "llm":
             self._refresh_llm_backends()
-            self._notify(
-                f"✓ Registered LLM backend{' edit' if edited else ''}: "
-                f"{path.stem}"
-            )
+            self._notify(f"LLM backend {verb}", path.stem, level="success")
             return {
                 "ok": True, "name": path.stem, "family": "llm_backend",
                 "path": str(path),
             }
         if root == "parsers":
             self._refresh_parsers()
-            self._notify(
-                f"✓ Registered parser{' edit' if edited else ''}: {path.stem}"
-            )
+            self._notify(f"Parser {verb}", path.stem, level="success")
             return {
                 "ok": True, "name": path.stem, "family": "parser",
                 "path": str(path),
@@ -168,7 +164,8 @@ class PluginWatcher:
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher skipped {path}: {err}")
-            self._notify(f"✕ Plugin registration failed: {path.name}\n{err}")
+            self._notify("Plugin registration failed", f"{path.name}\n\n{err}",
+                         level="error")
             return {"ok": False, "error": err}
         logger.info(f"Plugin watcher loading {info.plugin_type}: {path.name}")
         try:
@@ -186,12 +183,13 @@ class PluginWatcher:
             name, error = None, str(e)
         if error:
             logger.warning(f"Plugin watcher failed to load {path.name}: {error}")
-            self._notify(f"✕ Plugin registration failed: {name or path.name}\n{error}")
+            self._notify("Plugin registration failed",
+                         f"{name or path.name}\n\n{error}", level="error")
             return {"ok": False, "error": error}
         if info.plugin_type == "command":
             self._refresh_commands()
         self._reconcile_plugin_config()
-        self._notify(f"✓ Registered plugin{' edit' if edited else ''}: {name}")
+        self._notify(f"Plugin {verb}", str(name), level="success")
         logger.info(f"Plugin watcher loaded {info.plugin_type}: {name}")
         return {
             "ok": True, "name": name, "family": info.plugin_type,
@@ -208,14 +206,14 @@ class PluginWatcher:
         root = self._root_of(path)
         if root == "llm":
             self._refresh_llm_backends()
-            self._notify(f"Deregistered LLM backend: {path.stem}")
+            self._notify("LLM backend removed", path.stem)
             return {
                 "ok": True, "names": [path.stem], "family": "llm_backend",
                 "path": str(path),
             }
         if root == "parsers":
             self._refresh_parsers()
-            self._notify(f"Deregistered parser: {path.stem}")
+            self._notify("Parser removed", path.stem)
             return {
                 "ok": True, "names": [path.stem], "family": "parser",
                 "path": str(path),
@@ -249,7 +247,7 @@ class PluginWatcher:
             self._refresh_commands()
         self._reconcile_plugin_config()
         for name in names:
-            self._notify(f"Deregistered plugin: {name}")
+            self._notify("Plugin removed", str(name))
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
         return {
             "ok": True, "names": names, "family": info.plugin_type,
@@ -284,9 +282,15 @@ class PluginWatcher:
             )
         return matches[0][1], None
 
-    def _notify(self, message: str):
-        """Internal helper to handle notify."""
-        bus.emit(CHAT_MESSAGE_PUSHED, {"message": message, "kind": "plugin", "source": "plugin_watcher"})
+    def _notify(self, title: str, body: str = "", level: str = "info"):
+        """Announce one registry change.
+
+        The watcher is the clearest case for notifications being their own
+        kind: nothing here is anybody's conversation, it fires whenever a file
+        happens to change, and it used to interrupt whatever the user was
+        reading to say "✓ Registered plugin: x" in the middle of it.
+        """
+        notify(title=title, body=body, source="plugin_watcher", level=level)
 
     def _names_registered_from(self, plugin_type: str, path: Path) -> list[str]:
         """Internal helper to handle names registered from."""
