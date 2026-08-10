@@ -357,6 +357,59 @@ def test_the_kernel_stand_in_matches_the_sdk_surface():
     for name in ("log", "ok", "fail"):
         assert callable(getattr(KERNEL_SDK, name, None)), name
 
+    # The exception names are the same claim about a different kind of member,
+    # and they fail worse: a missing one makes the ``except`` clause itself
+    # raise ``AttributeError``, which masks the failure the parser was
+    # guarding — so the log names the stand-in and never the real cause.
+    for name in ("Denied", "Failed"):
+        assert getattr(KERNEL_SDK, name, None) is getattr(SDK, name), name
+
+
+def test_a_parser_guard_catches_a_kernel_side_service_failure():
+    """``except sdk.Failed`` must catch what the stand-in raises.
+
+    Every delegating parser guards ``sdk.services.call`` this way — "not
+    installed", "not loaded" and "it broke" are one answer to a parser — so
+    raising a plain ``LookupError`` here meant the guard caught nothing when
+    the *kernel* was the caller. That is the path attachment routing takes,
+    which is the one that matters for a voice note.
+    """
+    from parsing.kernel_sdk import KernelSDK
+
+    sdk = KernelSDK({})
+    try:
+        sdk.services.call("whisper", "transcribe", audio_path="x.wav")
+    except sdk.Failed as exc:
+        assert "not loaded" in str(exc)
+        assert exc.result.code == "not_found"
+    else:
+        raise AssertionError("calling an absent service should fail")
+
+    # A refusal is the narrower half, and stays catchable as either name.
+    try:
+        sdk.services.load("whisper")
+    except sdk.Denied:
+        pass
+    else:
+        raise AssertionError("loading a service should be refused")
+
+
+def test_the_stand_in_reports_a_broken_service_like_the_handler_does():
+    """Foreign code is guarded, and the message names whose bug it is."""
+    from parsing.kernel_sdk import KernelSDK
+
+    class Whisper:
+        def transcribe(self, audio_path):
+            raise RuntimeError("no model")
+
+    sdk = KernelSDK({"whisper": Whisper()})
+    try:
+        sdk.services.call("whisper", "transcribe", audio_path="x.wav")
+    except sdk.Failed as exc:
+        assert str(exc).endswith("whisper.transcribe failed: no model")
+    else:
+        raise AssertionError("a raising service should fail the call")
+
 
 def test_kernel_sdk_iter_bytes_matches_guest_windowing(tmp_path):
     """A parser sees the same offset and limit behavior in either caller."""

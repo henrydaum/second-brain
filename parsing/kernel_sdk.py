@@ -23,6 +23,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+# The exception vocabulary is part of what a parser can *observe*, so it comes
+# from the guest rather than being restated here — a stand-in that raises
+# lookalikes would let `except sdk.Failed` work in a box and miss kernel-side.
+from sandbox.guest.codes import ERROR_NOT_FOUND
+from sandbox.guest.requests import (SERVICE_CALL, SERVICE_LOAD,
+                                    SERVICE_UNLOAD, Denied, RequestFailed,
+                                    Result)
+
 logger = logging.getLogger("Parsing")
 
 
@@ -211,14 +219,41 @@ class _Services:
         self._services = services if services is not None else {}
 
     def call(self, name: str, method: str, **kwargs):
-        """Invoke a method on a loaded service."""
+        """Invoke a method on a loaded service.
+
+        Every failure is a ``RequestFailed``, with the messages and codes
+        ``handlers.kernel._service_call`` uses. A parser guards this call with
+        ``except sdk.Failed`` — the delegating ones all do, since "not
+        installed", "not loaded" and "it broke" are one answer to them — and
+        raising ``LookupError`` here meant that guard caught nothing kernel-side
+        while catching everything in a box.
+        """
         service = self._services.get(name)
         if service is None:
-            raise LookupError(f"service {name!r} is not loaded")
-        fn = getattr(service, method, None)
+            raise RequestFailed(
+                Result.failure(f"service {name!r} is not loaded",
+                               code=ERROR_NOT_FOUND), SERVICE_CALL)
+
+        exports = getattr(service, "exports", None)
+        if exports is not None and method not in exports:
+            raise RequestFailed(Result.failure(
+                f"{name}.{method} is not exported; {sorted(exports)} are"),
+                SERVICE_CALL)
+
+        fn = getattr(service, method or "", None)
         if not callable(fn):
-            raise AttributeError(f"{name} has no method {method!r}")
-        return fn(**kwargs)
+            raise RequestFailed(
+                Result.failure(f"{name} has no method {method!r}"),
+                SERVICE_CALL)
+        try:
+            return fn(**kwargs)
+        except Exception as exc:
+            # Foreign code, so it is guarded — and the traceback is kept,
+            # because the message only says whose bug it is.
+            logger.exception("service_call failed")
+            raise RequestFailed(
+                Result.failure(f"{name}.{method} failed: {exc}"),
+                SERVICE_CALL) from exc
 
     def list(self) -> dict:
         """Loaded services and whether each is ready, as ``sdk.services.list``.
@@ -235,18 +270,31 @@ class _Services:
         return self._services.get(name)
 
     def load(self, name: str):
-        """Parsers may inspect/call peers, never change their lifecycle."""
-        raise PermissionError(
-            f"parsers cannot load service {name!r}")
+        """Parsers may inspect/call peers, never change their lifecycle.
+
+        A refusal is a ``Denied``, for the same reason ``call`` raises
+        ``RequestFailed``: this is policy, and policy is the one thing a guest
+        already knows how to catch.
+        """
+        raise Denied(Result.refusal(
+            f"parsers cannot load service {name!r}"), SERVICE_LOAD)
 
     def unload(self, name: str):
         """Parsers may inspect/call peers, never change their lifecycle."""
-        raise PermissionError(
-            f"parsers cannot unload service {name!r}")
+        raise Denied(Result.refusal(
+            f"parsers cannot unload service {name!r}"), SERVICE_UNLOAD)
 
 
 class KernelSDK:
     """What a parser sees when the kernel calls it."""
+
+    #: Raised when the kernel refused. Subclasses ``Failed``, as in the guest.
+    Denied = Denied
+    #: Raised when something broke. The two names a parser writes in an
+    #: ``except`` clause, so they are not optional: a missing one makes the
+    #: clause itself an ``AttributeError``, which masks the failure it was
+    #: written to handle.
+    Failed = RequestFailed
 
     def __init__(self, services: dict | None = None):
         self.fs = _Fs()
@@ -260,9 +308,14 @@ class KernelSDK:
         """Present so a parser can use the same idiom in both worlds."""
         return data
 
-    def fail(self, error: str):
-        """Ditto — a parser normally returns ParseResult.failed instead."""
-        raise RuntimeError(error)
+    def fail(self, error: str, retryable: bool = False):
+        """Ditto — a parser normally returns ParseResult.failed instead.
+
+        It *returns*, matching the guest. Raising was the same parity bug one
+        method over: ``return sdk.fail(...)`` answered in a box and blew up
+        kernel-side.
+        """
+        return Result.failure(error, retryable=retryable)
 
 
 # One instance, because the kernel is one process and this holds no per-call

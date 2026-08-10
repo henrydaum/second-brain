@@ -79,6 +79,17 @@ def test_the_declarations_the_bridge_reads(source):
     caps = declared.get("capabilities") or {}
     assert caps.get("supports_streaming") is True
     assert caps.get("supports_typing") is True
+    # Without this the kernel flattens every notification into markdown and
+    # sends it as ``messages`` — so a plugin registering, a scheduled agent
+    # finishing and the agent's own reply all reach a client as the same kind,
+    # which is the distinction this frontend exists to be able to draw.
+    #
+    # Asserted here rather than left to the render test one screen down,
+    # because the two check different halves and only this one fails when the
+    # declaration goes missing: ``test_every_render_kind_crosses_unchanged``
+    # calls ``render`` directly, so it proves the frame survives the wire while
+    # saying nothing about whether the bus would ever route one to it.
+    assert caps.get("supports_notifications") is True
 
 
 def test_it_declares_every_request_it_makes(source):
