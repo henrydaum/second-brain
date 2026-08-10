@@ -200,6 +200,22 @@ def load_conversation(
         runtime.sessions[session_key] = session
     if marker_changed:
         persist_marker(runtime, session)
+    # Raised here rather than carried into the load reply, and *after* the
+    # marker is written back — the write is what makes this once-per-incident
+    # rather than once-per-load, since it clears the ``busy`` flag the notice
+    # was derived from.
+    #
+    # Persisted, unlike the other two ephemeral notifications. The test is
+    # whether anything else records the thing: a queued message lands in the
+    # transcript seconds later and a compaction leaves a checkpoint, so both
+    # can be forgotten. A turn that never finished writes no ledger row
+    # precisely because nothing completed, so this row is the only durable
+    # trace that it happened at all.
+    for notice in restore_notices:
+        runtime.notify(title=notice["title"], body=notice["body"],
+                       source="runtime", level="warning",
+                       source_session_key=session_key,
+                       conversation_id=conversation_id)
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
         "agent_profile": profile,
@@ -245,8 +261,6 @@ def load_history(runtime, session_key: str, conversation_id: int):
     msg = f"Loaded conversation: {title}\n\nAgent: {new_profile}"
     if old_profile != new_profile:
         msg += f"\n\nSwitched agent: {old_profile} -> {new_profile}"
-    if session.restore_notices:
-        msg += "\n\n" + "\n\n".join(session.restore_notices)
 
     return RuntimeResult(
         messages=[msg],
@@ -460,16 +474,28 @@ def restore_pending_form(runtime, session: RuntimeSession) -> None:
         runtime.emit_event("form_requested", {"session_key": session.key, "form": dict(out.form)})
 
 
-def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[str], bool]:
-    """Normalize stale persisted runtime state before rebuilding a session."""
+def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[dict], bool]:
+    """Normalize stale persisted runtime state before rebuilding a session.
+
+    Notices come back as ``{title, body}`` rather than sentences, because they
+    are raised as notifications: what they report is the *system* recovering
+    from a crash, not an answer to anything the reader just did. They used to
+    be strings glued onto the end of "Loaded conversation: X" with ``+=``,
+    which put a confirmation and a crash report in one blob and made the second
+    one look like a footnote to the first.
+    """
     marker = dict(marker or {})
     cache = dict(marker.get("cache") or {})
     phases = list(cache.get("phases") or [])
-    notices: list[str] = []
+    notices: list[dict] = []
     changed = False
 
     if marker.get("busy"):
-        notices.append("An earlier agent turn in this conversation was interrupted before it finished. To continue the conversation, send a message.")
+        notices.append({
+            "title": "Turn interrupted",
+            "body": "An earlier agent turn in this conversation was interrupted "
+                    "before it finished. Send a message to continue.",
+        })
         marker.update({"busy": False, "turn_priority": "user", "phase": BASE_PHASE})
         cache["phases"] = []
         changed = True
@@ -482,7 +508,11 @@ def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[str], b
                 continue
             kept.append(frame)
         if expired:
-            notices.append("\nAn earlier agent turn in this conversation was lost. To continue the conversation, send a message.")
+            notices.append({
+                "title": "Turn lost",
+                "body": "An earlier agent turn in this conversation was lost. "
+                        "Send a message to continue.",
+            })
             cache["phases"] = kept
             marker["phase"] = _frame_phase(kept[-1]) if kept else BASE_PHASE
             marker["turn_priority"] = _frame_actor(kept[-1]) if kept else "user"

@@ -135,7 +135,12 @@ class RuntimeSession:
     # fields. Persisted with the marker.
     plugin_state: dict[str, dict] = field(default_factory=dict)
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
-    restore_notices: list[str] = field(default_factory=list)
+    # What ``recover_marker`` had to repair when this session was rebuilt, as
+    # ``{title, body}``. Delivered as notifications at ``open_session``; kept
+    # here as the session's own record of what it woke up to, which is the one
+    # question the notification cannot answer later ("was *this* session the
+    # one that crashed?"). Ephemeral — recovery already happened.
+    restore_notices: list[dict] = field(default_factory=list)
     # Whether a human is present at this session right now (can answer an
     # interactive prompt and see output). None = defer to the kernel's global
     # single-active rule (REPL/Telegram, background drivers). True/False = the

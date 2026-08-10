@@ -28,6 +28,71 @@ def test_stale_busy_marker_recovers_to_user_without_replay(tmp_path):
     assert [m["role"] for m in session.history] == ["user"]
 
 
+def test_an_interrupted_turn_is_reported_as_a_notification(tmp_path):
+    """A crash report is not a footnote to "here is where you left off".
+
+    This used to be appended to the load reply with ``+=``, so a confirmation
+    and a recovery report arrived as one blob of text. It is its own event now,
+    which is what lets a client put it somewhere the reply is not.
+
+    ``warning``, and **persisted** — unlike the other two ephemeral
+    notifications. A turn that never finished writes no ledger row precisely
+    because nothing completed, so this row is the only durable trace that it
+    happened.
+    """
+    from events.event_channels import NOTIFICATION_PUSHED
+
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    db.save_message(cid, "user", "do a thing")
+    save_state_marker(db, cid, {"busy": True, "turn_priority": "agent",
+                                "phase": BASE_PHASE, "cache": {"phases": []}})
+
+    seen = []
+    unsub = bus.subscribe(NOTIFICATION_PUSHED, seen.append)
+    try:
+        rt = plain_runtime(db)
+        out = rt.load_conversation("s", cid)
+    finally:
+        unsub()
+
+    assert [n["title"] for n in seen] == ["Turn interrupted"]
+    assert seen[0]["level"] == "warning"
+    assert seen[0]["conversation_id"] == cid
+    # And it is gone from the reply, which is now only the confirmation.
+    messages = " ".join(getattr(out, "messages", None) or [])
+    assert "interrupted" not in messages
+
+
+def test_the_interruption_is_reported_once_not_on_every_load(tmp_path):
+    """Recovery clears the flag it was derived from, and the clear is written
+    back before the notification goes out.
+
+    That ordering is what makes persisting this safe: a notice raised on every
+    subsequent load would fill the panel with one crash reported forever.
+    """
+    from events.event_channels import NOTIFICATION_PUSHED
+
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    db.save_message(cid, "user", "do a thing")
+    save_state_marker(db, cid, {"busy": True, "turn_priority": "agent",
+                                "phase": BASE_PHASE, "cache": {"phases": []}})
+
+    rt = plain_runtime(db)
+    rt.load_conversation("s", cid)
+
+    seen = []
+    unsub = bus.subscribe(NOTIFICATION_PUSHED, seen.append)
+    try:
+        rt.close_session("s")
+        rt.load_conversation("s", cid)
+    finally:
+        unsub()
+
+    assert seen == []
+
+
 def test_restored_command_form_can_be_reprompted(tmp_path):
     db = _db(tmp_path)
     cid = db.create_conversation("x")

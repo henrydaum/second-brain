@@ -1082,11 +1082,11 @@ class ConversationRuntime:
         # restart always lands on the default — and the person who set
         # lockdown before quitting has no reason to suspect otherwise. Saying
         # it here costs one line and is the only moment it can be said.
-        msg = (f"Loaded last conversation{suffix}.\nAgent: {profile}"
-               f"\nPermission mode: {self.security_mode(session_key)}")
-        if session.restore_notices:
-            msg += "\n" + "\n".join(session.restore_notices)
-        return msg
+        # Recovery notices are deliberately absent: ``open_session`` raised
+        # them as notifications on the way here. A crash report is not a
+        # footnote to "here is where you left off".
+        return (f"Loaded last conversation{suffix}.\nAgent: {profile}"
+                f"\nPermission mode: {self.security_mode(session_key)}")
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
         """Remember the active conversation ID for the active session's user."""
