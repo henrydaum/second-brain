@@ -186,6 +186,14 @@ class HTTP(BaseFrontend):
         "supports_inline_forms": True,
         "supports_attachments_out": True,
         "supports_proactive_push": True,
+        # A client here has somewhere to put a notification that is not the
+        # transcript, which is the whole reason the kind exists. Without this
+        # the kernel flattens each one into markdown and sends it as
+        # ``messages`` — the pre-notification behaviour, and right for a
+        # transport whose only surface is a chat log. It is wrong for this one,
+        # and wrong invisibly: a plugin registration would arrive looking like
+        # something a person said.
+        "supports_notifications": True,
         "max_message_chars": None,
     }
 
@@ -404,7 +412,7 @@ class HTTP(BaseFrontend):
     def render(self, sdk, session_key, kind, payload):
         """One render, one frame. No translation, on purpose.
 
-        The ten kinds are the kernel's own vocabulary and they are already
+        The eleven kinds are the kernel's own vocabulary and they are already
         JSON-safe by the time they reach a guest, so a client sees precisely
         what a native frontend would be handed. Anything that wants a different
         shape can build it; nothing has to un-build ours first.
