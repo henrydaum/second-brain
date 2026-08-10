@@ -1174,15 +1174,23 @@ right way round — but it is a real constraint on where such a frontend may
 live, and `tests/test_store_frontend_contracts.py` pins that the reading comes
 out right.
 
-Two `BaseFrontend` hooks are **not** on the wire and a migrated frontend
-therefore loses them: `render_queued_ack` (return True to replace the textual
-mid-turn ack, e.g. with a message reaction) and `render_conversation_banner`
-(mirror the conversation title on a persistent surface). Telegram used both and
-gave them up. Carrying `queued_ack` means a render call whose *return value*
-matters, which the one-way `_render` deliberately is not; `conversation_banner`
-would fit the existing shape and is the cheaper of the two if either comes
-back. Adding either means growing `KINDS` in `sandbox/frontends.py`, the
-`native_names` map in `_adapt_frontend`, and the test that pins the set.
+One `BaseFrontend` hook is **not** on the wire and a migrated frontend
+therefore loses it: `render_conversation_banner` (mirror the conversation title
+on a persistent surface). Telegram used it and gave it up. It would fit the
+existing shape, so bringing it back means growing `KINDS` in
+`sandbox/frontends.py`, the `native_names` map in `_adapt_frontend`, and the
+test that pins the set.
+
+There were two. `render_queued_ack` returned True to replace the textual
+mid-turn ack with something like a message reaction, and it is **gone** rather
+than pending — a worked example of the notification split retiring a hook
+rather than needing one. Its whole job was suppressing a sentence, and the
+sentence no longer exists: the mid-turn receipt is a `persist=False`
+notification now, so a frontend that wants to answer it with a reaction does
+that in `render_notification`, which *is* on the wire and does not need a
+return value. Carrying `queued_ack` would have meant a render call whose return
+value matters, which the one-way `_render` deliberately is not — so the thing
+that made it unmigratable is exactly what made it unnecessary.
 
 `BaseFrontend` itself is **not** migrated and should not be: its 880 lines are
 host-side routing — fifteen bus subscriptions funnelling into ten `render_*`
@@ -2140,11 +2148,9 @@ tables/quotes as `<pre>`/`<blockquote>`. Don't invent a structured message
 type for this — markdown is deliberately the interchange format (it is also
 what the LLM emits, so frontends need exactly one rendering path).
 
-`BaseFrontend` also exposes optional per-frontend polish hooks:
-`render_queued_ack` (suppress the textual mid-turn ack in favor of e.g. a
-message reaction) and `render_conversation_banner` (mirror the session's
-conversation title on a persistent surface; fed by the
-`SESSION_CONVERSATION_CHANGED` bus channel).
+`BaseFrontend` also exposes one optional per-frontend polish hook:
+`render_conversation_banner` (mirror the session's conversation title on a
+persistent surface; fed by the `SESSION_CONVERSATION_CHANGED` bus channel).
 
 ## Where to plug in
 

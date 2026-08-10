@@ -44,20 +44,26 @@ def test_invalid_command_args_render_a_message():
     assert any("fifa_world_cup_daily_update" in m for m in fe.rendered)
 
 
-def test_queued_ack_hook_suppresses_the_text_ack():
+def test_a_queued_message_says_so_without_the_agent_speaking():
+    """The receipt is a notification now, and carries no text on the result.
+
+    It used to ride on ``RuntimeResult.messages`` as "Got it — I'll read that
+    as soon as I finish this step" — the agent's voice, first person, on a
+    receipt the agent had no part in, mid-turn. ``data["queued"]`` stays,
+    because that is what callers branch on; only the sentence is gone.
+
+    ``render_queued_ack`` went with it. Its whole job was suppressing that
+    sentence for a frontend that would rather react with an emoji, and there
+    is no longer a sentence to suppress — nor was it ever reachable, since it
+    is not one of the render kinds a sandboxed frontend receives.
+    """
     from runtime.session import RuntimeResult
 
     fe = _CaptureFrontend()
-    queued = RuntimeResult(messages=["Got it — I'll read that as soon as I finish this step."],
-                           data={"queued": True})
+    fe._render_result("s", RuntimeResult(data={"queued": True}))
 
-    fe._render_result("s", queued)
-    assert fe.rendered  # default hook: text ack renders
-
-    fe.rendered.clear()
-    fe.render_queued_ack = lambda _key: True  # reaction-capable frontend
-    fe._render_result("s", queued)
     assert fe.rendered == []
+    assert not hasattr(fe, "render_queued_ack")
 
 
 # ── Quicklinks ───────────────────────────────────────────────────────

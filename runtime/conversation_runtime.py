@@ -213,10 +213,21 @@ class ConversationRuntime:
                     return RuntimeResult(False, error={"code": "empty_input", "message": "No input."})
                 with session.lock:
                     session.pending_user_messages.append(text)
-                return RuntimeResult(
-                    messages=["Got it — I'll read that as soon as I finish this step."],
-                    data={"queued": True},
-                )
+                # A notification rather than a reply, because nothing was
+                # answered: the message was accepted and nobody has read it
+                # yet. Saying "Got it — I'll read that as soon as I finish
+                # this step" put the agent's voice on a receipt the agent had
+                # no part in, in the first person, in the middle of a turn the
+                # user is watching that agent take.
+                #
+                # ``persist=False`` — a receipt is worth seeing for a moment
+                # and worth nothing afterwards. What it acknowledges arrives
+                # in the transcript under its own steam a few seconds later.
+                self.notify(
+                    title="Message queued",
+                    body="It will be read when the current step finishes.",
+                    source="runtime", session_key=session_key, persist=False)
+                return RuntimeResult(data={"queued": True})
             else:
                 return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
 
