@@ -53,7 +53,8 @@ shown it is being used, and the curator should revise it on the same evidence.
 dependencies_files = []
 dependencies_pip = []
 requests = ["paths.get", "fs.read", "fs.list", "fs.write", "fs.delete",
-            "session.get", "db.query", "db.write", "config.read", "event.emit"]
+            "session.get", "session.push", "db.query", "db.write",
+            "config.read"]
 
 import time
 
@@ -92,17 +93,10 @@ HEAD_CHARS = 2000
 #: that this field goes in every prompt where the entry ranks.
 MAX_DESCRIPTION = 1024
 
-#: Broadcast a one-line note to whatever chat the user is actually looking at.
-#: A ``chat_message_pushed`` payload carrying no ``session_key`` goes to every
-#: live session rather than to a named one, which is exactly what is wanted
-#: here — the write happened in a session nobody is watching, so there is no
-#: session to reply *to*.
-CHAT_MESSAGE_PUSHED = "chat_message_pushed"
-
-#: What each action is called in that note. Past tense and entry-first, because
-#: the name is the only part worth scanning for. Reads are absent on purpose:
-#: they are not changes, and a read that announced itself would put a line in
-#: the user's chat every time the agent opened a memory.
+#: What each action is called in that note. Past tense, because the note is
+#: about something that already happened. Reads are absent on purpose: they are
+#: not changes, and a read that announced itself would interrupt the user every
+#: time the agent opened a memory.
 NOTIFY_VERB = {"create": "created", "update": "updated", "delete": "deleted"}
 
 
@@ -638,6 +632,25 @@ class Memory(BaseTool):
         stays correct for a concurrent multi-user frontend, which owns its own
         attendance and would defeat any guess made from a session key.
 
+        **A notification rather than a chat message**, which is what it always
+        wanted to be. This used to emit ``chat_message_pushed`` by literal
+        channel name — reaching around ``session.push`` to a bus channel this
+        tool does not own, in order to get the one thing that channel offered
+        and the Request did not: a payload with a ``source`` on it. Nothing
+        read that field, so the note arrived as an ordinary line of chat and
+        the attribution was decoration.
+
+        ``notify=True`` is the supported spelling of the same intent, and it is
+        better in the way that matters: the kernel stamps ``source`` off the
+        provenance chain, so it says ``tool_memory`` because that is what
+        actually ran, not because this file claimed it. A frontend with a
+        notification area puts it there; one without shows it in the chat
+        exactly as before, so nothing regresses for the REPL or Telegram.
+
+        No ``session_key``, deliberately, and that is unchanged: the write
+        happened where nobody was watching, so there is no session to reply
+        *to* and the note goes to whatever surface the user is actually at.
+
         Failing closed on both readings, and the direction matters in opposite
         ways. An unreadable ``attended`` means *do not send*, since a spurious
         notification in the middle of somebody's conversation is worse than a
@@ -652,14 +665,8 @@ class Memory(BaseTool):
             if not self._unattended(sdk) or not self._announcing(sdk):
                 return
             verb = NOTIFY_VERB.get(action, action)
-            sdk.events.emit(CHAT_MESSAGE_PUSHED, {
-                "message": f"Memory {verb}: {name}",
-                "title": "",
-                "kind": "note",
-                "source": "memory",
-                "source_id": self.name,
-                "sent_at": time.time(),
-            })
+            sdk.session.push(name, title=f"Memory {verb}", notify=True,
+                             level="success")
         except Exception:                      # noqa: BLE001 - see docstring
             sdk.log(f"could not announce the memory {action} of {name!r}",
                     level="debug")
