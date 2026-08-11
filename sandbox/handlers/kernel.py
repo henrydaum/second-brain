@@ -2460,6 +2460,10 @@ def _not_yours(adapter, session_key: str) -> Result | None:
 def _prepare_attachment(ctx, args: dict):
     """Build the richer send_attachment payload, or None for the plain path.
 
+    ``files`` is the many-file spelling and is answered first, because a person
+    who picks three files has sent *one* message with three attachments — see
+    ``_many_attachments``. Everything below is the one-file form.
+
     Two jobs, both of which exist because a frontend's files arrive over a
     *transport* rather than off the user's disk.
 
@@ -2480,12 +2484,71 @@ def _prepare_attachment(ctx, args: dict):
     Returns None when the guest asked for neither, so the original path stays
     byte-for-byte what it was.
     """
+    if isinstance(args.get("files"), list):
+        return _many_attachments(ctx, args)
     extras = {key: args.get(key) for key in
               ("file_name", "caption", "is_photo")}
     if not args.get("ingest") and not any(extras.values()):
         return None
+    return _one_attachment(ctx, args)
 
+
+def _many_attachments(ctx, args: dict):
+    """Every file of a many-file submit, as one action's content.
+
+    A person who attaches three files and types a line has sent **one
+    message**, and the kernel has always been able to carry it: the loop
+    bundles the whole of ``cs.pending_attachments`` into the first model call
+    of the turn. What could not say it was the wire — one submit carried one
+    path, and a ``send_attachment`` hands priority straight to the agent, so
+    the second file arrived at a session that was already busy and was told to
+    wait. A transport with a file picker could therefore only ever send one.
+
+    So the *Request* grew an argument rather than the vocabulary growing a
+    type. ``files`` is a list of the same per-file dicts the flat form spells
+    inline, and one file sent that way produces byte-identical content to the
+    flat form — this is a widening, and there is nothing for an existing
+    frontend to migrate to.
+
+    ``ingest`` and ``caption`` may be stated once for the message. The caption
+    rides on the **first** file only: it is the message's line, and repeating
+    it per file would say it three times in history and three times to the
+    model.
+    """
+    entries = [dict(entry) if isinstance(entry, dict) else {}
+               for entry in args.get("files") or []]
+    # Refused rather than skipped, for the reason an unreadable file below
+    # fails the whole message: dropping one quietly sends a message that is
+    # missing a file nobody will be told about.
+    if not entries or not all(entry.get("path") for entry in entries):
+        return Result.failure("frontend.submit: every file needs a path",
+                              code=ERROR_INVALID_ARGUMENT)
+
+    caption = str(args.get("caption") or "")
+    prepared = []
+    for index, entry in enumerate(entries):
+        if "ingest" not in entry:
+            entry["ingest"] = args.get("ingest")
+        if index == 0 and caption and not entry.get("caption"):
+            entry["caption"] = caption
+        made = _one_attachment(ctx, entry)
+        if isinstance(made, Result):
+            # One unreadable file fails the whole message. Half a message is
+            # worse than none: the person would be told it landed, and the
+            # agent would answer about the files that happened to arrive.
+            return made
+        prepared.append(made)
+
+    if len(prepared) == 1:
+        return prepared[0]
+    return {"files": prepared, "caption": caption}
+
+
+def _one_attachment(ctx, args: dict):
+    """Ingest one file if asked, and describe it as the action wants it."""
     path = Path(str(args.get("path") or ""))
+    extras = {key: args.get(key) for key in
+              ("file_name", "caption", "is_photo")}
     file_name = str(extras.get("file_name") or "") or path.name
     if args.get("ingest"):
         from attachments.cache import save as save_attachment

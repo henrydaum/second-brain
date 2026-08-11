@@ -462,3 +462,158 @@ def test_reading_an_empty_file_terminates(renderers, media_sdk, tmp_path):
     path = tmp_path / "empty.bin"
     path.write_bytes(b"")
     assert renderers.read_all_bytes(media_sdk, str(path)) == b""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Albums. Telegram sends a media group as several updates, and a submitted
+# attachment hands the turn to the agent — so delivering them as they land
+# sent the first photo and answered "Still working" about the rest.
+# ──────────────────────────────────────────────────────────────────────
+
+class _Handle:
+    """A telegram File, as far as this frontend uses one."""
+
+    def __init__(self, recorded):
+        self._recorded = recorded
+
+    def download_to_drive(self, path):
+        """The transport writing straight to the path the kernel allocated."""
+        self._recorded.append(path)
+
+
+class _FakeFrontendSDK:
+    """The inbound half of the SDK, recording what was submitted."""
+
+    class Failed(Exception):
+        """Stands in for sdk.Failed."""
+
+    def __init__(self, tmp_path):
+        self.submits = []
+        self.downloads = []
+        self.logs = []
+        self._tmp = tmp_path
+        self._made = 0
+        self.path = _Path
+        self.fs = types.SimpleNamespace(temp=self._temp)
+        self.frontend = types.SimpleNamespace(
+            submit_attachments=self._submit_attachments,
+            submit_text=lambda key, text: self.submits.append(
+                ("text", key, text)),
+            pending_input=lambda key: None)
+        self.session = types.SimpleNamespace(get=lambda key: {})
+
+    def log(self, message, level="info"):
+        self.logs.append((level, message))
+
+    def _temp(self, suffix=""):
+        self._made += 1
+        return str(self._tmp / f"scratch{self._made}{suffix}")
+
+    def _submit_attachments(self, key, files, caption="", ingest=False):
+        self.submits.append(("files", key, list(files), caption, ingest))
+        return True
+
+
+@pytest.fixture
+def telegram(module, tmp_path):
+    """A frontend instance with a loop that runs nothing and an SDK that lies."""
+    def run(done):
+        """Stand in for the loop: nothing here needs a slice to actually pass."""
+        if hasattr(done, "close"):        # a real coroutine, e.g. poll's sleep
+            done.close()
+        return done
+
+    frontend = module.TelegramFrontend()
+    frontend._loop = types.SimpleNamespace(run_until_complete=run)
+    return frontend, _FakeFrontendSDK(tmp_path)
+
+
+def _photo(key="telegram:1:1:0", name="photo.jpg", group="g1", caption="",
+           recorded=None):
+    return {"kind": "file", "key": key, "file": _Handle(recorded or []),
+            "name": name, "caption": caption, "is_photo": True,
+            "group": group}
+
+
+def test_an_album_is_submitted_as_one_message(telegram):
+    """Three photos, one submit — which is the only arrangement that works.
+
+    Three submits would be three ``send_attachment`` actions, and the second
+    arrives at a session the first just handed to the agent.
+    """
+    frontend, sdk = telegram
+    for index in range(3):
+        frontend._deliver(sdk, _photo(name=f"p{index}.jpg",
+                                      caption="which is sharpest?" if not index
+                                      else ""))
+
+    assert sdk.submits == [], "nothing goes until the album stops arriving"
+
+    frontend._albums[("telegram:1:1:0", "g1")]["last"] -= frontend._ALBUM_WAIT
+    assert frontend.poll(sdk) is True
+
+    kind, key, files, caption, ingest = sdk.submits[0]
+    assert (kind, key, ingest) == ("files", "telegram:1:1:0", True)
+    assert [one["file_name"] for one in files] == ["p0.jpg", "p1.jpg",
+                                                   "p2.jpg"]
+    # Hoisted: it is the album's line, not a label on the photo that carried it.
+    assert caption == "which is sharpest?"
+    assert [one["caption"] for one in files] == ["", "", ""]
+
+
+def test_a_lone_file_still_goes_straight_through(telegram):
+    """No media group, no waiting — the ordinary case is unchanged."""
+    frontend, sdk = telegram
+
+    frontend._deliver(sdk, _photo(group="", name="only.jpg",
+                                  caption="look at this"))
+
+    kind, key, files, caption, _ingest = sdk.submits[0]
+    assert (kind, len(files)) == ("files", 1)
+    assert files[0]["file_name"] == "only.jpg"
+    # A single file's caption stays on the file, which is what the one-file
+    # form has always sent.
+    assert (files[0]["caption"], caption) == ("look at this", "")
+
+
+def test_anything_else_for_that_chat_sends_the_album_first(telegram):
+    """What a person sent in an order should arrive in it."""
+    frontend, sdk = telegram
+    frontend._deliver(sdk, _photo(name="p0.jpg"))
+    frontend._deliver(sdk, {"kind": "text", "key": "telegram:1:1:0",
+                            "text": "what do you make of those?"})
+
+    assert [one[0] for one in sdk.submits] == ["files", "text"]
+
+
+def test_another_chats_album_is_left_alone(telegram):
+    """Flushing is per chat: one person typing must not post another's photos."""
+    frontend, sdk = telegram
+    frontend._deliver(sdk, _photo(key="telegram:2:2:0", name="theirs.jpg"))
+    frontend._deliver(sdk, {"kind": "text", "key": "telegram:1:1:0",
+                            "text": "hello"})
+
+    assert [one[0] for one in sdk.submits] == ["text"]
+    assert ("telegram:2:2:0", "g1") in frontend._albums
+
+
+def test_a_still_arriving_album_is_not_sent_early(telegram):
+    """The window is measured from the *last* photo, not the first."""
+    frontend, sdk = telegram
+    frontend._deliver(sdk, _photo(name="p0.jpg"))
+    frontend._albums[("telegram:1:1:0", "g1")]["last"] -= frontend._ALBUM_WAIT
+    frontend._deliver(sdk, _photo(name="p1.jpg"))
+
+    assert frontend._flush_albums(sdk) is False
+    assert sdk.submits == []
+
+
+def test_stopping_says_what_it_dropped(telegram):
+    """Photos vanishing without a word is what this whole path avoids."""
+    frontend, sdk = telegram
+    frontend._deliver(sdk, _photo(name="p0.jpg"))
+
+    frontend.stop(sdk)
+
+    assert any("unsent album" in message for _level, message in sdk.logs)
+    assert frontend._albums == {}

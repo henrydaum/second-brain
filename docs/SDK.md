@@ -999,6 +999,7 @@ Carrying what a person *does* back the other way is:
 sdk.frontend.submit_text(session_key, text)
 sdk.frontend.submit_attachment(session_key, path, extension="", file_name="",
                                caption="", is_photo=False, ingest=False)
+sdk.frontend.submit_attachments(session_key, files, caption="", ingest=False)
 sdk.frontend.submit_action(session_key, action_type, payload=None)
 sdk.frontend.cancel(session_key)
 sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
@@ -1040,6 +1041,21 @@ temp = sdk.fs.temp(suffix=sdk.path.suffix(name))
 await handle.download_to_drive(temp)
 sdk.frontend.submit_attachment(key, temp, file_name=name,
                                caption=caption, ingest=True)
+```
+
+**Several files are one message, so they are one submit.** A person who picks
+three files and types a line has not sent three messages, and sending them as
+three does not work: a `send_attachment` hands the turn to the agent, so the
+second one arrives at a session that is already busy and is told to wait.
+`submit_attachments` carries the whole message, and the model sees every file
+in the same call. `caption` and `ingest` are the message's; a file may still
+say its own.
+
+```python
+sdk.frontend.submit_attachments(key, [
+    {"path": first, "file_name": "chart.png"},
+    {"path": second, "file_name": "notes.pdf"},
+], caption="what do these have in common?", ingest=True)
 ```
 
 ### Acting as one of your sessions

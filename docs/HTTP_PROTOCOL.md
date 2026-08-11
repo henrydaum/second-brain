@@ -416,7 +416,8 @@ catalogues all of them with their policy inputs. The useful subset:
 | Request | Arguments |
 |---|---|
 | `frontend.submit` | `input_kind: "text"`, `text` — chat and slash commands alike |
-| `frontend.submit` | `input_kind: "attachment"`, `path`, `file_name`, `caption`, `ingest` |
+| `frontend.submit` | `input_kind: "attachment"`, `path`, `file_name`, `caption`, `ingest` — one file |
+| `frontend.submit` | `input_kind: "attachment"`, `files: [{path, file_name, extension, is_photo, caption}]`, `caption`, `ingest` — one message, several files |
 | `frontend.resolve` | `value`, `request_id` |
 | `frontend.cancel` | — stop the current turn |
 | `frontend.pending` | — the id of the approval still waiting, or `null`. With `details: true`, the question itself as `{kind, payload}` — approval **or** form step — which is how a reconnecting client gets back to one |
@@ -451,6 +452,40 @@ whole-file `read_bytes` is capped well below the sizes a UI deals in. Ask for
 successive `offset`/`length` windows and join them; a short read means you
 reached the end, so the loop terminates without your having to learn the size
 first.
+
+### Sending files
+
+There is no upload route, and there does not need to be one: a file becomes a
+path first, and the path is what a submit carries.
+
+```
+POST /sdk/fs.temp        {"suffix": ".png"}          → a scratch path
+POST /sdk/fs.write_bytes {"path": …, "data": "<base64>"}
+POST /sdk/fs.write_bytes {"path": …, "data": "<base64>", "mode": "append"}
+POST /sdk/frontend.submit {"input_kind": "attachment",
+                           "files": [{"path": …, "file_name": "chart.png"},
+                                     {"path": …, "file_name": "notes.pdf"}],
+                           "caption": "what do these have in common?",
+                           "ingest": true}
+```
+
+Scratch is a safe write, so none of this raises a dialog. One `write_bytes`
+message is capped exactly as one `read_bytes` answer is, so a large file goes
+up in `append` chunks. `ingest` then moves each file into the attachment cache
+— a watched directory, so the pipeline indexes it like anything else — and
+removes the scratch copy.
+
+**Attach several files in one submit, not several submits.** A submitted
+attachment hands the turn to the agent immediately, so a second submit arrives
+at a session that is already busy and comes back `busy`. `files` is the whole
+message: one action, one turn, and the model sees every file in the same call.
+`caption` is the line the person typed and belongs to the message — it is
+recorded once, on the first file, rather than repeated per file. A file may
+still carry its own `caption` when the transport gave it one (Telegram does).
+
+The one-file form (`path`, `file_name`, `caption`, `ingest` at the top level)
+is unchanged and still works; `files` with one entry means exactly the same
+thing.
 
 ## 4. `GET /files` — a host file as a URL
 

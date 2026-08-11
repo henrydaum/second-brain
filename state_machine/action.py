@@ -712,21 +712,47 @@ class SendAttachment(Action):
         return True, None
 
     def execute(self):
-        """Queue an attachment for parsing and hand the turn to the agent."""
+        """Queue this message's attachments and hand the turn to the agent.
+
+        One action, however many files. A person who attaches three and types a
+        line has sent one message, and the loop already bundles the whole of
+        ``pending_attachments`` into the first model call of the turn — so the
+        only thing that had to be true here is that three files can arrive
+        together. A file per action could not: the first hands priority to the
+        agent, and the next one meets a busy session.
+
+        ``files`` is the many-file spelling; without it the content *is* the
+        one file, exactly as it always was.
+
+        Extensions are checked for every file before any of them is parsed, so
+        a refused one leaves nothing queued. Half a message is worse than
+        none — the agent would answer about whichever files happened to pass.
+        """
         content = dict(self.content or {})
-        ext = self.cs.attachment_extension(content)
-        if self.cs.allowed_attachment_extensions and ext not in self.cs.allowed_attachment_extensions:
-            raise self.error(ERROR_ATTACHMENT_NOT_ALLOWED, f".{ext} attachments are not allowed for this model.", extension=ext)
+        items = [dict(f) for f in content.get("files") or []] or [content]
+        for item in items:
+            ext = self.cs.attachment_extension(item)
+            if self.cs.allowed_attachment_extensions and ext not in self.cs.allowed_attachment_extensions:
+                raise self.error(ERROR_ATTACHMENT_NOT_ALLOWED, f".{ext} attachments are not allowed for this model.", extension=ext)
         self.cs.phase = PHASE_PARSING_ATTACHMENT
         try:
-            parsed = self.cs.attachment_parser(content) if self.cs.attachment_parser else content
+            parsed_items = [self.cs.attachment_parser(item) if self.cs.attachment_parser else item
+                            for item in items]
         finally:
             self.cs.reset_phase()
         # If the parser produced an Attachment dataclass, queue it so the
         # next agent turn can hand it to the LLM service.
-        attachment = (parsed or {}).get("attachment") if isinstance(parsed, dict) else None
-        if attachment is not None:
-            self.cs.pending_attachments.append(attachment)
+        for one in parsed_items:
+            attachment = (one or {}).get("attachment") if isinstance(one, dict) else None
+            if attachment is not None:
+                self.cs.pending_attachments.append(attachment)
+        parsed = parsed_items[0] if len(parsed_items) == 1 else {
+            "files": parsed_items,
+            # One history row for one message, so the pointers are joined
+            # rather than each file writing a row of its own.
+            "text": "\n".join(str((one or {}).get("text") or "")
+                              for one in parsed_items if isinstance(one, dict)).strip(),
+        }
         actor = self.cs.participants.get(self.actor_id)
         if actor and actor.kind == "user":
             self.cs.switch_priority(self.actor_id)

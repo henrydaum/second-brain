@@ -970,6 +970,30 @@ class _Frontend(_Namespace):
                          file_name=file_name, caption=caption,
                          is_photo=bool(is_photo), ingest=bool(ingest))
 
+    def submit_attachments(self, session_key: str, files, caption: str = "",
+                           ingest: bool = False):
+        """Hand over several files someone sent as **one** message.
+
+        ``files`` is a list of the same fields ``submit_attachment`` takes
+        inline — ``{"path": …, "file_name": …, "extension": …,
+        "is_photo": …, "caption": …}`` — or just the paths, when there is
+        nothing else to say about them. ``caption`` and ``ingest`` are the
+        message's, applying to every file that does not state its own. The
+        message's caption rides on the first file, since it is the line the
+        person typed rather than a label on each.
+
+        Submitting them one at a time does not work and cannot be made to: the
+        first hands the turn to the agent, and the rest arrive at a session
+        that is already busy. This is one action, so the model sees all of
+        them in the same call — which is what a person means by attaching
+        three files.
+        """
+        return self._ask(FRONTEND_SUBMIT, token=self._token(),
+                         session_key=session_key, input_kind="attachment",
+                         files=[dict(f) if isinstance(f, dict)
+                                else {"path": str(f)} for f in files or []],
+                         caption=caption, ingest=bool(ingest))
+
     def submit_action(self, session_key: str, action_type: str, payload=None):
         """Hand over a typed action — a button press, a menu choice."""
         return self._ask(FRONTEND_SUBMIT, token=self._token(),

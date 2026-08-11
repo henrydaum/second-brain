@@ -227,6 +227,18 @@ class _Desk:
     def __init__(self, runtime):
         self.runtime = runtime
         self.attendance = []
+        #: Every action the state machine was handed, as ``(key, type, payload)``.
+        self.submitted = []
+
+    def submit(self, session_key, action_type, payload=None):
+        """One action, as ``ConversationRuntime.handle_action`` would take it."""
+        self.submitted.append((session_key, action_type, payload))
+        return SimpleNamespace(ok=True)
+
+    def submit_attachment(self, session_key, path, extension=None):
+        """The plain single-file entry, which carries no metadata."""
+        self.submitted.append((session_key, "plain", {"path": path}))
+        return SimpleNamespace(ok=True)
 
     def mark_attended(self, session_key):
         """Somebody opened a stream for this session."""
@@ -394,6 +406,23 @@ def _read(conn, until=b"\r\n\r\n", timeout=3.0) -> bytes:
         if not chunk:
             break
         got += chunk
+    return got
+
+
+def _answered(frontend, conn, tries: int = 200) -> bytes:
+    """Poll until the held request is answered, then hand back the reply.
+
+    ``act`` is asynchronous — the answer is collected on a later ``poll`` and
+    only then written to the socket — so reading without polling reads an
+    empty socket. ``settle`` stops at the first quiet poll, which for a Request
+    that has not finished yet is the poll immediately after it was accepted.
+    """
+    got = b""
+    for _ in range(tries):
+        frontend.poll()
+        got += _read(conn, until=b"}", timeout=0.02)
+        if b"}" in got:
+            break
     return got
 
 
@@ -661,6 +690,37 @@ def test_a_client_cannot_reach_another_frontends_session_by_key(running):
     # Rewritten to our own thread on the way through, so the other session was
     # never named at all.
     assert running.state == [("http:t9", "sandbox", "reached")]
+
+
+@pytest.mark.store
+def test_a_client_can_attach_several_files_to_one_message(running):
+    """A file picker returns a list, and this is the route it takes.
+
+    One submit, one action, one turn — which is the only arrangement that
+    works: a submitted attachment hands the turn to the agent, so a second
+    submit would arrive at a busy session and come back ``busy``. That is what
+    made this a one-file transport, and nothing in this file caused it or can
+    fix it; the ``files`` argument on ``frontend.submit`` is what does.
+    """
+    body = json.dumps({
+        "input_kind": "attachment",
+        "files": [{"path": "/tmp/chart.png", "file_name": "chart.png"},
+                  {"path": "/tmp/notes.pdf", "file_name": "notes.pdf"}],
+        "caption": "what do these have in common?"})
+    conn = _open(running, _request("POST", "/sdk/frontend.submit?thread=t10",
+                                   body=body))
+    raw = _answered(running, conn)
+    conn.close()
+
+    assert _status(raw) == 200
+    assert len(running.desk.submitted) == 1, "one message, one action"
+    key, action_type, payload = running.desk.submitted[0]
+    assert (key, action_type) == ("http:t10", "send_attachment")
+    assert [f["file_name"] for f in payload["files"]] == ["chart.png",
+                                                          "notes.pdf"]
+    # The person's line is the message's, so it is recorded once.
+    assert [f["caption"] for f in payload["files"]] == [
+        "what do these have in common?", ""]
 
 
 @pytest.mark.store
