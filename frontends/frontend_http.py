@@ -64,6 +64,20 @@ the session rather than at this frontend. Three consequences worth knowing:
   kernel supplies this frontend's token for ``frontend.*`` Requests. A token
   or ``session_key`` in the body is ignored.
 
+There is no upload route, and there is deliberately no need for one: a file
+becomes a *path* first (``fs.temp`` for scratch, then ``fs.write_bytes``, in
+``append`` chunks for anything larger than one wire message), and the path is
+what ``frontend.submit`` carries. Scratch is a safe write, so none of it raises
+a dialog, and ``ingest`` moves the file into the attachment cache on the way
+in.
+
+**Several files go in one submit** — ``input_kind: "attachment"`` with
+``files: [{path, file_name, …}]`` and the message's own ``caption``. Not three
+submits: a submitted attachment hands the turn to the agent, so the second
+would arrive at a session that is already busy and come back ``busy``, which
+is what made a transport with a file picker a one-file transport. One submit
+is one action, one turn, and every file in the same model call.
+
 --------------------------------------------------------------------------
 Running it
 --------------------------------------------------------------------------
@@ -184,6 +198,11 @@ class HTTP(BaseFrontend):
         "supports_buttons": True,
         "supports_rich_text": True,
         "supports_inline_forms": True,
+        # Both directions. Inbound is not a route of ours — a client writes
+        # the bytes to scratch through ``fs.write_bytes`` and submits the
+        # path — but a capability nobody declares is one a client has no way
+        # to discover, and this transport has a file picker behind it.
+        "supports_attachments_in": True,
         "supports_attachments_out": True,
         "supports_proactive_push": True,
         # A client here has somewhere to put a notification that is not the
