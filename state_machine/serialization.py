@@ -80,7 +80,16 @@ def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif role == "tool":
             history.append({"role": "tool", "tool_call_id": msg.get("tool_call_id"), "name": msg.get("tool_name"), "content": content})
         elif role == "user":
-            history.append({"role": "user", "content": content})
+            # The files stay a *record* here rather than being rendered back
+            # into the text. The prompt line is built at call time
+            # (``ConversationLoop._messages``), which is the only place that
+            # knows it is talking to a model — everything else holding this
+            # history (a rewrite, a client, a memory extractor) wants the two
+            # apart, which is the whole point of the column.
+            row = {"role": "user", "content": content}
+            if msg.get("attachments"):
+                row["attachments"] = list(msg["attachments"])
+            history.append(row)
     return heal_orphans(history)
 
 
@@ -108,7 +117,7 @@ def save_history_message(db, conversation_id: int, msg: dict[str, Any]) -> None:
     role, content = msg.get("role"), msg.get("content") or ""
     if role == "assistant" and msg.get("tool_calls"):
         content = json.dumps({"content": msg.get("content"), "tool_calls": msg["tool_calls"]})
-    db.save_message(conversation_id, role, content, tool_call_id=msg.get("tool_call_id"), tool_name=msg.get("name"))
+    db.save_message(conversation_id, role, content, tool_call_id=msg.get("tool_call_id"), tool_name=msg.get("name"), attachments=msg.get("attachments"))
 
 
 def save_state_marker(db, conversation_id: int, state: dict[str, Any]) -> None:

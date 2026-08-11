@@ -355,14 +355,19 @@ class ConversationRuntime:
 
         # Callers that bypass SendAttachment (e.g. iterate_agent_turn) can
         # pass attachments straight on the payload — push them onto
-        # cs.pending_attachments so the next agent turn picks them up.
+        # cs.pending_attachments so the next agent turn picks them up. Their
+        # records go on the message row like anybody else's: the row is what
+        # says the message carried a file, and a background driver's message
+        # is not less of a message.
+        inbound_records = []
         if inbound_attachments:
             from attachments.attachment import Attachment
             for entry in inbound_attachments:
+                if isinstance(entry, dict):
+                    entry = Attachment.from_dict(entry)
                 if isinstance(entry, Attachment):
                     session.cs.pending_attachments.append(entry)
-                elif isinstance(entry, dict):
-                    session.cs.pending_attachments.append(Attachment.from_dict(entry))
+                    inbound_records.append(entry.record())
 
         # Empty-input guard, matching v1 behavior. Skips state-machine entry
         # so we don't pollute history/events with a doomed action.
@@ -400,7 +405,8 @@ class ConversationRuntime:
         out.add_action_result(result)
         _approvals.resolve_answered_request(self, session.key, request_id, result)
         text = _disp.text_after_action(action_type, text, result)
-        _disp.absorb_user_action(self, session, action_type, text, result)
+        _disp.absorb_user_action(self, session, action_type, text, result,
+                                 records=inbound_records)
         _disp.emit_state_change(session, old_phase, old_priority)
         _disp.decorate_form(session, out)
         _disp.echo_callable_result(action_type, result, out)

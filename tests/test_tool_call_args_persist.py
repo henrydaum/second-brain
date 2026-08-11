@@ -31,10 +31,11 @@ class _DB:
         self.rows = []
 
     def save_message(self, conversation_id, role, content,
-                     tool_call_id=None, tool_name=None):
+                     tool_call_id=None, tool_name=None, attachments=None):
         self.rows.append({"conversation_id": conversation_id, "role": role,
                           "content": content, "tool_call_id": tool_call_id,
-                          "tool_name": tool_name})
+                          "tool_name": tool_name,
+                          "attachments": attachments or []})
 
 
 def _saved(path):

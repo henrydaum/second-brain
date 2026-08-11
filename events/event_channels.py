@@ -299,6 +299,13 @@ Payload:
     role:         str   — "user" | "assistant" | "tool"
     content:      str
     actor_id:     str   — "user" | "agent"
+    attachments:  list[dict]            — user rows: the files that message
+                                          carried, as {path, file_name,
+                                          modality, extension}. Empty for
+                                          almost every row; ``content`` is
+                                          what the person typed and nothing
+                                          else, so this is the only thing
+                                          saying a file arrived.
     name:         str (optional)        — tool rows: the tool name
     tool_call_id: str (optional)        — tool rows: id pairing with the call
     tool_calls:   list[dict] (optional) — assistant rows that request tools"""

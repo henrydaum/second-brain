@@ -249,8 +249,8 @@ class _FakeDb:
     def __init__(self):
         self.rows = []
 
-    def save_message(self, conversation_id, role, content, tool_call_id=None, tool_name=None):
-        self.rows.append({"role": role, "content": content, "tool_call_id": tool_call_id, "tool_name": tool_name})
+    def save_message(self, conversation_id, role, content, tool_call_id=None, tool_name=None, attachments=None):
+        self.rows.append({"role": role, "content": content, "tool_call_id": tool_call_id, "tool_name": tool_name, "attachments": attachments or []})
 
 
 def test_compaction_marker_preserves_db_rows_but_hides_pre_checkpoint_replay():

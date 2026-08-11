@@ -742,14 +742,18 @@ class SendAttachment(Action):
             self.cs.reset_phase()
         # If the parser produced an Attachment dataclass, queue it so the
         # next agent turn can hand it to the LLM service.
+        records = []
         for one in parsed_items:
-            attachment = (one or {}).get("attachment") if isinstance(one, dict) else None
-            if attachment is not None:
-                self.cs.pending_attachments.append(attachment)
+            if not isinstance(one, dict):
+                continue
+            if one.get("attachment") is not None:
+                self.cs.pending_attachments.append(one["attachment"])
+            if one.get("record"):
+                records.append(one["record"])
         parsed = parsed_items[0] if len(parsed_items) == 1 else {
             "files": parsed_items,
-            # One history row for one message, so the pointers are joined
-            # rather than each file writing a row of its own.
+            # One message, one row of text: whatever the person typed once,
+            # not a line per file. The files themselves are ``records``.
             "text": "\n".join(str((one or {}).get("text") or "")
                               for one in parsed_items if isinstance(one, dict)).strip(),
         }
@@ -757,4 +761,7 @@ class SendAttachment(Action):
         if actor and actor.kind == "user":
             self.cs.switch_priority(self.actor_id)
         event = self.cs.event("attachment", self.actor_id, attachment=content, parsed=parsed)
-        return ActionResult(True, self.action_type, events=[event], data={"parsed": parsed})
+        # ``records`` is what the transcript row keeps in its own column;
+        # ``parsed`` stays the whole parse for anything reading the event.
+        return ActionResult(True, self.action_type, events=[event],
+                            data={"parsed": parsed, "records": records})

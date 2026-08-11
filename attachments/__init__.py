@@ -11,7 +11,8 @@ three-tier routing:
     3. Pointer - neither                     -> just file name + path.
 """
 
-from attachments.attachment import Attachment, AttachmentBundle
+from attachments.attachment import (Attachment, AttachmentBundle, pointer_for,
+                                    with_pointers)
 from attachments.parse import parse_attachment
 from attachments.cache import save
 
@@ -19,5 +20,7 @@ __all__ = [
     "Attachment",
     "AttachmentBundle",
     "parse_attachment",
+    "pointer_for",
+    "with_pointers",
     "save",
 ]

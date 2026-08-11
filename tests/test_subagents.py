@@ -42,7 +42,7 @@ class FakeDB:
     def get_conversation(self, cid):
         return self.conversations.get(int(cid))
 
-    def save_message(self, cid, role, content):
+    def save_message(self, cid, role, content, **kwargs):
         self.messages.append((cid, role, content))
 
 

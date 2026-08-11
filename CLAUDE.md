@@ -656,10 +656,17 @@ which is what the `shell` argument exists to avoid writing.
 The counterpart on the enact side is `data_json.attachments`, written by
 `ConversationLoop._record_ledger` from the tool's `attachment_paths`. Files the
 agent *showed* reach a frontend as an `attachments` render frame and were then
-gone — `conversation_messages` has seven columns and no metadata blob, so a
-reload could not tell that a turn had shown anything. Between the two, one
-query answers "what did this conversation do to files", which is what a client
-needs and could not previously ask.
+gone — a render is an event, and the transcript row for a tool call says
+nothing about what it displayed. Between the two, one query answers "what did
+this conversation do to files", which is what a client needs and could not
+previously ask.
+
+**Files a *person* sent are the other direction, and they are a column**
+(`conversation_messages.attachments`, JSON, see **A message's files** below).
+The ledger is for what the system *did*; an attachment is part of what a
+message *is*, and it belongs on the message. That is why the two are not one
+mechanism, and it is worth stating because they look interchangeable from a
+client's side.
 
 `ledger.read` grew the arguments to ask it (`conversation_id`, `action_types`,
 `since_id`, `origin`, `session_key`) — every one narrowing in SQL, because
@@ -689,6 +696,43 @@ guidance belongs in a store package, not the kernel
 prompt. Row well-formedness is pinned by `tests/test_ledger.py`.
 Query/inspection UX (`/ledger`) is deliberately a
 future store package, not kernel.
+
+## A message's files
+
+`conversation_messages.attachments` is a JSON list of records —
+`{path, file_name, modality, extension}` — and it exists because a file is a
+thing, not a sentence about a thing. It used to be a sentence:
+`parse_attachment` welded `[Attached image file: chart.png (cached at …)]`
+onto whatever the person typed, and that string *was* the only record. So the
+one row that says a file arrived said it in prose. A client could get it back
+only by parsing English, a person who typed those characters was
+indistinguishable from a file, and `content` answered two questions at once.
+
+**The pointer line is a rendering, and it is rendered at call time.**
+`ConversationLoop._for_provider` is the one place history becomes provider
+messages, so that is where the record becomes text again and where the key is
+*dropped* — `messages` goes to a provider API verbatim, and a field no schema
+knows is either rejected or silently believed. The line is deliberately
+byte-identical to the old welded one, because every conversation written
+before the column still carries it in `content` and the model must not meet
+two spellings of one thing.
+
+Three consequences worth knowing. **The record is the durable half**:
+`Attachment.record()` drops `parsed_text` and `metadata`, which are a
+rendering of the file for one model on one turn and can be four thousand
+characters of a PDF — the file is still on disk to be parsed again.
+**`replace_conversation_messages` has to carry it**, since
+`iterate_agent_turn` rewrites a whole conversation from live history, and a
+key dropped there survives until the next background turn and then does not.
+And **files count as content** in `absorb_user_action`: the guard used to be
+`text` alone and worked only because the pointer made an uncaptioned photo's
+text non-empty, so reading it as "did the person say anything" now drops the
+only record that a file was sent.
+
+Nothing rewrites a message somebody sent. Rows written before the column keep
+their welded text and no record, which is exactly how they have always read;
+there is no backfill, because deciding where prose ends and a file begins by
+regex over somebody's own words is a guess with no upside.
 
 ## Package store V1
 

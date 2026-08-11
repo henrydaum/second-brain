@@ -78,6 +78,17 @@ def text_after_action(action_type: str, text: str, result: ActionResult) -> str:
     return str((parsed or {}).get("text") or text) if isinstance(parsed, dict) else text
 
 
+def records_after_action(action_type: str, result: ActionResult) -> list:
+    """The files a message carried, as records for its transcript row.
+
+    Empty for everything else, which is what keeps the row shape one shape:
+    a message with no files simply has no column value.
+    """
+    if action_type != "send_attachment" or not result.ok:
+        return []
+    return list((result.data or {}).get("records") or [])
+
+
 # ──────────────────────────────────────────────────────────────────────
 # After enact: side-effects to surface
 # ──────────────────────────────────────────────────────────────────────
@@ -104,18 +115,32 @@ def absorb_user_action(
     action_type: str,
     text: str,
     result: ActionResult,
+    records: list | None = None,
 ) -> None:
     """Translate user-side action outcomes into history rows + side effects.
 
     Mirrors ``ConversationLoop._absorb`` but for actions originating from
-    the frontend. Only ``send_text`` / ``send_attachment`` (with text) add
-    a chat-transcript row; commands/forms/approvals have no provider-
-    history impact, only state-machine impact.
+    the frontend. Only ``send_text`` / ``send_attachment`` (with text or
+    files) add a chat-transcript row; commands/forms/approvals have no
+    provider-history impact, only state-machine impact.
+
+    **Files count as content.** The guard used to be ``text`` alone, which
+    worked only because the pointer line was welded into it — a caption-less
+    attachment had non-empty text by accident. With the files in their own
+    column an uncaptioned photo is a row with no text and one attachment, and
+    reading the guard as "did the person say anything" would drop the only
+    record that it was ever sent.
     """
     if not result.ok:
         return
-    if action_type in {"send_text", "send_attachment"} and text:
+    # From the action for a ``send_attachment``; from the caller for the one
+    # path that bypasses it (``iterate_agent_turn`` puts attachments straight
+    # on a ``send_text`` payload).
+    records = records_after_action(action_type, result) or list(records or [])
+    if action_type in {"send_text", "send_attachment"} and (text or records):
         msg = {"role": "user", "content": text}
+        if records:
+            msg["attachments"] = records
         session.history.append(msg)
         if runtime.db and session.conversation_id:
             save_history_message(runtime.db, session.conversation_id, msg)
@@ -123,6 +148,7 @@ def absorb_user_action(
             "session_key": session.key,
             "role": "user",
             "content": text,
+            "attachments": records,
             "actor_id": "user",
         })
     note_user_command(runtime, session, result)

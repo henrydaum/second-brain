@@ -144,6 +144,28 @@ def _prompt_sections(prompt: Any) -> list[dict[str, Any]]:
     return [{"role": "system", "content": prompt or ""}]
 
 
+def _for_provider(msg: dict[str, Any]) -> dict[str, Any]:
+    """One history row as a provider will be shown it.
+
+    A transcript row keeps the person's words and the files they attached
+    apart — the files are a record in their own column. A model reads one
+    message, so the pointer lines are rendered back in here, and the key that
+    carried them is dropped: ``messages`` goes to a provider API verbatim, and
+    a field no schema knows is either rejected or silently believed.
+
+    This is the single place history becomes provider messages, which is what
+    makes rendering here safe. Anything else holding this history — a rewrite
+    back to the database, a client, a memory extractor — keeps the two apart.
+    """
+    if not msg.get("attachments"):
+        return msg
+    from attachments.attachment import with_pointers
+
+    out = {key: value for key, value in msg.items() if key != "attachments"}
+    out["content"] = with_pointers(msg.get("content") or "", msg["attachments"])
+    return out
+
+
 def _split_current_turn(history: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Split prior transcript from the latest user-led turn."""
     idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
@@ -731,7 +753,8 @@ class ConversationLoop:
         """
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         sections = _prompt_sections(prompt)
-        clean_history = [m for m in history if m.get("role") != "system"]
+        clean_history = [_for_provider(m) for m in history
+                         if m.get("role") != "system"]
 
         ctx_idx = next(
             (i for i, m in enumerate(sections)
@@ -1191,7 +1214,11 @@ class ConversationLoop:
             if compactor is None or not getattr(compactor, "loaded", False):
                 logger.warning("Compactor service is not loaded. History will not shrink via summary.")
                 return
-            transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history)
+            # Rendered, not raw: a summary is written *for* a model, so it
+            # should read what the model read — including that a file arrived.
+            transcript = "\n".join(
+                f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}"
+                for m in (_for_provider(row) for row in history))
             # Keep head + tail so the summary covers both how the conversation
             # started and what was most recently said, instead of silently
             # dropping everything after the first 20k chars.

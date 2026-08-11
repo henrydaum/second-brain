@@ -114,6 +114,35 @@ def set_thread_priority_low():
 	_priority_tls.priority = _LOW_PRIORITY
 
 
+def _pack_attachments(records) -> str | None:
+	"""A message's files as they go into the column, or NULL for none.
+
+	NULL rather than ``"[]"`` so the overwhelming majority of rows — every
+	message nobody attached anything to — cost a null and read back as one.
+	"""
+	return json.dumps(list(records), default=str) if records else None
+
+
+def _unpack_attachments(raw):
+	"""A message's files as they come back out: always a list.
+
+	Decoded here rather than by each reader, because every one of them wants
+	the same list and a column that is JSON to some callers and a list to
+	others is the conflation this column exists to end. Unreadable JSON is
+	answered as no attachments — a row somebody hand-edited must not make a
+	conversation unloadable.
+	"""
+	if not raw:
+		return []
+	if isinstance(raw, list):
+		return raw
+	try:
+		decoded = json.loads(raw)
+	except (TypeError, ValueError):
+		return []
+	return decoded if isinstance(decoded, list) else []
+
+
 class _PriorityLock:
 	"""Mutex that always prefers high-priority acquirers. Non-reentrant, matching
 	the threading.Lock it replaces."""
@@ -283,13 +312,27 @@ class Database:
 				content         TEXT,
 				tool_call_id    TEXT,
 				tool_name       TEXT,
-				timestamp       REAL
+				timestamp       REAL,
+				attachments     TEXT
 			)
 		""")
 		self.conn.execute("""
 			CREATE INDEX IF NOT EXISTS idx_conv_msg_conv
 			ON conversation_messages(conversation_id)
 		""")
+		# Migration: the files on a message stop being prose. ``content`` used to
+		# carry "[Attached image file: x.png (cached at …)]" welded onto whatever
+		# the person typed, so the one row that says a file arrived said it in a
+		# sentence — unparseable by a client, and indistinguishable from a person
+		# typing the same characters. Rows written before this keep their welded
+		# text and no record, which is exactly how they have always read; nothing
+		# rewrites a message somebody sent.
+		try:
+			self.conn.execute(
+				"ALTER TABLE conversation_messages ADD COLUMN attachments TEXT")
+			self.conn.commit()
+		except Exception:
+			pass
 		# Migration: conversations become user-owned. Add the column then backfill
 		# pre-existing rows to the base user so they stay visible to the operator.
 		try:
@@ -1465,15 +1508,25 @@ class Database:
 			return cur.lastrowid
 
 	def save_message(self, conversation_id, role, content,
-					 tool_call_id=None, tool_name=None):
-		"""Save message."""
+					 tool_call_id=None, tool_name=None, attachments=None):
+		"""Save message.
+
+		``attachments`` is the list of files the message carried — a record
+		each (``path``/``file_name``/``modality``/``extension``), stored as
+		JSON. It is a column rather than a line of ``content`` because a file
+		is a thing, not a sentence about a thing: a client can render it, a
+		query can find it, and the prompt line the model reads is rendered
+		back from it at call time.
+		"""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
 				INSERT INTO conversation_messages
-				(conversation_id, role, content, tool_call_id, tool_name, timestamp)
-				VALUES (?, ?, ?, ?, ?, ?)
-			""", (conversation_id, role, content, tool_call_id, tool_name, now))
+				(conversation_id, role, content, tool_call_id, tool_name, timestamp,
+				 attachments)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+			""", (conversation_id, role, content, tool_call_id, tool_name, now,
+				  _pack_attachments(attachments)))
 			self.conn.execute(
 				"UPDATE conversations SET updated_at = ? WHERE id = ?",
 				(now, conversation_id))
@@ -1629,18 +1682,24 @@ class Database:
 			return [dict(row) for row in cur.fetchall()]
 
 	def get_conversation_messages(self, conversation_id):
-		"""Get conversation messages."""
+		"""Get conversation messages, each with its files already decoded."""
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY timestamp",
 				(conversation_id,))
-			return [dict(row) for row in cur.fetchall()]
+			rows = [dict(row) for row in cur.fetchall()]
+		for row in rows:
+			row["attachments"] = _unpack_attachments(row.get("attachments"))
+		return rows
 
 	def replace_conversation_messages(self, conversation_id, history: list[dict]) -> None:
 		"""Atomically replace a conversation's persisted messages with `history`.
 
 		`history` is in provider-message shape: list of {role, content, ...} dicts.
 		Assistant turns with tool_calls get JSON-packed into the content column.
+		A user turn's ``attachments`` travel in their own column — this rewrites
+		a whole conversation from the live history, so a key it dropped would be
+		a key that survives until the next background turn and then does not.
 		"""
 		import json as _json
 		base = time.time()
@@ -1660,7 +1719,7 @@ class Database:
 			rows.append((
 				conversation_id, role, content,
 				msg.get("tool_call_id"), msg.get("name"),
-				ts,
+				ts, _pack_attachments(msg.get("attachments")),
 			))
 		with self.lock:
 			self.conn.execute(
@@ -1669,8 +1728,9 @@ class Database:
 			if rows:
 				self.conn.executemany("""
 					INSERT INTO conversation_messages
-					(conversation_id, role, content, tool_call_id, tool_name, timestamp)
-					VALUES (?, ?, ?, ?, ?, ?)
+					(conversation_id, role, content, tool_call_id, tool_name, timestamp,
+					 attachments)
+					VALUES (?, ?, ?, ?, ?, ?, ?)
 				""", rows)
 			self.conn.execute(
 				"UPDATE conversations SET updated_at = ? WHERE id = ?",

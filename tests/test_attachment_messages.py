@@ -173,12 +173,11 @@ def _state(**kwargs):
 
     def parse(content):
         name = content.get("file_name") or "file"
-        caption = content.get("caption") or ""
-        pointer = f"[Attached image file: {name}]"
-        text = f"{caption}\n\n{pointer}".strip() if caption else pointer
-        return {**content, "text": text, "attachment": Attachment(
-            path=content.get("path") or "", extension="png", file_name=name,
-            modality="image")}
+        attachment = Attachment(path=content.get("path") or "",
+                                extension="png", file_name=name,
+                                modality="image")
+        return {**content, "text": content.get("caption") or "",
+                "attachment": attachment, "record": attachment.record()}
 
     return ConversationState(
         [Participant("user", "user"), Participant("agent", "agent")],
@@ -201,9 +200,10 @@ def test_every_file_is_queued_by_the_one_action():
 
 
 def test_the_message_writes_one_history_row():
-    """``dispatch.text_after_action`` reads ``parsed['text']`` for history.
+    """``dispatch`` reads the text and the records off one result.
 
-    A row per file would be three user messages for one thing the person did.
+    A row per file would be three user messages for one thing the person did,
+    and the text is the person's line — once, not once per photo.
     """
     cs = _state()
 
@@ -212,9 +212,9 @@ def test_the_message_writes_one_history_row():
         {"path": "/tmp/b.png", "file_name": "b.png"},
     ]}, "user")
 
-    text = (result.data or {})["parsed"]["text"]
-    assert text == ("these two\n\n[Attached image file: a.png]\n"
-                    "[Attached image file: b.png]")
+    assert (result.data or {})["parsed"]["text"] == "these two"
+    assert [r["file_name"] for r in result.data["records"]] == ["a.png",
+                                                                "b.png"]
 
 
 def test_one_refused_extension_queues_nothing():
@@ -245,8 +245,9 @@ def test_a_single_file_action_is_unchanged():
     assert result.ok
     assert [a.file_name for a in cs.pending_attachments] == ["a.png"]
     parsed = (result.data or {})["parsed"]
-    assert parsed["text"] == "look\n\n[Attached image file: a.png]"
+    assert parsed["text"] == "look"
     assert "files" not in parsed
+    assert [r["file_name"] for r in result.data["records"]] == ["a.png"]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -270,6 +271,186 @@ def test_the_turn_hands_the_model_every_queued_file():
     bundle = AttachmentBundle.from_iterable(cs.pending_attachments)
 
     assert len(list(bundle)) == 2
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The column. A file is a thing, not a sentence about a thing — it used to
+# be written into the message text as "[Attached image file: x.png (cached
+# at …)]", so the one row that says a file arrived said it in prose: a
+# client could only get it back by parsing English, and a person who typed
+# those characters was indistinguishable from a file.
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def db(tmp_path):
+    """A real database, since the point is what a column does."""
+    from pipeline.database import Database
+
+    return Database(str(tmp_path / "test.db"))
+
+
+def _record(name="chart.png", path="/tmp/chart.png", modality="image"):
+    return {"path": path, "file_name": name, "modality": modality,
+            "extension": ".png"}
+
+
+def test_the_text_is_what_the_person_typed(db):
+    cid = db.create_conversation("Main")
+    db.save_message(cid, "user", "what is this?", attachments=[_record()])
+
+    row = db.get_conversation_messages(cid)[0]
+
+    assert row["content"] == "what is this?"
+    assert row["attachments"] == [_record()]
+
+
+def test_a_message_with_no_files_reads_back_as_an_empty_list(db):
+    """Not None, not "[]" — one shape for every reader."""
+    cid = db.create_conversation("Main")
+    db.save_message(cid, "user", "just talking")
+
+    assert db.get_conversation_messages(cid)[0]["attachments"] == []
+
+
+def test_the_records_survive_a_whole_conversation_rewrite(db):
+    """``iterate_agent_turn`` rewrites every row from the live history.
+
+    A key dropped there is one that survives until the next background turn
+    and then does not, which is the worst kind of loss: it needs a background
+    turn to reproduce.
+    """
+    cid = db.create_conversation("Main")
+    db.replace_conversation_messages(cid, [
+        {"role": "user", "content": "what is this?",
+         "attachments": [_record()]},
+        {"role": "assistant", "content": "A chart."},
+    ])
+
+    rows = db.get_conversation_messages(cid)
+
+    assert [r["attachments"] for r in rows] == [[_record()], []]
+
+
+def test_history_carries_the_records_and_not_the_prose(db):
+    """The row -> provider-history half of the round trip."""
+    from state_machine.serialization import messages_to_history
+
+    cid = db.create_conversation("Main")
+    db.save_message(cid, "user", "what is this?", attachments=[_record()])
+
+    history = messages_to_history(db.get_conversation_messages(cid))
+
+    assert history == [{"role": "user", "content": "what is this?",
+                        "attachments": [_record()]}]
+
+
+def test_the_model_still_reads_one_message(db):
+    """Rendered at call time, which is the only place that knows it is a model.
+
+    The pointer line is deliberately byte-identical to what used to be welded
+    into the text: every conversation written before the column still has
+    those lines in its content, and the model must not meet two spellings of
+    one thing.
+    """
+    from attachments.attachment import with_pointers
+
+    assert with_pointers("what is this?", [_record()]) == (
+        "what is this?\n\n"
+        "[Attached image file: chart.png (cached at /tmp/chart.png)]")
+
+
+def test_an_uncaptioned_file_is_still_a_message():
+    """The guard used to be ``text`` alone, and worked only by accident.
+
+    A caption-less photo had non-empty text *because* the pointer was welded
+    into it. With the files in their own column that text is empty, so a guard
+    reading "did the person say anything" drops the only record that a file
+    was ever sent.
+    """
+    from runtime.dispatch import absorb_user_action
+    from state_machine.errors import ActionResult
+
+    session = SimpleNamespace(key="chat", history=[], conversation_id=None)
+    runtime = SimpleNamespace(db=None, config={})
+    result = ActionResult(True, "send_attachment",
+                          data={"parsed": {"text": ""},
+                                "records": [_record()]})
+
+    absorb_user_action(runtime, session, "send_attachment", "", result)
+
+    assert session.history == [{"role": "user", "content": "",
+                                "attachments": [_record()]}]
+
+
+def test_no_provider_ever_sees_the_key():
+    """``messages`` goes to a provider API verbatim.
+
+    A field no schema knows is either rejected outright or silently believed,
+    so the rendering step has to drop it — this is the assertion that keeps
+    the column from reaching an HTTP request.
+    """
+    from runtime.conversation_loop import _for_provider
+
+    rendered = _for_provider({"role": "user", "content": "what is this?",
+                              "attachments": [_record()]})
+
+    assert "attachments" not in rendered
+    assert rendered["content"].endswith(
+        "[Attached image file: chart.png (cached at /tmp/chart.png)]")
+
+
+def test_the_whole_chain_from_a_submit_to_the_model(tmp_path):
+    """Every piece at once, because the pieces are the risk.
+
+    A person attaches a file and types a line. The row keeps them apart; the
+    model is handed them together; the message the provider receives carries
+    no key the API has never heard of.
+    """
+    import state_machine  # noqa: F401  - settles the package-init cycle
+
+    from tests.support import make_runtime, response
+
+    photo = tmp_path / "chart.png"
+    photo.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    runtime, session, llm = make_runtime(
+        tmp_path, [response(content="A chart.")], name="chain.db")
+    out = runtime.handle_action("s", "send_attachment", {
+        "path": str(photo), "file_name": "chart.png",
+        "caption": "what is this?"})
+    assert out.ok
+
+    row = next(r for r in runtime.db.get_conversation_messages(
+        session.conversation_id) if r["role"] == "user")
+    assert row["content"] == "what is this?"
+    assert [r["file_name"] for r in row["attachments"]] == ["chart.png"]
+
+    sent = llm.calls[0]
+    user = next(m for m in reversed(sent) if m["role"] == "user")
+    assert "[Attached image file: chart.png" in user["content"]
+    assert not any("attachments" in m for m in sent)
+    # And the file itself went natively, which is the other half of what an
+    # attachment is for.
+    assert [a["file_name"] for a in llm.attachments[0]] == ["chart.png"]
+
+
+def test_a_conversation_written_before_the_column_is_left_alone(db):
+    """Nothing rewrites a message somebody sent.
+
+    Old rows keep the pointer in their content and have no record, which is
+    exactly how they have always read — including to the model, which is why
+    no backfill guesses at where prose ends and a file begins.
+    """
+    from state_machine.serialization import messages_to_history
+
+    cid = db.create_conversation("Main")
+    old = ("what is this?\n\n[Attached image file: chart.png "
+           "(cached at /tmp/chart.png)]")
+    db.save_message(cid, "user", old)
+
+    history = messages_to_history(db.get_conversation_messages(cid))
+
+    assert history == [{"role": "user", "content": old}]
 
 
 if __name__ == "__main__":       # pragma: no cover

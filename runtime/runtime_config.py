@@ -571,9 +571,10 @@ def command_specs_from_dicts(specs: dict[str, dict]) -> dict[str, CallableSpec]:
 
 def parse_attachment(runtime, content: dict[str, Any]) -> dict[str, Any]:
     """Build an Attachment from a SendAttachment payload using the
-    runtime's services, then return a dict carrying both the dataclass
-    and the user-facing text the dispatch layer should record in
-    history. The Attachment itself is what flows to the LLM."""
+    runtime's services, then return a dict carrying the dataclass, the
+    durable record of the file, and the user-facing text the dispatch
+    layer should record in history. The Attachment itself is what flows
+    to the LLM."""
     from attachments import parse_attachment as build_attachment
 
     path = Path(str(content.get("path") or ""))
@@ -587,11 +588,13 @@ def parse_attachment(runtime, content: dict[str, Any]) -> dict[str, Any]:
         config={"max_chars": 4000},
     )
 
-    # History row text: caption plus a short pointer line so future
-    # replays of the conversation still know a file existed. The full
-    # parsed-text blurb is added to the prompt only when we hit the
-    # LLM (see AttachmentBundle.split_for_llm in the LLM service layer).
-    pointer = f"[Attached {attachment.modality} file: {file_name} (cached at {path})]"
-    text = f"{caption}\n\n{pointer}".strip() if caption else pointer
-
-    return {**content, "text": text, "attachment": attachment}
+    # The history row's *text* is what the person typed, and nothing else. The
+    # pointer line that used to be welded on here — "[Attached image file: …]"
+    # — is a rendering of the record for a model, and it is rendered at call
+    # time from ``record`` instead. Welding it in put a machine-readable fact
+    # into prose: a client could only get it back by parsing a sentence, and
+    # a person who typed those same characters was indistinguishable from a
+    # file. The full parsed-text blurb was never here either; it is added to
+    # the prompt when we hit the LLM (AttachmentBundle.split_for_llm).
+    return {**content, "text": caption, "attachment": attachment,
+            "record": attachment.record()}

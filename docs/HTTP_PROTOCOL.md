@@ -411,6 +411,22 @@ catalogues all of them with their policy inputs. The useful subset:
 | `conv.clear` | `id` |
 | `conv.delete` | `id` — **unsafe, raises a dialog** |
 
+A `conv.read` message row is
+`{id, conversation_id, role, content, tool_call_id, tool_name, timestamp,
+attachments}`. **`attachments` is the files that message carried** — a list of
+`{path, file_name, modality, extension}`, empty for the overwhelming majority
+of rows — and `content` is what the person actually typed. They used to be one
+field: the pointer line `[Attached image file: chart.png (cached at …)]` was
+welded onto the text, so the only way to know a message had a file was to parse
+prose, and a person typing those characters looked exactly like an attachment.
+Render them however your UI renders a file; `GET /files?path=` turns one into
+something an `<img>` or a `<video>` can load.
+
+Conversations written before the column keep the old welded line in `content`
+and have no `attachments`. Nothing rewrote them — guessing where prose ends and
+a file begins is not worth doing to somebody's own words — so a client that
+wants to show those has to accept the sentence as-is.
+
 **Talking**
 
 | Request | Arguments |
@@ -561,8 +577,12 @@ reload — and two of those things are worth getting back. Files the agent
 **edited** arrive as `attachments` render frames and are recorded as
 `origin: "sandbox"` rows for `fs.write` / `fs.write_bytes` / `fs.delete` /
 `fs.move`; files it **showed** you are on the `origin: "agent_enact"` row for the
-tool call, under `data_json.attachments`. Neither is in `conv.read`: the messages
-table has no metadata column.
+tool call, under `data_json.attachments`. Neither is in `conv.read` — they are
+things the agent *did*, not part of any message.
+
+Files the **person** sent are the opposite case and are on the message itself:
+`conv.read` gives every row an `attachments` list (see below). Don't go to the
+ledger for those.
 
 Shell commands count too. A successful `proc.run` / `proc.start` whose line is
 a recognised file command — `rm`, `mv`, `cp`, `mkdir`, `touch`, `rmdir`, `ln`
