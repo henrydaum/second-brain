@@ -20,6 +20,13 @@ sequential code:
   ``run_in_executor`` bounce, the ``run_coroutine_threadsafe`` bridges and the
   typing bracket around a blocking submit are all gone with the threads that
   needed them.
+- An **album** is the one thing the queue cannot take at face value. Telegram
+  delivers a media group as several updates arriving over a moment, and a
+  submitted attachment hands the turn to the agent — so submitting them as
+  they land sends the first photo and tells the person "Still working" about
+  the rest. Grouped files are held until the group goes quiet and then go over
+  as one ``submit_attachments``: one message, one turn, every photo in the
+  same model call.
 - ``render`` arrives between polls, when the loop is idle, so it can simply
   ``run_until_complete`` a send.
 
@@ -289,6 +296,13 @@ class TelegramFrontend(BaseFrontend):
     # progress during a slice, and a render can only land between them.
     _POLL_SLICE = 0.08
     _STREAM_CURSOR = " ▍"
+    # How long an album may stay quiet before it is taken to be complete.
+    # Telegram states no bound on how far apart a media group's updates
+    # arrive, so this is a judgement: long enough that a group is not split in
+    # two (the failure that matters — the second half meets a busy session and
+    # the person is told "Still working" about their own photos), short enough
+    # to disappear behind the upload that just finished.
+    _ALBUM_WAIT = 1.0
 
     def __init__(self):
         """Set up the state the transport hangs off. No effects here."""
@@ -299,6 +313,10 @@ class TelegramFrontend(BaseFrontend):
         # Update handlers append here; ``poll`` drains it. The whole of what
         # replaces the old cross-thread submit.
         self._queue = []
+        # (session_key, media_group_id) -> the files of one album and when the
+        # last of them arrived. Telegram sends an album as several updates, so
+        # what "the message" is cannot be known until they stop coming.
+        self._albums = {}
         self._chat_by_session = {}
         self._callbacks = {}
         self._tool_messages = {}
@@ -404,6 +422,16 @@ class TelegramFrontend(BaseFrontend):
         for stop in list(self._typing_stops.values()):
             stop.set()
         self._typing_stops.clear()
+        # An album still waiting for its last photo is dropped rather than
+        # rushed out: submitting starts an agent turn, and a turn whose replies
+        # render into a box that is unloading reaches nobody. Said out loud,
+        # because photos vanishing without a word is the failure this whole
+        # path exists to avoid.
+        held = sum(len(one["items"]) for one in self._albums.values())
+        if held:
+            sdk.log(f"Telegram is stopping with {held} unsent album "
+                    f"attachment(s); they were not delivered.", "warning")
+        self._albums.clear()
         if self._loop is None:
             return
         try:
@@ -454,11 +482,19 @@ class TelegramFrontend(BaseFrontend):
             except sdk.Failed as exc:
                 sdk.log(f"Telegram could not submit "
                         f"{item.get('kind')}: {exc}", "warning")
-        return bool(pending)
+        # An album is submitted by a *timer* rather than by an update, so this
+        # runs whether or not anything arrived this slice.
+        flushed = self._flush_albums(sdk)
+        return bool(pending) or flushed
 
     def _deliver(self, sdk, item: dict):
         """Carry one queued update into the state machine."""
         key = item["key"]
+        if item["kind"] == "file" and item.get("group"):
+            return self._hold(item)
+        # Anything else ends whatever album was accumulating for this chat, so
+        # it goes first: what a person sent in an order should arrive in it.
+        self._flush_albums(sdk, key)
         if item["kind"] == "file":
             return self._deliver_file(sdk, item)
         text = item.get("text") or ""
@@ -572,7 +608,53 @@ class TelegramFrontend(BaseFrontend):
         return True
 
     def _deliver_file(self, sdk, item: dict):
-        """Download one attachment into scratch and hand it over.
+        """One file on its own, as one message."""
+        return sdk.frontend.submit_attachments(
+            item["key"], [self._staged_file(sdk, item)], ingest=True)
+
+    def _hold(self, item: dict):
+        """Park one file of an album until the rest of it stops arriving."""
+        held = self._albums.setdefault((item["key"], item["group"]),
+                                       {"items": [], "last": 0.0})
+        held["items"].append(item)
+        held["last"] = time.monotonic()
+        return None
+
+    def _flush_albums(self, sdk, key: str = "") -> bool:
+        """Submit albums: this chat's now, or any that has gone quiet.
+
+        Named ``key`` means something else for that chat is about to be
+        delivered, so the album is over whatever the clock says. With no key
+        this is the ordinary timer.
+        """
+        due = time.monotonic() - self._ALBUM_WAIT
+        ready = [handle for handle, held in self._albums.items()
+                 if (handle[0] == key if key else held["last"] <= due)]
+        for handle in ready:
+            held = self._albums.pop(handle)
+            try:
+                self._deliver_album(sdk, handle[0], held["items"])
+            except sdk.Failed as exc:
+                sdk.log(f"Telegram could not submit an album: {exc}",
+                        "warning")
+        return bool(ready)
+
+    def _deliver_album(self, sdk, key: str, items: list):
+        """Every file of one media group, as one message.
+
+        Telegram puts the caption on whichever item carried it, but it is the
+        *album's* caption — the line the person typed once — so it is hoisted
+        to the message rather than left labelling one photo.
+        """
+        files = [self._staged_file(sdk, item) for item in items]
+        caption = next((one["caption"] for one in files if one["caption"]), "")
+        for one in files:
+            one["caption"] = ""
+        return sdk.frontend.submit_attachments(key, files, caption=caption,
+                                               ingest=True)
+
+    def _staged_file(self, sdk, item: dict) -> dict:
+        """Download one attachment into scratch and describe it for a submit.
 
         Straight to disk rather than through memory: one wire message holds
         about 11 MB and Telegram allows 50, so bytes that crossed the boundary
@@ -584,10 +666,10 @@ class TelegramFrontend(BaseFrontend):
         suffix = sdk.path.suffix(item["name"])
         temp = sdk.fs.temp(suffix=suffix)
         self._loop.run_until_complete(item["file"].download_to_drive(temp))
-        return sdk.frontend.submit_attachment(
-            item["key"], temp, extension=suffix.lstrip("."),
-            file_name=item["name"], caption=item.get("caption") or "",
-            is_photo=bool(item.get("is_photo")), ingest=True)
+        return {"path": temp, "extension": suffix.lstrip("."),
+                "file_name": item["name"],
+                "caption": item.get("caption") or "",
+                "is_photo": bool(item.get("is_photo"))}
 
     # ──────────────────────────────────────────────────────────────────
     # Update handlers. These run inside a poll slice and must not make
@@ -638,6 +720,9 @@ class TelegramFrontend(BaseFrontend):
             "kind": "file", "key": self._key_for(update), "file": handle,
             "name": file_name, "caption": message.caption or "",
             "is_photo": is_photo,
+            # Set when this is one photo of several sent together. Empty for
+            # an ordinary single file, which goes straight through.
+            "group": str(message.media_group_id or ""),
         })
         await self._show_typing(message.chat)
 
