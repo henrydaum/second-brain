@@ -236,6 +236,99 @@ def test_a_command_through_a_shell_is_still_offered_when_the_line_is_inert():
     assert [g.label for g in grants] == ["Always allow: git pull"]
 
 
+# ── the rest of this turn ─────────────────────────────────────────────
+#
+# The one builder whose unit is *time*, and the only one that can offer a
+# grant whose scope the person cannot check for themselves: nothing appears in
+# ``/config`` afterwards, because it is gone before they could look. So what
+# these pin is the window — offered inside a turn, and nowhere else.
+
+
+class _FakeRuntime:
+    """Just the three questions ``_rest_of_this_turn`` asks a runtime."""
+
+    def __init__(self, busy=True, mode="ask"):
+        self.busy, self.mode, self.set = busy, mode, []
+
+    def is_turn_in_flight(self, key):
+        return self.busy
+
+    def security_mode(self, key):
+        return self.mode
+
+    def set_security_mode(self, key, mode, *, scope="conversation"):
+        self.set.append((key, mode, scope))
+        return mode
+
+
+@pytest.fixture
+def kernel_runtime(monkeypatch):
+    """Install a runtime for the duration of one test, and only that long.
+
+    ``set_kernel_parts`` ignores ``None``, so it cannot un-install one — a
+    fake left behind would answer every later test's policy question.
+    """
+    from runtime.context import _KERNEL_PARTS
+
+    def install(runtime):
+        monkeypatch.setitem(_KERNEL_PARTS, "runtime", runtime)
+        return runtime
+    return install
+
+
+_TURN_LABEL = "Allow, and stop asking for the rest of this turn"
+_ASKING = Request(NET_HTTP, {"url": "https://example.invalid/"})
+
+
+def _turn_option(chain):
+    built = options.options_for(chain, _ASKING, classify(_ASKING, chain))
+    return [option for option in built if option.label == _TURN_LABEL]
+
+
+def test_the_turn_option_is_offered_during_an_agent_turn(kernel_runtime):
+    kernel_runtime(_FakeRuntime(busy=True))
+    assert _turn_option(CHAIN)
+
+
+def test_no_turn_option_when_no_agent_turn_is_running(kernel_runtime):
+    """The case a session key alone cannot tell apart, and the reason this
+    builder needs two questions rather than one.
+
+    A frontend acting as one of its sessions (``sdk.frontend.act`` — a button
+    in a web client) roots at that session, with a person right there watching
+    it, and no turn anywhere. Offered here the grant is dropped by the *next*
+    turn's end: whenever they happen to send a message and the agent happens
+    to finish replying. A button saying "the rest of this turn" would be
+    naming a scope nobody could have predicted from it.
+    """
+    kernel_runtime(_FakeRuntime(busy=False))
+    assert _turn_option(Chain(root="http:7:7:0").push("frontend:http")) == []
+
+
+def test_a_typed_command_never_reaches_the_turn_option(kernel_runtime):
+    """The half that already worked: ``user:command`` names no session."""
+    kernel_runtime(_FakeRuntime(busy=True))
+    assert _turn_option(Chain(root="user:command").push("packages")) == []
+
+
+def test_no_turn_option_when_the_turn_is_already_in_yolo(kernel_runtime):
+    """Rule 3: never offer what changes nothing."""
+    kernel_runtime(_FakeRuntime(busy=True, mode="yolo"))
+    assert _turn_option(CHAIN) == []
+
+
+def test_an_unwired_kernel_offers_no_turn_option():
+    assert _turn_option(CHAIN) == []
+
+
+def test_the_turn_option_writes_a_turn_scoped_yolo(kernel_runtime):
+    """It writes to the *session*, never to config — which is what makes an
+    expiring grant expressible at all."""
+    runtime = kernel_runtime(_FakeRuntime(busy=True))
+    assert _turn_option(CHAIN)[0].remember() is True
+    assert runtime.set == [(CHAIN.root, "yolo", "turn")]
+
+
 # ── remembering ───────────────────────────────────────────────────────
 
 def test_remembering_makes_the_same_request_safe(project):

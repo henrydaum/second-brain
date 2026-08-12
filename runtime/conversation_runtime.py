@@ -953,6 +953,29 @@ class ConversationRuntime:
         if session is not None:
             session.turn_security_mode = None
 
+    def is_turn_in_flight(self, session_key: str) -> bool:
+        """Whether an agent turn is running right now for ``session_key``.
+
+        The question a *turn-scoped* grant has to be able to answer before it
+        is offered, and it is deliberately narrower than "does this chain name
+        a session". ``session.busy`` is set for exactly the span of
+        ``_drive_agent_turn`` — the same span that ends at
+        ``HookRegistry.finish_turn``, which is what drops
+        ``turn_security_mode``. So this is not a proxy for the turn: it is the
+        window in which the grant has an expiry at all.
+
+        Outside it there is a session, and a person watching, and no turn —
+        a frontend acting as one of its sessions
+        (``sdk.frontend.act``), a command mid-run. A turn-scoped grant made
+        there is cleared by the *next* turn's end, which may be minutes and
+        several actions away and is not what the button says. A missing
+        session answers False for the same reason the mode reader answers the
+        default: an approver that cannot find the session must not invent a
+        scope for it.
+        """
+        session = self.sessions.get(session_key)
+        return bool(session is not None and session.busy)
+
     # ──────────────────────────────────────────────────────────────────
     # User identity — "whose data is this session acting on?" Ephemeral,
     # frontend-bound (like attendance). Orthogonal to authorization, which

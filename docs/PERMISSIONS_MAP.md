@@ -225,6 +225,16 @@ happens to be installed is not a grant that expires. This is what "Allow, and
 stop asking for the rest of this turn" writes, and what an approved plan will
 hand the turn that follows it.
 
+That button is therefore offered **only while a turn is actually running**
+(`options._rest_of_this_turn`, asking `runtime.is_turn_in_flight`), which is a
+narrower question than whether the chain names a session and was for a while
+conflated with it. A frontend acting as one of its sessions
+(`sdk.frontend.act`) roots at that session with a person watching and no turn
+anywhere; offered there, the grant would be dropped at the end of the *next*
+turn — whenever they happened to send a message and the agent happened to
+finish replying. Naming a scope the person cannot predict from the label is
+the same failure as offering a grant the policy would refuse to honour.
+
 There was a step between 1 and 2: **`skip_permissions`**, a user-scoped list of
 plugin names whose dialogs were auto-approved. It was the only durable answer
 the system had, which is why its unit had to be that broad. Once an answer

@@ -215,14 +215,25 @@ def _rest_of_this_turn(chain, request, decision) -> list:
     and revoke later, because it is gone before they could look — which is the
     whole difference between this and the three lists.
 
-    Offered only on an agent's own turn. A slash command states its scope up
-    front and is over in one act, so "the rest of the turn" names nothing a
-    person could reason about; and unattended work never reaches a dialog at
-    all. Both fall out of asking whether the chain names a live session.
+    Offered only while an agent turn is actually running, which takes **two**
+    questions and for a long time asked only the first. Whether the chain names
+    a live session rules out the two cases that have no turn by construction: a
+    slash command, which roots at ``user:command``, states its scope up front
+    and is over in one act; and unattended work, which never reaches a dialog
+    at all. But a session key is not a turn. A frontend acting as one of its
+    sessions (``sdk.frontend.act`` — a button in a web client) roots at that
+    session too, with a person right there watching, and no turn anywhere.
+
+    That is the second question, and it is rule 3 rather than tidiness. The
+    grant is dropped by ``HookRegistry.finish_turn``, so offered outside a turn
+    it expires at the end of the *next* one — whenever the person happens to
+    send a message and the agent happens to finish replying. A yolo window of
+    unstated length, opened by a button that stated a short one. Better no
+    option than a grant whose scope is not the one the person read.
 
     Not offered when the turn is already running in ``yolo``, since the button
-    would grant what is already granted — rule 3, never offer what changes
-    nothing.
+    would grant what is already granted — rule 3 again, never offer what
+    changes nothing.
     """
     from .policy import chain_session
 
@@ -231,12 +242,13 @@ def _rest_of_this_turn(chain, request, decision) -> list:
         return []
     runtime = _kernel_runtime()
     setter = getattr(runtime, "set_security_mode", None)
-    if setter is None:
+    in_flight = getattr(runtime, "is_turn_in_flight", None)
+    if setter is None or in_flight is None:
         return []
     try:
         from runtime.security_modes import TURN_SCOPE, YOLO
 
-        if runtime.security_mode(key) == YOLO:
+        if not in_flight(key) or runtime.security_mode(key) == YOLO:
             return []
     except Exception:
         return []
