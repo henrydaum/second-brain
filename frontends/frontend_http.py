@@ -19,9 +19,9 @@ The outbound half
 --------------------------------------------------------------------------
 
 The kernel calls ``render(session_key, kind, payload)`` on a frontend. There
-are ten kinds (``messages``, ``attachments``, ``form_field``, ``approval``,
+are twelve kinds (``messages``, ``attachments``, ``form_field``, ``approval``,
 ``approval_settled``, ``buttons``, ``error``, ``typing``, ``tool_status``,
-``stream_delta``) and each
+``stream_delta``, ``notification``, ``callable_output``) and each
 already crosses to the guest as plain JSON-safe data — ``approval`` in
 particular arrives already projected to id/title/body/type/enum/enum_labels/
 default, with the kernel's live objects stripped.
@@ -213,6 +213,11 @@ class HTTP(BaseFrontend):
         # and wrong invisibly: a plugin registration would arrive looking like
         # something a person said.
         "supports_notifications": True,
+        # And the same argument for what a slash command answered with. A
+        # `/config` listing and the agent's reply are not the same kind of
+        # thing, and a client drawing a conversation could not tell them apart
+        # while both arrived as ``messages``.
+        "supports_callable_output": True,
         "max_message_chars": None,
     }
 
@@ -431,7 +436,7 @@ class HTTP(BaseFrontend):
     def render(self, sdk, session_key, kind, payload):
         """One render, one frame. No translation, on purpose.
 
-        The eleven kinds are the kernel's own vocabulary and they are already
+        The twelve kinds are the kernel's own vocabulary and they are already
         JSON-safe by the time they reach a guest, so a client sees precisely
         what a native frontend would be handed. Anything that wants a different
         shape can build it; nothing has to un-build ours first.

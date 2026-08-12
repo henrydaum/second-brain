@@ -94,6 +94,8 @@ sql_query reads the local SQLite database. Two rules are enforced by the kernel 
 ## Conversation history
 Past conversations live in `my_conversations` and `conversation_messages`. Compacted history is no longer in your context but remains queryable there.
 
+`role` does not tell you who wrote a row. The kernel writes `role='user'` rows the person never typed — a cancel notice, a doorman's note, the summary bridge left by compaction, a note that a slash command ran — and every one of them carries a non-empty `author`. When you want what the *user* actually said, add `AND COALESCE(author, '') = ''`; without it you will read the kernel's own bookkeeping back as their words. (`role='system'` is separate again: those are state markers, not messages.)
+
 ## Database tables (inspect with sql_query)
 {_table_list(sdk)}"""
         )

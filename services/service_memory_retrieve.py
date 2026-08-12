@@ -528,9 +528,15 @@ class MemoryRetrieve(BaseService):
         if not cid:
             return ""
         try:
+            # ``author`` is the test, not ``role`` alone. The kernel writes
+            # user-role rows the person never typed — a cancel notice, a
+            # doorman's note, the ``reveal_user_commands`` note — so the newest
+            # one after any ``/cancel`` was "[The user cancelled the previous
+            # turn…]", and retrieval keyed off that instead of the question.
             rows = sdk.db.query(
                 "SELECT content FROM conversation_messages"
                 " WHERE conversation_id = ? AND LOWER(role) = 'user'"
+                "   AND COALESCE(author, '') = ''"
                 "   AND COALESCE(content, '') <> ''"
                 " ORDER BY id DESC LIMIT 1", [int(cid)], max_rows=1)
         except sdk.Failed as error:

@@ -191,6 +191,8 @@ class MCPServerFrontend(BaseFrontend):
             role = row.get("role")
             if role not in ("user", "assistant", "tool"):
                 continue  # state/compaction markers are kernel-internal
+            if row.get("author"):
+                continue  # kernel bookkeeping wearing somebody else's role
             content = str(row.get("content") or "").strip()
             if not content:
                 continue

@@ -416,6 +416,7 @@ class MemoryCurate(BaseTask):
                      ON r.conversation_id = m.conversation_id
              WHERE m.id > COALESCE(r.last_message_id, 0)
                AND LOWER(m.role) IN ('user', 'assistant')
+               AND COALESCE(m.author, '') = ''
                AND COALESCE(m.content, '') <> ''
                AND COALESCE(c.category, '') NOT LIKE 'Scheduled%'
                AND COALESCE(c.title, '') NOT LIKE ?{exclude}
@@ -555,6 +556,13 @@ class MemoryCurate(BaseTask):
         it found is visible only in what it called. A user/assistant-only
         transcript also hides where the work actually happened, which is most
         of what a conversation with real work in it consists of.
+
+        Rows with an ``author`` are excluded, and that is a different exclusion
+        from ``role <> 'system'`` beside it. A state marker is bookkeeping the
+        transcript never held; an authored row is the *kernel* wearing the
+        person's role — a cancel notice, a doorman's note, a compaction bridge.
+        Without this the curator read all of them as things the user said and
+        wrote them into MEMORY.md as the user's own words.
         """
         sql = """
             SELECT role, content, tool_name
@@ -563,6 +571,7 @@ class MemoryCurate(BaseTask):
                AND id > ?
                AND id <= ?
                AND LOWER(COALESCE(role, '')) <> 'system'
+               AND COALESCE(author, '') = ''
                AND COALESCE(content, '') <> ''
              ORDER BY id DESC
              LIMIT ?
