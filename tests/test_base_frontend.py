@@ -596,3 +596,72 @@ def test_an_older_frontend_survives_a_kind_it_has_never_heard_of():
                                       "request_id": request.id})
 
     assert not frontend.has_pending_approval("mine")
+
+
+# ── the capability bargain ─────────────────────────────────────────────
+#
+# Three render kinds are opt-in — stream_delta, notification, callable_output —
+# and all three make the same promise: a transport that declines gets the
+# payload down a path that already worked, so declining costs it nothing.
+# Nothing pinned that promise until now, which is how a kind could quietly stop
+# reaching the frontends that never asked for it.
+
+
+class _PlainFrontend(BaseFrontend):
+    """Declares nothing. Sees everything through the chat, as it always did."""
+    name = "plain"
+    capabilities = FrontendCapabilities()
+
+    def __init__(self):
+        super().__init__()
+        self.rendered: list[str] = []
+
+    def render_messages(self, _key, messages):
+        self.rendered.extend(messages)
+
+    def _current_approval_request(self, _key):
+        return None
+
+
+class _PanelFrontend(_PlainFrontend):
+    """Asks for command output separately and gets it whole."""
+    name = "panel"
+    capabilities = FrontendCapabilities(supports_callable_output=True)
+
+    def __init__(self):
+        super().__init__()
+        self.output: list[str] = []
+
+    def render_callable_output(self, _key, messages):
+        self.output.extend(messages)
+
+
+def test_a_frontend_that_asks_for_nothing_still_sees_command_output():
+    """The compatibility half. The REPL and Telegram declare no capability and
+    were not edited when the kind was added, so this is the assertion that says
+    they kept working."""
+    frontend = _PlainFrontend()
+
+    frontend._render_result("s", RuntimeResult(callable_output=["| a | b |"]))
+
+    assert frontend.rendered == ["| a | b |"]
+
+
+def test_a_frontend_that_asks_gets_command_output_on_its_own_kind():
+    """And it does *not* also arrive in the chat — the whole point is that a
+    client can draw the conversation without a `/config` dump in it."""
+    frontend = _PanelFrontend()
+
+    frontend._render_result("s", RuntimeResult(callable_output=["| a | b |"]))
+
+    assert frontend.output == ["| a | b |"]
+    assert frontend.rendered == []
+
+
+def test_the_agents_reply_is_never_command_output():
+    """``messages`` keeps meaning one thing. A reply goes to the chat for both
+    kinds of frontend, because it is the conversation either way."""
+    for frontend in (_PlainFrontend(), _PanelFrontend()):
+        frontend._render_result("s", RuntimeResult(messages=["Here you go."]))
+        assert frontend.rendered == ["Here you go."]
+        assert getattr(frontend, "output", []) == []

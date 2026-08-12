@@ -407,21 +407,28 @@ class BaseFrontend(BasePlugin):
         ``messages`` (list[str] of markdown) · ``attachments`` (list of paths)
         · ``form_field`` · ``approval`` · ``approval_settled`` · ``buttons`` ·
         ``error`` · ``typing`` (bool) · ``tool_status`` · ``stream_delta`` ·
-        ``notification``.
+        ``notification`` · ``callable_output`` (list[str] of markdown).
 
         Handle the kinds your transport can show and ignore the rest — a
         frontend that only renders ``messages`` is a working frontend.
         Answer an ``approval`` with ``sdk.frontend.resolve``.
 
-        Two kinds arrive only if you asked for them in ``capabilities``, and
-        both are opt-in for the same reason: each has a plain-text path that
-        already works, so a transport that ignored them silently would look
-        merely quiet rather than broken. ``stream_delta`` needs
+        ``messages`` is the conversation and nothing else: the agent's replies
+        and the person's own words. A refusal is ``error``, an announcement is
+        ``notification``, and what a slash command answered with is
+        ``callable_output``.
+
+        Three kinds arrive only if you asked for them in ``capabilities``, and
+        all three are opt-in for the same reason: each has a plain-text path
+        that already works, so a transport that ignored them silently would
+        look merely quiet rather than broken. ``stream_delta`` needs
         ``supports_streaming``; without it the same text arrives whole through
         ``messages``. ``notification`` needs ``supports_notifications``;
         without it the kernel flattens each one to markdown and sends it as a
-        ``messages`` render, which is what every frontend saw before the kind
-        existed.
+        ``messages`` render. ``callable_output`` needs
+        ``supports_callable_output``; without it command output arrives as
+        ``messages``. In every case that is what every frontend saw before the
+        kind existed.
         """
         raise NotImplementedError
 

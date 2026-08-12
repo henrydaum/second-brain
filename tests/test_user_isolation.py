@@ -53,14 +53,22 @@ def test_load_history_refuses_non_owner_without_leaking(runtime):
     cid = _owned_by_a(runtime)
     result = runtime.load_history("B", cid)
     assert result.ok is False
-    assert result.messages == ["No such conversation."]
+    # A refusal is an error, not chat: the non-leaking sentence is delivered
+    # once, on the kind a client branches on.
+    assert result.messages == []
+    assert result.error["code"] == "not_found"
+    assert result.error["message"] == "No such conversation."
 
 
 def test_inject_user_message_refuses_non_owner_without_leaking(runtime):
     cid = _owned_by_a(runtime)
     result = runtime.inject_user_message("B", "hello", conversation_id=cid)
     assert result.ok is False
-    assert result.messages == ["No such conversation."]
+    # A refusal is an error, not chat: the non-leaking sentence is delivered
+    # once, on the kind a client branches on.
+    assert result.messages == []
+    assert result.error["code"] == "not_found"
+    assert result.error["message"] == "No such conversation."
     assert runtime.db.get_conversation_messages(cid) == []
 
 
@@ -105,10 +113,21 @@ def test_last_active_conversation_is_per_user(tmp_path):
     assert db.get_user_config(other_uid)["last_active_conversation_id"] == other_cid
     assert "last_active_conversation_id" not in rt.config
 
-    rt2 = plain_runtime(db)
-    rt2.set_session_user("alice", other_uid)
-    notice = rt2.restore_last_active("alice")
-    assert notice and "alice" in notice
+    # The restore announces itself as a notification rather than handing back a
+    # string, so the title is where the restored conversation is named.
+    from events.event_bus import bus
+    from events.event_channels import NOTIFICATION_PUSHED
+
+    seen = []
+    unsubscribe = bus.subscribe(NOTIFICATION_PUSHED, seen.append)
+    try:
+        rt2 = plain_runtime(db)
+        rt2.set_session_user("alice", other_uid)
+        rt2.restore_last_active("alice")
+    finally:
+        unsubscribe()
+
+    assert any("alice" in (n.get("title") or "") for n in seen)
     assert rt2.sessions["alice"].conversation_id == other_cid
 
 

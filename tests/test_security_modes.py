@@ -784,11 +784,23 @@ def test_restoring_a_conversation_says_the_permission_mode(tmp_path):
     assert before.security_mode("repl") == LOCKDOWN
     before._remember_last_active(before.session_user_id("repl"), cid)
 
-    # A brand new runtime over the same database: the restart.
-    after = plain_runtime(db)
-    message = after.restore_last_active("repl")
+    # A brand new runtime over the same database: the restart. The restore
+    # announces itself as a notification, so that is where the line is read.
+    from events.event_bus import bus
+    from events.event_channels import NOTIFICATION_PUSHED
 
-    assert f"Permission mode: {ASK}" in message
+    seen = []
+    unsubscribe = bus.subscribe(NOTIFICATION_PUSHED, seen.append)
+    try:
+        after = plain_runtime(db)
+        after.restore_last_active("repl")
+    finally:
+        unsubscribe()
+
+    restored = next(n for n in seen
+                    if "Loaded last conversation" in (n.get("title") or ""))
+    body = restored.get("body") or ""
+    assert f"Permission mode: {ASK}" in body
     assert after.security_mode("repl") == ASK, "a mode must not survive a restart"
     # Reported, not assumed: the line has to follow the load.
-    assert message.index("Permission mode") > message.index("Agent:")
+    assert body.index("Permission mode") > body.index("Agent:")

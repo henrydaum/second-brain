@@ -23,15 +23,25 @@ class _CaptureFrontend(BaseFrontend):
     def __init__(self):
         super().__init__()
         self.rendered = []
+        self.errors = []
 
     def render_messages(self, _key, messages):
         self.rendered.extend(messages)
+
+    def render_error(self, _key, error):
+        self.errors.append(error)
 
     def _current_approval_request(self, _key):
         return None
 
 
-def test_invalid_command_args_render_a_message():
+def test_invalid_command_args_render_an_error():
+    """Bad arguments are a refusal, and refusals leave the chat.
+
+    The text is unchanged and still names the enum it rejected — what moved is
+    the *kind*. A client drawing a conversation could not previously tell this
+    apart from the agent speaking, because both arrived as ``messages``.
+    """
     fe = _CaptureFrontend()
     fe.commands = SimpleNamespace(parse_args=lambda *a, **k: (_ for _ in ()).throw(
         ValueError("job_name must be one of: fifa_world_cup_daily_update, add.")))
@@ -40,8 +50,11 @@ def test_invalid_command_args_render_a_message():
 
     assert args is None
     assert handled is not None and not handled.ok
-    assert any("Invalid arguments for `/schedule`" in m for m in fe.rendered)
-    assert any("fifa_world_cup_daily_update" in m for m in fe.rendered)
+    assert fe.rendered == []
+    assert len(fe.errors) == 1
+    assert fe.errors[0]["code"] == "bad_command_args"
+    assert "Invalid arguments for `/schedule`" in fe.errors[0]["message"]
+    assert "fifa_world_cup_daily_update" in fe.errors[0]["message"]
 
 
 def test_a_queued_message_says_so_without_the_agent_speaking():

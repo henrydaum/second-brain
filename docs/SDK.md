@@ -493,6 +493,24 @@ expands to the current user. Reading the base table is refused:
 sdk.db.query("SELECT * FROM my_conversations WHERE title LIKE ?", ["%tax%"])
 ```
 
+**A `conv.read` message row carries `author`, and `role` alone will mislead
+you.** The kernel writes `role='user'` rows the person never typed — a cancel
+notice, a doorman's note, the summary bridge compaction leaves behind, a note
+that a slash command ran — and each carries a non-empty `author`; a row
+somebody actually typed has `author` of `None`. `sdk.conv.append` stamps the
+calling plugin's name, read off the provenance chain rather than accepted as an
+argument. When you want what the *user* said, filter for it:
+
+```python
+sdk.db.query("SELECT content FROM conversation_messages"
+             " WHERE conversation_id = ? AND role = 'user'"
+             "   AND COALESCE(author, '') = ''"
+             " ORDER BY id DESC LIMIT 1", [conversation_id])
+```
+
+(`role = 'system'` is a separate exclusion again: those rows are state and
+compaction markers, not messages.)
+
 **Writing: rows yes, schemas no.** You may write rows in the kernel's own
 tables — data cannot change how the kernel works, only structure can. Prefer
 the named Request where one exists (`sdk.conv.set_title` over an `UPDATE`,

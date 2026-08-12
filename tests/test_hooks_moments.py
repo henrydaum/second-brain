@@ -177,7 +177,11 @@ def test_doorman_sendback_re_asks_once_and_records_the_note():
 
     assert reply == "second answer"
     assert len(llm.calls) == 2
-    assert {"role": "user", "content": "Please also include a haiku."} in new_messages
+    # A user row, because that is the only shape that keeps provider role
+    # alternation coherent — but authored, so nothing downstream reads a
+    # doorman's note as something the person said.
+    assert {"role": "user", "author": "doorman_note",
+            "content": "Please also include a haiku."} in new_messages
     assert cs.turn_priority == "user"  # the turn still ended
 
 

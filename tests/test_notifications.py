@@ -359,11 +359,17 @@ def test_a_notification_reaches_only_live_sessions(db):
 
 
 def test_notification_is_a_render_kind_both_halves_agree_on():
-    """``KINDS`` is the guest's half and ``native_names`` is the host's. A typo
-    in either shows nothing rather than failing, which is why this is a test."""
-    from sandbox.residency import _adapt_frontend  # noqa: F401  (import proves it loads)
+    """``KINDS`` is the guest's half and ``RENDER_METHODS`` is the host's. A typo
+    in either shows nothing rather than failing, which is why this is a test.
+
+    It used to check only the guest half, because the host's map was a local
+    inside ``_adapt_frontend`` and nothing outside could see it — so the exact
+    drift the docstring described was the drift it could not catch.
+    """
+    from sandbox.residency import RENDER_METHODS
 
     assert "notification" in sandbox_frontends.KINDS
+    assert RENDER_METHODS["notification"] == "render_notification"
 
 
 # ── the split ──────────────────────────────────────────────────────────

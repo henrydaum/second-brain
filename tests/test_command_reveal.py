@@ -38,12 +38,19 @@ def test_reveals_name_and_field_names_only(tmp_path):
 
     assert out.ok
     [note] = _notes(rt.sessions["s"].history)
+    # A user row, because that is the slot the model reads it in — but authored,
+    # or every reader downstream (a client drawing a chat, the memory curator,
+    # the conversation titler) takes the kernel's own bookkeeping for something
+    # the person typed.
     assert note["role"] == "user"
+    assert note["author"] == "command_note"
     assert "/config" in note["content"]
     assert "key" in note["content"] and "value" in note["content"]
     assert "sk-SECRET" not in note["content"]  # arg values never leak
     # Persisted so the agent sees it after restart/compaction reload too.
-    assert any("[SYSTEM NOTE]" in m["content"] for m in db.get_conversation_messages(cid))
+    [row] = [m for m in db.get_conversation_messages(cid)
+             if "[SYSTEM NOTE]" in (m["content"] or "")]
+    assert row["author"] == "command_note"
 
 
 def test_form_start_is_silent_and_completion_is_noted(tmp_path):

@@ -313,7 +313,8 @@ class Database:
 				tool_call_id    TEXT,
 				tool_name       TEXT,
 				timestamp       REAL,
-				attachments     TEXT
+				attachments     TEXT,
+				author          TEXT
 			)
 		""")
 		self.conn.execute("""
@@ -330,6 +331,23 @@ class Database:
 		try:
 			self.conn.execute(
 				"ALTER TABLE conversation_messages ADD COLUMN attachments TEXT")
+			self.conn.commit()
+		except Exception:
+			pass
+		# Migration: who actually wrote the row. ``role`` cannot answer it —
+		# 'system' already means a state-machine or compaction marker — so six
+		# kernel mechanisms write ``role='user'`` rows that read exactly like
+		# something a person typed. NULL means "this row is what its role says",
+		# which is true of every row written before this column, so nothing is
+		# backfilled and nothing is rewritten. Deliberately the *opposite* call
+		# from the ledger's identity columns, where NULL was a bug because the
+		# column was meant to always be filled: here NULL is a positive answer.
+		# Values are open like a notification's ``source``, not a frozen enum —
+		# ``conv.append`` lets a plugin write a row and no fixed vocabulary can
+		# name it, so that site stamps the provenance chain leaf instead.
+		try:
+			self.conn.execute(
+				"ALTER TABLE conversation_messages ADD COLUMN author TEXT")
 			self.conn.commit()
 		except Exception:
 			pass
@@ -1508,7 +1526,8 @@ class Database:
 			return cur.lastrowid
 
 	def save_message(self, conversation_id, role, content,
-					 tool_call_id=None, tool_name=None, attachments=None):
+					 tool_call_id=None, tool_name=None, attachments=None,
+					 author=None):
 		"""Save message.
 
 		``attachments`` is the list of files the message carried — a record
@@ -1517,16 +1536,22 @@ class Database:
 		is a thing, not a sentence about a thing: a client can render it, a
 		query can find it, and the prompt line the model reads is rendered
 		back from it at call time.
+
+		``author`` names whoever wrote a row that is wearing another role's
+		clothing — a cancel notice, a doorman's note, a plugin's append — and
+		stays ``None`` for the ordinary case, where ``role`` is already the
+		whole answer. It is stored as passed: NULL is the meaning, so nothing
+		normalizes it to ``""`` the way ``attachments`` normalizes to ``[]``.
 		"""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
 				INSERT INTO conversation_messages
 				(conversation_id, role, content, tool_call_id, tool_name, timestamp,
-				 attachments)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+				 attachments, author)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			""", (conversation_id, role, content, tool_call_id, tool_name, now,
-				  _pack_attachments(attachments)))
+				  _pack_attachments(attachments), author or None))
 			self.conn.execute(
 				"UPDATE conversations SET updated_at = ? WHERE id = ?",
 				(now, conversation_id))
@@ -1697,9 +1722,10 @@ class Database:
 
 		`history` is in provider-message shape: list of {role, content, ...} dicts.
 		Assistant turns with tool_calls get JSON-packed into the content column.
-		A user turn's ``attachments`` travel in their own column — this rewrites
-		a whole conversation from the live history, so a key it dropped would be
-		a key that survives until the next background turn and then does not.
+		A user turn's ``attachments`` and a synthesized row's ``author`` travel
+		in their own columns — this rewrites a whole conversation from the live
+		history, so a key it dropped would be a key that survives until the next
+		background turn and then does not.
 		"""
 		import json as _json
 		base = time.time()
@@ -1720,6 +1746,7 @@ class Database:
 				conversation_id, role, content,
 				msg.get("tool_call_id"), msg.get("name"),
 				ts, _pack_attachments(msg.get("attachments")),
+				msg.get("author") or None,
 			))
 		with self.lock:
 			self.conn.execute(
@@ -1729,8 +1756,8 @@ class Database:
 				self.conn.executemany("""
 					INSERT INTO conversation_messages
 					(conversation_id, role, content, tool_call_id, tool_name, timestamp,
-					 attachments)
-					VALUES (?, ?, ?, ?, ?, ?, ?)
+					 attachments, author)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				""", rows)
 			self.conn.execute(
 				"UPDATE conversations SET updated_at = ? WHERE id = ?",

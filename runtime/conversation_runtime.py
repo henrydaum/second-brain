@@ -148,10 +148,13 @@ class ConversationRuntime:
         if (not user_driven
                 and action_type == "send_text"
                 and session.cs.phase in FORM_PHASES):
-            return RuntimeResult(False,
-                                 messages=["Session is mid-form — handoff deferred."],
-                                 error={"code": "busy", "message": "form in progress"})
+            return RuntimeResult(False, error={
+                "code": "busy",
+                "message": "Session is mid-form — handoff deferred."})
 
+        # Stays on ``messages``: this is the return value of ``session.cancel``,
+        # which ``/cancel`` reads to decide what to say. It is an answer to
+        # something the person typed, not a refusal.
         if action_type == "cancel" and not session.busy and session.cs.phase == BASE_PHASE:
             return RuntimeResult(messages=["Nothing to cancel."])
 
@@ -229,7 +232,7 @@ class ConversationRuntime:
                     source="runtime", session_key=session_key, persist=False)
                 return RuntimeResult(data={"queued": True})
             else:
-                return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
+                return RuntimeResult(False, error={"code": "busy", "message": "Still working. Send /cancel to interrupt."})
 
         # No-conversation guard: chat actions need a conversation to write
         # into. Fresh installs (and sessions whose saved conversation was
@@ -243,10 +246,12 @@ class ConversationRuntime:
                 and action_type in {"send_text", "send_attachment"}
                 and session.conversation_id is None):
             if not (self.config.get("llm_profiles") or {}):
-                return RuntimeResult(False, messages=[
-                    "Welcome to Second Brain. Run /setup to configure an LLM and the Telegram frontend."
-                ])
-            return RuntimeResult(False, messages=["No conversation loaded.\nTry /new."])
+                return RuntimeResult(False, error={
+                    "code": "no_llm",
+                    "message": "Welcome to Second Brain. Run /setup to configure an LLM and the Telegram frontend."})
+            return RuntimeResult(False, error={
+                "code": "no_conversation",
+                "message": "No conversation loaded.\nTry /new."})
 
         with session.lock:
             _cfg.refresh_specs(self, session)
@@ -322,6 +327,7 @@ class ConversationRuntime:
                 _persist.persist_marker(self, session)
             out.ok = out.ok and follow.ok
             out.messages.extend(follow.messages)
+            out.callable_output.extend(follow.callable_output)
             out.attachments.extend(follow.attachments)
             out.events.extend(follow.events)
             if follow.error:
@@ -647,7 +653,8 @@ class ConversationRuntime:
         Refuses cross-user access with a non-leaking message (the conversation is
         reported as if it does not exist)."""
         if not self.assert_conversation_access(session_key, conversation_id, override=override):
-            return RuntimeResult(False, messages=["No such conversation."])
+            return RuntimeResult(False, error={
+                "code": "not_found", "message": "No such conversation."})
         return _persist.load_history(self, session_key, conversation_id)
 
     def reset_conversation(self, session_key: str) -> RuntimeSession:
@@ -665,7 +672,8 @@ class ConversationRuntime:
     def inject_user_message(self, session_key: str, text: str, *, conversation_id: int | None = None, actor_id: str = "user", override: bool = False) -> RuntimeResult:
         """Append a message directly to a session before handing control to the agent loop."""
         if conversation_id is not None and not self.assert_conversation_access(session_key, conversation_id, override=override):
-            return RuntimeResult(False, messages=["No such conversation."])
+            return RuntimeResult(False, error={
+                "code": "not_found", "message": "No such conversation."})
         return _persist.inject_user_message(self, session_key, text, conversation_id=conversation_id, actor_id=actor_id)
 
     def close_session(self, session_key: str) -> bool:
@@ -1065,42 +1073,51 @@ class ConversationRuntime:
     # intentionally avoided — only the actual switch event hits disk.
     # ──────────────────────────────────────────────────────────────────
 
-    def restore_last_active(self, session_key: str) -> str | None:
+    def restore_last_active(self, session_key: str) -> None:
         """Eager restore entry point for frontends to call at startup,
         before the user's first action — so the "Loaded last
         conversation" notice arrives right after the frontend's
-        ready/online banner instead of mid-command."""
+        ready/online banner instead of mid-command.
+
+        Announces through :meth:`notify` rather than handing back a string. It
+        used to return the notice for the caller to render into the chat, which
+        put a startup banner in the transcript and — worse — meant the *other*
+        caller of ``_load_last_active`` (an identity switch, from
+        ``set_session_user``) discarded the string and announced nothing at
+        all. A notification reaches both, and a frontend without a notification
+        surface still sees it flattened into chat exactly as before.
+        """
         if session_key in self._restore_consumed_keys:
-            return None
+            return
         self._restore_consumed_keys.add(session_key)
         if not self.user_setting(session_key, "startup_restore_conversation", True):
-            return None
-        return self._load_last_active(session_key)
+            return
+        self._load_last_active(session_key)
 
-    def _load_last_active(self, session_key: str) -> str | None:
+    def _load_last_active(self, session_key: str) -> None:
         """Load the current user's last-active conversation into the session.
 
         Shared by startup restore and identity-switch (``set_session_user``).
-        No-ops (returns ``None``) when there is nothing accessible to restore or
-        the session is already bound to a conversation."""
+        No-ops when there is nothing accessible to restore or the session is
+        already bound to a conversation."""
         conv_id = self._last_active_conversation_id(session_key)
         try:
             conv_id = int(conv_id) if conv_id not in (None, "") else None
         except (TypeError, ValueError):
             conv_id = None
         if conv_id is None or self.db is None or not self.assert_conversation_access(session_key, conv_id):
-            return None
+            return
         existing = self.sessions.get(session_key)
         if existing is not None and existing.conversation_id is not None:
             # Frontend re-attached to a session that already has a
             # conversation (mid-process reload, hot reattach) — leave it
             # alone, no restore needed.
-            return None
+            return
         try:
             session = self.load_conversation(session_key, conv_id)
         except Exception:
             logger.exception(f"Failed to restore last active conversation {conv_id}")
-            return None
+            return
         self._persisted_active_conv_by_user[self.session_user_id(session_key)] = conv_id
         title = (self.db.get_conversation(conv_id) or {}).get("title") or ""
         profile = session.profile_override or session.active_agent_profile or "default"
@@ -1114,8 +1131,11 @@ class ConversationRuntime:
         # Recovery notices are deliberately absent: ``open_session`` raised
         # them as notifications on the way here. A crash report is not a
         # footnote to "here is where you left off".
-        return (f"Loaded last conversation{suffix}.\nAgent: {profile}"
-                f"\nPermission mode: {self.security_mode(session_key)}")
+        self.notify(
+            title=f"Loaded last conversation{suffix}",
+            body=(f"Agent: {profile}"
+                  f"\nPermission mode: {self.security_mode(session_key)}"),
+            source="runtime", session_key=session_key, persist=False)
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
         """Remember the active conversation ID for the active session's user."""

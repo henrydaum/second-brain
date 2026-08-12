@@ -32,7 +32,14 @@ class RuntimeResult:
     """Transport-neutral output for adapters to render."""
 
     ok: bool = True
+    # The conversation: the agent's replies and the person's own words. Nothing
+    # else belongs here — a refusal is ``error``, an announcement is a
+    # notification, and what a command answered with is ``callable_output``.
     messages: list[str] = field(default_factory=list)
+    # What a command or tool returned. Separate from ``messages`` because it is
+    # the answer to something the person typed rather than something anybody
+    # said, and a client drawing a chat had no way to tell the two apart.
+    callable_output: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
     buttons: list[dict[str, str]] = field(default_factory=list)
     form: dict[str, Any] = field(default_factory=dict)
@@ -41,14 +48,25 @@ class RuntimeResult:
     data: dict[str, Any] = field(default_factory=dict)
 
     def add_action_result(self, result: ActionResult) -> "RuntimeResult":
-        """Handle add action result."""
+        """Fold one action's outcome into this result.
+
+        A failure is delivered **once**, on ``error``. It used to be delivered
+        three times: ``ActionResult.fail`` sets ``message=err.message`` *and*
+        ``error=err``, so the same sentence was appended by both branches below
+        and then populated ``error`` as well. Every frontend that rendered both
+        kinds printed it twice, and a client had no way to tell the copies from
+        two genuinely different things the kernel wanted to say.
+
+        ``message`` is still forwarded when there is no error, because that is
+        the success one-liner ("Cancelled.", "Skipped.", "Back.") and it is
+        conversation, not diagnostics.
+        """
         self.ok = self.ok and result.ok
         self.events.extend(result.events)
-        if result.message:
-            self.messages.append(result.message)
         if result.error:
             self.error = result.error.to_dict()
-            self.messages.append(result.error.message)
+        elif result.message:
+            self.messages.append(result.message)
         return self
 
 

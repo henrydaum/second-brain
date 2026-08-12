@@ -341,7 +341,22 @@ def test_the_render_kinds_are_the_documented_ones():
     side would silently show a person nothing."""
     assert set(KINDS) == {"messages", "attachments", "form_field", "approval",
                           "approval_settled", "buttons", "error", "typing",
-                          "tool_status", "stream_delta", "notification"}
+                          "tool_status", "stream_delta", "notification",
+                          "callable_output"}
+
+
+def test_both_halves_of_the_render_wire_name_the_same_kinds():
+    """``KINDS`` is the guest's half, ``RENDER_METHODS`` the host's.
+
+    A kind in one and not the other is the worst available failure: the guest
+    documents a kind nothing ever sends, or the adapter forwards to a method no
+    frontend was told about. Either way a person is shown nothing and nothing
+    raises. Pinned as equality rather than membership so a *twelfth* kind
+    cannot be added to one half alone.
+    """
+    from sandbox.residency import RENDER_METHODS
+
+    assert set(KINDS) == set(RENDER_METHODS)
 
 
 # ──────────────────────────────────────────────────────────────────────

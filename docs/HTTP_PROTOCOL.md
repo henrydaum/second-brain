@@ -70,7 +70,7 @@ outright. No stream, no dialogs.
 **One stream per thread.** A second `GET /events` for the same thread replaces
 the first.
 
-### The eleven kinds
+### The twelve kinds
 
 Handle what you can show and ignore the rest; a client that only renders
 `messages` is a working client.
@@ -80,6 +80,12 @@ Handle what you can show and ignore the rest; a client that only renders
 GitHub-flavored markdown, including tables and fenced code blocks. This is the
 interchange format everywhere in Second Brain; it is also what the model emits,
 so one rendering path covers both.
+
+**This kind is the conversation and nothing else** — the agent's replies and
+the person's own words. Everything that used to be smuggled through it now has
+its own kind: a refusal is `error`, an announcement is `notification`, and what
+a slash command answered with is `callable_output`. If you are drawing a chat
+transcript, `messages` is the only kind that belongs in it.
 
 #### `stream_delta` — `dict`
 
@@ -326,6 +332,27 @@ failure it exists to avoid.
 progress, e.g. "Compacting conversation…"). Everything else is in the
 `notifications` table and can be read back — see below.
 
+#### `callable_output` — `list[str]`
+
+What a slash command or a user-invoked tool **returned**: a `/config` listing,
+a `/conversations` table, a `/debug` dump. GitHub-flavored markdown, same wire
+convention as `messages`.
+
+Separate because it is the answer to something the person typed rather than
+something anybody said. It was much the largest population making `messages`
+unreadable to a client — the agent's reply and a settings table arrived as the
+same kind of thing, with no field to tell them apart.
+
+**You only get this kind if you ask for it.** Declare
+`supports_callable_output` in `capabilities`, which `frontend_http` does;
+without it the kernel sends command output as a `messages` render, exactly as
+every frontend saw it before this kind existed. Same bargain as
+`notification` and `stream_delta` above.
+
+A good client gives this its own treatment — a collapsible block, a monospace
+panel beside the transcript — rather than a chat bubble. It is output, not
+speech.
+
 #### Filling the panel on a fresh load
 
 The stream only ever answers "what happened since you connected". A panel that
@@ -413,7 +440,20 @@ catalogues all of them with their policy inputs. The useful subset:
 
 A `conv.read` message row is
 `{id, conversation_id, role, content, tool_call_id, tool_name, timestamp,
-attachments}`. **`attachments` is the files that message carried** — a list of
+attachments, author}`.
+
+**`author` is who actually wrote the row**, and it is `null` for almost all of
+them, which is the answer "the row is what its `role` says". A non-null value
+means the kernel synthesized the row wearing somebody else's role — the values
+it uses are `cancel_notice`, `doorman_note`, `command_note`, `compaction` and
+`truncation`, and a plugin's `conv.append` is stamped with the plugin's own
+name. `role` cannot carry this because `role: "system"` was already taken by
+state and compaction markers, which are not messages at all and should be
+skipped. Do not render an authored row as something the person said; hiding
+them outright is a reasonable default, since each one is addressed to the
+model rather than to a reader.
+
+**`attachments` is the files that message carried** — a list of
 `{path, file_name, modality, extension}`, empty for the overwhelming majority
 of rows — and `content` is what the person actually typed. They used to be one
 field: the pointer line `[Attached image file: chart.png (cached at …)]` was
@@ -640,6 +680,12 @@ Naming a conversation you do not own is refused, not asked about.
    alongside the agent's replies, which is where they used to have to go.
    Backfill the area with `notification.list` on load; the stream only carries
    what happened while you were connected.
+9. Declare `supports_callable_output` and give it somewhere that is not a chat
+   bubble. Between this and step 8, `messages` is left meaning exactly one
+   thing — the conversation — which is what makes a transcript view possible
+   at all.
+10. When you read history back with `conv.read`, honour `author` (below).
+    A row with one is not something the person said.
 
 ### Things that will bite
 
@@ -656,9 +702,18 @@ Naming a conversation you do not own is refused, not asked about.
   `frontend.pending {details: true}`.
 - **`approval` is not only permission.** The same kind carries any question a
   tool asks, so do not word the dialog as a permission grant.
-- **`notification` needs `supports_notifications`.** Without it you still get
-  every notification, flattened into a `messages` render — which looks like
-  nothing is wrong and is the reason the opt-in is worth checking.
+- **`notification` needs `supports_notifications`, and `callable_output` needs
+  `supports_callable_output`.** Without them you still get everything,
+  flattened into `messages` renders — which looks like nothing is wrong and is
+  the reason the opt-ins are worth checking.
+- **`role` does not tell you who wrote a history row.** `conv.read` returns
+  rows the kernel synthesized in the person's slot — a cancel notice, a
+  doorman's note, the summary bridge compaction leaves behind, a note that a
+  slash command ran. Every one of them has a non-empty `author`; a row the
+  person actually typed has `author: null`. Drawing a transcript on `role`
+  alone puts the kernel's own bookkeeping in the user's bubble. Note
+  `role: "system"` is separate again — those are state markers, not messages,
+  and should be skipped outright.
 - **Not every notification is persisted.** `notification_id` is absent for
   transient progress, so keying a panel's list on it will silently drop those.
 - **You are not the only one who can answer.** A question raised on your session

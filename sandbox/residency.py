@@ -44,6 +44,29 @@ from .policy import Chain
 
 logger = logging.getLogger("Sandbox")
 
+# Wire kind -> the ``BaseFrontend`` method the adapter replaces with a box
+# forwarder. The names differ from the kinds in three places, because the kernel
+# named them for what they are and the wire names them for what a frontend does
+# with them.
+#
+# Module level so it can be checked against ``frontends.KINDS``: the two halves
+# have to agree exactly, and a kind in one but not the other shows a person
+# *nothing* rather than failing — the reason there is a test at all. It used to
+# be a local inside ``_adapt_frontend``, which is why the test that claimed to
+# pin this could only ever check the guest half.
+RENDER_METHODS = {"messages": "render_messages",
+                  "attachments": "render_attachments",
+                  "form_field": "render_form_field",
+                  "approval": "render_approval_request",
+                  "approval_settled": "render_approval_settled",
+                  "buttons": "render_buttons",
+                  "error": "render_error",
+                  "typing": "render_typing",
+                  "tool_status": "render_tool_status",
+                  "stream_delta": "render_stream_delta",
+                  "notification": "render_notification",
+                  "callable_output": "render_callable_output"}
+
 
 def _sync_hooks(service) -> None:
     """Stand this service's declared hooks at their doorways, exactly once.
@@ -667,12 +690,11 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
 
         # Restoration may synchronously emit form/approval renders. It must
         # happen between guest calls, after start() has released the box.
+        # It announces itself as a notification, so there is nothing to render
+        # here — a startup banner is the system talking, not the conversation.
         if restore_on_start:
             try:
-                key = self.session_key(None)
-                notice = self.runtime.restore_last_active(key)
-                if notice:
-                    self.render_messages(key, [notice])
+                self.runtime.restore_last_active(self.session_key(None))
             except Exception:
                 logger.exception("frontend %s restore_last_active failed", name)
 
@@ -821,21 +843,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         if key not in NOT_CARRIED:
             attributes[key] = value
 
-    # The native names differ from the wire kinds in three places, because the
-    # kernel named them for what they are and the wire names them for what a
-    # frontend does with them.
-    native_names = {"messages": "render_messages",
-                    "attachments": "render_attachments",
-                    "form_field": "render_form_field",
-                    "approval": "render_approval_request",
-                    "approval_settled": "render_approval_settled",
-                    "buttons": "render_buttons",
-                    "error": "render_error",
-                    "typing": "render_typing",
-                    "tool_status": "render_tool_status",
-                    "stream_delta": "render_stream_delta",
-                    "notification": "render_notification"}
-    for kind, method in native_names.items():
+    for kind, method in RENDER_METHODS.items():
         attributes[method] = _renderer(kind)
 
     # ``capabilities`` is declared as a plain dict because a box cannot hold a

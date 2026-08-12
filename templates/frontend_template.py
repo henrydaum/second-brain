@@ -55,12 +55,22 @@ and `kind` says what:
     messages      list[str] of markdown        attachments   list of paths
     form_field    dict (name/field/collected/display)
     approval      dict (id/title/body/type/enum/default)
+    approval_settled  dict (request_id/reason)
     buttons       list[dict]                   error         dict
     typing        bool                         tool_status   dict
-    stream_delta  dict (only if you set supports_streaming)
+    stream_delta      dict       (only if you set supports_streaming)
+    notification      dict       (only if you set supports_notifications)
+    callable_output   list[str]  (only if you set supports_callable_output)
 
 Handle what your transport can show and ignore the rest. A frontend that only
 renders `messages` is a working frontend.
+
+`messages` is the conversation and nothing else — the agent's replies and the
+person's own words. A refusal is `error`, an announcement is `notification`,
+and what a slash command answered with is `callable_output`. The last three
+kinds above are opt-in, and declining any of them is free: the kernel sends
+that content as `messages` instead, exactly as it did before the kind existed.
+So a transport gains a surface by asking and loses nothing by not.
 
 Output is **markdown on the wire** — that is the interchange format, because it
 is also what the model emits. Render it however your transport prefers.

@@ -249,8 +249,8 @@ class _FakeDb:
     def __init__(self):
         self.rows = []
 
-    def save_message(self, conversation_id, role, content, tool_call_id=None, tool_name=None, attachments=None):
-        self.rows.append({"role": role, "content": content, "tool_call_id": tool_call_id, "tool_name": tool_name, "attachments": attachments or []})
+    def save_message(self, conversation_id, role, content, tool_call_id=None, tool_name=None, attachments=None, author=None):
+        self.rows.append({"role": role, "content": content, "tool_call_id": tool_call_id, "tool_name": tool_name, "attachments": attachments or [], "author": author})
 
 
 def test_compaction_marker_preserves_db_rows_but_hides_pre_checkpoint_replay():
@@ -264,9 +264,11 @@ def test_compaction_marker_preserves_db_rows_but_hides_pre_checkpoint_replay():
     history = messages_to_history(db.rows)
 
     assert [r["content"] for r in db.rows if r["role"] != "system"] == ["old user", "old assistant", "after"]
+    # The bridge pair is authored: it is the kernel handing the model a summary,
+    # not two turns anybody took. "after" is the person, so it carries nothing.
     assert history == [
-        {"role": "user", "content": "[Conversation summary from earlier]\nEarlier summary."},
-        {"role": "assistant", "content": "Understood - I have the earlier context."},
+        {"role": "user", "author": "compaction", "content": "[Conversation summary from earlier]\nEarlier summary."},
+        {"role": "assistant", "author": "compaction", "content": "Understood - I have the earlier context."},
         {"role": "user", "content": "after"},
     ]
     assert latest_state(db.rows)["active_agent_profile"] == "builder"

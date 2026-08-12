@@ -386,14 +386,24 @@ def _relative_time(timestamp, now) -> str:
 
 
 def _conv_append(ctx, args: dict) -> Result:
-    """Add a message."""
+    """Add a message.
+
+    The row is stamped with whoever appended it, read off the provenance chain
+    exactly as ``_notification_source`` does. This is the site the ``author``
+    column's vocabulary is deliberately open for: the kernel's own synthesized
+    rows name a mechanism, but a plugin writing a ``role='user'`` row can only
+    be named by the kernel, and it is the same forgery argument — a plugin
+    allowed to state its own authorship could write a row indistinguishable
+    from something the person typed.
+    """
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    db.save_message(cid, args.get("role") or "user", args.get("content") or "")
+    db.save_message(cid, args.get("role") or "user", args.get("content") or "",
+                    author=_notification_source())
     return Result(data=True)
 
 

@@ -299,6 +299,17 @@ Payload:
     role:         str   — "user" | "assistant" | "tool"
     content:      str
     actor_id:     str   — "user" | "agent"
+    author:       str (optional)        — set when the row was synthesized by
+                                          something other than whoever ``role``
+                                          names: a cancel notice, a doorman's
+                                          note, a compaction bridge, a plugin's
+                                          ``conv.append``. Absent is the
+                                          ordinary case and means the role is
+                                          the whole answer. ``actor_id`` above
+                                          collapses every user-role row to
+                                          "user", so this is the only field
+                                          that tells a synthesized row from
+                                          something the person actually typed.
     attachments:  list[dict]            — user rows: the files that message
                                           carried, as {path, file_name,
                                           modality, extension}. Empty for

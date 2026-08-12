@@ -156,18 +156,33 @@ def _for_provider(msg: dict[str, Any]) -> dict[str, Any]:
     This is the single place history becomes provider messages, which is what
     makes rendering here safe. Anything else holding this history — a rewrite
     back to the database, a client, a memory extractor — keeps the two apart.
+
+    ``author`` is dropped here for the same reason and is checked *before* the
+    attachments shortcut below: it rides on rows that carry no files at all —
+    a cancel notice, a doorman's note — so returning ``msg`` unchanged on the
+    no-attachments path would send a key no provider schema knows straight to
+    the API.
     """
-    if not msg.get("attachments"):
+    if not msg.get("attachments") and "author" not in msg:
         return msg
     from attachments.attachment import with_pointers
 
-    out = {key: value for key, value in msg.items() if key != "attachments"}
-    out["content"] = with_pointers(msg.get("content") or "", msg["attachments"])
+    out = {key: value for key, value in msg.items()
+           if key not in ("attachments", "author")}
+    if msg.get("attachments"):
+        out["content"] = with_pointers(msg.get("content") or "", msg["attachments"])
     return out
 
 
 def _split_current_turn(history: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split prior transcript from the latest user-led turn."""
+    """Split prior transcript from the latest user-led turn.
+
+    Deliberately still asks only about ``role``, unlike ``latest_user_text``.
+    The row this finds is where the ``[SYSTEM CONTEXT UPDATE]`` block gets
+    merged, so an authored row (a cancel notice, a doorman's note) is a
+    perfectly good host for it — the block is kernel text either way. Changing
+    turn-splitting to skip them would move the merge point for no gain.
+    """
     idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
     return (history, []) if idx is None else (history[:idx], history[idx:])
 
@@ -1167,7 +1182,11 @@ class ConversationLoop:
         that immediately follows it), aggressively truncating any string
         content. Used when compaction itself can't help — either because
         the compactor service did not produce a summary, the summary came
-        back empty, or the post-compact retry still overflowed."""
+        back empty, or the post-compact retry still overflowed.
+
+        Like ``_split_current_turn`` this asks only about ``role``: keeping an
+        authored row is keeping context the model needs (a cancel notice most
+        of all), and this path is already discarding almost everything."""
         if not history:
             return
         last_user_idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
@@ -1184,8 +1203,8 @@ class ConversationLoop:
             shrunk.append(msg)
         original_count = len(history)
         history[:] = [
-            {"role": "user", "content": "[Earlier conversation dropped to fit context. Continue from the message below.]"},
-            {"role": "assistant", "content": "Understood."},
+            {"role": "user", "author": "truncation", "content": "[Earlier conversation dropped to fit context. Continue from the message below.]"},
+            {"role": "assistant", "author": "truncation", "content": "Understood."},
             *shrunk,
         ]
         logger.warning(f"Emergency-truncated history from {original_count} -> {len(history)} messages.")
@@ -1216,9 +1235,17 @@ class ConversationLoop:
                 return
             # Rendered, not raw: a summary is written *for* a model, so it
             # should read what the model read — including that a file arrived.
+            #
+            # An authored row is labelled SYSTEM rather than by its role. The
+            # label is computed here rather than by ``_for_provider``, which
+            # strips ``author`` — so without this a cancel notice entered the
+            # summary as "USER: [The user cancelled the previous turn…]" and
+            # that misattribution is what survives into every later context,
+            # long after the row itself has been compacted away.
             transcript = "\n".join(
-                f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}"
-                for m in (_for_provider(row) for row in history))
+                f"{'SYSTEM' if row.get('author') else (row.get('role') or '').upper()}: "
+                f"{(_for_provider(row).get('content') or '')[:1000]}"
+                for row in history)
             # Keep head + tail so the summary covers both how the conversation
             # started and what was most recently said, instead of silently
             # dropping everything after the first 20k chars.
@@ -1246,7 +1273,7 @@ class ConversationLoop:
             })
             tail = [self._shrink_for_tail(m) for m in history[-2:]]
             history[:] = [
-                {"role": "user", "content": (
+                {"role": "user", "author": "compaction", "content": (
                     "[Conversation summary from earlier]\n"
                     "Earlier turns were compacted away; only this summary remains "
                     "visible. The full transcript is preserved in the "
@@ -1256,7 +1283,7 @@ class ConversationLoop:
                     "— never deny it was said.\n"
                     f"{summary}"
                 )},
-                {"role": "assistant", "content": "Understood - I have the earlier context."},
+                {"role": "assistant", "author": "compaction", "content": "Understood - I have the earlier context."},
                 *tail,
             ]
             if self.on_notice:
@@ -1337,8 +1364,9 @@ class ConversationLoop:
             note = (verdict.note or "").strip()
             if note and not verdict.ephemeral:
                 # Recorded feedback keeps the transcript coherent: the note
-                # lands as a user row between the agent's two replies.
-                self._record({"role": "user", "content": note}, history, new_messages, db, conversation_id)
+                # lands as a user row between the agent's two replies — but a
+                # doorman is not the person, so it says whose note it is.
+                self._record({"role": "user", "author": "doorman_note", "content": note}, history, new_messages, db, conversation_id)
             elif note:
                 self._pending_ephemeral_notes.append(note)
             if not verdict.allow_tools:
@@ -1484,7 +1512,8 @@ class ConversationLoop:
         not something the model needs to act on differently, and the branch
         cost a boolean threaded through two files.
         """
-        self._record({"role": "user", "content": self.CANCEL_NOTICE},
+        self._record({"role": "user", "author": "cancel_notice",
+                      "content": self.CANCEL_NOTICE},
                      history, new_messages, db, conversation_id)
 
     def _cancelled(self) -> bool:
@@ -1536,7 +1565,13 @@ class ConversationLoop:
         This is the single choke point for agent-turn history rows, so the
         SESSION_MESSAGE emission here is what makes the channel a complete
         live feed of the transcript (assistant text, tool-call rows, tool
-        results, and drained mid-turn user rows alike)."""
+        results, and drained mid-turn user rows alike).
+
+        ``author`` rides along for the same reason it is a column: ``actor_id``
+        below collapses every user-role row to ``"user"``, so on this channel a
+        cancel notice and a drained mid-turn message from the person read
+        identically. A UI built on the bus has the problem a UI built on the
+        table has."""
         history.append(msg)
         new_messages.append(msg)
         if db is not None and conversation_id is not None:
@@ -1548,6 +1583,8 @@ class ConversationLoop:
             "content": msg.get("content") or "",
             "actor_id": "user" if role == "user" else "agent",
         }
+        if msg.get("author"):
+            payload["author"] = msg["author"]
         if msg.get("name"):
             payload["name"] = msg["name"]
         if msg.get("tool_call_id"):

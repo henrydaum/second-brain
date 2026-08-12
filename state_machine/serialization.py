@@ -67,7 +67,7 @@ def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         idx, marker = compact
         rows = rows[idx + 1:]
         summary = (marker.get("summary") or "").strip()
-        history = ([{"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"}, {"role": "assistant", "content": "Understood - I have the earlier context."}] if summary else [])
+        history = ([{"role": "user", "author": "compaction", "content": f"[Conversation summary from earlier]\n{summary}"}, {"role": "assistant", "author": "compaction", "content": "Understood - I have the earlier context."}] if summary else [])
     else:
         history = []
     for msg in rows:
@@ -76,9 +76,9 @@ def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         role, content = msg.get("role"), msg.get("content") or ""
         if role == "assistant":
             packed = history_tool_calls_from_content(content)
-            history.append({"role": "assistant", "content": packed.get("content"), "tool_calls": packed["tool_calls"]} if packed else {"role": "assistant", "content": content})
+            row = {"role": "assistant", "content": packed.get("content"), "tool_calls": packed["tool_calls"]} if packed else {"role": "assistant", "content": content}
         elif role == "tool":
-            history.append({"role": "tool", "tool_call_id": msg.get("tool_call_id"), "name": msg.get("tool_name"), "content": content})
+            row = {"role": "tool", "tool_call_id": msg.get("tool_call_id"), "name": msg.get("tool_name"), "content": content}
         elif role == "user":
             # The files stay a *record* here rather than being rendered back
             # into the text. The prompt line is built at call time
@@ -89,7 +89,15 @@ def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             row = {"role": "user", "content": content}
             if msg.get("attachments"):
                 row["attachments"] = list(msg["attachments"])
-            history.append(row)
+        else:
+            continue
+        # Carried for the same reason and dropped in the same place: a client
+        # or a memory extractor holding this history needs to know a cancel
+        # notice is not something the person said, and ``_for_provider`` takes
+        # the key back off before a model ever sees it.
+        if msg.get("author"):
+            row["author"] = msg["author"]
+        history.append(row)
     return heal_orphans(history)
 
 
@@ -117,7 +125,7 @@ def save_history_message(db, conversation_id: int, msg: dict[str, Any]) -> None:
     role, content = msg.get("role"), msg.get("content") or ""
     if role == "assistant" and msg.get("tool_calls"):
         content = json.dumps({"content": msg.get("content"), "tool_calls": msg["tool_calls"]})
-    db.save_message(conversation_id, role, content, tool_call_id=msg.get("tool_call_id"), tool_name=msg.get("name"), attachments=msg.get("attachments"))
+    db.save_message(conversation_id, role, content, tool_call_id=msg.get("tool_call_id"), tool_name=msg.get("name"), attachments=msg.get("attachments"), author=msg.get("author"))
 
 
 def save_state_marker(db, conversation_id: int, state: dict[str, Any]) -> None:

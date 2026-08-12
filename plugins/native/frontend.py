@@ -145,6 +145,11 @@ class FrontendCapabilities:
     # supports_streaming above: declaring it opts into a structured channel,
     # declining it opts into the path that was always there.
     supports_notifications: bool = False
+    # Frontend draws command/tool return values somewhere of its own (and
+    # implements render_callable_output). False = the base sends them through
+    # render_messages, which is what every frontend saw before the kind existed.
+    # Same bargain as supports_notifications directly above.
+    supports_callable_output: bool = False
 
 
 class BaseFrontend:
@@ -182,6 +187,9 @@ class BaseFrontend:
         render_error(session_key, error)
         render_typing(session_key, on)            — default no-op.
         render_tool_status(session_key, payload)  — default no-op.
+        render_callable_output(session_key, messages)
+                                                  — default no-op; needs
+                                                    supports_callable_output.
 
     Provided (do NOT override):
         bind(runtime, registry, config)
@@ -408,6 +416,25 @@ class BaseFrontend:
         """
         return
 
+    def render_callable_output(self, session_key: str, messages: list[str]) -> None:
+        """Default no-op; frontends with ``supports_callable_output`` override.
+
+        What a slash command or a user-invoked tool *returned* — a `/config`
+        listing, a `/conversations` table — as GitHub-flavored markdown, same
+        wire convention as :meth:`render_messages`.
+
+        Split out because it is an answer to something the person typed rather
+        than something anybody said, and it was much the largest population
+        making the message stream unreadable to a client: the agent's reply and
+        a `/debug` dump arrived as the same kind of thing.
+
+        Deliberately empty for the same reason ``render_notification`` is: a
+        transport with somewhere to put it draws it there, and a transport
+        without never reaches here, because ``_render_result`` sends it down
+        the message path instead.
+        """
+        return
+
     # ──────────────────────────────────────────────────────────────────────
     # Wiring — provided by the base.
     # ──────────────────────────────────────────────────────────────────────
@@ -581,19 +608,25 @@ class BaseFrontend:
         try:
             return (self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}), None
         except Exception as e:
-            result = RuntimeResult(False, messages=[f"Invalid arguments for `/{name}`: {e}\nType `/{name}` alone to fill them in step by step."])
+            result = RuntimeResult(False, error={
+                "code": "bad_command_args",
+                "message": f"Invalid arguments for `/{name}`: {e}\nType `/{name}` alone to fill them in step by step."})
             self._render_result(session_key, result)
             return None, result
 
     def _unknown_command(self, session_key: str, name: str):
-        """Render an unknown slash-command message without waking the agent."""
-        result = RuntimeResult(False, messages=[f"`/{name}` isn't a recognized slash command. Type `/commands` to see the full list of what's available."])
+        """Render an unknown slash-command error without waking the agent."""
+        result = RuntimeResult(False, error={
+            "code": "unknown_command",
+            "message": f"`/{name}` isn't a recognized slash command. Type `/commands` to see the full list of what's available."})
         self._render_result(session_key, result)
         return result
 
     def _command_not_allowed(self, session_key: str, name: str):
-        """Render a message for a command blocked by this frontend's profile."""
-        result = RuntimeResult(False, messages=[f"`/{name}` is not available on the '{self.name}' frontend. Type `/commands` to see what's available here."])
+        """Render an error for a command blocked by this frontend's profile."""
+        result = RuntimeResult(False, error={
+            "code": "command_not_allowed",
+            "message": f"`/{name}` is not available on the '{self.name}' frontend. Type `/commands` to see what's available here."})
         self._render_result(session_key, result)
         return result
 
@@ -1048,6 +1081,16 @@ class BaseFrontend:
             messages = [m for m in result.messages if not self._consume_streamed(session_key, m)]
             if messages:
                 self.render_messages(session_key, messages)
+        if result.callable_output:
+            # The fallback lives here rather than in a default
+            # ``render_callable_output`` body, because ``residency`` replaces
+            # every ``render_*`` wholesale with the box forwarder for sandboxed
+            # frontends — which is all of them — so a default would never run.
+            # Same reason the notification fallback lives on its bus handler.
+            if self.capabilities.supports_callable_output:
+                self.render_callable_output(session_key, list(result.callable_output))
+            else:
+                self.render_messages(session_key, list(result.callable_output))
         if result.attachments:
             self.render_attachments(session_key, list(result.attachments))
         if result.form:

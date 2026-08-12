@@ -173,7 +173,7 @@ def note_user_command(runtime, session: RuntimeSession, result: ActionResult) ->
         return
     args = event.get("args") or {}
     fields = f" (fields: {', '.join(sorted(args))})" if args else ""
-    msg = {"role": "user", "content": (
+    msg = {"role": "user", "author": "command_note", "content": (
         f"[SYSTEM NOTE] The user ran the slash command /{event['name']}{fields}. "
         "Its output was shown directly to the user.")}
     session.history.append(msg)
@@ -182,14 +182,25 @@ def note_user_command(runtime, session: RuntimeSession, result: ActionResult) ->
 
 
 def echo_callable_result(action_type: str, result: ActionResult, out: RuntimeResult) -> None:
-    """Surface command/tool return values to the frontend (v1 behavior)."""
+    """Surface command/tool return values to the frontend.
+
+    On ``callable_output`` rather than ``messages``: this is what a callable
+    *answered*, not something anybody said, and it was the largest population
+    making ``messages`` unreadable to a client — a `/config` table and the
+    agent's reply arrived as the same kind of thing. Frontends that do not
+    declare ``supports_callable_output`` still see it in the chat, flattened
+    by ``_render_result``, so nothing about the REPL or Telegram changes.
+
+    Note this serves ``call_tool`` too, which is why the field is not named for
+    commands alone.
+    """
     if action_type not in {"call_command", "call_tool"} and getattr(result, "action", None) not in {"call_command", "call_tool"}:
         return
     if not result.ok:
         return
     value = (result.data or {}).get("result")
     if value is not None:
-        out.messages.append(str(value))
+        out.callable_output.append(str(value))
 
 
 def decorate_form(session: RuntimeSession, out: RuntimeResult) -> None:
@@ -209,8 +220,16 @@ def decorate_form(session: RuntimeSession, out: RuntimeResult) -> None:
 
 
 def latest_user_text(session: RuntimeSession) -> str:
-    """Return the latest user-authored text stored in session history."""
+    """Return the latest user-authored text stored in session history.
+
+    ``role`` alone is not the test, because the kernel writes user rows the
+    person never typed. This feeds the new conversation's **title**
+    (``ConversationRuntime`` names a conversation after its first message), so
+    reading role alone titled conversations "[The user cancelled the previous
+    turn…]" after a ``/cancel``, or "[SYSTEM NOTE] The user ran /config" with
+    ``reveal_user_commands`` on — with no sign anything had gone wrong.
+    """
     for msg in reversed(session.history):
-        if msg.get("role") == "user":
+        if msg.get("role") == "user" and not msg.get("author"):
             return msg.get("content") or ""
     return ""

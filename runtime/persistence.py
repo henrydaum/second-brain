@@ -299,12 +299,21 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
 
 
 def new_conversation(runtime, session_key: str):
-    """Handle new conversation."""
+    """Start a fresh conversation and announce it.
+
+    The announcement is a notification rather than a chat message: a new
+    conversation beginning is the system reporting a state change, and putting
+    it in the transcript made the first line of every conversation something
+    nobody said. Frontends without a notification surface still see it, flattened
+    into chat exactly as before.
+    """
     from runtime.session import RuntimeResult
 
     reset_conversation(runtime, session_key)
     profile = runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
-    return RuntimeResult(messages=[f"New conversation started. Agent: {profile}."])
+    runtime.notify(title="New conversation started", body=f"Agent: {profile}.",
+                   source="runtime", session_key=session_key, persist=False)
+    return RuntimeResult()
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -477,11 +477,20 @@ def test_every_render_kind_crosses_unchanged(running):
         ("stream_delta", {"stream_id": "s1", "seq": 0, "delta": "hi"}),
         ("notification", {"title": "Plugin registered", "body": "tool_x",
                           "source": "plugin_watcher", "level": "success"}),
+        ("callable_output", ["| setting | value |"]),
     ]
+
+    # Stated once, checked against the kernel: a kind added to ``KINDS`` and
+    # not to this list would leave the outbound contract half-pinned, and this
+    # test would still pass while covering less than it claims.
+    from sandbox.frontends import KINDS
+
+    assert {kind for kind, _ in sent} == set(KINDS)
+
     for kind, payload in sent:
         assert running.render("http:t1", kind, payload).ok
 
-    frames = _frames(_read(conn, until=b"notification", timeout=3.0))
+    frames = _frames(_read(conn, until=b"callable_output", timeout=3.0))
     conn.close()
 
     assert [f["kind"] for f in frames] == [kind for kind, _ in sent]

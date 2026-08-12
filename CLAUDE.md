@@ -734,6 +734,57 @@ their welded text and no record, which is exactly how they have always read;
 there is no backfill, because deciding where prose ends and a file begins by
 regex over somebody's own words is a guess with no upside.
 
+## Who wrote a row
+
+`conversation_messages.author` answers the question `role` cannot. `'system'`
+was taken from the beginning — it means a state or compaction marker, packed
+JSON that `messages_to_history` skips wholesale — so **six kernel mechanisms
+write `role='user'` rows the person never typed**: the `reveal_user_commands`
+note (`command_note`), a doorman's `SendBack` (`doorman_note`), the cancel
+notice (`cancel_notice`), the compaction bridge (`compaction`, from both the
+live rewrite and the re-derivation on load), the emergency-truncation bridge
+(`truncation`), and any plugin's `conv.append`.
+
+**NULL is the meaning**, not an absence of one: it says the row is what its
+`role` says, which is true of every row written before the column, so there is
+no backfill and nothing normalizes it to `""` the way `_pack_attachments`
+normalizes to `[]`. This is deliberately the *opposite* call from the ledger's
+identity columns — there NULL was a bug because the column was meant to always
+be filled, and a NULL looked exactly like a table nobody had asked yet.
+
+**The vocabulary is open, like a notification's `source` and for the same
+reason.** `conv.append` lets a plugin write a user row and no frozen enum can
+name it, so `handlers/kernel._conv_append` stamps the provenance chain leaf via
+`_notification_source` — the part a box cannot forge. A plugin free to state
+its own authorship could leave it blank and write a row indistinguishable from
+something the person typed, which is the whole thing the column prevents.
+
+It is threaded exactly where `attachments` is threaded — `save_message`,
+`save_history_message`, `replace_conversation_messages` (a key dropped there
+survives until the next *background* turn and then does not), `messages_to_
+history`, and the `SESSION_MESSAGE` payload, whose `actor_id` collapses every
+user-role row to `"user"` and so has the identical problem a table has.
+
+**`_for_provider` strips it, and the check runs before the attachments
+shortcut.** That function returned `msg` untouched when there were no files,
+and an authored row carries none — so the one fast path was the one case the
+key always took, and a field no provider schema knows is either rejected or
+silently believed.
+
+Two readers were already wrong and are fixed: `dispatch.latest_user_text` feeds
+the **conversation title**, so a `/cancel` titled conversations "[The user
+cancelled the previous turn…]"; and `_compact` labels the compactor's
+transcript by role, computed separately from `_for_provider`, so a notice
+entered the summary as `USER: …` and that misattribution survived into every
+later context. `_split_current_turn` and the emergency-truncate scan still ask
+only about `role`, deliberately — see their docstrings.
+
+The column is **advisory**: `sandbox/users.py` neither knows nor cares about it
+(`conversation_messages` is a kernel table, not user-scoped), so nothing forces
+a query to honour it. The store's memory retriever, curator and MCP server were
+each reading authored rows as user speech and now filter on it; a new consumer
+must opt in the same way, which is why `tool_sql_query`'s agent prompt says so.
+
 ## Package store V1
 
 - **Tree mirror, not package archives.** The `origin/store` branch mirrors what
@@ -1860,7 +1911,7 @@ kernel-owned and hook-*shaped*.
 are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
 per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs), `docs/HTTP_PROTOCOL.md` (hand this to an agent
-writing a *client* — the ten render kinds with their real payload shapes, the
+writing a *client* — the twelve render kinds with their real payload shapes, the
 Requests worth calling, and the half-dozen rules a working demo cannot show;
 `docs/http_reference_client.html` is that demo, for checking the bridge when
 the client misbehaves).
@@ -2120,9 +2171,38 @@ no edits, and `frontend_http` needed none either, since it forwards any kind
 generically. Exactly the bargain `supports_streaming` already makes for deltas,
 and for the same reason: a client quietly ignoring a kind looks merely quiet.
 Note the fallback has to live on the *bus handler*, not on `render_notification`
-— `residency.native_names` replaces that method wholesale with the box
+— `residency.RENDER_METHODS` replaces that method wholesale with the box
 forwarder, so a default implementation there would never run for a sandboxed
 frontend, which is all of them.
+
+That map is module-level in `residency.py` rather than a local inside
+`_adapt_frontend`, and only because of what it costs to get wrong: a kind in
+`frontends.KINDS` and not in `RENDER_METHODS` (or the reverse) shows a person
+*nothing* and raises nothing. The test that claimed to pin exactly this could
+only ever check the guest half, because the host's half was unreachable from
+outside the function. It is pinned as set equality now.
+
+**`messages` means the conversation, and everything else was moved out of it.**
+The notification split was the first of four; the rest followed the same
+argument and finished it. A refusal is the `error` kind
+(`RuntimeResult.add_action_result` also stopped delivering one *three* times —
+`ActionResult.fail` sets `message` **and** `error`, so both branches appended
+the same sentence before `error` was even populated). An announcement is a
+notification: only two were left worth moving, `new_conversation` and the
+restore-on-start notice, and moving the second fixed a silent gap, since
+`_load_last_active`'s other caller — an identity switch — discarded the
+returned string and announced nothing at all. And what a command *returned* is
+`callable_output`, the twelfth kind, gated by `supports_callable_output` on the
+same bargain: REPL and Telegram needed zero edits.
+
+**Three sites deliberately kept their `messages`**, and the reason is that they
+are the return value of a guest-facing Request. `conv.load` and `session.cancel`
+hand `RuntimeResult.messages` to a box, and `command_cancel` reads it to decide
+what to say — route "Nothing to cancel." to a notification and `/cancel` falls
+through to `return "Cancelled."`, announcing the opposite of the truth while a
+notification says the right thing. `command_conversations` degrades the same
+way, losing the title and agent line. A `RuntimeResult` field is not always a
+render channel; check whether a Request answers with it first.
 
 **`source` is stamped by the kernel, never stated by whoever asked.** For
 sandboxed code `handlers/kernel._notification_source` reads the leaf of the live
