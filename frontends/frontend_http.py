@@ -32,6 +32,14 @@ So this frontend does no mapping at all. One render, one SSE frame::
 
 A client that can read those ten can do everything the REPL can.
 
+**Two ways in, one way out.** ``render`` is the kernel's, and ``on_event`` is
+everyone else's: ``buttons`` is in the kind list but the kernel never emits it —
+it exists for store plugins, and a plugin cannot render, because rendering
+belongs to a loaded frontend and a plugin is not one. So a plugin emits on the
+bus and this frontend, which holds the stream, writes the frame. Both paths go
+through ``_push`` so both are numbered and buffered identically; a client cannot
+tell which one produced a frame, and ``Last-Event-ID`` counts them the same.
+
 **The stream is the attendance signal.** Opening it declares that somebody is
 watching (``sdk.frontend.attended``); a push that comes back False means the
 client hung up, and the session goes unattended again. That matters more than
@@ -170,6 +178,14 @@ _JSON = {"Content-Type": "application/json"}
 # without bound.
 _MAX_BUFFERED = 500
 
+# The bus channel ``tool_suggest_followups`` emits on. Spelled out a second time
+# in the ``subscribed_channels`` declaration below rather than referenced from
+# it, because a declaration is read by AST and never executed — a name there
+# resolves to nothing, the whole declaration is dropped, and ``validate`` still
+# reports ok. So there are three copies of this string across two files and
+# nothing checks that they agree: a typo is silence, not an error.
+_FOLLOWUPS_CHANNEL = "followups"
+
 # What a failed Request looks like over HTTP. Codes the kernel actually sets;
 # anything else is a genuine server-side fault and says so.
 _STATUS = {"approval_declined": 403, "not_permitted": 403,
@@ -243,6 +259,14 @@ class HTTP(BaseFrontend):
         "frontend.act", "frontend.collect", "frontend.attend",
         "secret.reveal", "config.read", "fs.read_bytes", "fs.stat",
     ]
+
+    # Frames nobody renders. The kernel emits twelve kinds through ``render``;
+    # ``buttons`` is not one of them — it exists for store plugins, and a plugin
+    # has no way to render because rendering belongs to a loaded frontend. The
+    # bus closes that gap: ``tool_suggest_followups`` emits here and ``on_event``
+    # puts the frame on this session's stream. A literal, not ``_FOLLOWUPS_CHANNEL``
+    # — see the comment beside that constant.
+    subscribed_channels = ["followups"]
 
     agent_prompt = (
         "The person may be using a web client. It renders GitHub markdown, "
@@ -441,6 +465,31 @@ class HTTP(BaseFrontend):
         what a native frontend would be handed. Anything that wants a different
         shape can build it; nothing has to un-build ours first.
         """
+        return self._push(sdk, session_key, kind, payload)
+
+    def on_event(self, sdk, channel, payload):
+        """Frames a plugin asked for, on a stream only this frontend holds.
+
+        ``render`` is the kernel's way in; this is everyone else's. The kernel
+        does not emit ``buttons`` — the kind exists for store plugins — and a
+        plugin cannot render, because rendering belongs to a loaded frontend and
+        it is not one. So the bus carries the payload here and this puts it on
+        the wire, which is the whole reason a plugin can show a chip at all.
+
+        Deliberately routed through ``_push`` rather than ``sdk.http.push``: the
+        sequence and replay bookkeeping is what a reconnecting client counts in,
+        and a frame that skipped it would leave a hole that ``Last-Event-ID``
+        never fills.
+        """
+        if channel != _FOLLOWUPS_CHANNEL:
+            return
+        session_key = (payload or {}).get("session_key")
+        if not session_key:
+            return
+        self._push(sdk, session_key, "buttons", (payload or {}).get("buttons") or [])
+
+    def _push(self, sdk, session_key, kind, payload):
+        """Number one frame, hold it for a reconnect, and write it if anyone is there."""
         frame = json.dumps({"kind": kind, "session_key": session_key,
                             "payload": payload})
         seq = self._seq.get(session_key, 0) + 1
