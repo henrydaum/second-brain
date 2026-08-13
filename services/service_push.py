@@ -64,6 +64,7 @@ nothing. It is mentioned only to save the next person the experiment.
 dependencies_files = []
 dependencies_pip = ["pywebpush"]
 
+import base64
 import json
 import time
 
@@ -99,6 +100,11 @@ SEND_TIMEOUT = 10
 MAX_FAILURES = 10
 
 
+def _b64url(raw: bytes) -> str:
+    """Base64url without padding, which is the only spelling VAPID accepts."""
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
 class Push(BaseService):
     """Send scheduled-agent notifications to subscribed browsers."""
 
@@ -106,18 +112,31 @@ class Push(BaseService):
     description = "Sends scheduled agent results to subscribed devices as push notifications."
     shared = True
     subscribed_channels = ["notification_pushed"]
-    exports = ["public_key", "subscribe", "unsubscribe", "state", "send_test"]
+    exports = ["setup", "public_key", "subscribe", "unsubscribe", "state",
+               "send_test"]
     # No ``conv.read``: the category comes from ``db.query`` instead, for the
     # reason ``_category`` gives. Asking for a Request this never makes would be
     # capability nobody audits.
+    # ``config.write`` is for ``setup`` and nothing else, and it is silent
+    # rather than approval-gated only because these are settings this plugin
+    # *declared*: policy answers SAFE for ``scope="plugin"`` on a key the chain
+    # owns, and UNSAFE for every other write. Ownership comes from the setting
+    # registry, not from this list.
     requests = ["db.define", "db.query", "db.write",
-                "config.read", "secret.reveal"]
+                "config.read", "config.write", "secret.reveal"]
     dependencies_pip = ["pywebpush"]
 
     config_settings = [
+        # The validator notes that this looks credential-shaped and is not
+        # declared ``secret_``. That is deliberate and must stay that way: the
+        # public half of a VAPID pair is *meant* to be public — the browser
+        # cannot subscribe without it. Renaming it would hand the frontend a
+        # ``<secret:…>`` handle, which is a string that means something only
+        # inside ``net.http``, and `pushManager.subscribe` would be given
+        # nonsense. Only the private half below is a secret.
         ("VAPID public key", "push_vapid_public_key",
-         "Base64url VAPID public key. Handed to the browser when it subscribes; "
-         "generate a pair with `npx web-push generate-vapid-keys`.",
+         "Base64url VAPID public key, handed to the browser when it subscribes. "
+         "Call the push service's `setup` method to generate a pair.",
          "",
          {"type": "text"}),
 
@@ -190,6 +209,76 @@ class Push(BaseService):
             sdk.log(f"could not create push_subscriptions: {error}", "warning")
 
     # ── the browser's side ──────────────────────────────────────────
+
+    def setup(self, sdk, contact="", force=False):
+        """Generate this installation's VAPID key pair and store it.
+
+        **Because the manual version of this step is where the feature died.**
+        It was four instructions — run a Node one-liner, copy two base64url
+        blobs into two settings, put an address in a third — and every one of
+        them fails silently: an unset key makes ``public_key`` answer "", the
+        browser subscribes against nothing, and the only symptom is a phone
+        that never buzzes. A key pair is not a decision anybody needs to make,
+        so it should not be a step anybody can half-do.
+
+        Silent, and legitimately so: policy answers SAFE for a
+        ``scope="plugin"`` write to a key this plugin declared, so this raises
+        no dialog and needs nobody attending. The private key is generated here
+        and stored here — it never crosses a network, which is more than the
+        copy-and-paste version could say.
+
+        **Rotating throws every device away.** A subscription is bound to the
+        key that created it, so the old rows would sit there failing until
+        ``MAX_FAILURES`` retired them one scheduled agent at a time. ``force``
+        therefore clears them, and every device has to be re-enabled — which is
+        why it is not the default and why an existing key is left alone.
+        """
+        existing = str(sdk.config.read("push_vapid_public_key") or "").strip()
+        if existing and not force:
+            if contact:
+                sdk.config.write("push_contact_email", str(contact).strip(),
+                                 scope="plugin")
+            return {"ok": True, "rotated": False, "public_key": existing,
+                    "contact": str(sdk.config.read("push_contact_email") or "")}
+
+        # From ``cryptography``, which is already here as a pywebpush
+        # dependency — this plugin is disclaimed and subprocessed for that
+        # library either way, so it costs nothing new.
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        private = ec.generate_private_key(ec.SECP256R1())
+        # The two shapes VAPID actually wants, and they are not the same
+        # encoding: the public half is the uncompressed P-256 point (65 bytes,
+        # 87 base64url characters) and the private half is the bare 32-byte
+        # scalar (43 characters). This is what `web-push generate-vapid-keys`
+        # prints, and what py_vapid's `from_string` expects.
+        public_bytes = private.public_key().public_bytes(
+            serialization.Encoding.X962,
+            serialization.PublicFormat.UncompressedPoint)
+        private_bytes = private.private_numbers().private_value.to_bytes(32, "big")
+
+        public_key = _b64url(public_bytes)
+        sdk.config.write("push_vapid_public_key", public_key, scope="plugin")
+        sdk.config.write("secret_push_vapid_private_key",
+                         _b64url(private_bytes), scope="plugin")
+        if contact:
+            sdk.config.write("push_contact_email", str(contact).strip(),
+                             scope="plugin")
+
+        cleared = 0
+        if existing:
+            try:
+                cleared = len(sdk.db.query(
+                    "SELECT endpoint FROM push_subscriptions"))
+                sdk.db.write("DELETE FROM push_subscriptions")
+            except sdk.Failed as error:
+                sdk.log(f"could not clear subscriptions after a key "
+                        f"rotation: {error}", "warning")
+
+        return {"ok": True, "rotated": bool(existing), "public_key": public_key,
+                "cleared_subscriptions": cleared,
+                "contact": str(sdk.config.read("push_contact_email") or "")}
 
     def public_key(self, sdk):
         """The VAPID public key, for ``pushManager.subscribe``.
