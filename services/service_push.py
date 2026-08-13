@@ -100,9 +100,34 @@ SEND_TIMEOUT = 10
 MAX_FAILURES = 10
 
 
+#: The VAPID ``sub`` claim used when no contact address is configured. A push
+#: service reads this as "who to complain to about this application server" and
+#: checks only that it is a well-formed ``mailto:`` or ``https:`` URL — so a
+#: placeholder delivers, where an empty claim is rejected outright. ``.invalid``
+#: is the reserved TLD for exactly this (RFC 2606): unmistakably not a real
+#: address, and impossible to collide with somebody else's.
+DEFAULT_CONTACT = "mailto:second-brain@second-brain.invalid"
+
+
 def _b64url(raw: bytes) -> str:
     """Base64url without padding, which is the only spelling VAPID accepts."""
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _vapid_sub(contact: str) -> str:
+    """A configured address as a ``sub`` claim, or the placeholder.
+
+    Accepts what a person would actually type — a bare email — and also leaves
+    an already-qualified ``mailto:`` or ``https:`` value alone, because typing
+    the scheme is the other thing a person would do and silently prefixing it
+    twice produces a claim every push service rejects.
+    """
+    contact = (contact or "").strip()
+    if not contact:
+        return DEFAULT_CONTACT
+    if contact.startswith(("mailto:", "https://")):
+        return contact
+    return f"mailto:{contact}"
 
 
 class Push(BaseService):
@@ -183,11 +208,45 @@ class Push(BaseService):
             sdk.log(f"could not drop push_subscriptions: {error}", "warning")
 
     def start(self, sdk):
-        """Nothing to open. The table is defined here as well as in
-        ``on_install`` because a service can be registered from the sandbox
-        without an install ever having run, and a missing table would then be
-        discovered at the worst moment — the first scheduled agent to finish."""
+        """Make the plugin ready to work, without anybody being asked to help.
+
+        The table is defined here as well as in ``on_install`` because a
+        service can be registered from the sandbox without an install ever
+        having run, and a missing table would otherwise be discovered at the
+        worst moment — the first scheduled agent to finish.
+
+        **The key pair is generated here for the same reason, and it is the
+        more important half.** Every earlier version of this made key
+        generation somebody's job: first a Node one-liner and two settings to
+        paste, then an exported ``setup`` for someone to call. Both are the
+        same mistake in different clothes — a step that can be skipped, whose
+        being skipped is invisible, and whose only symptom is a phone that
+        never buzzes. A VAPID pair is not a decision anybody needs to make; it
+        is an implementation detail of speaking the protocol at all. So the
+        service provisions itself and says so in the log.
+        """
         self._define(sdk)
+        try:
+            self._ensure_keys(sdk)
+        except Exception as error:
+            # Never fatal. A push service that refuses to load takes its own
+            # diagnostics down with it, and ``state`` reporting
+            # ``configured: false`` is far more use than a service that is not
+            # there to ask.
+            sdk.log(f"could not provision a VAPID key pair: {error}", "error")
+        return True
+
+    def _ensure_keys(self, sdk) -> bool:
+        """Generate and store a VAPID pair unless one is already there.
+
+        Answers whether it made one, so ``start`` can be quiet on every boot
+        after the first.
+        """
+        if str(sdk.config.read("push_vapid_public_key") or "").strip():
+            return False
+        public_key = self._generate(sdk)
+        sdk.log(f"generated a VAPID key pair for push notifications "
+                f"({public_key[:12]}…); devices can now be subscribed", "info")
         return True
 
     def stop(self, sdk):
@@ -210,49 +269,27 @@ class Push(BaseService):
 
     # ── the browser's side ──────────────────────────────────────────
 
-    def setup(self, sdk, contact="", force=False):
-        """Generate this installation's VAPID key pair and store it.
+    def _generate(self, sdk) -> str:
+        """Make a VAPID pair, store both halves, and answer the public one.
 
-        **Because the manual version of this step is where the feature died.**
-        It was four instructions — run a Node one-liner, copy two base64url
-        blobs into two settings, put an address in a third — and every one of
-        them fails silently: an unset key makes ``public_key`` answer "", the
-        browser subscribes against nothing, and the only symptom is a phone
-        that never buzzes. A key pair is not a decision anybody needs to make,
-        so it should not be a step anybody can half-do.
-
-        Silent, and legitimately so: policy answers SAFE for a
-        ``scope="plugin"`` write to a key this plugin declared, so this raises
-        no dialog and needs nobody attending. The private key is generated here
-        and stored here — it never crosses a network, which is more than the
-        copy-and-paste version could say.
-
-        **Rotating throws every device away.** A subscription is bound to the
-        key that created it, so the old rows would sit there failing until
-        ``MAX_FAILURES`` retired them one scheduled agent at a time. ``force``
-        therefore clears them, and every device has to be re-enabled — which is
-        why it is not the default and why an existing key is left alone.
+        Writing is silent and legitimately so: policy answers SAFE for a
+        ``scope="plugin"`` write to a key this plugin declared, and UNSAFE for
+        every other write. So this needs no dialog and nobody attending, which
+        is what lets ``start`` do it unprompted. The private half is generated
+        on the machine that will sign with it and never crosses a network.
         """
-        existing = str(sdk.config.read("push_vapid_public_key") or "").strip()
-        if existing and not force:
-            if contact:
-                sdk.config.write("push_contact_email", str(contact).strip(),
-                                 scope="plugin")
-            return {"ok": True, "rotated": False, "public_key": existing,
-                    "contact": str(sdk.config.read("push_contact_email") or "")}
-
-        # From ``cryptography``, which is already here as a pywebpush
-        # dependency — this plugin is disclaimed and subprocessed for that
-        # library either way, so it costs nothing new.
+        # From ``cryptography``, already present as a pywebpush dependency —
+        # this plugin is disclaimed and subprocessed for that library either
+        # way, so reaching for it costs nothing new.
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
 
         private = ec.generate_private_key(ec.SECP256R1())
-        # The two shapes VAPID actually wants, and they are not the same
-        # encoding: the public half is the uncompressed P-256 point (65 bytes,
-        # 87 base64url characters) and the private half is the bare 32-byte
-        # scalar (43 characters). This is what `web-push generate-vapid-keys`
-        # prints, and what py_vapid's `from_string` expects.
+        # The two shapes VAPID wants are not the same encoding: the public half
+        # is the uncompressed P-256 point (65 bytes, 87 base64url characters)
+        # and the private half is the bare 32-byte scalar (43 characters). That
+        # is what `web-push generate-vapid-keys` prints and what py_vapid's
+        # `from_string` expects.
         public_bytes = private.public_key().public_bytes(
             serialization.Encoding.X962,
             serialization.PublicFormat.UncompressedPoint)
@@ -262,9 +299,32 @@ class Push(BaseService):
         sdk.config.write("push_vapid_public_key", public_key, scope="plugin")
         sdk.config.write("secret_push_vapid_private_key",
                          _b64url(private_bytes), scope="plugin")
+        return public_key
+
+    def setup(self, sdk, contact="", force=False):
+        """Rotate the key pair, or set the contact address.
+
+        **Not required for the feature to work.** ``start`` provisions a pair
+        the first time the service loads, so this exists for the two things
+        that genuinely are decisions: putting a real address in the VAPID
+        ``sub`` claim, and deliberately replacing a key.
+
+        **Rotating throws every device away.** A subscription is bound to the
+        key that created it, so old rows would sit there failing until
+        ``MAX_FAILURES`` retired them one scheduled agent at a time. ``force``
+        therefore clears the table, and every device has to be enabled again —
+        which is why it is not the default.
+        """
         if contact:
             sdk.config.write("push_contact_email", str(contact).strip(),
                              scope="plugin")
+
+        existing = str(sdk.config.read("push_vapid_public_key") or "").strip()
+        if existing and not force:
+            return {"ok": True, "rotated": False, "public_key": existing,
+                    "contact": str(sdk.config.read("push_contact_email") or "")}
+
+        public_key = self._generate(sdk)
 
         cleared = 0
         if existing:
@@ -482,12 +542,22 @@ class Push(BaseService):
         from pywebpush import WebPushException, webpush
 
         private_key = str(sdk.secrets.reveal("secret_push_vapid_private_key") or "").strip()
-        contact = str(sdk.config.read("push_contact_email") or "").strip()
-        if not private_key or not contact:
-            sdk.log("push is not configured: set secret_push_vapid_private_key "
-                    "and push_contact_email", "warning")
+        if not private_key:
+            # Should not happen — ``start`` provisions one — so say so loudly
+            # rather than returning a quiet zero that looks like "nothing to
+            # send".
+            sdk.log("push has no private key; the service did not provision "
+                    "one at start", "error")
             return {"sent": 0, "failed": 0, "pruned": 0,
-                    "error": "not configured"}
+                    "error": "no key"}
+
+        # **A missing contact must not stop delivery.** It is the VAPID `sub`
+        # claim: an abuse contact for the push service, not authentication and
+        # not addressed to the user. Push services check that it is a
+        # well-formed mailto or https URL and nothing more. Refusing to send
+        # without one turned an unset optional setting into total silence,
+        # which is the same failure this whole file has now had twice.
+        contact = str(sdk.config.read("push_contact_email") or "").strip()
 
         subscriptions = sdk.db.query(
             "SELECT endpoint, p256dh, auth, failures FROM push_subscriptions")
@@ -495,8 +565,7 @@ class Push(BaseService):
             return {"sent": 0, "failed": 0, "pruned": 0}
 
         message = self._message(payload)
-        claims = {"sub": contact if contact.startswith("mailto:")
-                  else f"mailto:{contact}"}
+        claims = {"sub": _vapid_sub(contact)}
 
         sent = failed = pruned = 0
         for row in subscriptions:
