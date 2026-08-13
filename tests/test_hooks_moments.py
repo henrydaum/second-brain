@@ -236,6 +236,49 @@ def test_doorman_require_tool_forces_the_call_when_supported():
     assert reply == "Echo sent."
 
 
+def test_doorman_can_require_a_tool_the_model_was_never_shown():
+    """A shaper may hide a tool from the catalogue and still demand it at the exit.
+
+    ``get_all_schemas`` answers with what the model was *shown*, so looking the
+    required name up there made a scope shaper and its own doorman mutually
+    exclusive: hide a tool so it does not sit in every prompt, and the ``end_turn``
+    hook that exists to demand it could no longer find it. Silently — an
+    unrecognized name logs and lets the turn end, so the only symptom was the
+    forced call never happening.
+    """
+    ran = []
+    tools, schemas = _echo_tools(ran)
+    llm = _ToolChoiceLLM([
+        _response(content="I'm done."),
+        _response(tool_calls=[{"id": "tc1", "name": "echo", "arguments": '{"via": "forced"}'}]),
+        _response(content="Echo sent."),
+    ])
+    # An empty catalogue, and a registry that still holds the tool: exactly the
+    # shape ``scoped_registry`` produces once a shaper has narrowed what is visible.
+    loop, cs, session, hooks, _, _ = _rig(tools=tools, schemas=[], llm=llm)
+    loop.tool_registry.tools = {"echo": SimpleNamespace(to_schema=lambda: schemas[0])}
+
+    hooks.add(END_TURN, lambda ctx, ending: RequireTool("echo") if not ran else None)
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert ran == [{"via": "forced"}]
+    forced_call = llm.records[1]
+    assert [s["function"]["name"] for s in forced_call["tools"]] == ["echo"]
+    assert reply == "Echo sent."
+
+
+def test_doorman_requiring_a_genuinely_absent_tool_still_lets_the_turn_end():
+    """The fallback widens the lookup; it must not make an unknown name fatal."""
+    llm = _FakeLLM([_response(content="I'm done.")])
+    loop, cs, session, hooks, _, _ = _rig(llm=llm)
+
+    hooks.add(END_TURN, lambda ctx, ending: RequireTool("no_such_tool"))
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert reply == "I'm done."
+    assert len(llm.calls) == 1, "no forced comeback for a tool that does not exist"
+
+
 def test_doorman_require_tool_degrades_to_a_note_without_backend_support():
     ran = []
     tools, schemas = _echo_tools(ran)

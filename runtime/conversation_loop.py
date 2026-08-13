@@ -1397,12 +1397,31 @@ class ConversationLoop:
         return "end"
 
     def _tool_schema(self, name: str):
-        """Find one tool's provider schema in the current registry, if present."""
+        """Find one tool's provider schema — visible first, then any callable one.
+
+        **Visibility is not the question a doorman is asking.** ``get_all_schemas``
+        answers with what the *model was shown*, and requiring a tool means
+        overriding exactly that: the forced call above replaces the toolbox with
+        this one schema and pins ``tool_choice`` to it, so whether the name was in
+        the catalogue never enters into the call being built.
+
+        Reading only the visible set made a shaper and its own doorman mutually
+        exclusive — hide a tool at ``shape_scope`` so it does not sit in every
+        prompt, and the ``end_turn`` hook that exists to demand it stopped being
+        able to find it. The miss was silent, too: an unknown name logs and lets
+        the turn end, so the symptom was chips that simply never appeared.
+
+        The fallback reads ``tools`` rather than the visible set, which
+        ``scoped_registry`` keeps deliberately separate (visible ⊆ callable). A
+        profile that denies a tool removes it from *both*, so this widens what a
+        doorman can reach without touching that boundary.
+        """
         for schema in (self.tool_registry.get_all_schemas() if self.tool_registry else None) or []:
             fn = schema.get("function", schema)
             if fn.get("name") == name:
                 return schema
-        return None
+        tool = (self.tool_registry.tools.get(name) if self.tool_registry else None)
+        return tool.to_schema() if tool is not None else None
 
     def _pop_agent_action(self):
         """Return the next doorway-queued agent action as a call_tool, if any.
