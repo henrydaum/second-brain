@@ -403,8 +403,19 @@ class _CallableAction(Action):
         self.cs.phase = self.calling_phase
         started = call_id or self._emit_invocation_started(spec, args)
         prior_approval = self.cs.cache.get("_approved_command_execution")
+        prior_running = self.cs.cache.get("_running_command")
         if self.action_type == "call_command":
             self.cs.cache["_approved_command_execution"] = approved
+            # Who to address progress to while the body runs. A command that
+            # takes long enough to be worth narrating — a package install —
+            # reports from deep inside a kernel handler, which knows the
+            # session and nothing else; without this it had no call to name and
+            # its only route to the person was ``push_message``, i.e. the chat.
+            # Saved and restored rather than cleared, because a command may
+            # call another one.
+            if started:
+                self.cs.cache["_running_command"] = {"call_id": started,
+                                                     "name": spec.name}
         try:
             # The plugin body runs outside whatever lock the driver holds, and
             # everything around it stays inside. A command that asks the user
@@ -429,6 +440,10 @@ class _CallableAction(Action):
                     self.cs.cache.pop("_approved_command_execution", None)
                 else:
                     self.cs.cache["_approved_command_execution"] = prior_approval
+                if prior_running is None:
+                    self.cs.cache.pop("_running_command", None)
+                else:
+                    self.cs.cache["_running_command"] = prior_running
             self.cs.reset_phase()
         self._emit_command_finished(started, spec, True, None)
         event = self.cs.event(self.action_type, self.actor_id, name=spec.name, args=args, previous_phase=old_phase)

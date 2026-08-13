@@ -1445,13 +1445,53 @@ def _plugin_list(ctx, args: dict) -> Result:
 
 
 def _package_progress(ctx):
-    """Send long-running package progress to the issuing frontend."""
+    """Narrate long-running package work on the running command's own call.
+
+    **Not ``push_message``.** That channel is the conversation — the model's
+    mid-turn narration and the files a tool renders — and "Copying package
+    files" is neither. Sent there it arrived as a `messages` frame, so a client
+    with a command panel printed the progress of a command run from its
+    settings screen into the chat instead, where it also could not persist:
+    ``push_message`` writes no history row, so the lines vanished on reload.
+
+    ``COMMAND_CALL_PROGRESSED`` addresses the call the person is already
+    watching, which is the whole point — the panel that asked for the install
+    is the panel that should say how it is going. The channel carried only
+    collected form values before this; ``narration`` is what it says while the
+    body runs, and a frontend that reads neither is no worse off than it was.
+
+    Returns None when there is nothing to address — a package action taken
+    outside a slash command (an agent calling the tool, a task) narrates
+    nowhere rather than falling back to the chat.
+    """
     runtime = _runtime(ctx)
     key = getattr(ctx, "session_key", None)
-    push = getattr(runtime, "push_message", None)
-    if push is None or not key:
+    if runtime is None or not key:
         return None
-    return lambda message: push(key, message, source="packages")
+    try:
+        session = runtime.sessions.get(key)
+        running = (getattr(session, "cs", None).cache or {}).get("_running_command")
+        call_id = (running or {}).get("call_id")
+        name = (running or {}).get("name")
+    except Exception:
+        return None
+    if not call_id:
+        return None
+
+    from events.event_bus import bus
+    from events.event_channels import COMMAND_CALL_PROGRESSED
+
+    def narrate(message: str) -> None:
+        # Defensive on purpose: losing the install because we could not say
+        # what it was doing is the wrong failure of the two.
+        try:
+            bus.emit(COMMAND_CALL_PROGRESSED, {
+                "session_key": key, "call_id": call_id,
+                "command_name": name, "narration": str(message)})
+        except Exception:
+            logger.exception("could not narrate package progress (ignored)")
+
+    return narrate
 
 
 def _plugin_install(ctx, args: dict) -> Result:

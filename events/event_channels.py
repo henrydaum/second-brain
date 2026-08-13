@@ -240,12 +240,26 @@ Payload:
     args:         dict"""
 
 COMMAND_CALL_PROGRESSED = "command_call_progressed"
-"""The runtime collected another slash-command form value.
+"""A running slash command has more to say about itself.
+
+Two producers, deliberately sharing one channel because a frontend does the
+same thing with both — update the call it is already showing, in place. The
+runtime emits it when it collects another form value (``args``), and a
+long-running command body emits it to narrate what it is doing (``narration``),
+which is why both fields are optional: an emit carries whichever it has, and
+the other is not "now empty".
+
+**Narration is why a package install no longer talks in the chat.** Progress
+from inside a command used to reach the person through CHAT_MESSAGE_PUSHED,
+the one channel a kernel handler could see — and that channel is conversation,
+so the lines landed in the transcript of a command run from a settings screen.
+Here they are addressed to the call itself.
 Payload:
     session_key:  str
     call_id:      str
     command_name: str
-    args:         dict"""
+    args:         dict (optional) — form values collected so far, cumulative
+    narration:    str (optional)  — one line about what the body is doing now"""
 
 COMMAND_CALL_FINISHED = "command_call_finished"
 """The runtime finished a slash command.
