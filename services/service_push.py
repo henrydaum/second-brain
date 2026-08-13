@@ -71,6 +71,15 @@ from guest.bases import BaseService
 
 #: Conversation categories whose background results are worth a device push.
 #: ``runtime/subagents.py:_scheduled_category`` writes exactly these two.
+#:
+#: **Do not reference this name inside ``config_settings``.** Declarations are
+#: extracted from the AST without importing the file, so every element of that
+#: list has to be a literal. A single name reference in one default value makes
+#: the whole list unextractable — and it is dropped in silence, taking every
+#: other setting in it along. That failure shipped once: all four settings read
+#: back ``null``, ``public_key()`` answered "", the browser subscribed against
+#: an empty application server key, and the only symptom was a phone that never
+#: buzzed. The literal below is duplicated for exactly that reason.
 DEFAULT_CATEGORIES = ["Scheduled", "Scheduled (one-time)"]
 
 #: A push service will reject an oversized payload outright, and a notification
@@ -130,7 +139,8 @@ class Push(BaseService):
          "Conversation categories whose background results are pushed to your "
          "devices, as a JSON array. Defaults to the two the timekeeper files "
          "scheduled agents under; empty means those defaults.",
-         DEFAULT_CATEGORIES,
+         # A literal, never ``DEFAULT_CATEGORIES`` — see the note on that name.
+         ["Scheduled", "Scheduled (one-time)"],
          {"type": "json_list"}),
     ]
 
