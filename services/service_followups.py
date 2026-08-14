@@ -148,16 +148,32 @@ class Followups(BaseService):
             may_decline = True
         plural = "question" if count == 1 else "questions"
         note = [
-            f"Before finishing, call '{TOOL_NAME}' with up to {count} short follow-up "
-            f"{plural} the person might naturally ask next.",
+            f"Call '{TOOL_NAME}' with up to {count} short follow-up {plural} the "
+            f"person might naturally ask next.",
             "Write each in their voice, as something they would say to you, in a few "
             "words — it is submitted verbatim as their next message when pressed.",
-            "Do not repeat anything already asked or already answered in this "
-            "conversation.",
+            # The failure this is written against: a first outing produced "show
+            # me what you can do" on a turn that had just offered a demo. In the
+            # person's voice, the right length, and worth nothing — it asked for
+            # the conversation that was already happening. Naming the shape of
+            # the mistake beats describing the goal, because every generic
+            # suggestion passes every general rule.
+            "It must be about something specific in this conversation. Never a "
+            "generic opener like 'tell me more', 'show me what you can do', or "
+            "'what else can you help with' — if the question would fit under any "
+            "reply you have ever written, it is the wrong question.",
+            "Do not repeat anything already asked or already answered here.",
         ]
         if may_decline:
             note.append(
-                "If nothing genuinely useful follows from this turn, call it with an "
-                "empty list rather than inventing something."
+                "If nothing specific and genuinely useful follows from this turn, "
+                "call it with an empty list rather than inventing something."
             )
+        # The forced call is not a checkpoint in the middle of the turn, and a
+        # model that treats it as one signs off twice — once before the call and
+        # again after it, the second time with nothing left to say.
+        note.append(
+            "This is the last action of your turn. Your reply above is already "
+            "complete: after this call, write nothing further."
+        )
         return " ".join(note)

@@ -94,12 +94,24 @@ class SuggestFollowups(BaseTool):
         except Exception as error:
             return sdk.fail(f"Could not offer follow-ups: {error}")
 
+        # The summary is the last thing the model reads before deciding whether
+        # to speak again, so it says the turn is over rather than describing
+        # what happened and leaving that open. A result that only reported
+        # "Offered 1 follow-up(s): …" read as a checkpoint, and the model
+        # answered it — signing off a second time, after a reply that had
+        # already ended.
         if not buttons:
-            return sdk.ok({"emitted": 0}, llm_summary="No follow-ups offered.")
+            return sdk.ok(
+                {"emitted": 0},
+                llm_summary="No follow-ups offered. Turn complete — say nothing further.",
+            )
         shown = ", ".join(button["label"] for button in buttons)
         return sdk.ok(
             {"emitted": len(buttons), "buttons": buttons},
-            llm_summary=f"Offered {len(buttons)} follow-up(s): {shown}",
+            llm_summary=(
+                f"Shown to the person: {shown}. "
+                f"Turn complete — say nothing further."
+            ),
         )
 
     @staticmethod
