@@ -367,6 +367,11 @@ GRANT_PHRASES = {
     "session.remove_tool": "take a tool away from the agent",
     "session.remove_prompt_extra": "remove instructions from the prompt",
     "session.add_attachment": "show the agent a file",
+    # Named for what a person would notice: the conversation stops being
+    # visible in full, which is the part worth stating. The transcript
+    # surviving in the database is the reason this is safe, not the answer to
+    # "what is about to happen".
+    "session.compact": "summarize the conversation and shrink what the agent sees",
     # Named for its effect rather than its mechanism. "Change the security
     # mode" describes a setting; what is actually being granted is the power
     # to stop the user being consulted, and only the second is answerable.

@@ -490,6 +490,14 @@ ALWAYS_SAFE = {
     R.CONV_SET_TITLE, R.CONV_SET_CATEGORY, R.CONV_SET_NOTIFICATION_MODE,
     R.CONV_LOAD, R.CONV_CLEAR,
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
+    # Compaction destroys nothing: the full transcript stays in
+    # ``conversation_messages`` and the marker written beside it is a replay
+    # cursor, which is what separates this from CONV_DELETE. What it changes is
+    # how much of the conversation the model is shown — it narrows, like
+    # SESSION_REMOVE_TOOL — and the model call it costs is the one the loop's
+    # own context-safety layer already places unattended on any long turn. It
+    # names no session, so it can only ever reach the caller's own.
+    R.SESSION_COMPACT,
     # Reading and settling notifications the kernel wrote *about this user*,
     # scoped in SQL by the context's own ``user_id`` rather than by an argument
     # anybody could name. LIST reads; MARK_READ writes one timestamp whose only

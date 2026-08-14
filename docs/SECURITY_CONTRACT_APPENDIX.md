@@ -296,6 +296,7 @@ never silently filtered.
 | `session.state_get/set/clear(key, ns)` | Per-session plugin scratch state | namespace | safe |
 | `session.set_attended(key, bool)` | Declare human presence | key | unsafe |
 | `session.cancel(key)` | Cancel the running turn | key | safe |
+| `session.compact()` | Summarize this session's history and shrink what the model is shown | — (scoped to the calling session; takes no key) | safe |
 | `session.add_attachment(path, key)` | Stage a file for the next model call | — (handler applies the read deny-list) | safe |
 | `session.set_profile(key, profile)` | Switch agent profile | profile | unsafe |
 | `session.add_prompt_extra(text, key, slot)` | Inject system prompt text into one named overlay | `key` (which session) | **safe** for your own session; unsafe when it names another |
@@ -505,6 +506,20 @@ agent that needs a dialog to end something it started will leave it running.
 
 `agent.schedule` is unsafe because it creates *unattended* future work, where no
 one is present to answer a dialog.
+
+`session.compact` is safe on three counts, and the first is what separates it
+from `conv.delete`: it **destroys nothing** — the full transcript stays in
+`conversation_messages` and the marker written beside it is a replay cursor, so
+what changes is how much of the conversation the model is shown, which is a
+narrowing. The model call it costs is the one the loop's own context-safety
+layer already places, unattended, on any long turn. And it names no session:
+the handler scopes to `ctx.session_key`, which is stronger than validating an
+argument, because there is no argument to get wrong.
+
+It is deliberately **not** in `READ_ONLY`. It changes what the next call sees,
+so it belongs in the ledger and it should bump `sandbox.epoch` — a cached
+`agent_prompt` computed against the pre-compaction world is stale the moment
+this succeeds.
 
 ## 12. Scheduling
 

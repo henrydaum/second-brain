@@ -689,6 +689,37 @@ class ConversationRuntime:
                 "code": "not_found", "message": "No such conversation."})
         return _persist.load_history(self, session_key, conversation_id)
 
+    def compact_session(self, session_key: str) -> dict[str, Any]:
+        """Compact a session's live history on demand.
+
+        The loop's context-safety escort does this on its own when the context
+        gets tight; this is the same act, asked for. It reaches
+        ``runtime.compaction`` with the pieces the loop only has mid-drive —
+        the database and the conversation id — because a compaction with no
+        marker row is an in-memory shrink the next reload silently undoes.
+
+        Refused while ``session.busy``: that flag is set only around the agent
+        turn, so it is exactly "a drive owns this history list right now", and
+        compacting underneath one would rewrite a list it is iterating. A
+        command's own phase does not set it, so this does not refuse itself.
+        """
+        from runtime.compaction import Compaction, compact_history
+
+        session = self.sessions.get(session_key)
+        if session is None:
+            return Compaction(False, "no active session").as_dict()
+        if session.busy:
+            return Compaction(False, "the agent is mid-turn").as_dict()
+        with session.lock:
+            outcome = compact_history(
+                self, session_key, session.history,
+                db=self.db, conversation_id=session.conversation_id,
+                # No notice: the automatic path narrates because the history
+                # changes under the user's feet mid-turn. Here they asked, and
+                # the command they are watching narrates itself.
+                on_notice=None)
+        return outcome.as_dict()
+
     def reset_conversation(self, session_key: str) -> RuntimeSession:
         """Drop the in-memory conversation state for one session."""
         return _persist.reset_conversation(self, session_key)

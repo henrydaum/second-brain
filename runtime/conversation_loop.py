@@ -33,10 +33,9 @@ from events.event_bus import bus
 from events.event_channels import (
     AGENT_LLM_CALL_FINISHED,
     AGENT_LLM_CALL_STARTED,
-    SESSION_COMPACTED,
     SESSION_MESSAGE,
 )
-from state_machine.serialization import save_compaction_marker, save_history_message
+from state_machine.serialization import save_history_message
 from runtime.ledger import record_enact
 from runtime.token_stripper import ModelTextFilter, filter_text
 
@@ -1225,81 +1224,26 @@ class ConversationLoop:
         self._compact(history)
 
     def _compact(self, history) -> None:
-        """Summarize the head of `history` in place via the compactor service."""
-        if len(history) <= 2 or self.runtime is None:
-            return
+        """Summarize the head of `history` in place via the compactor service.
+
+        The act itself lives in ``runtime.compaction`` because ``/compact``
+        performs the same one outside a turn. What stays here is the
+        *swallow*: compaction observes a turn's context pressure and must
+        never be the reason the turn fails. The command path deliberately
+        does not swallow — it has somebody waiting for an answer.
+
+        Imported locally because ``runtime.compaction`` imports this module
+        for its renderers, and a module-level import either way is a cycle.
+        """
+        from runtime.compaction import compact_history
+
         try:
-            compactor = (getattr(self.runtime, "services", {}) or {}).get("compactor")
-            if compactor is None or not getattr(compactor, "loaded", False):
-                logger.warning("Compactor service is not loaded. History will not shrink via summary.")
-                return
-            # Rendered, not raw: a summary is written *for* a model, so it
-            # should read what the model read — including that a file arrived.
-            #
-            # An authored row is labelled SYSTEM rather than by its role. The
-            # label is computed here rather than by ``_for_provider``, which
-            # strips ``author`` — so without this a cancel notice entered the
-            # summary as "USER: [The user cancelled the previous turn…]" and
-            # that misattribution is what survives into every later context,
-            # long after the row itself has been compacted away.
-            transcript = "\n".join(
-                f"{'SYSTEM' if row.get('author') else (row.get('role') or '').upper()}: "
-                f"{(_for_provider(row).get('content') or '')[:1000]}"
-                for row in history)
-            # Keep head + tail so the summary covers both how the conversation
-            # started and what was most recently said, instead of silently
-            # dropping everything after the first 20k chars.
-            transcript = _truncate_middle(transcript, 20000)
-            if self.on_notice:
-                self.on_notice("Compacting conversation...")
-            summary = compactor.compact(
-                session_key=self.session_key,
-                transcript=transcript,
-            )
-            if not summary:
-                logger.warning("Compaction returned no summary. History will not shrink via summary.")
-                return
-            old_count = len(history)
-            if self._active_db is not None and self._active_conversation_id is not None:
-                save_compaction_marker(self._active_db, self._active_conversation_id, summary)
-                session = getattr(self.runtime, "sessions", {}).get(self.session_key)
-                if session is not None:
-                    session.has_compaction_checkpoint = True
-            bus.emit(SESSION_COMPACTED, {
-                "session_key": self.session_key,
-                "conversation_id": self._active_conversation_id,
-                "messages_compacted": old_count,
-                "summary": summary,
-            })
-            tail = [self._shrink_for_tail(m) for m in history[-2:]]
-            history[:] = [
-                {"role": "user", "author": "compaction", "content": (
-                    "[Conversation summary from earlier]\n"
-                    "Earlier turns were compacted away; only this summary remains "
-                    "visible. The full transcript is preserved in the "
-                    "conversation_messages table and is queryable if a SQL/history "
-                    "tool is installed. If the user references something absent from "
-                    "this summary, say you can't see that far back (or query for it) "
-                    "— never deny it was said.\n"
-                    f"{summary}"
-                )},
-                {"role": "assistant", "author": "compaction", "content": "Understood - I have the earlier context."},
-                *tail,
-            ]
-            if self.on_notice:
-                self.on_notice(f"Compacted {old_count} messages.")
+            compact_history(self.runtime, self.session_key, history,
+                            db=self._active_db,
+                            conversation_id=self._active_conversation_id,
+                            on_notice=self.on_notice)
         except Exception as e:
             logger.debug("Compaction failed: %s", e, exc_info=True)
-
-    def _shrink_for_tail(self, msg: dict[str, Any]) -> dict[str, Any]:
-        """Aggressively truncate any oversized message preserved through
-        compaction. Without this, a huge ``role: tool`` result in the last
-        two messages would survive compaction intact and the post-compact
-        retry would overflow again."""
-        content = msg.get("content")
-        if not isinstance(content, str) or len(content) <= self.MAX_TOOL_RESULT_CHARS:
-            return msg
-        return {**msg, "content": _truncate_middle(content, self.MAX_TOOL_RESULT_CHARS)}
 
     # ──────────────────────────────────────────────────────────────────────
     # The end_turn doorway (doorman gate + budget exhaustion)

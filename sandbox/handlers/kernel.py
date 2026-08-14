@@ -53,7 +53,8 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               SERVICE_LOAD, SERVICE_UNLOAD,
                               SESSION_ADD_ATTACHMENT,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
-                              SESSION_CANCEL, SESSION_GET, SESSION_LIST,
+                              SESSION_CANCEL, SESSION_COMPACT,
+                              SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
                               SESSION_REMOVE_TOOL, SESSION_SET_MODE,
                               SESSION_STATE_GET,
@@ -793,6 +794,28 @@ def _session_cancel(ctx, args: dict) -> Result:
     if outcome is None:
         return Result(data=None)
     return Result(data=_runtime_answer(outcome))
+
+
+def _session_compact(ctx, args: dict) -> Result:
+    """Summarize this session's history and shrink what the model is shown.
+
+    Scoped to ``ctx.session_key`` rather than to a ``key`` argument: the
+    kernel's own answer about whose call this is cannot be pointed at somebody
+    else's conversation, so there is nothing here to check access on.
+
+    The runtime reports a *reason* for each way of doing nothing — nothing to
+    compact, no compactor installed, a turn already driving this history — and
+    those are failures rather than an empty success, because a person who
+    asked for this is owed the difference.
+    """
+    runtime = _runtime(ctx)
+    compactor = getattr(runtime, "compact_session", None)
+    if (bad := _need(compactor, "conversation compaction")) is not None:
+        return bad
+    outcome = compactor(getattr(ctx, "session_key", None)) or {}
+    if not outcome.get("ok"):
+        return Result.failure(outcome.get("reason") or "compaction failed")
+    return Result(data=outcome)
 
 
 def _session_add_tool(ctx, args: dict) -> Result:
@@ -3883,6 +3906,7 @@ HANDLERS = {
     SESSION_GET: _session_get, SESSION_LIST: _session_list,
     SESSION_PUSH: _session_push, SESSION_STATE_GET: _session_state_get,
     SESSION_STATE_SET: _session_state_set, SESSION_CANCEL: _session_cancel,
+    SESSION_COMPACT: _session_compact,
     SESSION_ADD_TOOL: _session_add_tool,
     SESSION_REMOVE_TOOL: _session_remove_tool,
     SESSION_ADD_PROMPT: _session_add_prompt,

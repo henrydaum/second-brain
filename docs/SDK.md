@@ -656,6 +656,14 @@ sdk.session.push(message, title="Indexed", notify=True, level="success")
 sdk.session.state_get(namespace="sandbox")
 sdk.session.state_set(value, namespace="sandbox")
 sdk.session.cancel(key="")
+sdk.session.compact()                # summarize this session's history and
+                                     # shrink what the model is shown. Takes
+                                     # no key: it acts on the session you are
+                                     # serving. Answers with messages_before/
+                                     # after, chars_before/after/saved,
+                                     # summary_chars — and fails with a plain
+                                     # reason (nothing to compact, no
+                                     # compactor installed, agent mid-turn).
 sdk.session.add_tool(tool) / remove_tool(tool)
 sdk.session.add_prompt(text) / remove_prompt(handle)
 sdk.session.add_attachment(path)     # show the *model* a file

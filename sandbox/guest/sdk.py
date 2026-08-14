@@ -93,7 +93,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
                        SERVICE_UNLOAD, SESSION_ADD_ATTACHMENT,
                        SESSION_ADD_PROMPT,
-                       SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
+                       SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_COMPACT,
+                       SESSION_GET,
                        SESSION_LIST, SESSION_PUSH, SESSION_REMOVE_PROMPT,
                        SESSION_REMOVE_TOOL, SESSION_SET_MODE,
                        SESSION_STATE_GET,
@@ -450,6 +451,21 @@ class _Session(_Namespace):
     def cancel(self, key: str = ""):
         """Cancel the turn running on a session."""
         return self._ask(SESSION_CANCEL, key=key)
+
+    def compact(self):
+        """Summarize this session's history and shrink what the model sees.
+
+        The kernel does this on its own when the context gets tight; asking
+        does the same thing now. Answers with a report — ``messages_before`` /
+        ``messages_after``, ``chars_before`` / ``chars_after`` /
+        ``chars_saved``, ``summary_chars`` — and fails with a plain reason when
+        there is nothing to compact, the compactor is not installed, or the
+        agent is mid-turn.
+
+        Takes no session key on purpose: it acts on the session you are
+        serving, so there is no argument to point at somebody else's.
+        """
+        return self._ask(SESSION_COMPACT)
 
     def add_tool(self, tool: str, key: str = ""):
         """Widen the agent's scope."""

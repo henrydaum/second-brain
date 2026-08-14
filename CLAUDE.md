@@ -150,9 +150,10 @@ future store) — *not* by deleting them. What remains:
   forever taught the user to ignore boot warnings. Normalization still keeps
   unknown names, because at that point the answer isn't known yet.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
-  wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
-  `locations`, `commands`, `tools`, `services`, `tasks`, `packages`,
-  `permissions`, `mode`, `schedule`, `quit`, `restart`. The last two used to be
+  wizard), `llm`, `conversations`, `clear`, `cancel`, `compact`, `debug`,
+  `frontends`, `locations`, `commands`, `tools`, `services`, `tasks`,
+  `packages`, `permissions`, `mode`, `schedule`, `quit`, `restart`.
+  `quit` and `restart` used to be
   native `_HostCommand` instances built in the composition root, holding
   `shutdown_fn` and the scaffold directly; they are ordinary sandboxed
   commands over the `app.stop` Request now, which is what parity with the
@@ -165,6 +166,9 @@ future store) — *not* by deleting them. What remains:
   gives, and a safety surface that stops working when a package is uninstalled
   is worse than none. Between them they are the two commands that answer "what
   is allowed here" — one scoped to destinations, one to time.
+  `compact` is kernel on that same argument: it triggers the loop's own
+  context-safety mechanism, and a lever for the one thing that keeps a long
+  conversation alive must not disappear with a package.
   Profile/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 
@@ -533,6 +537,31 @@ the difference between a microkernel and a pile of assumptions:
   is hook-shaped but never registry-dependent. Reactive overflow retries
   rebuild the prompt from compacted history and re-enter the inner onion, so
   they keep the post-escort brain, bus events, and provider params.
+
+  **The act itself is `runtime/compaction.py`, because `/compact` performs the
+  same one.** It moved off the loop for the reason every turn-scoped thing
+  eventually does: `_active_db` and `_active_conversation_id` are set at the
+  top of `drive()` and cleared in its `finally`, so a compaction asked for
+  outside a turn could reach neither — and a compaction with no marker row and
+  no `has_compaction_checkpoint` is an in-memory shrink that the *next* turn's
+  `replace_conversation_messages` writes over the full transcript with. Losing
+  the conversation, silently, as the reward for asking to tidy it.
+
+  Two halves stayed behind on purpose. The **swallow** is the loop's:
+  compaction observes a turn's context pressure and must never be why the turn
+  fails. The command path deliberately does not swallow, and
+  `compact_history` therefore *names* each way of doing nothing — nothing to
+  compact, no compactor installed, an empty summary, a drive already holding
+  the list — where the loop had four identical silent returns. And the
+  **notice** is the loop's: the automatic path narrates because the history
+  changes under the user's feet mid-turn, while `/compact` was asked for by
+  somebody watching a command that narrates itself.
+
+  `ConversationRuntime.compact_session` refuses while `session.busy`, which is
+  set only around the agent turn — so it is exactly "a drive owns this history
+  list right now", and a command's own phase does not set it. The Request is
+  `session.compact`, `ALWAYS_SAFE`, and it takes **no session key**: it scopes
+  to `ctx.session_key`, which is stronger than checking an argument.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
 - **A capability absorbed into the kernel must take its settings with it.**
