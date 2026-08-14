@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from state_machine.conversation import ConversationState
-from state_machine.errors import ActionResult
+from state_machine.errors import FORM_NAVIGATION, ActionResult
 from runtime.notifications import DEFAULT_NOTIFICATION_MODE
 
 _logger = logging.getLogger("Runtime")
@@ -58,15 +58,38 @@ class RuntimeResult:
         two genuinely different things the kernel wanted to say.
 
         ``message`` is still forwarded when there is no error, because that is
-        the success one-liner ("Cancelled.", "Skipped.", "Back.") and it is
-        conversation, not diagnostics.
+        the success one-liner. **Which channel it goes to depends on what it is
+        acknowledging**, and the two cases are not alike:
+
+        - ``cancel`` says "Cancelled." about the *conversation* — it ends the
+          turn — and ``/cancel`` reads that answer to tell a real cancellation
+          from "Nothing to cancel.". It stays on ``messages``.
+        - "Back." and "Skipped." are a form acknowledging its own navigation.
+          That is a command talking about its own progress, which is what
+          ``callable_output`` is for. On ``messages`` it was a line of chat
+          arriving in the transcript every time somebody pressed Back in a
+          settings dialog — and the field documentation above says outright
+          that nothing but the conversation belongs there.
+
+        The second case is recognised by ``FORM_NAVIGATION`` in ``data`` rather
+        than by the action's name, because skipping a form's last field runs the
+        command and returns *that* action's result: the acknowledgement outlives
+        the action that made it.
+
+        A frontend that does not declare ``supports_callable_output`` still sees
+        both, flattened into the chat by ``BaseFrontend`` — so a terminal keeps
+        the acknowledgement it depends on, and a structured client gets it
+        beside the form it is about.
         """
         self.ok = self.ok and result.ok
         self.events.extend(result.events)
         if result.error:
             self.error = result.error.to_dict()
         elif result.message:
-            self.messages.append(result.message)
+            if (result.data or {}).get(FORM_NAVIGATION):
+                self.callable_output.append(result.message)
+            else:
+                self.messages.append(result.message)
         return self
 
 

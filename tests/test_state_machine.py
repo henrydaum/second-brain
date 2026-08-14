@@ -149,6 +149,69 @@ def test_runtime_decorates_form_with_back_available_after_input():
     assert out.form["display"]["allow_back"] is True
 
 
+# ── Which channel a success one-liner travels on ─────────────────────
+#
+# A form-navigation acknowledgement is a command reporting on its own progress,
+# so it belongs on ``callable_output``. Landing on ``messages`` put a line of
+# chat in the transcript every time somebody pressed Back in a settings dialog.
+# ``cancel`` is the deliberate exception: it ends the turn, and ``/cancel``
+# reads its answer to tell a real cancellation from "Nothing to cancel."
+
+
+def _two_step_form():
+    return ConversationState([
+        Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True), FormStep("action", "Choose.", True)])}),
+    ])
+
+
+def test_back_acknowledgement_is_command_output_not_conversation():
+    from runtime.session import RuntimeResult
+
+    cs = _two_step_form()
+    assert cs.enact("call_command", {"name": "agent", "args": {}}, "user").ok
+    assert cs.enact("submit_form_text", "default", "user").ok
+
+    out = RuntimeResult().add_action_result(cs.enact("back_form", None, "user"))
+
+    assert out.callable_output == ["Back."]
+    assert out.messages == []
+
+
+def test_skip_acknowledgement_is_command_output_not_conversation():
+    from runtime.session import RuntimeResult
+
+    # A required step, then an optional one that asks to be shown anyway: a
+    # required field refuses to be skipped, and an optional field is only
+    # *presented* — and so only skippable — with `prompt_when_missing`.
+    cs = ConversationState([
+        Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True), FormStep("notes", "Anything to add?", False, prompt_when_missing=True)])}),
+    ])
+    assert cs.enact("call_command", {"name": "agent", "args": {}}, "user").ok
+    assert cs.enact("submit_form_text", "default", "user").ok
+
+    result = cs.enact("skip_form", None, "user")
+    assert result.ok
+    out = RuntimeResult().add_action_result(result)
+
+    # Skipping the last field also *runs* the command, so this exercises the
+    # path where the acknowledgement is carried by the replayed action's own
+    # result rather than by `skip_form`'s.
+    assert out.callable_output == ["Skipped."]
+    assert out.messages == []
+
+
+def test_cancel_acknowledgement_stays_conversation():
+    from runtime.session import RuntimeResult
+
+    cs = _two_step_form()
+    assert cs.enact("call_command", {"name": "agent", "args": {}}, "user").ok
+
+    out = RuntimeResult().add_action_result(cs.enact("cancel", None, "user"))
+
+    assert out.messages == ["Cancelled."]
+    assert out.callable_output == []
+
+
 # ── REPL form rendering ──────────────────────────────────────────────
 
 def test_repl_form_rendering_uses_display_payload(capsys):

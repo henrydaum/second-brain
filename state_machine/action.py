@@ -36,6 +36,7 @@ from state_machine.errors import (
     ERROR_UNKNOWN_TOOL,
     ERROR_WRONG_ACTOR_TYPE,
     ERROR_WRONG_TURN,
+    FORM_NAVIGATION,
     ActionError,
     ActionResult,
 )
@@ -677,7 +678,7 @@ class SkipForm(Action):
         if missing:
             frame.steps, frame.step_index = missing, 0
             event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
-            return ActionResult(True, self.action_type, "Skipped.", events=[event], data={"step": frame.step.name})
+            return ActionResult(True, self.action_type, "Skipped.", events=[event], data={"step": frame.step.name, FORM_NAVIGATION: True})
         pending = {"name": frame.name, "args": frame.data["args"]}
         if frame.data.get("call_id"):
             pending["_call_id"] = frame.data["call_id"]
@@ -691,8 +692,12 @@ class SkipForm(Action):
             self.cs.push_phase(frame)
             if result.error:
                 result.error.retry_phase = self.cs.phase
-        if result.ok:
-            result.message = result.message or "Skipped."
+        if result.ok and not result.message:
+            # Skipping the *last* field runs the command, and this returns that
+            # run's own result. A message it supplied is real output; this one
+            # is ours, and is the same acknowledgement the branch above sends.
+            result.message = "Skipped."
+            result.data = {**(result.data or {}), FORM_NAVIGATION: True}
         return result
 
 
@@ -709,7 +714,7 @@ class BackForm(Action):
         if step is None:
             raise self.error(ERROR_INVALID_ACTION, "Nothing to go back to.")
         event = self.cs.event("form_step", self.actor_id, name=frame.name, step=step.name, prompt=step.prompt)
-        return ActionResult(True, self.action_type, "Back.", events=[event], data={"step": step.name})
+        return ActionResult(True, self.action_type, "Back.", events=[event], data={"step": step.name, FORM_NAVIGATION: True})
 
 
 class SendAttachment(Action):
