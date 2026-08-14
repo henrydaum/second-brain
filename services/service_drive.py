@@ -23,6 +23,16 @@ files are read through ``sdk.fs.read`` and handed to the library's
 its ``*_file`` variants, so the paths are the kernel's and the reads are
 mediated even though what happens next is not.
 
+**Loading and signing in are separate, because one of them waits on a human.**
+``start`` used to end in ``run_local_server``, and extension services are
+auto-loaded on the boot thread *before* any frontend starts — so a first run
+hung the entire app behind a browser window, with no surface anywhere to say
+why. ``start`` now does only what it can do alone (read a stored token, refresh
+an expired one) and returns True having signed in or not; ``_ensure_auth``
+does the rest at the first call that needs credentials, where there is somebody
+to notify and something to notify them on. It is still blocking — that part is
+the OAuth library's, not ours — but it is once, and it announces itself.
+
 The connectivity probe is gone — it opened a socket to google.com to decide
 whether authenticating was worth attempting, and a machine with DNS but no
 route to Google passed it and failed anyway. Attempting the thing and reporting
@@ -79,7 +89,7 @@ class GoogleDriveService(BaseService):
     description = "Export Google Docs and Sheets as text."
     shared = True
     timeout = 300           # the OAuth dance waits on a human in a browser
-    requests = ["paths.get", "fs.read", "fs.write", "fs.list"]
+    requests = ["paths.get", "fs.read", "fs.write", "fs.list", "session.push"]
     exports = ["download_as", "download_text", "download_csv", "describe"]
 
     def __init__(self):
@@ -89,23 +99,32 @@ class GoogleDriveService(BaseService):
     # ── lifecycle ───────────────────────────────────────────────────
 
     def start(self, sdk):
-        """Authenticate, reusing a stored token when one is still good.
+        """Load, using a stored token when there is a usable one.
 
-        Returns False rather than raising for every *expected* absence — no
-        client secret, a token that will not load — because a service that
-        cannot start is a capability the user has not set up yet, not a fault.
-        An unexpected failure is left to raise, where it arrives with a
-        traceback.
+        Deliberately does **not** log in. Loading and authenticating used to be
+        one act, and the act blocked: ``run_local_server`` binds a port, opens
+        a browser and waits for a human. Extension services are auto-loaded on
+        the boot thread, *before* the frontends start — so a first run stopped
+        the whole app with a browser window and nothing on screen to explain
+        it, and there was no surface anywhere to say anything on.
+
+        So the three settled cases stay here, and only the one that needs a
+        person moves to :meth:`_ensure_auth`. Having no token is not a failure:
+        it returns True with ``_creds`` unset, which is the honest state —
+        *installed, not yet signed in* — and the sign-in happens at the first
+        call that needs it, by which time somebody is watching.
+
+        Returns False rather than raising for every *expected* absence, because
+        a service that cannot start is a capability the user has not set up
+        yet, not a fault. An unexpected failure is left to raise, where it
+        arrives with a traceback.
         """
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
 
-        data = sdk.paths.get("data")
-        secret_path = sdk.path.join(data, CLIENT_SECRET_FILE)
-        token_path = sdk.path.join(sdk.paths.get("workspace"), TOKEN_DIR,
-                                   TOKEN_FILE)
-        legacy_token = sdk.path.join(data, TOKEN_FILE)
+        secret_path = self._secret_path(sdk)
+        token_path = self._token_path(sdk)
+        legacy_token = sdk.path.join(sdk.paths.get("data"), TOKEN_FILE)
 
         if not _exists(sdk, secret_path):
             sdk.log(f"no {CLIENT_SECRET_FILE} at {secret_path}; get one from "
@@ -122,9 +141,9 @@ class GoogleDriveService(BaseService):
                     json.loads(sdk.fs.read(stored)), SCOPES)
             except (ValueError, KeyError) as exc:
                 # A token written by an older scope set, or half-written. Not
-                # an error worth failing on — the flow below replaces it.
-                sdk.log(f"stored token unusable, re-authenticating: {exc}",
-                        level="debug")
+                # an error worth failing on — _ensure_auth replaces it.
+                sdk.log(f"stored token unusable, re-authenticating on first use:"
+                        f" {exc}", level="debug")
 
         if creds and creds.valid:
             if stored != token_path:
@@ -136,17 +155,79 @@ class GoogleDriveService(BaseService):
             return True
 
         if creds and creds.expired and creds.refresh_token:
+            # Refreshing needs no human and no browser — it is one HTTPS call
+            # against a token we already hold — so it stays at load, where it
+            # keeps the ordinary restart silent.
             creds.refresh(Request())
-        else:
-            sdk.log("opening a browser to authenticate with Google Drive")
-            flow = InstalledAppFlow.from_client_config(
-                json.loads(sdk.fs.read(secret_path)), SCOPES)
-            creds = flow.run_local_server(port=0)
+            sdk.fs.write(token_path, creds.to_json())
+            self._creds = creds
+            sdk.log("google drive token refreshed")
+            return True
 
-        sdk.fs.write(token_path, creds.to_json())
+        sdk.log("google drive is installed but not signed in; will ask on "
+                "first use")
+        return True
+
+    def _ensure_auth(self, sdk):
+        """Sign in if we are not already, telling the user before we block.
+
+        The blocking half of the old ``start``. It is still blocking — the OAuth
+        library binds a local port and waits for a browser redirect, which is
+        foreign I/O past the kernel's reach — but it now happens somewhere a
+        person can be told about it, and it happens once.
+
+        The notification says *where* to sign in, because that is the part
+        nobody can guess and the part that silently fails: the token comes back
+        to a port on this machine, so signing in on a phone, or over SSH from a
+        laptop, hands the credential to a listener that is not us.
+        """
+        if self._creds and self._creds.valid:
+            return
+
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        secret_path = self._secret_path(sdk)
+        if not _exists(sdk, secret_path):
+            raise RuntimeError(
+                f"google drive has no {CLIENT_SECRET_FILE}: download the OAuth "
+                f"client secret from the Google Cloud Console and save it at "
+                f"{secret_path}")
+
+        sdk.session.push(
+            "A browser window is opening so you can sign in to Google Drive.\n\n"
+            "The sign-in has to be completed **on this computer** — the one "
+            "Second Brain is running on — because Google hands the token back "
+            "to a local port here. Signing in on a phone or another machine "
+            "will look like it worked and will not connect.\n\n"
+            "This happens once. The token is saved afterwards and refreshed "
+            "automatically.",
+            title="Google Drive needs authorizing",
+            notify=True, level="warning")
+
+        sdk.log("opening a browser to authenticate with Google Drive")
+        flow = InstalledAppFlow.from_client_config(
+            json.loads(sdk.fs.read(secret_path)), SCOPES)
+        creds = flow.run_local_server(port=0)
+
+        sdk.fs.write(self._token_path(sdk), creds.to_json())
         self._creds = creds
         sdk.log("google drive authenticated")
-        return True
+
+    @staticmethod
+    def _secret_path(sdk):
+        """Where the OAuth client secret lives. Yours to provide, never written."""
+        return sdk.path.join(sdk.paths.get("data"), CLIENT_SECRET_FILE)
+
+    @staticmethod
+    def _token_path(sdk):
+        """Where the refresh token lives — inside the freely writable workspace.
+
+        Everything under DATA_DIR *except* the workspace is protected by policy,
+        and a service acts unattended: an unattended chain is refused rather
+        than asked, so the DATA_DIR root was not a dialog nobody answered, it
+        was a hard denial.
+        """
+        return sdk.path.join(sdk.paths.get("workspace"), TOKEN_DIR, TOKEN_FILE)
 
     def stop(self, sdk):
         """Drop the credentials. The box closing is what releases the rest."""
@@ -156,8 +237,15 @@ class GoogleDriveService(BaseService):
     # ── exports ─────────────────────────────────────────────────────
 
     def describe(self, sdk):
-        """Whether this service can currently answer."""
-        return {"loaded": self._creds is not None,
+        """Whether this service can currently answer.
+
+        ``loaded`` and ``authenticated`` came apart when the sign-in moved out
+        of ``start``: the service now loads without credentials and acquires
+        them on first use, so "installed but not signed in" is a real state and
+        worth being able to name.
+        """
+        signed_in = self._creds is not None
+        return {"loaded": True, "authenticated": signed_in,
                 "scopes": list(SCOPES)}
 
     def download_as(self, sdk, doc_id: str, mime_type: str):
@@ -218,8 +306,7 @@ class GoogleDriveService(BaseService):
         boundary. Built per call because ``build()`` is ~1ms and each one
         carries its own transport.
         """
-        if self._creds is None:
-            raise RuntimeError("google drive is not authenticated")
+        self._ensure_auth(sdk)
 
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build

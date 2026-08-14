@@ -1,10 +1,20 @@
-"""Display files to the user in the chat.
+"""Show files to the user in the chat.
 
 The residual outbound case. A tool that *produces* a file should hand it back
 on its own result — ``sdk.ok(..., attachments=[path])`` — which is what the
 search tools do, and it costs nothing extra. This tool exists for the file no
 tool in this turn produced: one the agent found by path and wants the user to
 see. That is a small job done infrequently, which is why this is a small tool.
+
+It was called ``render_files``, and the name was doing real damage: "render" is
+a word about drawing, so the tool read as being *for images*, and the agent
+mostly reached for it only there — describing a PDF it could have simply sent.
+The description had said "always use this for images, audio, and video" from
+the start, which is the sentence a model weighs against a name that agrees with
+half of it. Nothing about the mechanism is modality-specific; it hands paths
+back, and the frontend decides how to draw each one. The name says that now,
+and the description leads with breadth and with the reason the tool exists at
+all — the user cannot see a file until it is shown to them.
 
 Sandboxed: the paths ride out on the tool's own result, the same route
 ``ToolResult.attachment_paths`` always was. Existence is checked with
@@ -33,11 +43,11 @@ def _exists(sdk, path) -> bool:
     return any(not entry.get("is_dir") for entry in entries or [])
 
 
-class RenderFiles(BaseTool):
-    """Render files."""
-    name = "render_files"
+class ShowFiles(BaseTool):
+    """Show files to the user."""
+    name = "show_files"
     description = (
-        "Display one or more local files to the user in chat alongside an optional caption. Always use this for images, audio, and video — a description is not a substitute. Use it for documents the user asked to find or open, and for files referenced in your reply that the user will likely want to inspect. Skip it when your text reply fully covers the content (e.g. you quoted the three relevant lines). This shows a file to the *user*; to look at one yourself, read_file it."
+        "Show the user any local file(s) in chat, with an optional caption: images, audio, video, PDFs, spreadsheets, documents, code, archives — anything on disk, of any type or size. The user cannot see a file until you show it, so send the file rather than describing it. Always use this for images, audio, and video — a description is not a substitute. Use it for any file the user asked you to find, open, or check, and for files your reply refers to that they will want to look at themselves. Skip it only when your text fully covers the content (e.g. you quoted the three relevant lines). This shows a file to the *user*; to look at one yourself, read_file it."
     )
     parameters = {
         "type": "object",
@@ -49,7 +59,7 @@ class RenderFiles(BaseTool):
             },
             "caption": {
                 "type": "string",
-                "description": "Optional short text shown alongside the rendered files in the same chat turn (e.g. 'Here are the three invoices that match.'). Use this instead of sending a separate reply when the text is about the files.",
+                "description": "Optional short text shown alongside the files in the same chat turn (e.g. 'Here are the three invoices that match.'). Use this instead of sending a separate reply when the text is about the files.",
             },
         },
         "required": ["paths"],
@@ -57,7 +67,7 @@ class RenderFiles(BaseTool):
     requires_services = []
 
     def run(self, sdk, **kwargs):
-        """Run render files."""
+        """Run show files."""
         paths = kwargs.get("paths") or []
         caption = (kwargs.get("caption") or "").strip()
         if not paths:
@@ -93,7 +103,7 @@ class RenderFiles(BaseTool):
             if notes:
                 summary += "\n\n(" + " ".join(notes) + ")"
         else:
-            summary = f"Rendered {len(valid)} file(s) to the user: {names}."
+            summary = f"Showed {len(valid)} file(s) to the user: {names}."
             if notes:
                 summary += " " + " ".join(notes)
 

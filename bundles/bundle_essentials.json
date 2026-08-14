@@ -10,7 +10,7 @@
     "tools/tool_glob.py",
     "tools/tool_grep.py",
     "tools/tool_read_file.py",
-    "tools/tool_render_files.py",
+    "tools/tool_show_files.py",
     "tools/tool_run_command.py",
     "tools/tool_run_script.py",
     "tools/tool_schedule_subagent.py",
