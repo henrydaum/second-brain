@@ -1667,27 +1667,32 @@ class Database:
 		has_more = len(rows) > limit
 		return rows[:limit], has_more
 
-	def list_conversation_categories(self, user_id=None) -> list[str | None]:
-		"""Distinct category values present in the conversations table.
+	def count_conversations_by_category(self, user_id=None) -> list[tuple[str | None, int]]:
+		"""Every category present, with how many conversations are in it.
 
-		``None`` is included if any row has NULL/empty category. Scoped to one
-		owner when ``user_id`` is given.
+		``None`` is the "Main" bucket and collapses NULL and empty together, the
+		way ``list_conversations_page`` does for ``category=""``.
+
+		**The count is the point, and it has to come from here.** A client can
+		only tally the page it was sent, so a caller paging through a long list
+		would report "3 Subagent" while looking at a window of three. This is
+		one ``GROUP BY`` over an indexed column against a client that cannot
+		answer the question at all.
+
+		Scoped to one owner when ``user_id`` is given.
 		"""
 		where = "WHERE user_id = ?" if user_id is not None else ""
 		params = [user_id] if user_id is not None else []
 		with self.lock:
 			cur = self.conn.execute(
-				f"SELECT DISTINCT category FROM conversations {where}", params)
-			values = [row["category"] for row in cur.fetchall()]
-		out: list[str | None] = []
-		seen_main = False
-		for v in values:
-			if v in (None, ""):
-				if not seen_main:
-					out.append(None)
-					seen_main = True
-			elif v not in out:
-				out.append(v)
+				"SELECT category, COUNT(*) AS n FROM conversations "
+				f"{where} GROUP BY category", params)
+			rows = [(row["category"], row["n"]) for row in cur.fetchall()]
+
+		main = sum(n for value, n in rows if value in (None, ""))
+		out: list[tuple[str | None, int]] = [(None, main)] if main else []
+		out.extend(
+			(value, n) for value, n in rows if value not in (None, ""))
 		return out
 
 	def list_user_conversations(self, limit=50, user_id=None):

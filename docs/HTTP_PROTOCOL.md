@@ -429,14 +429,34 @@ catalogues all of them with their policy inputs. The useful subset:
 
 | Request | Arguments |
 |---|---|
-| `conv.list` | `category`, `limit`, `details` |
+| `conv.list` | `category`, `limit`, `offset`, `details` |
 | `conv.read` | `id`, `details` |
 | `conv.create` | `title`, `category`, `activate` |
 | `conv.load` | `id` |
 | `conv.set_title` | `id`, `title` |
 | `conv.set_category` | `id`, `category` |
+| `conv.set_notification_mode` | `id`, `mode` — `"on"` or `"off"` |
 | `conv.clear` | `id` |
 | `conv.delete` | `id` — **unsafe, raises a dialog** |
+
+`conv.list` with `details` answers
+`{items, has_more, categories}`, where `categories` is
+`[{category, count}]` — `category: null` is the Main bucket. **The counts are
+over the whole table, not over `items`**, which is what makes them usable as a
+picker beside a page.
+
+**`category` has three meanings and they are all reachable.** Omitted (or
+`null`) is every conversation; `""` is the Main bucket, meaning NULL *or*
+empty; anything else is an exact match. Without the `""` case there is no way
+to ask for uncategorised conversations except by reading every row and
+filtering, which is exactly what breaks once subagent runs outnumber your own.
+
+Page with `offset` and stop when `has_more` is false. There is no total and no
+cursor; asking past the end is an empty `items` rather than an error.
+
+`conv.read` with `details` adds `notification_mode` (`"on"`/`"off"`) alongside
+the rows — it is derived from the state machine rather than stored on the
+conversation, so `conv.list` cannot carry it.
 
 A `conv.read` message row is
 `{id, conversation_id, role, content, tool_call_id, tool_name, timestamp,

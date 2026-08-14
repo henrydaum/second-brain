@@ -331,13 +331,22 @@ def _conv_list(ctx, args: dict) -> Result:
     limit, bad = int_arg(args, "limit", 50, lo=1, hi=200)
     if bad is not None:
         return bad
+    # No ceiling: ``limit`` is a page size and this is which page. A caller
+    # asking past the end gets an empty list and ``has_more: false``, which is
+    # the honest answer rather than an error.
+    offset, bad = int_arg(args, "offset", 0, lo=0)
+    if bad is not None:
+        return bad
     user_id = getattr(ctx, "user_id", None)
     if args.get("details"):
         import time
 
+        # ``None`` means every conversation; ``""`` means the Main bucket
+        # specifically. Both are reachable, and the difference is the only way
+        # to ask for uncategorised conversations without reading all of them.
         category = args.get("category")
         rows, has_more = db.list_conversations_page(
-            offset=0,
+            offset=offset,
             limit=limit,
             category=category,
             user_id=user_id,
@@ -349,8 +358,15 @@ def _conv_list(ctx, args: dict) -> Result:
         return Result(data={
             "items": items,
             "has_more": bool(has_more),
-            "categories": list(
-                db.list_conversation_categories(user_id=user_id)),
+            # Counted across the whole table rather than over ``items``: a
+            # caller holding one page cannot tally what it was not sent, and a
+            # picker built from a page would name only the categories that
+            # happened to appear in it.
+            "categories": [
+                {"category": value, "count": count}
+                for value, count in db.count_conversations_by_category(
+                    user_id=user_id)
+            ],
         })
     if user_id is not None and hasattr(db, "list_user_conversations"):
         return Result(data=_rows(db.list_user_conversations(user_id)))

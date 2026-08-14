@@ -462,7 +462,7 @@ sdk.db.define(ddl)             # create a table your plugin owns
 
 sdk.conv.create(title, category=None, activate=False)
 sdk.conv.read(conversation_id, details=False)
-sdk.conv.list(category=None, limit=50, details=False)
+sdk.conv.list(category=None, limit=50, offset=0, details=False)
 sdk.conv.append(conversation_id, role, content)
 sdk.conv.set_title(conversation_id, title)
 sdk.conv.set_category(conversation_id, category)

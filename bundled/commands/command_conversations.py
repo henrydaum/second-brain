@@ -155,9 +155,16 @@ def _existing_conversation_steps(sdk, args, category):
     return steps
 
 
-def _category_labels(values):
+def _category_labels(entries):
+    """Labels for the category picker.
+
+    ``conv.list`` answers ``{"category": ..., "count": n}`` per bucket, counted
+    across the whole table rather than over the page it sent. Bare values are
+    still accepted so this keeps working against an older kernel.
+    """
     labels = []
-    for value in values or []:
+    for entry in entries or []:
+        value = entry.get("category") if isinstance(entry, dict) else entry
         label = _MAIN if value in (None, "") else value
         if label not in labels:
             labels.append(label)

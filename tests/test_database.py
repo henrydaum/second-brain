@@ -191,6 +191,110 @@ def test_conversations_are_user_scoped(db):
     assert {c["id"] for c in page} == {theirs}
 
 
+def test_conversation_page_walks_with_offset(db):
+    # Newest first, so the ids come back in reverse creation order.
+    ids = [db.create_conversation(title=f"c{n}", user_id=DEFAULT_USER_ID)
+           for n in range(5)]
+
+    first, more = db.list_conversations_page(offset=0, limit=2,
+                                             user_id=DEFAULT_USER_ID)
+    assert [c["id"] for c in first] == ids[:-3:-1]
+    assert more is True
+
+    second, more = db.list_conversations_page(offset=2, limit=2,
+                                              user_id=DEFAULT_USER_ID)
+    assert [c["id"] for c in second] == ids[2:0:-1]
+    assert more is True
+
+    last, more = db.list_conversations_page(offset=4, limit=2,
+                                            user_id=DEFAULT_USER_ID)
+    assert [c["id"] for c in last] == [ids[0]]
+    assert more is False
+
+    # Past the end is an empty page, not an error.
+    beyond, more = db.list_conversations_page(offset=99, limit=2,
+                                              user_id=DEFAULT_USER_ID)
+    assert beyond == [] and more is False
+
+
+def test_category_counts_span_the_table_not_a_page(db):
+    for _ in range(3):
+        db.create_conversation(title="sub", category="Subagent",
+                               user_id=DEFAULT_USER_ID)
+    db.create_conversation(title="plain", user_id=DEFAULT_USER_ID)
+    # NULL and empty are one bucket, the way ``category=""`` filters them.
+    db.create_conversation(title="blank", category="", user_id=DEFAULT_USER_ID)
+
+    counts = dict(db.count_conversations_by_category(user_id=DEFAULT_USER_ID))
+    assert counts[None] == 2
+    assert counts["Subagent"] == 3
+
+    # Main first, so a picker built from this lists it where people expect.
+    assert db.count_conversations_by_category(
+        user_id=DEFAULT_USER_ID)[0][0] is None
+
+    # Another owner's rows are not counted into yours.
+    db.create_conversation(title="theirs", category="Subagent", user_id=2)
+    assert dict(db.count_conversations_by_category(
+        user_id=DEFAULT_USER_ID))["Subagent"] == 3
+
+
+def test_conv_list_pages_and_reports_whole_table_counts(db):
+    """The handler's own contract, not just the SQL underneath it.
+
+    ``offset`` was hardcoded to 0 here long after ``list_conversations_page``
+    grew the argument, so a client could ask for page two and be handed page
+    one - which looks like a list that simply stops.
+    """
+    from types import SimpleNamespace
+
+    from sandbox.guest.requests import CONV_LIST
+    from tests.support import call_handler
+
+    # The categorised one first, so it is the *oldest* and the four below stay
+    # the front of the unfiltered list.
+    db.create_conversation(title="sub", category="Subagent",
+                           user_id=DEFAULT_USER_ID)
+    ids = [db.create_conversation(title=f"c{n}", user_id=DEFAULT_USER_ID)
+           for n in range(4)]
+    ctx = SimpleNamespace(db=db, user_id=DEFAULT_USER_ID)
+
+    first = call_handler(CONV_LIST, ctx, {"details": True, "limit": 2})
+    assert [c["id"] for c in first.data["items"]] == [ids[3], ids[2]]
+    assert first.data["has_more"] is True
+
+    second = call_handler(
+        CONV_LIST, ctx, {"details": True, "limit": 2, "offset": 2})
+    assert [c["id"] for c in second.data["items"]] == [ids[1], ids[0]]
+
+    # Counts describe the table, so the same numbers come back on every page.
+    for answer in (first, second):
+        counts = {e["category"]: e["count"] for e in answer.data["categories"]}
+        assert counts[None] == 4 and counts["Subagent"] == 1
+
+    # And the Main bucket is reachable on its own.
+    main = call_handler(CONV_LIST, ctx, {"details": True, "category": ""})
+    assert {c["id"] for c in main.data["items"]} == set(ids)
+
+
+def test_main_bucket_is_asked_for_with_an_empty_category(db):
+    plain = db.create_conversation(title="plain", user_id=DEFAULT_USER_ID)
+    blank = db.create_conversation(title="blank", category="",
+                                   user_id=DEFAULT_USER_ID)
+    db.create_conversation(title="sub", category="Subagent",
+                           user_id=DEFAULT_USER_ID)
+
+    # `""` is the Main bucket; `None` is no filter at all. That distinction is
+    # what lets a client ask for uncategorised conversations without reading
+    # every row to find them.
+    main, _ = db.list_conversations_page(category="", user_id=DEFAULT_USER_ID)
+    assert {c["id"] for c in main} == {plain, blank}
+
+    every, _ = db.list_conversations_page(category=None,
+                                          user_id=DEFAULT_USER_ID)
+    assert len(every) == 3
+
+
 def test_scoped_delete_is_a_noop_on_mismatch(db):
     cid = db.create_conversation(title="owned by 1", user_id=DEFAULT_USER_ID)
     db.delete_conversation(cid, user_id=2)  # wrong owner → no-op

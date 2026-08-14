@@ -356,11 +356,18 @@ class _Conv(_Namespace):
         *,
         category=None,
         limit: int = 50,
+        offset: int = 0,
         details: bool = False,
     ):
-        """Current-user conversations, optionally with category metadata."""
+        """Current-user conversations, optionally with category metadata.
+
+        ``category``: ``None`` for every conversation, ``""`` for the Main
+        bucket, or a name. ``offset`` pages: ``details`` answers ``has_more``,
+        so a caller walks until that is false rather than guessing a total.
+        """
         return self._ask(
-            CONV_LIST, category=category, limit=limit, details=details)
+            CONV_LIST, category=category, limit=limit, offset=offset,
+            details=details)
 
     def append(self, conversation_id, role: str, content: str):
         """Add a message."""
