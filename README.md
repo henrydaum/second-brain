@@ -13,7 +13,7 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 # Second Brain
 
-<mark>*NEW!* Second Brain now has a modern and sleek React frontend which can be installed on iPhone as a PWA. It connects to Second Brain using HTTP and streams over the web using Tailscale. It has a familiar, ChatGPT-like UI built with [assistant-ui](https://www.assistant-ui.com/).</mark>
+<mark>*NEW!* Second Brain now has a modern and sleek React frontend which can be installed on iPhone as a PWA. It connects to Second Brain using HTTP and streams over the web using Tailscale. It has a familiar, ChatGPT-like UI built with [assistant-ui](https://www.assistant-ui.com/). You can find it [here](https://github.com/henrydaum/second-brain-ui).</mark>
 
 *For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
 
