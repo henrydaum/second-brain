@@ -282,7 +282,7 @@ class Ears(BaseFrontend):
     """Hears the bus as well as the kernel."""
 
     name = "ears_ui"
-    subscribed_channels = ["followups"]
+    subscribed_channels = ["task_completed"]
 
     def start(self, sdk):
         """Nothing to hold."""
@@ -322,7 +322,7 @@ def test_a_frontend_carries_its_declared_channels(tmp_path):
     """
     adapter = _frontend_adapter(tmp_path)
 
-    assert adapter()._channels == ["followups"]
+    assert adapter()._channels == ["task_completed"]
 
 
 def test_a_frontend_subscription_delivers_and_is_dropped(tmp_path):
@@ -341,14 +341,14 @@ def test_a_frontend_subscription_delivers_and_is_dropped(tmp_path):
     frontend = _frontend_adapter(tmp_path)()
     frontend._sandbox_box = _Box()
     _listen(frontend)
-    bus.emit("followups", {"session_key": "http:main", "buttons": []})
+    bus.emit("task_completed", {"task_name": "embed"})
 
     assert delivered == [
-        ("__event__", {"channel": "followups",
-                       "payload": {"session_key": "http:main", "buttons": []}})]
+        ("__event__", {"channel": "task_completed",
+                       "payload": {"task_name": "embed"}})]
 
     _deafen(frontend)
-    bus.emit("followups", {"session_key": "http:main", "buttons": []})
+    bus.emit("task_completed", {"task_name": "embed"})
 
     assert len(delivered) == 1, "a dropped subscription stops delivering"
 
