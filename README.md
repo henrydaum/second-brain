@@ -381,7 +381,7 @@ The kernel ships REPL UX and introspection commands only:
 | `/debug` | Inspect runtime state & recent errors |
 | `/update` | Pull most recent Repo state |
 
-Other commands (for example `/schedule` for cron jobs, or MCP commands) arrive with the packages that provide them.
+Other commands arrive with the packages that provide them.
 
 The kernel ships **no built-in tools** — a fresh install can converse but has no agent-callable actions. Tools come from the store; the `starter` and `full` bundles install the common ones, and you can add others individually with `/packages install <stem>`. Frequently installed tools include:
 

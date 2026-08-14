@@ -123,18 +123,21 @@ future store) — *not* by deleting them. What remains:
   authoring tools are package capabilities unless discovery shows they are
   installed.
 - **Frontend:** `frontend_repl` only. Telegram (`frontend_telegram`, migrated
-  to the SDK), the MCP server (`frontend_mcp_server` — exposes Second Brain
-  to external MCP clients over streamable HTTP, and **not** yet migrated: it
-  still imports `logging`, `pipeline.database` and
-  `state_machine.conversation_phases`) and `frontend_http` live on the store
-  branch. Testing them
+  to the SDK) and `frontend_http` live on the store branch. There was a third,
+  an MCP server exposing Second Brain to external MCP clients over streamable
+  HTTP; it was never migrated — it still imported `logging`,
+  `pipeline.database` and `state_machine.conversation_phases`, so the bridge
+  could not carry it and the app could not load it at all — and it was
+  **deleted** rather than ported, along with the `mcp` service and command that
+  went with it. Reviving MCP means writing it against the SDK, not restoring a
+  file. Testing the two that remain
   is split by whose behaviour is under test. What the *kernel* claims about
   them — the validator's verdict, the declarations the bridge reads, the
   isolation the tree resolves — is `tests/test_store_frontend_contracts.py`
   (plus `tests/test_frontend_http.py`, which has its own file because that
   plugin is the whole of what a web or native app can reach)
   and runs by default. Their own behaviour (markdown rendering, chunking, the
-  streamed-reply tracker, media planning, MCP session identity) is marked
+  streamed-reply tracker, media planning) is marked
   `store` in `pytest.ini` and deselected, since a kernel change cannot break
   it; run it with `pytest -m store`. They reach the store branch through
   `tests/support.store_source`, which prefers a store *worktree* when the
@@ -162,7 +165,7 @@ future store) — *not* by deleting them. What remains:
   gives, and a safety surface that stops working when a package is uninstalled
   is worse than none. Between them they are the two commands that answer "what
   is allowed here" — one scoped to destinations, one to time.
-  Profile/MCP/update commands are package capabilities unless the
+  Profile/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 
 The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) still
@@ -781,8 +784,8 @@ only about `role`, deliberately — see their docstrings.
 
 The column is **advisory**: `sandbox/users.py` neither knows nor cares about it
 (`conversation_messages` is a kernel table, not user-scoped), so nothing forces
-a query to honour it. The store's memory retriever, curator and MCP server were
-each reading authored rows as user speech and now filter on it; a new consumer
+a query to honour it. The store's memory retriever and curator were each
+reading authored rows as user speech and now filter on it; a new consumer
 must opt in the same way, which is why `tool_sql_query`'s agent prompt says so.
 
 ## Package store V1

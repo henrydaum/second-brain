@@ -1,14 +1,14 @@
-"""What the kernel reads off the two store frontends, and must keep reading.
+"""What the kernel reads off the store's Telegram frontend, and must keep reading.
 
 These are kernel invariants that happen to be *about* store files. Each one
 pins something the kernel itself computes -- the validator's verdict, the
 declarations the bridge reads, the isolation the tree resolves -- so the
 subject is kernel behaviour and the store file is the input.
 
-The behavioural tests for those frontends (markdown rendering, chunking, the
-streamed-reply tracker, media planning, MCP session identity) are marked
-``store`` and deselected by default: they exercise code that is not in this
-repo, and a kernel change cannot break them. Run them with ``-m store``.
+The behavioural tests for that frontend (markdown rendering, chunking, the
+streamed-reply tracker, media planning) are marked ``store`` and deselected by
+default: they exercise code that is not in this repo, and a kernel change
+cannot break them. Run them with ``-m store``.
 
 Skips cleanly when no store ref is reachable.
 """
@@ -24,7 +24,6 @@ from tests.support import store_source
 
 TELEGRAM = "frontends/frontend_telegram.py"
 RENDERERS = "frontends/helpers/telegram_renderers.py"
-MCP = "frontends/frontend_mcp_server.py"
 
 
 def _source_or_skip(relative: str) -> str:
@@ -47,10 +46,9 @@ def telegram() -> str:
 def test_the_store_frontends_conform(relative):
     """No ERROR findings — warnings about foreign libraries are the point.
 
-    ``frontend_mcp_server.py`` is deliberately absent: it is one of the store
-    plugins still unmigrated, and imports ``logging``, ``pipeline.database``
-    and ``state_machine.conversation_phases`` directly. Adding it here when it
-    is migrated is the check that the migration actually landed.
+    Every file on the store branch now conforms; the unmigrated ones were
+    deleted rather than ported, so a store file that fails this is a
+    regression rather than a leftover.
     """
     from sandbox.validator import validate
 
@@ -102,14 +100,3 @@ def test_telegram_needs_a_subprocess(telegram):
     report = validate(telegram, filename="frontend_telegram.py")
     assert "telegram" in report.unmediated
     assert "asyncio" in report.unmediated
-
-
-def test_mcp_declares_its_store_contract():
-    """``dependencies_pip`` must stay a module-level literal to be AST-read."""
-    from sandbox.validator import validate
-
-    source = _source_or_skip(MCP)
-    declared = validate(source, filename="frontend_mcp_server.py").declarations
-    assert declared["name"] == "mcp_server"
-    assert declared["user_binding"] == "per_user"
-    assert declared["dependencies_pip"] == ["mcp"]
