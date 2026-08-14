@@ -320,7 +320,9 @@ def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | 
             raise
         if plan.helper_rescan_needed:
             _progress(progress, "Rescanning parsers and LLM backends")
-            _rescan_helpers(context, lines)
+            _rescan_helpers(context, lines,
+                            new_parsers=any(_is_parser(file.path)
+                                            for file in plan.files))
         # Before the services load, so a plugin that arranges its own config
         # has done it by the time it starts reading any.
         _progress(progress, "Running package setup")
@@ -1016,7 +1018,13 @@ def _is_rescannable_helper(rel: str) -> bool:
     return len(p.parts) == 2 and p.parts[0] in RESCANNED_ROOTS
 
 
-def _rescan_helpers(context, lines: list[str]) -> None:
+def _is_parser(rel: str) -> bool:
+    """Whether an installed file is a parser specifically."""
+    p = PurePosixPath(rel)
+    return len(p.parts) == 2 and p.parts[0] == "parsers"
+
+
+def _rescan_helpers(context, lines: list[str], new_parsers: bool = False) -> None:
     """Rescan the helper trees so a newly installed helper is live at once.
 
     Both families here are kernel *routing* rather than services, so this is a
@@ -1024,6 +1032,13 @@ def _rescan_helpers(context, lines: list[str]) -> None:
     tear down. An LLM backend additionally needs the brains rebuilt, since a
     profile naming a backend that was missing a moment ago should start
     working without a restart.
+
+    ``new_parsers`` asks for the *file* rescan on top, and is deliberately
+    narrower than "a helper changed". Its whole purpose is to find files that
+    were previously invisible, which only a parser being **added** can cause —
+    so an LLM backend must not trigger it (it cannot change what is parseable,
+    and the walk is the expensive part), and neither must an uninstall (a
+    parser going away makes nothing newly visible).
     """
     try:
         import parsing
@@ -1033,7 +1048,8 @@ def _rescan_helpers(context, lines: list[str]) -> None:
     except Exception as e:
         lines.append(f"Parser rescan failed (restart to apply): {e}")
     else:
-        _rescan_files(context, lines)
+        if new_parsers:
+            _rescan_files(context, lines)
 
     try:
         import llm
@@ -1077,7 +1093,10 @@ def _rescan_files(context, lines: list[str]) -> None:
         return
     try:
         rescan()
-        lines.append("Rescanned watched folders for newly parseable files.")
+        # Present tense on purpose: rescan() hands the disk walk to a daemon
+        # thread and returns, so the files appear over the following seconds
+        # rather than by the time this line is printed.
+        lines.append("Scanning watched folders for newly parseable files.")
     except Exception as e:
         lines.append(f"File rescan failed (restart to apply): {e}")
 

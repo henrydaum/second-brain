@@ -87,23 +87,60 @@ def test_rescan_is_what_refreshes_the_extension_set(monkeypatch, db, tmp_path):
     assert ".zip" in watcher.supported_extensions
 
 
-def test_a_scan_re_registers_a_file_whose_kind_changed_under_it(db, monkeypatch):
+def _scanning_watcher(monkeypatch, db, tmp_path, modality):
+    """A watcher whose scan will walk ``tmp_path``, with a fixed modality map."""
+    import pipeline.watcher as watcher_module
+
+    monkeypatch.setattr(watcher_module, "get_supported_extensions",
+                        lambda: {".zip"})
+    monkeypatch.setattr(watcher_module, "get_modality", lambda ext: modality)
+    return Watcher(orchestrator=_RecordingOrchestrator(), db=db,
+                   config={"sync_directories": [str(tmp_path)],
+                           # pytest's tmp root lives under ".pytest_tmp", and
+                           # the scan skips any path with a dot-prefixed part.
+                           "skip_hidden_folders": False})
+
+
+class _RecordingOrchestrator:
+    """Just enough orchestrator for the watcher to report to."""
+
+    def __init__(self):
+        self.discovered = []
+
+    def on_file_discovered(self, path, ext, modality):
+        self.discovered.append((path, modality))
+
+    def on_file_deleted(self, path):
+        pass
+
+
+def test_a_scan_re_registers_a_file_whose_kind_changed_under_it(
+        db, monkeypatch, tmp_path):
     """Untouched on disk, but the registry's answer about it has changed.
 
     The scan compared mtimes only, so a file already in the table was skipped
     forever — the row kept saying ``unknown`` and no modality-rooted task ever
     matched it. Nothing about the file changed; what changed is what we know.
+
+    Driven through ``_initial_scan`` rather than by re-deriving its condition,
+    because the branch is the subject: a test that recomputes the comparison
+    itself passes just as happily with the branch deleted.
     """
-    import pipeline.watcher as watcher_module
+    archive = tmp_path / "box.zip"
+    archive.write_bytes(b"PK\x03\x04")
 
-    db.upsert_file("/in/box.zip", "box.zip", ".zip", "unknown", 100.0)
-    monkeypatch.setattr(watcher_module, "get_modality", lambda ext: "container")
+    # First scan: no container parser installed, so the row says "unknown".
+    before = _scanning_watcher(monkeypatch, db, tmp_path, "unknown")
+    before._initial_scan([str(tmp_path)])
+    assert db.get_files_by_modality("unknown") == [str(archive)]
 
-    known_mtime, known_modality = db.get_watched_file_state()["/in/box.zip"]
-    unchanged_on_disk = abs(known_mtime - 100.0) <= 1.0
-    stale = known_modality != watcher_module.get_modality(".zip")
+    # parse_container is installed. The file has not been touched.
+    after = _scanning_watcher(monkeypatch, db, tmp_path, "container")
+    after._initial_scan([str(tmp_path)])
 
-    assert unchanged_on_disk and stale, "this is the branch mtime alone missed"
+    assert db.get_files_by_modality("container") == [str(archive)]
+    assert db.get_files_by_modality("unknown") == []
+    assert after.orchestrator.discovered == [(str(archive), "container")]
 
 
 # ── The task nobody asked about ──────────────────────────────────────

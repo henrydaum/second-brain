@@ -816,3 +816,51 @@ def test_dependency_metadata_is_written_after_future_import(tmp_path):
     text = (tmp_path / "store" / "tools" / "tool_future.py").read_text(encoding="utf-8")
     assert text.index("from __future__ import annotations") < text.index("dependencies_pip")
     compile(text, "tool_future.py", "exec")
+
+
+# ── Which installs are worth walking the disk for ────────────────────
+
+class _CountingWatcher:
+    def __init__(self):
+        self.rescans = 0
+
+    def rescan(self):
+        self.rescans += 1
+
+
+class _WatcherContext:
+    def __init__(self, watcher):
+        self.orchestrator = type("O", (), {"watcher": watcher})()
+        self.config = {}
+
+
+def _rescan_count(*, new_parsers):
+    """Drive ``_rescan_helpers`` and report whether it walked the disk."""
+    watcher = _CountingWatcher()
+    package_manager._rescan_helpers(_WatcherContext(watcher), [],
+                                    new_parsers=new_parsers)
+    return watcher.rescans
+
+
+def test_installing_a_parser_rescans_the_watched_folders():
+    """The whole point: a newly parseable extension needs its files found."""
+    assert _rescan_count(new_parsers=True) == 1
+
+
+def test_installing_an_llm_backend_does_not_walk_the_disk():
+    """``helper_rescan_needed`` covers parsers *and* backends; this must not.
+
+    A backend cannot change which files are parseable, and the walk is the
+    expensive half — it tears the observer down, rebuilds it, and re-reads
+    every sync directory. Getting this wrong is silent: installing an LLM
+    backend simply becomes mysteriously slow on a large corpus.
+    """
+    assert _rescan_count(new_parsers=False) == 0
+
+
+def test_a_parser_file_is_told_apart_from_a_backend():
+    assert package_manager._is_parser("parsers/parse_pdf.py")
+    assert not package_manager._is_parser("llm/llm_litellm.py")
+    assert not package_manager._is_parser("tools/tool_echo.py")
+    # A nested path is not a root-level parser.
+    assert not package_manager._is_parser("parsers/helpers/shared.py")
