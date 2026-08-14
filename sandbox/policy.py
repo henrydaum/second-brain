@@ -476,6 +476,20 @@ ALWAYS_UNSAFE = {
     R.USER_WRITE, R.USER_LIST,
     # Destructive.
     R.CONV_DELETE, R.FS_DELETE,
+    # Irreversible, which is the criterion the db-write branch below states for
+    # itself: the thing worth asking about is the write that cannot be undone
+    # by writing again. Nothing anywhere removes a compaction marker —
+    # ``latest_compaction`` finds it and ``messages_to_history`` honours it
+    # forever — so a conversation, once folded into a summary, has no way back
+    # to being read in full.
+    #
+    # The rows themselves survive, which makes this *less* destructive than
+    # CONV_CLEAR one set over. It is here anyway, and with no
+    # ``chain.typed_command`` exemption, because the question is not how much
+    # data is lost but whether the loss is recoverable. A person typing
+    # ``/compact`` answers one dialog; that is the price of nothing else in the
+    # system being able to rewrite their conversation without saying so.
+    R.SESSION_COMPACT,
     # Ending the process. Unconditional, including the restart variant: coming
     # back up is not a mitigation, since everything in flight still dies.
     R.APP_STOP,
@@ -490,14 +504,6 @@ ALWAYS_SAFE = {
     R.CONV_SET_TITLE, R.CONV_SET_CATEGORY, R.CONV_SET_NOTIFICATION_MODE,
     R.CONV_LOAD, R.CONV_CLEAR,
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
-    # Compaction destroys nothing: the full transcript stays in
-    # ``conversation_messages`` and the marker written beside it is a replay
-    # cursor, which is what separates this from CONV_DELETE. What it changes is
-    # how much of the conversation the model is shown — it narrows, like
-    # SESSION_REMOVE_TOOL — and the model call it costs is the one the loop's
-    # own context-safety layer already places unattended on any long turn. It
-    # names no session, so it can only ever reach the caller's own.
-    R.SESSION_COMPACT,
     # Reading and settling notifications the kernel wrote *about this user*,
     # scoped in SQL by the context's own ``user_id`` rather than by an argument
     # anybody could name. LIST reads; MARK_READ writes one timestamp whose only
@@ -655,7 +661,7 @@ _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
              R.COMMAND_CALL,
-             UI_ASK, R.UI_APPROVE, SESSION_ADD_TOOL,
+             UI_ASK, R.UI_APPROVE, SESSION_ADD_TOOL, R.SESSION_COMPACT,
              SESSION_ADD_PROMPT, R.SESSION_SET_MODE, AGENT_SCHEDULE,
              CONV_DELETE,
              R.TASK_PAUSE, R.TASK_RESET}
@@ -1307,6 +1313,19 @@ def classify(request: Request, chain: Chain) -> Decision:
             UNSAFE,
             "resetting task state makes pipeline work eligible to run again",
             say="Everything it has already done becomes work to do again.",
+        )
+
+    # In ALWAYS_UNSAFE *and* branched, like CONV_DELETE, because set membership
+    # alone answers "may this happen" and says nothing a person can act on:
+    # the fallback below renders "session.compact changes what the system can
+    # do", which is true of everything in the set. The one fact that decides
+    # this dialog is that it cannot be undone, and the ``say`` half is where a
+    # fact for a *person* goes — the action line above it already names the act.
+    if kind == R.SESSION_COMPACT:
+        return Decision(
+            UNSAFE, "compacting drops the earlier turns from view for good",
+            say="The full transcript stays in the database, but the "
+                "conversation cannot be restored to reading in full.",
         )
 
     if kind in ALWAYS_UNSAFE:

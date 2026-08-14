@@ -283,6 +283,11 @@ GRANT_PHRASES = {
     # Distinct from the ``ui`` family's "ask you questions": this one is the
     # plugin stopping to get permission, not collecting a value it needs.
     "ui.approve": "act only with your approval",
+    # Not the ``ui`` family phrase. Progress *narrates*; it never asks, and a
+    # grant reading "/compact wants to ask you questions" for a command that
+    # will not is the same overstatement as announcing an update as a removal.
+    # Invisible until now because no gated command declared it.
+    "ui.progress": "say what it is doing while it works",
     "proc.run": "run shell commands",
     "proc.start": "start background processes that keep running",
     # The three that only ever speak about a process already started. They are

@@ -13,6 +13,14 @@ class CompactCommand(BaseCommand):
     name = "compact"
     description = "Summarize the conversation so far and shrink the context"
     category = "Conversation"
+    # Asked up front, which is the right path for a command: the grant is
+    # stated and answered before the body runs, rather than interrupting a
+    # half-done run with one Request in isolation. ``session.compact`` is
+    # consequential because nothing removes a compaction marker — the
+    # conversation has no way back to being read in full — so the state
+    # machine asks even though the person typed this themselves.
+    require_approval = True
+    approval_actor_id = "user"
     requests = ["ui.progress", "session.compact"]
 
     def run(self, sdk, args):

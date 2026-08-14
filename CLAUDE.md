@@ -559,9 +559,35 @@ the difference between a microkernel and a pile of assumptions:
 
   `ConversationRuntime.compact_session` refuses while `session.busy`, which is
   set only around the agent turn — so it is exactly "a drive owns this history
-  list right now", and a command's own phase does not set it. The Request is
-  `session.compact`, `ALWAYS_SAFE`, and it takes **no session key**: it scopes
-  to `ctx.session_key`, which is stronger than checking an argument.
+  list right now", and a command's own phase does not set it. The Request
+  takes **no session key**: it scopes to `ctx.session_key`, which is stronger
+  than checking an argument.
+
+  **`session.compact` is `ALWAYS_UNSAFE`, and the reason is irreversibility
+  rather than destruction.** Those come apart here, which is why it is worth
+  stating. Compaction *deletes nothing* — `save_compaction_marker` appends a
+  row and every original message survives in `conversation_messages` — so by
+  volume of data lost it is strictly gentler than `conv.clear`, which runs a
+  real `DELETE` and is `ALWAYS_SAFE`. What it does instead is permanent:
+  nothing anywhere removes a marker, `messages_to_history` honours the latest
+  one on every load, and there is no un-compact. That is exactly the test the
+  db-write branch already states for itself — *the write worth asking about is
+  the one that cannot be undone by writing again*.
+
+  There is deliberately **no `chain.typed_command` exemption**, which is where
+  this parts company with `config.write` and `session.set_mode`. Both of those
+  have a way back, so the person who typed the command can fix a mistake;
+  here they cannot, so `/compact` declares `require_approval` and answers for
+  the grant up front like any other consequential command. It is in
+  `ALWAYS_UNSAFE` *and* `_BRANCHED`, like `conv.delete`: membership alone
+  renders "changes what the system can do", which is true of everything in the
+  set, and the branch supplies the two facts a person actually needs — that
+  there is no way back, and that their transcript is not being deleted.
+
+  One thing this surfaced: `/compact` is the only gated command declaring
+  `ui.progress`, so it is the first to ever *render* a grant for it — and the
+  `ui` family fallback claimed the command would "ask you questions", which
+  progress never does.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
 - **A capability absorbed into the kernel must take its settings with it.**

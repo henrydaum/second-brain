@@ -321,6 +321,69 @@ def test_the_handler_says_so_when_the_kernel_cannot_compact_at_all():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Policy: irreversible, so everybody is asked.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_compacting_is_unsafe_for_everybody_including_a_typed_command():
+    """No ``chain.typed_command`` exemption, unlike ``config.write`` and
+    ``session.set_mode``.
+
+    Those two have a way back — write the setting again, set the mode again.
+    This does not: nothing anywhere removes a compaction marker, so the
+    conversation can never be read in full again. The question policy asks is
+    not how much data is lost (none is; the rows outlive this, which makes it
+    strictly less destructive than the SAFE ``conv.clear``) but whether the
+    loss can be undone.
+    """
+    from sandbox import Chain, Request
+    from sandbox.policy import classify
+
+    typed = Chain(root="user:command")
+    assert classify(Request(SESSION_COMPACT, {}), typed).level == "unsafe"
+    assert classify(Request(SESSION_COMPACT, {}), Chain()).level == "unsafe"
+
+
+def test_the_dialog_says_the_one_thing_that_decides_it():
+    """Set membership alone renders "changes what the system can do", which is
+    true of everything in ``ALWAYS_UNSAFE`` and helps nobody. A person
+    answering this needs the fact that there is no way back — and the fact
+    that their transcript is not being deleted, or they would answer no for
+    the wrong reason."""
+    from sandbox import Chain, Request
+    from sandbox.policy import classify
+
+    decision = classify(Request(SESSION_COMPACT, {}), Chain())
+
+    assert "cannot be restored" in decision.say
+    assert "stays in the database" in decision.say
+
+
+def test_the_command_declares_the_gate_its_request_requires():
+    """``CONSEQUENTIAL`` is derived from ``ALWAYS_UNSAFE``, so this is already
+    enforced across every command tree. Pinned here too because the coupling
+    runs the other way as well: a future decision to make compaction safe must
+    consciously drop this, not silently leave a command asking for a grant
+    nothing needs."""
+    from sandbox.policy import CONSEQUENTIAL
+    from sandbox.validator import validate_file
+
+    declared = validate_file(
+        Path("bundled/commands/command_compact.py")).declarations
+
+    assert SESSION_COMPACT in CONSEQUENTIAL
+    assert declared["require_approval"] is True
+
+
+def test_progress_is_not_described_as_asking_a_question():
+    """``/compact`` is the only gated command declaring ``ui.progress``, so it
+    is the first to render a grant for it — and the family fallback claimed it
+    would "ask you questions", which it never does."""
+    from sandbox.approval import phrase_for
+
+    assert phrase_for("ui.progress") == "say what it is doing while it works"
+
+
+# ──────────────────────────────────────────────────────────────────────
 # The command.
 # ──────────────────────────────────────────────────────────────────────
 

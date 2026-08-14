@@ -296,7 +296,7 @@ never silently filtered.
 | `session.state_get/set/clear(key, ns)` | Per-session plugin scratch state | namespace | safe |
 | `session.set_attended(key, bool)` | Declare human presence | key | unsafe |
 | `session.cancel(key)` | Cancel the running turn | key | safe |
-| `session.compact()` | Summarize this session's history and shrink what the model is shown | — (scoped to the calling session; takes no key) | safe |
+| `session.compact()` | Summarize this session's history and shrink what the model is shown | — (scoped to the calling session; takes no key) | **unsafe** |
 | `session.add_attachment(path, key)` | Stage a file for the next model call | — (handler applies the read deny-list) | safe |
 | `session.set_profile(key, profile)` | Switch agent profile | profile | unsafe |
 | `session.add_prompt_extra(text, key, slot)` | Inject system prompt text into one named overlay | `key` (which session) | **safe** for your own session; unsafe when it names another |
@@ -507,17 +507,35 @@ agent that needs a dialog to end something it started will leave it running.
 `agent.schedule` is unsafe because it creates *unattended* future work, where no
 one is present to answer a dialog.
 
-`session.compact` is safe on three counts, and the first is what separates it
-from `conv.delete`: it **destroys nothing** — the full transcript stays in
-`conversation_messages` and the marker written beside it is a replay cursor, so
-what changes is how much of the conversation the model is shown, which is a
-narrowing. The model call it costs is the one the loop's own context-safety
-layer already places, unattended, on any long turn. And it names no session:
-the handler scopes to `ctx.session_key`, which is stronger than validating an
-argument, because there is no argument to get wrong.
+`session.compact` is unsafe on **irreversibility**, which is the criterion the
+db-write section states for itself: the write worth asking about is the one
+that cannot be undone by writing again. Nothing anywhere removes a compaction
+marker — `latest_compaction` finds it and `messages_to_history` honours it on
+every load, forever — so a conversation folded into a summary has no way back
+to being read in full.
 
-It is deliberately **not** in `READ_ONLY`. It changes what the next call sees,
-so it belongs in the ledger and it should bump `sandbox.epoch` — a cached
+Note this is *not* an argument about data loss, and the distinction is worth
+keeping straight because it points the other way: compaction **deletes
+nothing**. `save_compaction_marker` appends a row, and every original message
+survives in `conversation_messages`, queryable. `conv.clear` — which runs an
+actual `DELETE` — is `ALWAYS_SAFE` one set over. So on destructiveness alone
+this would be the safer of the two. It is unsafe because the *effect* is
+permanent, not because the *rows* are gone, and the dialog says both halves
+so nobody answers no for the wrong reason.
+
+There is deliberately **no `chain.typed_command` exemption**, unlike
+`config.write` and `session.set_mode`. Those two have a way back — write the
+setting again, set the mode again — so a person who typed the command can
+undo a mistake. Here they cannot, so `/compact` declares `require_approval`
+and answers for itself up front like any other consequential command. That is
+the price of nothing else in the system being able to rewrite somebody's
+conversation without saying so.
+
+It scopes to `ctx.session_key` and takes no key argument, which is stronger
+than validating one: there is no argument to get wrong.
+
+It is also **not** in `READ_ONLY`. It changes what the next call sees, so it
+belongs in the ledger and it should bump `sandbox.epoch` — a cached
 `agent_prompt` computed against the pre-compaction world is stale the moment
 this succeeds.
 
