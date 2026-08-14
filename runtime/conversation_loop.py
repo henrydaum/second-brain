@@ -1378,6 +1378,7 @@ class ConversationLoop:
             if schema is None:
                 logger.warning(f"Doorman required unknown tool {verdict.name!r}; allowing end of turn.")
                 return "end"
+            self._grant_required_tool(cs, verdict.name, schema)
             note = (verdict.note or "").strip() or (
                 f"Before finishing, you must call the '{verdict.name}' tool now."
             )
@@ -1395,6 +1396,35 @@ class ConversationLoop:
             return "again"
         logger.warning(f"Unknown doorman verdict {verdict!r}; allowing end of turn.")
         return "end"
+
+    def _grant_required_tool(self, cs, name: str, schema) -> None:
+        """Let the agent call the tool it is about to be handed.
+
+        **The rule is that the agent may only call what it can see, and this
+        keeps that true rather than bending it.** The forced call shows the model
+        exactly one tool, so for the length of that call the visible set *is*
+        this tool — but the participant's callable specs were built once, at the
+        start of the dispatch, from the registry as it looked then. A tool a
+        shaper had hidden is therefore missing from them, and the state machine
+        refuses the call the kernel just compelled: ``Tool not in agent scope``,
+        after the model did exactly as it was told.
+
+        Granting is narrow on purpose. One tool, named by a doorman, for the
+        turn it was named in — and self-clearing, because ``refresh_specs``
+        rebuilds the participant's tools from the registry on the next dispatch.
+        A profile that denies a tool still denies it: ``_tool_schema`` never
+        finds one outside the scoped registry, so there is nothing to bind.
+        """
+        participant = (cs.participants or {}).get("agent")
+        if participant is None or not isinstance(getattr(participant, "tools", None), dict):
+            return
+        if name in participant.tools:
+            return
+        from runtime.runtime_config import tool_spec
+
+        bound = tool_spec(self.tool_registry, schema)
+        if bound is not None:
+            participant.tools[bound[0]] = bound[1]
 
     def _tool_schema(self, name: str):
         """Find one tool's provider schema — visible first, then any callable one.

@@ -200,15 +200,30 @@ def tool_specs_for(runtime, session: RuntimeSession | None = None) -> dict[str, 
         return {}
     specs = {}
     for schema in registry.get_all_schemas() or []:
-        fn = schema.get("function", schema)
-        name = fn.get("name")
-        if name:
-            specs[name] = CallableSpec(
-                name,
-                lambda cs, _actor, args, n=name, reg=registry: reg.call(n, _session_key=(cs.cache or {}).get("session_key"), **args),
-                schema_to_form_steps(fn.get("parameters")),
-            )
+        bound = tool_spec(registry, schema)
+        if bound is not None:
+            specs[bound[0]] = bound[1]
     return specs
+
+
+def tool_spec(registry, schema) -> tuple[str, CallableSpec] | None:
+    """Bind one registry schema as a callable spec, or None if it has no name.
+
+    Split out of ``tool_specs_for`` so a doorman's ``RequireTool`` can bind the
+    single tool it demands. The participant's specs are built once per dispatch
+    from the *visible* registry, and the forced call happens inside that
+    dispatch — so a tool that became callable mid-turn has nowhere to be bound
+    without this. See ``ConversationLoop._grant_required_tool``.
+    """
+    fn = schema.get("function", schema)
+    name = fn.get("name")
+    if not name:
+        return None
+    return name, CallableSpec(
+        name,
+        lambda cs, _actor, args, n=name, reg=registry: reg.call(n, _session_key=(cs.cache or {}).get("session_key"), **args),
+        schema_to_form_steps(fn.get("parameters")),
+    )
 
 
 def refresh_specs(runtime, session: RuntimeSession) -> None:

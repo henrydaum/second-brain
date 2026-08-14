@@ -267,6 +267,48 @@ def test_doorman_can_require_a_tool_the_model_was_never_shown():
     assert reply == "Echo sent."
 
 
+def test_doorman_grants_the_tool_it_requires_so_the_forced_call_can_run():
+    """Finding the schema is not enough — the call has to be legal too.
+
+    The participant's callable specs are built once per dispatch from the
+    *visible* registry, and the forced call happens inside that dispatch. So a
+    tool a shaper hid was shown to the model, called by the model, and then
+    refused by the state machine with "Tool not in agent scope" — the kernel
+    compelling a call it would not then permit.
+    """
+    ran = []
+    _, schemas = _echo_tools(ran)
+
+    class _HiddenOnly:
+        """Nothing visible; ``echo`` present and callable, as after a shaper."""
+
+        max_tool_calls = 5
+        tools = {"echo": SimpleNamespace(to_schema=lambda: schemas[0])}
+
+        def get_all_schemas(self):
+            return []
+
+        def call(self, name, _session_key=None, **args):
+            ran.append(args)
+            return ToolResult(llm_summary="echoed", data={"ok": True})
+
+    llm = _ToolChoiceLLM([
+        _response(content="I'm done."),
+        _response(tool_calls=[{"id": "tc1", "name": "echo", "arguments": '{"via": "forced"}'}]),
+        _response(content="Echo sent."),
+    ])
+    # No participant specs either — the agent genuinely cannot call echo yet.
+    loop, cs, session, hooks, _, _ = _rig(tools={}, schemas=[], llm=llm)
+    loop.tool_registry = _HiddenOnly()
+
+    hooks.add(END_TURN, lambda ctx, ending: RequireTool("echo") if not ran else None)
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert ran == [{"via": "forced"}], "the granted tool actually ran"
+    assert "echo" in cs.participants["agent"].tools, "granted for the rest of the turn"
+    assert reply == "Echo sent."
+
+
 def test_doorman_requiring_a_genuinely_absent_tool_still_lets_the_turn_end():
     """The fallback widens the lookup; it must not make an unknown name fatal."""
     llm = _FakeLLM([_response(content="I'm done.")])
