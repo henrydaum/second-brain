@@ -604,6 +604,12 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         forget_prompt(self)
         self._stopping = threading.Event()
         self._shutdown_event = shutdown_event
+        # Same two fields the service adapter carries, for the same ``_listen``.
+        # The validator lets a frontend declare ``subscribed_channels`` — it is
+        # one of the two families that stays loaded — so the wiring has to exist
+        # here too or the declaration passes validation and does nothing.
+        self._channels = list(declarations.get("subscribed_channels") or [])
+        self._listeners = None
 
     def _done(self) -> bool:
         """Whether the loop should stop."""
@@ -682,6 +688,10 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
                          result.error)
             self.stop()
             return
+        # After binding, because an event may arrive the instant we subscribe
+        # and a delivery reaches the same box that serves renders — it should
+        # not land on a frontend that has not been given its authority yet.
+        _listen(self)
 
         if not box.call("start").ok:
             logger.error("frontend %s refused to start", name)
@@ -729,6 +739,11 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         on unregister, and either may be first.
         """
         self._stopping.set()
+        # Before the box closes, so a late delivery cannot arrive at a shut
+        # box. ``deliver`` tolerates that anyway, but a subscription outliving
+        # the thing it delivers into is the kind of leak ``_deafen`` exists to
+        # make impossible.
+        _deafen(self)
         # Scoped to one residency, for the reason ``_load`` gives: asked while
         # the box is shut, the honest answer is "nothing", and it must not
         # outlive the shutdown that made it true.

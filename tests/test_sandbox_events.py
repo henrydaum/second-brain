@@ -7,6 +7,7 @@ plugin) and about *what crosses* (a live ``threading.Event`` must not).
 """
 
 import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -269,6 +270,87 @@ def test_unknown_channel_names_are_allowed():
         '        """Handle it."""\n'
         "        return None\n")
     assert report.ok, report.render()
+
+
+LISTENING_FRONTEND = '''
+"""A frontend that listens."""
+
+from guest.bases import BaseFrontend
+
+
+class Ears(BaseFrontend):
+    """Hears the bus as well as the kernel."""
+
+    name = "ears_ui"
+    subscribed_channels = ["followups"]
+
+    def start(self, sdk):
+        """Nothing to hold."""
+        return True
+
+    def poll(self, sdk):
+        """Idle."""
+        return False
+
+    def render(self, sdk, session_key, kind, payload):
+        """Show nothing."""
+        return True
+
+    def on_event(self, sdk, channel, payload):
+        """Handle it."""
+        return None
+'''
+
+
+def _frontend_adapter(tmp_path):
+    """Build the sandboxed frontend adapter class without starting its loop."""
+    path = tmp_path / "frontend_ears.py"
+    path.write_text(LISTENING_FRONTEND, encoding="utf-8")
+    module = adapt(path)
+    return next(value for value in vars(module).values()
+                if isinstance(value, type) and getattr(value, "name", "") == "ears_ui")
+
+
+def test_a_frontend_carries_its_declared_channels(tmp_path):
+    """A frontend is one of the two families that stays loaded, so it may listen.
+
+    The validator has always said so and the bridge's own docstring lists bus
+    subscriptions among what a *service or a frontend* gets from residency —
+    but only the service adapter carried ``_channels``, so a frontend's
+    declaration passed validation and then did nothing at all. Nothing raised;
+    the events simply went nowhere.
+    """
+    adapter = _frontend_adapter(tmp_path)
+
+    assert adapter()._channels == ["followups"]
+
+
+def test_a_frontend_subscription_delivers_and_is_dropped(tmp_path):
+    """One subscribe, one delivery, and nothing left behind afterwards."""
+    from sandbox.residency import _deafen, _listen
+
+    delivered = []
+
+    class _Box:
+        alive = True
+
+        def call(self, method, **kwargs):
+            delivered.append((method, kwargs))
+            return types.SimpleNamespace(ok=True, error=None)
+
+    frontend = _frontend_adapter(tmp_path)()
+    frontend._sandbox_box = _Box()
+    _listen(frontend)
+    bus.emit("followups", {"session_key": "http:main", "buttons": []})
+
+    assert delivered == [
+        ("__event__", {"channel": "followups",
+                       "payload": {"session_key": "http:main", "buttons": []}})]
+
+    _deafen(frontend)
+    bus.emit("followups", {"session_key": "http:main", "buttons": []})
+
+    assert len(delivered) == 1, "a dropped subscription stops delivering"
 
 
 def test_the_guest_refuses_an_undeclared_delivery():
