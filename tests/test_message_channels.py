@@ -200,13 +200,8 @@ def test_a_request_answer_carries_both_text_channels():
     assert answer["data"]["conversation_id"] == 7
 
 
-@pytest.mark.parametrize("field", ["callable_output", "messages"])
-def test_cancel_command_reads_either_channel(field):
-    """``/cancel`` still tells a real cancellation from "Nothing to cancel."
-
-    Both channels, because the command reads ``callable_output`` first and falls
-    back — and a fallback nothing exercises is a fallback that does not work.
-    """
+def _cancel_command():
+    """``/cancel``, loaded from source without going through discovery."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -214,12 +209,39 @@ def test_cancel_command_reads_either_channel(field):
         ROOT / "bundled" / "commands" / "command_cancel.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module.CancelCommand()
 
-    sdk = SimpleNamespace(session=SimpleNamespace(
-        get=lambda: {"key": "s"},
-        cancel=lambda: {"ok": True, field: ["Nothing to cancel."]}))
 
-    assert module.CancelCommand().run(sdk, {}) == "Nothing to cancel."
+def _run_cancel(answer):
+    return _cancel_command().run(SimpleNamespace(session=SimpleNamespace(
+        get=lambda: {"key": "s"}, cancel=lambda: answer)), {})
+
+
+@pytest.mark.parametrize("field", ["callable_output", "messages"])
+def test_cancel_command_reads_a_dismissed_form_off_the_text_channel(field):
+    """Dismissing a *form* answers with text, and that text is the output.
+
+    Both channels, because the command reads ``callable_output`` first and falls
+    back — and a fallback nothing exercises is a fallback that does not work.
+    """
+    assert _run_cancel({"ok": True, field: ["Cancelled."]}) == "Cancelled."
+
+
+@pytest.mark.parametrize("outcome,expected", [
+    ({"cancelled": True, "subagents_stopped": False}, "Cancelled."),
+    ({"cancelled": True, "subagents_stopped": True},
+     "Cancelled. Subagents stopped."),
+    ({"cancelled": False}, "Nothing to cancel."),
+])
+def test_cancel_command_words_a_stopped_turn_from_state(outcome, expected):
+    """Stopping a *turn* answers with state, because the kernel notifies.
+
+    The command still has to say something: it was invoked by name, and one
+    that answered with nothing would read as having silently failed. So the
+    wording lives here, and the kernel's notification is what the Cancel
+    *button* — which invokes no callable at all — delivers instead.
+    """
+    assert _run_cancel({"ok": True, "data": outcome}) == expected
 
 
 # ── A failure says what failed ───────────────────────────────────────

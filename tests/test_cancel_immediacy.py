@@ -313,9 +313,10 @@ def test_cancel_returns_while_the_model_is_still_blocked(conv_runtime):
 
     out = rt.handle_action(session.key, "cancel")
 
-    # The answer to something the person typed, so ``callable_output``.
-    assert out.callable_output == ["Cancelled."]
-    assert out.messages == []
+    # State, not prose: the acknowledgement goes out as a notification (see
+    # ``test_exactly_one_cancelled_reaches_the_person``), so what the action
+    # itself answers with is whether it cancelled anything.
+    assert out.data["cancelled"] is True
     turn.join(timeout=10)
     assert not turn.is_alive()
 
@@ -346,13 +347,19 @@ def test_the_interrupted_turn_reports_cancellation_rather_than_an_error(conv_run
 def test_exactly_one_cancelled_reaches_the_person(conv_runtime):
     """The ``/cancel`` action answers; the interrupted turn stays quiet.
 
-    Counted across *both* text channels, because a person sees both — a
-    frontend without ``supports_callable_output`` flattens the second into the
-    first. Counting one would pass just as well if the duplicate moved.
+    Counted across the notification *and* both text channels, because a person
+    sees all three — a frontend that declares neither opt-in flattens the other
+    two into the chat. Watching one would pass just as well if the duplicate
+    moved to another, which is exactly what happened when the acknowledgement
+    changed channels.
     """
+    from events.event_bus import bus
+    from events.event_channels import NOTIFICATION_PUSHED
+
     entered = threading.Event()
     release = threading.Event()
     results = []
+    notices = []
 
     class _Blocking(FakeLLM):
         def chat(self, request, on_delta=None, on_call=None):
@@ -372,14 +379,22 @@ def test_exactly_one_cancelled_reaches_the_person(conv_runtime):
     turn.start()
     assert entered.wait(timeout=10)
 
-    cancel_out = rt.handle_action(session.key, "cancel")
-    turn.join(timeout=10)
+    unsub = bus.subscribe(NOTIFICATION_PUSHED, notices.append)
+    try:
+        cancel_out = rt.handle_action(session.key, "cancel")
+        turn.join(timeout=10)
+    finally:
+        unsub()
 
     def _said(out):
         return list(out.messages) + list(out.callable_output)
 
     said = _said(cancel_out) + [line for out in results for line in _said(out)]
-    assert said.count("Cancelled.") == 1
+    cancelled = ([n for n in notices if n.get("title") == "Cancelled"]
+                 + [line for line in said if line.startswith("Cancelled")])
+    assert len(cancelled) == 1
+    # And it is the notification, not prose on a text channel.
+    assert said == []
 
 
 def test_a_normal_turn_still_says_what_it_always_said(conv_runtime):

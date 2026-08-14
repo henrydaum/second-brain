@@ -77,8 +77,13 @@ name: a slash command, and a tool invoked directly rather than by the agent.
 One code path, so one output kind. Read `callable_output` as "what the thing
 they invoked answered with" — a /config listing, a /conversations table, and
 also the short acknowledgements a form makes about itself ("Back.", "Skipped.",
-"Cancelled."). None of it is anything anybody *said*, which is the line it is
-drawn on.
+"Cancelled." when a form is dismissed). None of it is anything anybody *said*,
+which is the line it is drawn on.
+
+Note what is *not* there: stopping a turn. That usually arrives as a button
+press, which invokes no callable, so its acknowledgement is a `notification`
+and the action answers with state. Only `/cancel` typed as a command produces
+`callable_output`.
 
 Output is **markdown on the wire** — that is the interchange format, because it
 is also what the model emits. Render it however your transport prefers.

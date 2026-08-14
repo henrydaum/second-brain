@@ -48,6 +48,10 @@ class RuntimeResult:
     # chat had no way to tell the two apart. It carries the short
     # acknowledgements as well as the output proper — "Back.", "Skipped.",
     # "Cancelled." are a form reporting on itself, which nobody said either.
+    #
+    # Note the last of those is a *form* being dismissed. Stopping a **turn**
+    # is not here: that is usually a button, which invokes no callable, so it
+    # is a notification and ``handle_action`` answers it with ``data``.
     callable_output: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
     buttons: list[dict[str, str]] = field(default_factory=list)

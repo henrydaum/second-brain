@@ -365,11 +365,20 @@ same kind of thing, with no field to tell them apart.
 
 **Short acknowledgements arrive here too**, not only command output proper:
 `"Back."` and `"Skipped."` as a form moves between fields, `"Cancelled."` when
-one is dismissed or a turn is stopped, `"Loaded conversation: Main"` when one is
-opened. All of them are a callable reporting on itself, and none of them is
-something anybody said — so if your panel treats every frame as a block of
-output, expect one-line frames as well as tables. A panel that shows the last
-frame prominently will want to pair these with the `form_field` they are about.
+a form is dismissed, `"Loaded conversation: Main"` when one is opened. All of
+them are a callable reporting on itself — so if your panel treats every frame
+as a block of output, expect one-line frames as well as tables. A panel that
+shows the last frame prominently will want to pair these with the `form_field`
+they are about.
+
+**Stopping a turn is *not* one of them**, and the distinction is which gesture
+was made. Typing `/cancel` invokes a callable by name and its answer arrives
+here. Pressing a Cancel button invokes nothing — so that acknowledgement is a
+`notification` instead, and the action answers with
+`data: {cancelled, subagents_stopped}`. If you draw command output in a panel,
+routing a button press there means synthesizing a command that was never run;
+the notification is the frame you want, and `typing: false` plus
+`SESSION_TURN_COMPLETED` already told you the turn ended.
 
 **You only get this kind if you ask for it.** Declare
 `supports_callable_output` in `capabilities`, which `frontend_http` does;

@@ -2222,6 +2222,28 @@ way. What was actually on that channel was a settings form's own Cancel button
 typing into the transcript — the same thing "Back." and "Skipped." were doing,
 and it is marked `FORM_NAVIGATION` alongside them now.
 
+**Cancelling is two gestures, and only one of them is a callable.** The three
+"Cancelled." sites went to `callable_output` together, which was right for the
+`Cancel` *action* and wrong for the two early returns in `handle_action`.
+Typing `/cancel` invokes a callable by name; pressing a Cancel button invokes
+nothing, so a client drawing command output in a panel had no command to put
+the answer against. The React UI synthesized a phantom run named `output` to
+hold it, and stopping the agent opened the settings screen.
+
+The two early returns raise a `persist=False` **notification** and answer with
+`data: {cancelled, subagents_stopped}`. The argument is already made two
+branches below them: a message sent mid-turn does exactly this, and is the same
+kind of event — mid-turn, user-initiated, worth seeing for a moment and worth
+nothing afterwards. It is also the split `new_conversation` and `command_new`
+already draw, where the action notifies and the command returns text.
+`command_cancel` words its own answer from `data`, because a command invoked by
+name that answers with nothing reads as having silently failed. Frontends with
+no notification surface flatten it back into the chat, so nothing is lost on a
+terminal — though not byte-identically, since "Cancelled." becomes a title over
+a body the way every other notification already reads there. That flattening is
+also why the whole thing was invisible until a client drew the kinds apart:
+three channels look like one from a REPL.
+
 **Every population reaching a person, and what carries it:**
 
 | What it is | Channel | Written by |
@@ -2230,7 +2252,7 @@ and it is marked `FORM_NAVIGATION` alongside them now.
 | What a command or user-invoked tool returned | `callable_output` | `dispatch.echo_callable_result` |
 | A form or approval acknowledging its own navigation | `callable_output` | `add_action_result`, on `FORM_NAVIGATION` |
 | Anything that failed | `error` | `add_action_result`, stamped with `action`/`name` |
-| The system telling the user something | `notification` | `runtime.notifications.notify` |
+| The system telling the user something — a stopped turn included | `notification` | `runtime.notifications.notify` |
 | A running command narrating itself | `tool_status` | `sdk.ui.progress` → `COMMAND_CALL_PROGRESSED` |
 | The model's mid-turn narration; `sdk.ui.render` files | `messages` | `CHAT_MESSAGE_PUSHED` |
 

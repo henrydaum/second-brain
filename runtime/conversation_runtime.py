@@ -152,13 +152,17 @@ class ConversationRuntime:
                 "code": "busy",
                 "message": "Session is mid-form — handoff deferred."})
 
-        # ``callable_output``, not ``messages``: this is the answer to something
-        # the person typed, which is what that channel is for. It is also the
-        # return value of ``session.cancel`` — the answer carries every channel
-        # and ``/cancel`` picks the one it wants, rather than the channel being
-        # chosen to suit the reader (see ``_session_cancel``).
+        # A notification, for the reason given at the busy branch below: the
+        # usual way to cancel is a button, and pressing one invokes no callable.
+        # Answering with nothing at all would be worse than either channel —
+        # somebody pressed a control and is owed a reply, even when the reply is
+        # that there was nothing to do.
         if action_type == "cancel" and not session.busy and session.cs.phase == BASE_PHASE:
-            return RuntimeResult(callable_output=["Nothing to cancel."])
+            self.notify(title="Nothing to cancel",
+                        body="No turn was running.",
+                        source="runtime", session_key=session_key,
+                        persist=False)
+            return RuntimeResult(data={"cancelled": False})
 
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
@@ -203,9 +207,35 @@ class ConversationRuntime:
                 # moment anyone raised it. A count nobody can trust at every
                 # setting is worse than no count: this says the true thing at
                 # all of them.
-                return RuntimeResult(callable_output=[
-                    "Cancelled. Subagents stopped." if stopped
-                    else "Cancelled."])
+                # A notification, not ``callable_output``, and the distinction
+                # is which *gesture* this was. Typing ``/cancel`` invokes a
+                # callable by name; pressing a Cancel button invokes nothing —
+                # it is a receipt about the turn, and a client with a command
+                # panel had no command to put it against. The one that shipped
+                # synthesized a phantom command run to hold it, which opened
+                # the settings screen every time somebody stopped the agent.
+                #
+                # The twin case is two branches below and already knew this: a
+                # message sent mid-turn raises a ``persist=False`` notification
+                # and answers with ``data``. Same situation exactly — mid-turn,
+                # user-initiated, worth seeing for a moment and worth nothing
+                # afterwards — so it gets the same shape. The ``Cancel`` action
+                # keeps ``callable_output``, because a settings form dismissing
+                # itself really is that form reporting on its own navigation.
+                #
+                # Frontends with no notification surface flatten it back into
+                # the chat, so nothing is lost on a terminal — though not
+                # byte-identically: "Cancelled." becomes the title over the
+                # body, which is how every other notification already reads
+                # there ("New conversation started" over "Agent: default.").
+                self.notify(
+                    title="Cancelled",
+                    body=("The turn was stopped, along with the background "
+                          "agents it had started." if stopped
+                          else "The turn was stopped."),
+                    source="runtime", session_key=session_key, persist=False)
+                return RuntimeResult(data={"cancelled": True,
+                                           "subagents_stopped": stopped})
             if action_type in {"answer_approval", "cancel"} and session.cs.phase == PHASE_APPROVING_REQUEST:
                 pass  # fall through and dispatch
             elif action_type == "send_text":
