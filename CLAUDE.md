@@ -2198,14 +2198,55 @@ returned string and announced nothing at all. And what a command *returned* is
 `callable_output`, the twelfth kind, gated by `supports_callable_output` on the
 same bargain: REPL and Telegram needed zero edits.
 
-**Three sites deliberately kept their `messages`**, and the reason is that they
-are the return value of a guest-facing Request. `conv.load` and `session.cancel`
-hand `RuntimeResult.messages` to a box, and `command_cancel` reads it to decide
-what to say — route "Nothing to cancel." to a notification and `/cancel` falls
-through to `return "Cancelled."`, announcing the opposite of the truth while a
-notification says the right thing. `command_conversations` degrades the same
-way, losing the title and agent line. A `RuntimeResult` field is not always a
-render channel; check whether a Request answers with it first.
+**Three sites kept their `messages` for a while, and the reason they did is the
+trap worth naming.** A `RuntimeResult` is two things at once: what
+`BaseFrontend._render_result` draws, and the return value of `conv.load` and
+`session.cancel` — which a command reads back to build its own output. So the
+*reader* was deciding the channel. "Loaded conversation: Main" and "Cancelled."
+stayed on the chat kind because `command_conversations` and `command_cancel`
+read `messages`, and routing them anywhere else made `/cancel` fall through to
+`return "Cancelled."` and announce the opposite of the truth.
+
+`handlers/kernel._runtime_answer` is the fix, and it is one key: **the answer
+carries every channel and the caller picks.** A command reads `callable_output`
+first and falls back to `messages`, so where the kernel puts a line is once
+again only a question about the person looking at it. Both moved to
+`callable_output` with it.
+
+`Cancel.execute`'s own "Cancelled." was the third and had a different excuse —
+that cancelling ends the turn, so it is conversation. It is not: `handle_action`
+short-circuits every base-phase and busy cancel before dispatch, so an action
+that reaches `Cancel.execute` always has a *frame* to pop, and
+`BaseFrontend.submit_text` intercepts `/cancel` before the command runs either
+way. What was actually on that channel was a settings form's own Cancel button
+typing into the transcript — the same thing "Back." and "Skipped." were doing,
+and it is marked `FORM_NAVIGATION` alongside them now.
+
+**Every population reaching a person, and what carries it:**
+
+| What it is | Channel | Written by |
+|---|---|---|
+| The agent's reply, and the person's own words | `messages` | `_drive_agent_turn` only |
+| What a command or user-invoked tool returned | `callable_output` | `dispatch.echo_callable_result` |
+| A form or approval acknowledging its own navigation | `callable_output` | `add_action_result`, on `FORM_NAVIGATION` |
+| Anything that failed | `error` | `add_action_result`, stamped with `action`/`name` |
+| The system telling the user something | `notification` | `runtime.notifications.notify` |
+| A running command narrating itself | `tool_status` | `sdk.ui.progress` → `COMMAND_CALL_PROGRESSED` |
+| The model's mid-turn narration; `sdk.ui.render` files | `messages` | `CHAT_MESSAGE_PUSHED` |
+
+The last row is the only remaining producer on `CHAT_MESSAGE_PUSHED`, and it
+belongs there: both are the agent's turn speaking.
+`tests/test_message_channels.py` pins the complete set of writers to `messages`
+by AST, in the style of `test_kernel_boundary.py` — because all three
+stragglers were found by eye, and a line of chat nobody said is exactly the
+failure nothing reports.
+
+**None of this is visible from a terminal.** The REPL declares neither
+`supports_callable_output` nor `supports_notifications`, so `BaseFrontend`
+flattens both into `render_messages` and the output is byte-identical whichever
+channel it travelled on. That is deliberate — it is what made the split cost
+zero frontend edits — and it is also why getting the channel wrong is never
+caught by trying it.
 
 **`source` is stamped by the kernel, never stated by whoever asked.** For
 sandboxed code `handlers/kernel._notification_source` reads the leaf of the live
@@ -2285,6 +2326,11 @@ persistent surface; fed by the `SESSION_CONVERSATION_CHANGED` bus channel).
   as `command_*.py` in the workspace, installed package tree, or deliberately
   in [bundled/commands/](bundled/commands/) when it is true kernel behavior.
   Commands receive `sdk` in both `form(args, sdk)` and `run(args, sdk)`.
+  **What it returns is its output and returning is the only route** — see the
+  channel table under **Notifications**. `sdk.ui.progress` narrates a slow
+  body, `sdk.session.push(notify=True)` raises a notification, and
+  `sdk.session.push` without it speaks into the conversation, which a command
+  never does. None of this is visible from the REPL.
 - **Add a tool**: write a `BaseTool` subclass from `guest.bases` as
   `tool_*.py`. It receives `sdk`, not `context`, and the bridge registers it
   like any other tool. See `docs/SDK.md`. There is no second way — a file

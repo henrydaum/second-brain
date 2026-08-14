@@ -32,7 +32,8 @@ from __future__ import annotations
 import threading
 
 from .guest.requests import (CONSOLE_WRITE, HTTP_CLOSE, HTTP_PUSH,
-                             HTTP_RESPOND, LLM_DELTA, READ_ONLY, UI_RENDER)
+                             HTTP_RESPOND, LLM_DELTA, READ_ONLY, UI_PROGRESS,
+                             UI_RENDER)
 
 #: Showing the agent's output to a person. Writes, all three, and none of them
 #: in ``READ_ONLY`` — but **rendering is not a change**: they move text to a
@@ -57,7 +58,10 @@ from .guest.requests import (CONSOLE_WRITE, HTTP_CLOSE, HTTP_PUSH,
 #: join them not by volume but by the same argument the set is named for —
 #: they finish moving text to a person and produce no state a prompt could read
 #: back. Only ``http.drain`` is left out, and it is a read.
-RENDERING = {LLM_DELTA, CONSOLE_WRITE, UI_RENDER,
+#:
+#: ``ui.progress`` joins on both counts: a command narrating a loop emits one
+#: per iteration, and what it produces is a line on a status display.
+RENDERING = {LLM_DELTA, CONSOLE_WRITE, UI_RENDER, UI_PROGRESS,
              HTTP_RESPOND, HTTP_PUSH, HTTP_CLOSE}
 
 #: Requests that do not tick the counter: reads, which change nothing by

@@ -36,9 +36,18 @@ class RuntimeResult:
     # else belongs here — a refusal is ``error``, an announcement is a
     # notification, and what a command answered with is ``callable_output``.
     messages: list[str] = field(default_factory=list)
-    # What a command or tool returned. Separate from ``messages`` because it is
-    # the answer to something the person typed rather than something anybody
-    # said, and a client drawing a chat had no way to tell the two apart.
+    # What a **callable** answered with — the kernel's word for the two things
+    # a person invokes by name, a slash command and a directly-invoked tool.
+    # They are one code path (``CallableSpec``, ``_CallableAction``), so they
+    # get one field; it is not ``command_output`` because ``frontend.submit``
+    # with ``call_tool`` is a supported way for a client to run a tool, and its
+    # result lands here too.
+    #
+    # Separate from ``messages`` because it is the answer to something the
+    # person did rather than something anybody said, and a client drawing a
+    # chat had no way to tell the two apart. It carries the short
+    # acknowledgements as well as the output proper — "Back.", "Skipped.",
+    # "Cancelled." are a form reporting on itself, which nobody said either.
     callable_output: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
     buttons: list[dict[str, str]] = field(default_factory=list)
@@ -57,24 +66,32 @@ class RuntimeResult:
         kinds printed it twice, and a client had no way to tell the copies from
         two genuinely different things the kernel wanted to say.
 
+        **The failure says what failed.** ``ActionError.to_dict`` answers
+        ``{code, message, details, retry_phase}``, which describes the error and
+        not the act — so a failing ``/packages install``, an unrecognised slash
+        command and "Still working." arrived as the same shape, and a client
+        with a command panel had nothing to route on. ``action`` (and ``name``,
+        where the act had one) are stamped on here, at the one place that still
+        knows both halves.
+
         ``message`` is still forwarded when there is no error, because that is
-        the success one-liner. **Which channel it goes to depends on what it is
-        acknowledging**, and the two cases are not alike:
+        the success one-liner. **Today every one of them is a form or approval
+        acknowledging its own navigation** — "Back.", "Skipped.", "Cancelled." —
+        so every one is marked ``FORM_NAVIGATION`` and travels on
+        ``callable_output``. That is a command reporting on its own progress. On
+        ``messages`` it was a line of chat arriving in the transcript every time
+        somebody pressed Back in a settings dialog, and the field documentation
+        above says outright that nothing but the conversation belongs there.
 
-        - ``cancel`` says "Cancelled." about the *conversation* — it ends the
-          turn — and ``/cancel`` reads that answer to tell a real cancellation
-          from "Nothing to cancel.". It stays on ``messages``.
-        - "Back." and "Skipped." are a form acknowledging its own navigation.
-          That is a command talking about its own progress, which is what
-          ``callable_output`` is for. On ``messages`` it was a line of chat
-          arriving in the transcript every time somebody pressed Back in a
-          settings dialog — and the field documentation above says outright
-          that nothing but the conversation belongs there.
+        The ``messages`` branch is therefore currently unreachable, and is kept
+        rather than deleted because it is where a *future* action that genuinely
+        speaks in the conversation would belong. Adding one is the deliberate
+        act; ``tests/test_message_channels.py`` is what makes it deliberate.
 
-        The second case is recognised by ``FORM_NAVIGATION`` in ``data`` rather
-        than by the action's name, because skipping a form's last field runs the
-        command and returns *that* action's result: the acknowledgement outlives
-        the action that made it.
+        The mark is ``FORM_NAVIGATION`` in ``data`` rather than a check on the
+        action's name, because skipping a form's last field runs the command and
+        returns *that* action's result: the acknowledgement outlives the action
+        that made it.
 
         A frontend that does not declare ``supports_callable_output`` still sees
         both, flattened into the chat by ``BaseFrontend`` — so a terminal keeps
@@ -84,7 +101,11 @@ class RuntimeResult:
         self.ok = self.ok and result.ok
         self.events.extend(result.events)
         if result.error:
-            self.error = result.error.to_dict()
+            error = result.error.to_dict()
+            error["action"] = result.action
+            if name := (error.get("details") or {}).get("name"):
+                error["name"] = name
+            self.error = error
         elif result.message:
             if (result.data or {}).get(FORM_NAVIGATION):
                 self.callable_output.append(result.message)

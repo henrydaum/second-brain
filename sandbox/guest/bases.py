@@ -314,7 +314,20 @@ class BaseService(BasePlugin):
 
 
 class BaseCommand(BasePlugin):
-    """A slash command a person types."""
+    """A slash command a person types.
+
+    **What you return is your output, and returning is the only route.** A
+    command's answer travels on the ``callable_output`` render kind, not on
+    ``messages``, which is what lets a client keep its chat to the conversation
+    and draw commands somewhere of their own. Text produced any other way lands
+    in the transcript instead.
+
+    Nothing about a terminal will tell you when you get this wrong — the REPL
+    flattens both kinds and looks identical. ``sdk.ui.progress`` narrates a slow
+    body on its own call, ``sdk.session.push(notify=True)`` raises a
+    notification, and ``sdk.session.push`` without it speaks *into the
+    conversation*, which a command never does.
+    """
 
     family = COMMAND
 
@@ -330,7 +343,8 @@ class BaseCommand(BasePlugin):
         return []
 
     def run(self, sdk, args: dict):
-        """Execute and return markdown, or None."""
+        """Execute and return markdown, or None. See the class docstring: the
+        return value is the output channel."""
         raise NotImplementedError
 
 

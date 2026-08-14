@@ -64,7 +64,8 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               TASK_LIST, TASK_OUTPUT, TASK_PAUSE, TASK_RESET,
                               TASK_STATUS, TASK_TRIGGER, TOOL_CALL, TOOL_LIST,
                               UI_APPROVE,
-                              UI_ASK, UI_RENDER, USER_LIST, USER_READ,
+                              UI_ASK, UI_PROGRESS, UI_RENDER, USER_LIST,
+                              USER_READ,
                               USER_WRITE, ALL_TYPES, Request, Result)
 from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
                           ERROR_NOT_PERMITTED, ERROR_UNAVAILABLE)
@@ -117,6 +118,31 @@ def _rows(value):
     if value is None:
         return []
     return [dict(row) for row in value]
+
+
+def _runtime_answer(outcome) -> dict:
+    """Flatten a ``RuntimeResult`` into the answer a guest gets back.
+
+    **Every text channel crosses, and the caller picks.** A ``RuntimeResult`` is
+    two things at once: what ``BaseFrontend._render_result`` draws, and — here —
+    the return value of ``conv.load`` and ``session.cancel``. That coupling used
+    to decide the channel: those two kept building their text on ``messages``
+    because the commands reading them back read ``messages``, so a confirmation
+    no client should have seen was pinned to the chat kind to keep one command
+    working.
+
+    Handing over both costs a key and removes the reason to ever choose again. A
+    command reads ``callable_output`` first and falls back to ``messages``; where
+    the kernel puts the line is then purely a question about the person looking
+    at it.
+    """
+    return {
+        "ok": bool(getattr(outcome, "ok", True)),
+        "messages": list(getattr(outcome, "messages", None) or []),
+        "callable_output": list(getattr(outcome, "callable_output", None) or []),
+        "error": getattr(outcome, "error", None),
+        "data": dict(getattr(outcome, "data", None) or {}),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -469,7 +495,10 @@ def _conv_set_notification_mode(ctx, args: dict) -> Result:
 
 
 def _conv_load(ctx, args: dict) -> Result:
-    """Load an owned conversation and restore its persisted runtime state."""
+    """Load an owned conversation and restore its persisted runtime state.
+
+    Carries both text channels, for the reason in ``_runtime_answer``.
+    """
     runtime = _runtime(ctx)
     loader = getattr(runtime, "load_history", None)
     if (bad := _need(loader, "conversation loading")) is not None:
@@ -477,13 +506,8 @@ def _conv_load(ctx, args: dict) -> Result:
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    outcome = loader(getattr(ctx, "session_key", None), cid)
-    return Result(data={
-        "ok": bool(getattr(outcome, "ok", True)),
-        "messages": list(getattr(outcome, "messages", None) or []),
-        "error": getattr(outcome, "error", None),
-        "data": dict(getattr(outcome, "data", None) or {}),
-    })
+    return Result(data=_runtime_answer(
+        loader(getattr(ctx, "session_key", None), cid)))
 
 
 def _conv_clear(ctx, args: dict) -> Result:
@@ -757,7 +781,10 @@ def _session_state_set(ctx, args: dict) -> Result:
 
 
 def _session_cancel(ctx, args: dict) -> Result:
-    """Cancel the turn running on a session."""
+    """Cancel the turn running on a session.
+
+    Carries both text channels, for the reason in ``_runtime_answer``.
+    """
     runtime = _runtime(ctx)
     canceller = getattr(runtime, "cancel_session", None)
     if (bad := _need(canceller, "session cancellation")) is not None:
@@ -765,12 +792,7 @@ def _session_cancel(ctx, args: dict) -> Result:
     outcome = canceller(args.get("key") or getattr(ctx, "session_key", None))
     if outcome is None:
         return Result(data=None)
-    return Result(data={
-        "ok": bool(getattr(outcome, "ok", True)),
-        "messages": list(getattr(outcome, "messages", None) or []),
-        "error": getattr(outcome, "error", None),
-        "data": dict(getattr(outcome, "data", None) or {}),
-    })
+    return Result(data=_runtime_answer(outcome))
 
 
 def _session_add_tool(ctx, args: dict) -> Result:
@@ -1013,6 +1035,28 @@ def _ui_render(ctx, args: dict) -> Result:
     except Exception as exc:
         logger.exception("ui_render failed")
         return Result.failure(f"render failed: {exc}")
+
+
+def _ui_progress(ctx, args: dict) -> Result:
+    """Narrate a running slash command on its own call.
+
+    The whole of it is ``_command_progress``, which is also what the package
+    handlers use — one reading of ``_running_command``, so a command's own
+    narration and the kernel's narration of work it asked for cannot address
+    different places.
+
+    **Abstains rather than falling back.** No slash command running means an
+    agent-invoked tool, a task or a service is calling, and there is no call for
+    the line to attach to. It answers ``False`` and says nothing. The tempting
+    fallback — push it to the chat — is exactly the behaviour this Request
+    exists to replace, so having no fallback is the feature: a shared helper can
+    call it unconditionally and never leak progress into a transcript.
+    """
+    narrate = _command_progress(ctx)
+    if narrate is None:
+        return Result(data=False)
+    narrate(str(args.get("message") or ""))
+    return Result(data=True)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1460,8 +1504,8 @@ def _plugin_list(ctx, args: dict) -> Result:
     })
 
 
-def _package_progress(ctx):
-    """Narrate long-running package work on the running command's own call.
+def _command_progress(ctx):
+    """Narrate long-running work on the running command's own call.
 
     **Not ``push_message``.** That channel is the conversation — the model's
     mid-turn narration and the files a tool renders — and "Copying package
@@ -1476,9 +1520,14 @@ def _package_progress(ctx):
     collected form values before this; ``narration`` is what it says while the
     body runs, and a frontend that reads neither is no worse off than it was.
 
-    Returns None when there is nothing to address — a package action taken
-    outside a slash command (an agent calling the tool, a task) narrates
-    nowhere rather than falling back to the chat.
+    Returns None when there is nothing to address — work taken outside a slash
+    command (an agent calling the tool, a task) narrates nowhere rather than
+    falling back to the chat.
+
+    Written for ``plugin.install`` and named ``_command_progress`` while that
+    was its only caller. It is the general mechanism now: ``ui.progress`` is the
+    same thing reached by a command's own body, and the two must not become two
+    readings of ``_running_command``.
     """
     runtime = _runtime(ctx)
     key = getattr(ctx, "session_key", None)
@@ -1505,7 +1554,7 @@ def _package_progress(ctx):
                 "session_key": key, "call_id": call_id,
                 "command_name": name, "narration": str(message)})
         except Exception:
-            logger.exception("could not narrate package progress (ignored)")
+            logger.exception("could not narrate command progress (ignored)")
 
     return narrate
 
@@ -1519,7 +1568,7 @@ def _plugin_install(ctx, args: dict) -> Result:
         root = getattr(ctx, "root_dir", None) or ROOT_DIR
         outcome = package_manager.install_package(
             root, args.get("package_id") or "", ctx,
-            progress=_package_progress(ctx))
+            progress=_command_progress(ctx))
         return Result(data=outcome.text())
     except Exception as exc:
         logger.exception("plugin_install failed")
@@ -1535,7 +1584,7 @@ def _plugin_uninstall(ctx, args: dict) -> Result:
         root = getattr(ctx, "root_dir", None) or ROOT_DIR
         outcome = package_manager.uninstall_package(
             args.get("package_id") or "", ctx,
-            progress=_package_progress(ctx), root_dir=root)
+            progress=_command_progress(ctx), root_dir=root)
         return Result(data=outcome.text())
     except Exception as exc:
         logger.exception("plugin_uninstall failed")
@@ -1550,7 +1599,7 @@ def _plugin_update(ctx, args: dict) -> Result:
 
         root = getattr(ctx, "root_dir", None) or ROOT_DIR
         outcome = package_manager.update_packages(
-            root, ctx, progress=_package_progress(ctx))
+            root, ctx, progress=_command_progress(ctx))
         return Result(data=outcome.text())
     except Exception as exc:
         logger.exception("plugin_update failed")
@@ -3841,6 +3890,7 @@ HANDLERS = {
     SESSION_ADD_ATTACHMENT: _session_add_attachment,
     SESSION_SET_MODE: _session_set_mode,
     UI_ASK: _ui_ask, UI_APPROVE: _ui_approve, UI_RENDER: _ui_render,
+    UI_PROGRESS: _ui_progress,
     CONFIG_READ: _config_read, CONFIG_WRITE: _config_write,
     PATH_GET: _path_get,
     USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,

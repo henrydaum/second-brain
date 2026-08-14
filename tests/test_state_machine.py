@@ -154,8 +154,13 @@ def test_runtime_decorates_form_with_back_available_after_input():
 # A form-navigation acknowledgement is a command reporting on its own progress,
 # so it belongs on ``callable_output``. Landing on ``messages`` put a line of
 # chat in the transcript every time somebody pressed Back in a settings dialog.
-# ``cancel`` is the deliberate exception: it ends the turn, and ``/cancel``
-# reads its answer to tell a real cancellation from "Nothing to cancel."
+#
+# ``cancel`` was held back from that move on the reading that it ends the turn
+# and that ``/cancel`` reads its answer. Neither applies to *this* result:
+# ``handle_action`` short-circuits every base-phase and busy cancel before
+# dispatch, so an action reaching ``Cancel.execute`` always has a frame to pop,
+# and ``BaseFrontend.submit_text`` intercepts ``/cancel`` before the command
+# ever runs. What was left was a form's own Cancel button typing into the chat.
 
 
 def _two_step_form():
@@ -200,7 +205,7 @@ def test_skip_acknowledgement_is_command_output_not_conversation():
     assert out.messages == []
 
 
-def test_cancel_acknowledgement_stays_conversation():
+def test_cancel_acknowledgement_is_command_output_not_conversation():
     from runtime.session import RuntimeResult
 
     cs = _two_step_form()
@@ -208,8 +213,8 @@ def test_cancel_acknowledgement_stays_conversation():
 
     out = RuntimeResult().add_action_result(cs.enact("cancel", None, "user"))
 
-    assert out.messages == ["Cancelled."]
-    assert out.callable_output == []
+    assert out.callable_output == ["Cancelled."]
+    assert out.messages == []
 
 
 # ── REPL form rendering ──────────────────────────────────────────────

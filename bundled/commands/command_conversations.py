@@ -83,9 +83,12 @@ class ConversationsCommand(BaseCommand):
             if "not available to this user" in exc.error.lower():
                 return "No such conversation."
             raise
-        messages = result.get("messages") or []
+        # ``callable_output`` first, ``messages`` as the fallback: the load
+        # confirmation is this command's own output, and reads back on the
+        # channel a command answers on.
+        said = result.get("callable_output") or result.get("messages") or []
         return "\n".join(
-            message for message in messages if message
+            message for message in said if message
         ).strip() or f"Loaded conversation #{cid}."
 
 

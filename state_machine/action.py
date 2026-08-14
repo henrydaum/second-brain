@@ -121,11 +121,23 @@ class Action(object):
         """Build an ActionError anchored to the current phase."""
         return ActionError(code, message, details, self.cs.phase)
 
+    def failure_details(self) -> dict[str, Any]:
+        """What every failure from this action should carry beyond the message.
+
+        Empty for most actions, because most of them *are* the whole subject —
+        a ``send_text`` that failed needs nothing said about which send_text.
+        A callable is the exception: it acts on behalf of a named command or
+        tool, and a client routing a failure back to the panel that asked for
+        it needs the name. See ``_CallableAction``.
+        """
+        return {}
+
     def enact(self) -> ActionResult:
         """Run legality checks, execute the action, and normalize failures."""
         legal, reason = self.is_legal()
         if not legal:
-            err = self.error(self.illegal_code, reason or self.illegal_code)
+            err = self.error(self.illegal_code, reason or self.illegal_code,
+                             **self.failure_details())
             self.cs.last_error = err
             event = self.cs.event("error", self.actor_id, error=err.to_dict())
             result = ActionResult.fail(self.action_type, err)
@@ -134,13 +146,22 @@ class Action(object):
         try:
             result = self.execute()
         except ActionError as err:
+            # ``setdefault``, because a raise from inside ``execute`` that named
+            # itself (``spec()``, ``_validate``) is the more specific answer.
+            for key, value in self.failure_details().items():
+                err.details.setdefault(key, value)
             self.cs.last_error = err
             event = self.cs.event("error", self.actor_id, error=err.to_dict())
             result = ActionResult.fail(self.action_type, err)
             result.events.append(event)
         except Exception as exc:
             logger.debug("Error executing %s for %s: %r", type(self).__name__, self.actor_id, self.content, exc_info=True)
-            err = self.error(ERROR_EXECUTION_FAILED, str(exc) or type(exc).__name__)
+            # Built here rather than where it was raised, so ``retry_phase`` is
+            # the phase the action left behind — ``_CallableAction._run``'s
+            # ``finally`` has reset it by now, and one built inside that body
+            # would name the calling phase nobody can retry from.
+            err = self.error(ERROR_EXECUTION_FAILED, str(exc) or type(exc).__name__,
+                             **self.failure_details())
             self.cs.last_error = err
             event = self.cs.event("error", self.actor_id, error=err.to_dict())
             result = ActionResult.fail(self.action_type, err)
@@ -222,7 +243,13 @@ class Cancel(Action):
                 except Exception:
                     pass
         event = self.cs.event("cancelled", self.actor_id, cancelled=frame.action_type if frame else None)
-        return ActionResult(True, self.action_type, "Cancelled.", events=[event])
+        # Marked like "Back." and "Skipped.", because this reaches the person in
+        # exactly the same situation. ``handle_action`` short-circuits every
+        # base-phase and busy cancel before dispatch, so an action that arrives
+        # here always has a frame to pop: a form or an approval acknowledging
+        # its own navigation, not the conversation being ended.
+        return ActionResult(True, self.action_type, "Cancelled.", events=[event],
+                            data={FORM_NAVIGATION: True})
 
 
 class _CallableAction(Action):
@@ -244,6 +271,19 @@ class _CallableAction(Action):
         payload = dict(self.content or {})
         payload.setdefault("args", {})
         return payload
+
+    def failure_details(self) -> dict[str, Any]:
+        """Name the callable, so a client can route the failure to its panel.
+
+        Read off the payload rather than off the resolved spec, because the
+        failure worth naming most is the one where there is no spec — an
+        unrecognised command still came from something the person typed.
+        """
+        try:
+            name = self.payload().get("name")
+        except Exception:
+            return {}
+        return {"name": name} if name else {}
 
     def is_legal(self):
         """Return whether the current participant is allowed to call this callable."""

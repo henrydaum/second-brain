@@ -268,6 +268,80 @@ sdk.log("could not reach the index", level="warning")
 
 ---
 
+## Where your output goes
+
+**Return it. That is the whole rule**, and it is worth stating on its own
+because getting it wrong is invisible from inside the plugin: the text appears,
+it just appears in the wrong place.
+
+A frontend does not receive one stream of text. It receives *kinds*, and the
+kind decides where a person sees the words. `messages` is the **conversation** —
+the agent's replies and the person's own words, the thing a chat transcript is
+drawn from. What you return is `callable_output`, a different kind, which a
+client with a command panel draws there instead. A terminal that declares
+neither still shows both, so **the REPL looks identical whichever you use** —
+which is exactly why this is easy to get wrong and easy to miss.
+
+("Callable" is the kernel's word for the two things a person invokes by name: a
+slash command, and a tool invoked directly rather than by the agent. One code
+path, so one output kind — which is why the field is not called
+`command_output`.)
+
+Your return value is already routed for you:
+
+```python
+class Report(BaseCommand):
+    """List what is indexed."""
+
+    name = "report"
+
+    def run(self, sdk, args):
+        """Answer with a table."""
+        rows = sdk.db.query("SELECT name, status FROM files LIMIT 20")
+        return sdk.md.table(["File", "Status"], [
+            [row["name"], row["status"]] for row in rows])
+```
+
+Three other calls also put text in front of a person. Each has one job, and none
+of them is "the output of this command":
+
+| Call | Where it lands | Reach for it when |
+|---|---|---|
+| *your `return`* | `callable_output` | Always. This is the answer. |
+| `sdk.ui.progress(line)` | the running call's own status | The body is slow and should say so. |
+| `sdk.session.push(..., notify=True)` | `notification` | The system has something to *tell* them, unprompted. |
+| `sdk.ui.render(paths)` | the conversation, with files | You made a file they should see. |
+
+**`sdk.session.push` without `notify=True` is the one to reach for last.** Its
+destination is the chat, and it is right for exactly one thing: speaking *into*
+the conversation, which a tool narrating mid-turn does and a command does not.
+A command that pushes its progress there puts "Copying files…" in the transcript
+of a conversation nobody was having — the person opened a settings screen.
+
+```python
+def run(self, sdk, args):
+    """Reset every task's failed rows."""
+    tasks = sdk.tasks.list()
+    for index, task in enumerate(tasks, 1):
+        sdk.ui.progress(f"Resetting {task['name']} ({index}/{len(tasks)})")
+        sdk.tasks.reset(task["name"], failed_only=True)
+    return f"Reset {len(tasks)} task(s)."
+```
+
+`sdk.ui.progress` says nothing at all unless a slash command is actually
+running — called from an agent-invoked tool, a task or a service it returns
+`False` and emits nothing. Narrating nowhere is deliberate: the alternative is
+falling back to the chat, which is the behaviour it exists to replace. So a
+helper shared between a command and a tool may call it unconditionally.
+
+**Errors are a kind too**, and you do not raise them yourself: return a string
+for something the person should read and fix (`"Unknown setting: colour"`), and
+let a genuine failure raise. The kernel puts a raise on the `error` kind, stamped
+with which command it came from, so a client can show it beside the command
+rather than in the chat.
+
+---
+
 ## The Request reference
 
 Each namespace is exactly one Request family, so `sdk.fs.read` *is* the
@@ -567,10 +641,16 @@ sdk.ui.approve(action, justification)
                                      # asks it. Returns True, or raises
                                      # sdk.Denied when the answer was no.
 sdk.ui.render(paths, caption="")     # show files in the chat
+sdk.ui.progress(line)                # say what a running slash command is
+                                     # doing, on its own call — see "Where
+                                     # your output goes" above. Silent when
+                                     # no command is running.
 
 sdk.session.get(key="")              # defaults to this session
 sdk.session.list()
-sdk.session.push(message, key="")    # message the user out of band
+sdk.session.push(message, key="")    # speak INTO the conversation. Lands in
+                                     # the chat transcript — never a command's
+                                     # output, never its progress.
 sdk.session.push(message, title="Indexed", notify=True, level="success")
                                      # ...or as a *notification*: see below
 sdk.session.state_get(namespace="sandbox")

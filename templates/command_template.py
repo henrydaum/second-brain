@@ -54,14 +54,33 @@ For a dynamic form, look at what has been collected already and return only
 the next steps needed. Returning [] means "ready, run now".
 
 
-RETURN MARKDOWN
----------------
+RETURN MARKDOWN — AND RETURN IT, DO NOT PUSH IT
+----------------------------------------------
 Command output is a string of GitHub-flavored markdown. Each frontend renders
 it by its own policy — the REPL aligns tables and strips fences, rich
 frontends render natively. Do not invent a structured return type; markdown is
 deliberately the interchange format.
 
-Build it with the SDK helpers so it renders consistently everywhere:
+`return` is also the ONLY route. A command's answer travels on the
+`callable_output` render kind, which is what lets a client keep its chat
+transcript to the conversation and draw commands in a panel of their own.
+Producing text any other way puts it in the chat instead.
+
+This is invisible from a terminal — the REPL flattens both kinds and looks
+identical either way — so it will not be caught by trying it. The three calls
+that legitimately show text, and what each is for:
+
+    sdk.ui.progress(line)                   "step 2 of 5", on the running
+                                            command's own call. Silent when no
+                                            command is running.
+    sdk.session.push(text, notify=True)     the system TELLING them something,
+                                            unprompted. Lands in the panel.
+    sdk.ui.render(paths)                    you made a file they should see.
+
+And `sdk.session.push` WITHOUT `notify=True` is for speaking into the
+conversation, which a command never does. Its destination is the transcript.
+
+Build the answer with the SDK helpers so it renders consistently everywhere:
 
     sdk.md.table(headers, rows)     data tables
     sdk.md.card(title, pairs)       describe-style key/value cards
@@ -69,7 +88,10 @@ Build it with the SDK helpers so it renders consistently everywhere:
 Tables must start their own block — put a blank line before one, or markdown
 parsers fold it into the preceding paragraph.
 
-Return None for no visible message.
+Return None for no visible message. Do not return an error string you would
+rather raise: a raise becomes the `error` kind, stamped with which command it
+came from. Return a string when the person should read and fix something
+("Unknown setting: colour"); let a real failure raise.
 
 
 The two examples below are separate commands, shown together for contrast. A

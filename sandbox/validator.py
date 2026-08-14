@@ -20,8 +20,18 @@ Three severities:
 - ``WARNING`` — loads with a disclaimer. A foreign library cannot be validated
   (it may be binary, or not Python at all), so its actions cannot be turned
   into Requests. Subprocess it and say so.
-- ``NOTE``    — advisory. A declared value above the kernel's ceiling still
-  works; it just gets clamped.
+- ``NOTE``    — advisory. The file loads and runs exactly as written; something
+  about it is probably not what was meant. A declared value above the kernel's
+  ceiling still works, it just gets clamped; a setting named like a credential
+  but not declared as one hands over plaintext; a command pushing its output
+  into the chat puts it somewhere the author did not intend.
+
+``NOTE`` earns its place by covering the mistakes that are **invisible from
+outside**. A wrong ``poll_interval`` fails loudly and a direct effect does not
+load at all, but a plugin handing over a plaintext secret, or a command
+narrating into the transcript, behaves perfectly and looks right when tried —
+the REPL flattens every render kind into one, so the channel a line travelled
+on cannot be seen from a terminal at all. Advisory is not the same as minor.
 """
 
 from __future__ import annotations
@@ -702,6 +712,55 @@ def _check_subscribed_channels(walker: _Walker, node, cls, family: str):
                    "would reach the base class and be discarded")
 
 
+def _check_command_output(walker: _Walker, tree):
+    """Note a command pushing text into the chat instead of returning it.
+
+    A command's answer travels on the ``callable_output`` render kind, and the
+    only thing that puts it there is the ``return``. ``sdk.session.push``
+    without ``notify`` goes to ``CHAT_MESSAGE_PUSHED`` — the *conversation* —
+    so a command narrating itself that way lands in the transcript of a chat
+    the person was not having; they opened a settings screen.
+
+    **This is worth a finding because nothing else will ever tell you.** A
+    frontend that declares neither opt-in flattens both kinds into
+    ``render_messages``, so the REPL renders the two identically and trying it
+    proves nothing. Every other way of getting this wrong announces itself; this
+    one is silent in both directions.
+
+    Advisory rather than an error, because it is a legitimate call that is
+    usually the wrong one: a command *may* have something to say into the
+    conversation. The three better destinations are named in the fix so the
+    reader does not have to go looking for which one they meant.
+
+    Scanned over the whole module rather than the class body: commands
+    routinely delegate their rendering to module-level helpers
+    (``_show(sdk, …)``, ``_toggle(sdk, name, action)``), and a push is just as
+    misplaced there.
+    """
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "push"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "session"):
+            continue
+        # ``notify=True`` is a notification, which is a different destination
+        # and a perfectly good one. A non-literal ``notify=`` cannot be read
+        # here, and abstaining is right: guessing would cry wolf on the one
+        # spelling that is already correct.
+        notify = next((kw for kw in node.keywords if kw.arg == "notify"), None)
+        if notify is not None and _literal(notify.value) is not False:
+            continue
+        walker.add(NOTE, node,
+                   "a command that pushes text is speaking into the "
+                   "conversation — it lands in the chat transcript, not in "
+                   "this command's output. The REPL renders both the same "
+                   "way, so this will look correct when you try it",
+                   "return the text (it becomes `callable_output`), or "
+                   "`sdk.ui.progress(...)` to narrate a slow body, or "
+                   "`notify=True` to raise a notification")
+
+
 def _check_secret_names(walker: _Walker, node):
     """Warn about a config setting that looks like a credential but is not
     declared as one."""
@@ -792,6 +851,11 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                 f"FormStep is command-only; a {family} cannot present a "
                 "multi-step command form",
             )
+    else:
+        # Command-only, because the same call in a *tool* is the legitimate
+        # use: a tool narrating mid-turn genuinely is the agent's turn
+        # speaking, which is what the chat channel is for.
+        _check_command_output(walker, tree)
 
     # One class per file, with one exception: services.
     #

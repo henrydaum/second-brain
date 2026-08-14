@@ -152,11 +152,13 @@ class ConversationRuntime:
                 "code": "busy",
                 "message": "Session is mid-form — handoff deferred."})
 
-        # Stays on ``messages``: this is the return value of ``session.cancel``,
-        # which ``/cancel`` reads to decide what to say. It is an answer to
-        # something the person typed, not a refusal.
+        # ``callable_output``, not ``messages``: this is the answer to something
+        # the person typed, which is what that channel is for. It is also the
+        # return value of ``session.cancel`` — the answer carries every channel
+        # and ``/cancel`` picks the one it wants, rather than the channel being
+        # chosen to suit the reader (see ``_session_cancel``).
         if action_type == "cancel" and not session.busy and session.cs.phase == BASE_PHASE:
-            return RuntimeResult(messages=["Nothing to cancel."])
+            return RuntimeResult(callable_output=["Nothing to cancel."])
 
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
@@ -201,7 +203,7 @@ class ConversationRuntime:
                 # moment anyone raised it. A count nobody can trust at every
                 # setting is worse than no count: this says the true thing at
                 # all of them.
-                return RuntimeResult(messages=[
+                return RuntimeResult(callable_output=[
                     "Cancelled. Subagents stopped." if stopped
                     else "Cancelled."])
             if action_type in {"answer_approval", "cancel"} and session.cs.phase == PHASE_APPROVING_REQUEST:

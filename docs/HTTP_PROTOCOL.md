@@ -288,7 +288,19 @@ the kernel currently emits this; it exists for store plugins. Submit the
 
 #### `error` — `dict`
 
-`{code, message, details, retry_phase}`. `message` is the human-readable part.
+`{code, message, details, retry_phase, action, name}`. `message` is the
+human-readable part.
+
+`action` and `name` say **what was being attempted**, and they are what lets you
+route a failure to the same place its output would have gone. `action:
+"call_command"` with `name: "packages"` is `/packages` failing — draw it in the
+command panel, beside the call. Without them a failing install, an unrecognised
+slash command and "Still working. Send /cancel to interrupt." are one shape, and
+all three end up in the chat.
+
+Both are absent when the failure belongs to no named callable — a rejected
+`send_text`, a busy session. That is the signal to treat it as a chat-level
+error.
 
 #### `attachments` — `list[str]`
 
@@ -334,14 +346,30 @@ progress, e.g. "Compacting conversation…"). Everything else is in the
 
 #### `callable_output` — `list[str]`
 
-What a slash command or a user-invoked tool **returned**: a `/config` listing,
-a `/conversations` table, a `/debug` dump. GitHub-flavored markdown, same wire
-convention as `messages`.
+A **callable** is the kernel's word for the two things a person can invoke by
+name: a slash command, and a tool invoked directly rather than by the agent.
+They share one code path (`CallableSpec` — same argument forms, same approval
+gates, same events), so they share one output kind. Read `callable_output` as
+"what the thing I invoked answered with", and the reason it is not called
+`command_output` is that `submit_action` with `call_tool` is a supported way for
+*your* client to run a tool, and its result arrives here too.
+
+So: what a slash command or a user-invoked tool **returned** — a `/config`
+listing, a `/conversations` table, a `/debug` dump. GitHub-flavored markdown,
+same wire convention as `messages`.
 
 Separate because it is the answer to something the person typed rather than
 something anybody said. It was much the largest population making `messages`
 unreadable to a client — the agent's reply and a settings table arrived as the
 same kind of thing, with no field to tell them apart.
+
+**Short acknowledgements arrive here too**, not only command output proper:
+`"Back."` and `"Skipped."` as a form moves between fields, `"Cancelled."` when
+one is dismissed or a turn is stopped, `"Loaded conversation: Main"` when one is
+opened. All of them are a callable reporting on itself, and none of them is
+something anybody said — so if your panel treats every frame as a block of
+output, expect one-line frames as well as tables. A panel that shows the last
+frame prominently will want to pair these with the `form_field` they are about.
 
 **You only get this kind if you ask for it.** Declare
 `supports_callable_output` in `capabilities`, which `frontend_http` does;

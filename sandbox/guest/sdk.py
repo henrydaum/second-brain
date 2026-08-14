@@ -100,7 +100,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        SESSION_STATE_SET, TASK_ENQUEUE, TASK_GRAPH, TASK_LIST,
                        TASK_OUTPUT, TASK_PAUSE, TASK_RESET, TASK_STATUS,
                        TASK_TRIGGER, TOOL_CALL, TOOL_LIST, UI_APPROVE, UI_ASK,
-                       UI_RENDER, USER_LIST, USER_READ, USER_WRITE, Request,
+                       UI_PROGRESS, UI_RENDER, USER_LIST, USER_READ,
+                       USER_WRITE, Request,
                        Result)
 
 
@@ -534,6 +535,26 @@ class _UI(_Namespace):
         """Show files to the user in chat."""
         return self._ask(UI_RENDER, paths=[str(p) for p in paths],
                          caption=caption)
+
+    def progress(self, message: str):
+        """Say what a slash command is doing, while it does it.
+
+        Addressed to the *call* the person is already watching, not to the
+        conversation — a frontend showing "⋯ /packages" updates that line in
+        place. Use it for work long enough to be worth narrating: a bulk task
+        reset, a service load that imports torch, an install.
+
+        **Not ``sdk.session.push``.** That destination is the chat, and progress
+        from a command run out of a settings screen does not belong in the
+        transcript of the conversation. This is the difference.
+
+        **Silent when nothing is watching.** Called from an agent-invoked tool,
+        a task or a service — anywhere no slash command is running — it does
+        nothing and answers False. Narrating nowhere is the right failure; the
+        alternative is falling back to the chat, which is what this exists to
+        stop. So a shared helper may call it unconditionally.
+        """
+        return self._ask(UI_PROGRESS, message=str(message))
 
 
 class _Config(_Namespace):

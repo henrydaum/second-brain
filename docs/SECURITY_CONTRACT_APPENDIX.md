@@ -345,6 +345,16 @@ route to the same place rather than a new one.
 | `ui.ask(prompt, title, type, choices, required, default)` | Question with typed answer | attendance | safe if attended, refused if not |
 | `ui.approve(action, justification)` | Explicit approval for a sensitive action | — | **always unsafe** |
 | `ui.render(paths, caption)` | Show files to the user in chat | paths | safe |
+| `ui.progress(message)` | One line about what a running slash command is doing | — | safe |
+
+`ui.progress` is safe because it reaches nothing to decide about: the handler
+resolves the *running command's* call id from the session and abstains when
+there is none, so an agent-invoked tool, a task or a service calling it emits
+nothing at all. A dialog would also be self-defeating — progress is emitted in a
+loop, so asking would cost more interruptions than the work being narrated. It
+is in `epoch.RENDERING` and the ledger's `unrecorded` set for the same pair of
+reasons `llm.delta` is: per-iteration volume, and text on a screen is not state
+a prompt can read back.
 
 `ui.ask` is definitionally safe when a human is present — it *is* the approval
 channel. In an unattended session it is refused rather than queued, matching the

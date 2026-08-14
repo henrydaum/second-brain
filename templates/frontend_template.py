@@ -72,6 +72,14 @@ kinds above are opt-in, and declining any of them is free: the kernel sends
 that content as `messages` instead, exactly as it did before the kind existed.
 So a transport gains a surface by asking and loses nothing by not.
 
+A **callable** is the kernel's word for the two things a person invokes by
+name: a slash command, and a tool invoked directly rather than by the agent.
+One code path, so one output kind. Read `callable_output` as "what the thing
+they invoked answered with" — a /config listing, a /conversations table, and
+also the short acknowledgements a form makes about itself ("Back.", "Skipped.",
+"Cancelled."). None of it is anything anybody *said*, which is the line it is
+drawn on.
+
 Output is **markdown on the wire** — that is the interchange format, because it
 is also what the model emits. Render it however your transport prefers.
 

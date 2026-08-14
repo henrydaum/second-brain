@@ -849,7 +849,11 @@ def test_cancel_clears_the_queue(tmp_path):
 
     out = rt.handle_action("s", "cancel", None)
 
-    assert "Cancelled." in out.messages
+    # ``callable_output``: an answer to something the person typed, not
+    # something the agent said. A frontend without a panel still shows it,
+    # flattened into the chat by ``BaseFrontend._render_result``.
+    assert "Cancelled." in out.callable_output
+    assert out.messages == []
     assert session.pending_user_messages == []
     assert session.cancel_event.is_set()
 

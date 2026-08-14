@@ -514,6 +514,12 @@ ALWAYS_SAFE = {
     # UI_APPROVE is *not* here. Asking permission is a policy decision, so it
     # is always unsafe and the approver asks it — see the branch below.
     R.UI_RENDER,
+    # A line of text on the call the person is already watching, and only when
+    # one is running — the handler abstains otherwise, so there is no reach to
+    # decide about. A dialog would be worse than pointless: progress is emitted
+    # in a loop, so asking would make narrating cost more interruptions than
+    # the work it describes.
+    R.UI_PROGRESS,
     R.USER_READ,
     # PLUGIN_VALIDATE sits with the listings, not with REGISTER and friends,
     # because it changes nothing: the validator is a pure AST walk that never

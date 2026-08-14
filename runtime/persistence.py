@@ -262,8 +262,12 @@ def load_history(runtime, session_key: str, conversation_id: int):
     if old_profile != new_profile:
         msg += f"\n\nSwitched agent: {old_profile} -> {new_profile}"
 
+    # ``callable_output``: this confirms something the person asked for, which is
+    # not the conversation. It reaches them as ``/conversations``' own output —
+    # and ``load_history`` is a dispatchable action, so a client wiring a load
+    # button straight to it would otherwise get a line of chat nobody said.
     return RuntimeResult(
-        messages=[msg],
+        callable_output=[msg],
         data={"conversation_id": conversation_id, "history": session.history, "agent_profile": new_profile},
     )
 

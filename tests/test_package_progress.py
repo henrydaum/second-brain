@@ -22,7 +22,7 @@ from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_PROGRESSED
 from pipeline.database import Database
 from runtime.conversation_runtime import ConversationRuntime
-from sandbox.handlers.kernel import _package_progress
+from sandbox.handlers.kernel import _command_progress
 from state_machine.conversation import CallableSpec
 
 
@@ -37,7 +37,7 @@ class _Session:
 
 
 class _Runtime:
-    """Only what ``_package_progress`` reads, plus a record of what it pushed."""
+    """Only what ``_command_progress`` reads, plus a record of what it pushed."""
 
     def __init__(self, sessions):
         self.sessions = sessions
@@ -72,7 +72,7 @@ def _running(call_id="cmd:packages:abcd1234", name="packages"):
 def test_progress_addresses_the_running_command(emitted):
     """The panel that asked for the install is told how it is going."""
     ctx = _running()
-    progress = _package_progress(ctx)
+    progress = _command_progress(ctx)
     assert progress is not None
 
     progress("Copying package files")
@@ -88,7 +88,7 @@ def test_progress_addresses_the_running_command(emitted):
 def test_progress_never_reaches_the_conversation(emitted):
     """The regression itself. Nothing here belongs in the transcript."""
     ctx = _running()
-    _package_progress(ctx)("Running package setup")
+    _command_progress(ctx)("Running package setup")
 
     assert emitted["chat"] == []
     assert ctx.runtime.pushed == []
@@ -97,7 +97,7 @@ def test_progress_never_reaches_the_conversation(emitted):
 def test_a_progress_emit_claims_nothing_about_collected_answers(emitted):
     """``args`` is the other producer's field, and stating it empty here would
     blank the answers the panel is still showing."""
-    _package_progress(_running())("Resolving dependency plan")
+    _command_progress(_running())("Resolving dependency plan")
 
     assert "args" not in emitted["progress"][0]
 
@@ -108,18 +108,18 @@ def test_no_running_command_narrates_nowhere(emitted):
     the chat, which is the behaviour this replaced."""
     ctx = _Ctx(_Runtime({"frontend:http:1": _Session({})}))
 
-    assert _package_progress(ctx) is None
+    assert _command_progress(ctx) is None
     assert emitted["chat"] == []
 
 
 def test_an_unknown_session_narrates_nowhere():
-    assert _package_progress(_Ctx(_Runtime({}))) is None
+    assert _command_progress(_Ctx(_Runtime({}))) is None
 
 
 def test_no_session_key_narrates_nowhere():
     ctx = _Ctx(_Runtime({}), session_key=None)
 
-    assert _package_progress(ctx) is None
+    assert _command_progress(ctx) is None
 
 
 # ── The other half: the state machine has to say which command is running ──

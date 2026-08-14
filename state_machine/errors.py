@@ -35,10 +35,10 @@ class ActionError(Exception):
         return {"code": self.code, "message": self.message, "details": self.details, "retry_phase": self.retry_phase}
 
 
-# Marks a success message as a *form's* acknowledgement of its own navigation
-# ("Back.", "Skipped.") rather than as something anybody said. The runtime reads
-# it to decide which output channel the line travels on — see
-# ``RuntimeResult.add_action_result``.
+# Marks a success message as a form's or approval's acknowledgement of its own
+# navigation ("Back.", "Skipped.", "Cancelled.") rather than as something
+# anybody said. The runtime reads it to decide which output channel the line
+# travels on — see ``RuntimeResult.add_action_result``.
 #
 # A flag in ``data`` rather than a check on ``action``, because skipping the
 # last field of a form runs the command and returns *that* action's result: the

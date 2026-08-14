@@ -76,6 +76,14 @@ NOTIFICATION_MARK_READ = "notification.mark_read"
 UI_ASK = "ui.ask"
 UI_APPROVE = "ui.approve"
 UI_RENDER = "ui.render"
+# One line about what a running slash command is doing, addressed to the call
+# the person is already watching rather than to the conversation. It exists
+# because the only other route was ``session.push``, whose destination is the
+# chat — so a command that narrated its own progress put "Copying package
+# files" in the transcript of a command run from a settings screen. In
+# ``RENDERING`` for the reason above ``http.push``: it moves text to a screen
+# and produces no state a prompt could read back.
+UI_PROGRESS = "ui.progress"
 
 # ── configuration ─────────────────────────────────────────────────────
 CONFIG_READ = "config.read"
@@ -303,7 +311,7 @@ ALL_TYPES = {
     SESSION_ADD_PROMPT, SESSION_REMOVE_PROMPT, SESSION_ADD_ATTACHMENT,
     SESSION_SET_MODE,
     NOTIFICATION_LIST, NOTIFICATION_MARK_READ,
-    UI_ASK, UI_APPROVE, UI_RENDER,
+    UI_ASK, UI_APPROVE, UI_RENDER, UI_PROGRESS,
     CONFIG_READ, CONFIG_WRITE, PATH_GET,
     USER_READ, USER_LIST, USER_WRITE,
     PLUGIN_LIST, PLUGIN_DESCRIBE, PLUGIN_VALIDATE,

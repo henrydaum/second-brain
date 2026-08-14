@@ -610,6 +610,7 @@ class BaseFrontend:
         except Exception as e:
             result = RuntimeResult(False, error={
                 "code": "bad_command_args",
+                "action": "call_command", "name": name,
                 "message": f"Invalid arguments for `/{name}`: {e}\nType `/{name}` alone to fill them in step by step."})
             self._render_result(session_key, result)
             return None, result
@@ -618,6 +619,7 @@ class BaseFrontend:
         """Render an unknown slash-command error without waking the agent."""
         result = RuntimeResult(False, error={
             "code": "unknown_command",
+            "action": "call_command", "name": name,
             "message": f"`/{name}` isn't a recognized slash command. Type `/commands` to see the full list of what's available."})
         self._render_result(session_key, result)
         return result
@@ -626,6 +628,7 @@ class BaseFrontend:
         """Render an error for a command blocked by this frontend's profile."""
         result = RuntimeResult(False, error={
             "code": "command_not_allowed",
+            "action": "call_command", "name": name,
             "message": f"`/{name}` is not available on the '{self.name}' frontend. Type `/commands` to see what's available here."})
         self._render_result(session_key, result)
         return result

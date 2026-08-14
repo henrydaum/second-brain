@@ -313,7 +313,9 @@ def test_cancel_returns_while_the_model_is_still_blocked(conv_runtime):
 
     out = rt.handle_action(session.key, "cancel")
 
-    assert out.messages == ["Cancelled."]
+    # The answer to something the person typed, so ``callable_output``.
+    assert out.callable_output == ["Cancelled."]
+    assert out.messages == []
     turn.join(timeout=10)
     assert not turn.is_alive()
 
@@ -342,7 +344,12 @@ def test_the_interrupted_turn_reports_cancellation_rather_than_an_error(conv_run
 
 
 def test_exactly_one_cancelled_reaches_the_person(conv_runtime):
-    """The ``/cancel`` action answers; the interrupted turn stays quiet."""
+    """The ``/cancel`` action answers; the interrupted turn stays quiet.
+
+    Counted across *both* text channels, because a person sees both — a
+    frontend without ``supports_callable_output`` flattens the second into the
+    first. Counting one would pass just as well if the duplicate moved.
+    """
     entered = threading.Event()
     release = threading.Event()
     results = []
@@ -368,7 +375,10 @@ def test_exactly_one_cancelled_reaches_the_person(conv_runtime):
     cancel_out = rt.handle_action(session.key, "cancel")
     turn.join(timeout=10)
 
-    said = cancel_out.messages + [m for out in results for m in out.messages]
+    def _said(out):
+        return list(out.messages) + list(out.callable_output)
+
+    said = _said(cancel_out) + [line for out in results for line in _said(out)]
     assert said.count("Cancelled.") == 1
 
 
