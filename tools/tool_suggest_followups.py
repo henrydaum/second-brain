@@ -94,24 +94,21 @@ class SuggestFollowups(BaseTool):
         except Exception as error:
             return sdk.fail(f"Could not offer follow-ups: {error}")
 
-        # The summary is the last thing the model reads before deciding whether
-        # to speak again, so it says the turn is over rather than describing
-        # what happened and leaving that open. A result that only reported
-        # "Offered 1 follow-up(s): …" read as a checkpoint, and the model
-        # answered it — signing off a second time, after a reply that had
-        # already ended.
+        # **Purely factual, and no instruction.** This is the last thing the
+        # model reads before it is sampled once more, and an imperative here
+        # gets obeyed the only way a text response can obey it: by restating
+        # it. "Turn complete — say nothing further" produced a reply reading
+        # "Turn complete." — the model complying as briefly as it could.
+        #
+        # The instruction it needs is in the doorman's note, which arrives
+        # before the call rather than after, where it reads as direction rather
+        # than as something to answer.
         if not buttons:
-            return sdk.ok(
-                {"emitted": 0},
-                llm_summary="No follow-ups offered. Turn complete — say nothing further.",
-            )
+            return sdk.ok({"emitted": 0}, llm_summary="No follow-ups offered.")
         shown = ", ".join(button["label"] for button in buttons)
         return sdk.ok(
             {"emitted": len(buttons), "buttons": buttons},
-            llm_summary=(
-                f"Shown to the person: {shown}. "
-                f"Turn complete — say nothing further."
-            ),
+            llm_summary=f"Shown to the person: {shown}",
         )
 
     @staticmethod

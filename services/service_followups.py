@@ -172,8 +172,14 @@ class Followups(BaseService):
         # The forced call is not a checkpoint in the middle of the turn, and a
         # model that treats it as one signs off twice — once before the call and
         # again after it, the second time with nothing left to say.
+        #
+        # Phrased as an action to take rather than a phrase to honour. Told to
+        # "say nothing further", the model said "Turn complete." — the shortest
+        # available way to acknowledge an instruction is still to acknowledge
+        # it, so the instruction has to describe ending rather than silence.
         note.append(
-            "This is the last action of your turn. Your reply above is already "
-            "complete: after this call, write nothing further."
+            "Your reply above is already complete and the person has read it. "
+            "Make this tool call the final thing you do, then end your turn "
+            "immediately — no closing line, no summary, no acknowledgement."
         )
         return " ".join(note)
