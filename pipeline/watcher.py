@@ -99,6 +99,18 @@ class Watcher:
 		self.ignored_folders = set(self.config.get("ignored_folders", []))
 		self.skip_hidden = self.config.get("skip_hidden_folders", True)
 
+		# And the one piece of state that is not config's. Installing a parser
+		# is what makes an extension worth looking at, and _should_process gates
+		# every file on this set — so a snapshot taken in __init__ meant a newly
+		# installed parser's file types stayed invisible until the next boot.
+		# ".zip" is the worked example: it is not in parsing._NATIVE_DEFAULTS,
+		# so before parse_container is installed an archive is not merely
+		# unparseable, it never enters the files table at all. That is also why
+		# the fresh scan below is the point of this call rather than a side
+		# effect of it — there is nothing to re-resolve, there are files that
+		# were never seen.
+		self.supported_extensions = get_supported_extensions()
+
 		valid_dirs = [d for d in self.watch_dirs if d and os.path.exists(d)]
 		if not valid_dirs:
 			logger.warning("No valid sync directories after rescan. Use /configure sync_directories to add a folder.")
@@ -135,15 +147,23 @@ class Watcher:
 		Walk all watched directories. Compare disk state to DB state.
 		New files -> upsert + notify orchestrator.
 		Modified files -> upsert + notify orchestrator.
+		Reclassified files -> upsert + notify orchestrator.
 		Deleted files (ghosts) -> remove from DB + notify orchestrator.
+
+		"Reclassified" is the case a parser install creates: the file on disk
+		is untouched, but ``get_modality`` now answers differently about it
+		than it did when the row was written. Comparing only mtimes meant such
+		a file was skipped forever — the row kept saying ``unknown`` and no
+		modality-rooted task ever found it.
 		"""
 		# Background scan: its DB writes yield the shared lock to the conversation.
 		set_thread_priority_low()
 		t0 = time.time()
-		db_state = self.db.get_watched_files()  # {path: mtime} — watched only
+		db_state = self.db.get_watched_file_state()  # {path: (mtime, modality)}
 		disk_files = set()
 		new_count = 0
 		modified_count = 0
+		reclassified_count = 0
 
 		for watch_dir in valid_dirs:
 			if self._is_ignored(watch_dir):
@@ -169,10 +189,15 @@ class Watcher:
 					if path not in db_state:
 						self._register_file(path, mtime)
 						new_count += 1
+						continue
 
-					elif abs(mtime - db_state[path]) > 1.0:
+					known_mtime, known_modality = db_state[path]
+					if abs(mtime - known_mtime) > 1.0:
 						self._register_file(path, mtime)
 						modified_count += 1
+					elif known_modality != get_modality(Path(path).suffix.lower()):
+						self._register_file(path, mtime)
+						reclassified_count += 1
 
 		# Ghost cleanup — files in DB but not on disk
 		ghost_count = 0
@@ -185,7 +210,8 @@ class Watcher:
 		elapsed = time.time() - t0
 		logger.info(
 			f"Initial scan complete: {len(disk_files)} files on disk, "
-			f"{new_count} new, {modified_count} modified, {ghost_count} ghosts removed "
+			f"{new_count} new, {modified_count} modified, "
+			f"{reclassified_count} reclassified, {ghost_count} ghosts removed "
 			f"({elapsed:.2f}s)"
 		)
 

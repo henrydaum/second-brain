@@ -54,6 +54,17 @@ class Option:
 ALLOW_ONCE = Option("allow", "Allow once")
 DENY = Option("deny", "Deny", allow=False)
 
+#: What :data:`ALLOW_ONCE` is called when it is the only way to say yes.
+#:
+#: "once" is a *contrast*, and the things it contrasts with are all
+#: conditional: "Always allow <host>" needs a ``net.http``, "Always allow:
+#: <cmd>" needs a line the lexer can decompose and a program not in
+#: :data:`NEVER_OFFERED`, and "for the rest of this turn" needs a turn to be
+#: running. When every builder abstains the dialog reads "Allow once / Deny",
+#: where the qualifier distinguishes the option from nothing at all and only
+#: invites the question of what the other choice was.
+ALLOW = Option("allow", "Allow")
+
 
 # ──────────────────────────────────────────────────────────────────────
 # The seam.
@@ -279,6 +290,11 @@ def options_for(chain, request, decision) -> list:
     filtered out of the ``enum`` by ``runtime_approvals._sane_enum`` anyway,
     and it is better to never build a button than to build one nobody can
     press.
+
+    The last pass renames a lone allow to :data:`ALLOW`. It is done here, after
+    the filtering, because "is this the only way to say yes" is a question
+    about the finished list — no builder can answer it about itself, and the
+    dialog should not have to.
     """
     options = [ALLOW_ONCE]
     for build in OPTION_BUILDERS:
@@ -294,6 +310,14 @@ def options_for(chain, request, decision) -> list:
             continue
         seen.add(option.value)
         kept.append(option)
+
+    if sum(1 for option in kept if option.allow) == 1:
+        # Only ALLOW_ONCE can be that one — it is the sole unconditional allow,
+        # and it is added first — so this swaps the label and nothing else. The
+        # value stays "allow", which is what ``chosen`` matches on and what the
+        # ledger records, so a dialog restored from an older session still
+        # answers correctly.
+        kept = [ALLOW if option is ALLOW_ONCE else option for option in kept]
     return kept
 
 

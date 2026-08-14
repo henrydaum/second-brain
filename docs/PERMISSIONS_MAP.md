@@ -298,7 +298,7 @@ exactly when whatever ran it was. That is the whole rule.
 
 | Wanted | Status | Where it goes |
 |---|---|---|
-| Allow once | **exists** — the dialog | — |
+| Allow once | **exists** — the dialog; reads just "Allow" when it is the only way to say yes | — |
 | Deny once | **exists** — the dialog | — |
 | Allow always (per tool/plugin) | **removed** — was `skip_permissions` | superseded by the three destination grants |
 | Allow web domain | **exists** — an answer option, writing `net_allowed_hosts` | — |

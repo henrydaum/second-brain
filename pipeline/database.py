@@ -470,7 +470,21 @@ class Database:
 	# =================================================================
 
 	def upsert_file(self, path, file_name, extension, modality, mtime, source="watched"):
-		"""Handle upsert file."""
+		"""Insert or refresh one file row.
+
+		``extension`` and ``modality`` are refreshed on conflict because they
+		are *derived*, not recorded: the caller computes them from the parser
+		registry, and what that registry says changes when a parser is
+		installed. Updating only the mtime meant a file first seen while its
+		parser was absent kept ``modality = 'unknown'`` for good — so a ``.zip``
+		discovered before ``parse_container`` was installed stayed invisible to
+		``get_files_by_modality('container')`` no matter how many times the
+		pipeline was rescanned or restarted.
+
+		``discovered_at`` and ``source`` are deliberately *not* refreshed: those
+		are facts about the row's history, and container-extracted children in
+		particular must not be relabelled ``watched`` by a later sweep.
+		"""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
@@ -478,7 +492,9 @@ class Database:
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(path) DO UPDATE SET
 					mtime = excluded.mtime,
-					updated_at = excluded.updated_at
+					updated_at = excluded.updated_at,
+					extension = excluded.extension,
+					modality = excluded.modality
 			""", (path, file_name, extension, modality, mtime, now, now, source))
 			self.conn.commit()
 
@@ -495,11 +511,19 @@ class Database:
 			cur = self.conn.execute("SELECT path, mtime FROM files")
 			return {row["path"]: row["mtime"] for row in cur.fetchall()}
 
-	def get_watched_files(self):
-		"""Returns {path: mtime} for watched files only (excludes container-extracted)."""
+	def get_watched_file_state(self):
+		"""Returns {path: (mtime, modality)} for watched files only.
+
+		Excludes container-extracted children. Carries the modality alongside
+		the mtime because the scan has two reasons to re-register a file and
+		mtime only answers one of them: the file changed, or *what we know
+		about its kind* changed because a parser was installed.
+		"""
 		with self.lock:
-			cur = self.conn.execute("SELECT path, mtime FROM files WHERE source = 'watched'")
-			return {row["path"]: row["mtime"] for row in cur.fetchall()}
+			cur = self.conn.execute(
+				"SELECT path, mtime, modality FROM files WHERE source = 'watched'")
+			return {row["path"]: (row["mtime"], row["modality"])
+			        for row in cur.fetchall()}
 
 	def get_container_children(self, extract_dir):
 		"""Returns list of paths for files extracted from a container (under extract_dir)."""

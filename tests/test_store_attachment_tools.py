@@ -7,7 +7,7 @@ the store file is the input.
 
 The pair matters together because they are the two directions and they are
 easy to confuse. ``read_file`` stages a file for the **model** to look at
-(``session.add_attachment``); ``render_files`` hands files back for the
+(``session.add_attachment``); ``show_files`` hands files back for the
 **user** to see (``attachments=`` on the result, which becomes
 ``ToolResult.attachment_paths``). Neither route reaches the other's
 destination.
@@ -25,7 +25,7 @@ import sandbox  # noqa: F401
 from tests.support import store_source
 
 READ_FILE = "tools/tool_read_file.py"
-RENDER_FILES = "tools/tool_render_files.py"
+SHOW_FILES = "tools/tool_show_files.py"
 FILE_READS = "tools/helpers/file_reads.py"
 
 
@@ -43,11 +43,11 @@ def _declarations(relative: str) -> dict:
                     filename=Path(relative).name).declarations
 
 
-@pytest.mark.parametrize("relative", [READ_FILE, RENDER_FILES, FILE_READS])
+@pytest.mark.parametrize("relative", [READ_FILE, SHOW_FILES, FILE_READS])
 def test_the_store_attachment_tools_conform(relative):
     """``conforms`` is the whole question: it means the file loads in a box.
 
-    ``render_files`` was one of the ten store tools still importing
+    ``show_files`` was one of the ten store tools still importing
     ``plugins.BaseTool`` and using ``pathlib``, either of which is an ERROR.
     """
     from sandbox.validator import validate
@@ -57,7 +57,7 @@ def test_the_store_attachment_tools_conform(relative):
     assert not errors, report.render()
 
 
-@pytest.mark.parametrize("relative", [READ_FILE, RENDER_FILES])
+@pytest.mark.parametrize("relative", [READ_FILE, SHOW_FILES])
 def test_every_declared_request_is_a_real_one(relative):
     """``requests`` is the approval grant, so a typo silently narrows it."""
     from guest.requests import ALL_TYPES
@@ -82,7 +82,7 @@ def test_read_file_declares_the_staging_request_it_needs():
     assert declared["dependencies_files"] == [FILE_READS]
 
 
-def test_render_files_needs_no_request_to_hand_a_file_back():
+def test_show_files_needs_no_request_to_hand_a_file_back():
     """The user-facing direction rides on the result, not on a Request.
 
     ``fs.list`` is there to check the paths exist. Nothing else is declared
@@ -90,21 +90,21 @@ def test_render_files_needs_no_request_to_hand_a_file_back():
     every tool already has this power and only the residual "show the user a
     file nothing produced" case needs a tool of its own.
     """
-    declared = _declarations(RENDER_FILES)
+    declared = _declarations(SHOW_FILES)
     assert declared["family"] == "tool"
-    assert declared["name"] == "render_files"
+    assert declared["name"] == "show_files"
     assert declared["requests"] == ["fs.list"]
 
 
 def test_neither_tool_is_asked_about():
     """Both are safe for every argument, so neither interrupts a turn.
 
-    ``read_file`` reads and stages, ``render_files`` lists and returns. If
+    ``read_file`` reads and stages, ``show_files`` lists and returns. If
     either ever lands in ``CONSEQUENTIAL`` the agent starts paying a dialog to
     look at its own files, which is the cost that stops it looking.
     """
     from sandbox.policy import CONSEQUENTIAL
 
-    for relative in (READ_FILE, RENDER_FILES):
+    for relative in (READ_FILE, SHOW_FILES):
         declared = _declarations(relative)
         assert not (set(declared["requests"]) & set(CONSEQUENTIAL)), relative

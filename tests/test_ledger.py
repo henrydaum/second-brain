@@ -524,7 +524,7 @@ def test_a_tool_that_showed_files_records_which(tmp_path):
     loop._active_db, loop._active_conversation_id = db, cid
 
     shown = ToolResult(success=True, attachment_paths=["/w/chart.png", "/w/report.md"])
-    loop._record_ledger("call_tool", {"name": "render_files"}, "agent",
+    loop._record_ledger("call_tool", {"name": "show_files"}, "agent",
                         SimpleNamespace(ok=True, error=None,
                                         data={"result": shown}), None, time.perf_counter())
 

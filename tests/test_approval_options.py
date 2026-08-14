@@ -90,7 +90,35 @@ def test_every_dialog_can_be_allowed_once_or_denied():
 
 def test_a_request_no_builder_recognises_offers_only_those_two():
     assert _offered(Request("plugin.install", {"stem": "tool_x"})) == [
-        "Allow once", "Deny"]
+        "Allow", "Deny"]
+
+
+def test_a_lone_allow_drops_the_once_it_has_nothing_to_contrast_with():
+    """"once" is only meaningful beside an "always".
+
+    Every builder that offers a wider grant is conditional, so most dialogs
+    show two buttons — and "Allow once" there distinguishes the option from
+    nothing at all, while inviting the reader to wonder what the alternative
+    was.
+    """
+    lone = Request("plugin.install", {"stem": "tool_x"})
+    assert _offered(lone)[0] == "Allow"
+
+    beside_an_always = Request(NET_HTTP, {"url": "https://example.invalid/"})
+    assert _offered(beside_an_always)[0] == "Allow once"
+
+
+def test_relabelling_a_lone_allow_leaves_the_answer_it_records_alone():
+    """The label is for the reader; the value is for ``chosen`` and the ledger.
+
+    A dialog built by an older version of this file is answered with "allow"
+    and must still resolve, so the rename may never reach the value.
+    """
+    request = Request("plugin.install", {"stem": "tool_x"})
+    offered = options.options_for(CHAIN, request, classify(request, CHAIN))
+
+    assert [option.value for option in offered] == ["allow", "deny"]
+    assert options.chosen(offered, "allow").allow is True
 
 
 def test_a_raising_builder_costs_its_own_options_and_nothing_else():

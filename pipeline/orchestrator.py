@@ -135,6 +135,17 @@ class Orchestrator:
 			# so concurrent (un)registration must be excluded here.
 			self._build_graph()
 			self.refresh_event_subscriptions()
+		# Only once we are running, and never during boot: registration at boot
+		# is followed by start()'s own sweep over every task, so backfilling
+		# here as well would walk the whole files table once per task for no
+		# gain. Past that point nothing else will ever ask on this task's
+		# behalf — a task installed from the store has to catch up on the files
+		# that were discovered before it existed, or it does nothing at all
+		# until the next restart. Outside the lock: this walks the database,
+		# and _tasks_snapshot exists precisely so registration need not block
+		# on it.
+		if self.running:
+			self._backfill_task(task)
 		logger.info(f"Registered task: {task.name}")
 		bus.emit(TASKS_CHANGED, {"name": task.name, "action": "registered"})
 
@@ -199,35 +210,47 @@ class Orchestrator:
 				logger.debug(f"Root task (no same-kind dependencies): '{task.name}' ({kind})")
 
 	def _backfill_tasks(self):
-		"""Enqueue existing files for eligible path tasks.
-
-		Event tasks are never backfilled; they only run when triggered.
-		"""
-		total_enqueued = 0
-		for task in self._tasks_snapshot():
-			if getattr(task, "trigger", "path") != "path":
-				continue
-			enqueued = 0
-			if task.modalities:
-				# Root task — find files by modality
-				for modality in task.modalities:
-					paths = self.db.get_files_by_modality(modality)
-					for path in paths:
-						if self._deps_met(path, task):
-							self.db.enqueue_task(path, task.name)
-							enqueued += 1
-			elif task.reads:
-				# Downstream task (no modalities) — find paths with upstream done
-				paths = self._get_backfill_paths(task)
-				for path in paths:
-					if self._deps_met(path, task):
-						self.db.enqueue_task(path, task.name)
-						enqueued += 1
-			if enqueued:
-				logger.debug(f"Backfill: enqueued {enqueued} entries for '{task.name}'")
-			total_enqueued += enqueued
+		"""Enqueue existing files for every eligible path task."""
+		total_enqueued = sum(self._backfill_task(task)
+		                     for task in self._tasks_snapshot())
 		if total_enqueued:
 			logger.info(f"Backfill: {total_enqueued} total entries enqueued across all tasks")
+
+	def _backfill_task(self, task) -> int:
+		"""Enqueue the files one path task should already have run on.
+
+		Split out of :meth:`_backfill_tasks` so :meth:`register_task` can ask
+		it about a single task. A task registered while the app is running —
+		installed from the store, or hot-reloaded — used to be backfilled by
+		nobody: ``start`` was the only caller, so the task sat idle against
+		every file discovered before it existed and looked broken until the
+		next restart.
+
+		Event tasks are never backfilled; they only run when triggered.
+		Returns how many entries were enqueued, which is a count of *attempts*
+		— ``enqueue_task`` is ``INSERT OR IGNORE``, so a path reachable through
+		two of the task's modalities is counted twice and queued once.
+		"""
+		if getattr(task, "trigger", "path") != "path":
+			return 0
+		if task.modalities:
+			# Root task — find files by modality
+			paths = [path for modality in task.modalities
+			         for path in self.db.get_files_by_modality(modality)]
+		elif task.reads:
+			# Downstream task (no modalities) — find paths with upstream done
+			paths = self._get_backfill_paths(task)
+		else:
+			return 0
+
+		enqueued = 0
+		for path in paths:
+			if self._deps_met(path, task):
+				self.db.enqueue_task(path, task.name)
+				enqueued += 1
+		if enqueued:
+			logger.debug(f"Backfill: enqueued {enqueued} entries for '{task.name}'")
+		return enqueued
 
 	def _get_backfill_paths(self, task):
 		"""Return paths where at least one upstream task is already DONE."""

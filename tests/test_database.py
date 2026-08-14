@@ -36,6 +36,46 @@ def test_upsert_is_idempotent_and_updates_mtime(db):
     assert files == {"/notes/a.md": 150.0}
 
 
+def test_upsert_refreshes_a_modality_that_only_a_new_parser_could_answer(db):
+    """The reported bug: an archive stayed invisible after installing a parser.
+
+    ``modality`` is *derived* from the parser registry, not recorded, so what
+    it should be changes when a parser is installed. Refreshing only the mtime
+    meant a ``.zip`` first seen while ``parse_container`` was absent kept
+    ``unknown`` for good — and ``extract_container`` roots on the ``container``
+    modality, so it never found the file however often the pipeline restarted.
+    """
+    db.upsert_file("/in/box.zip", "box.zip", ".zip", "unknown", 100.0)
+    assert db.get_files_by_modality("container") == []
+
+    # Same file, same mtime; only the registry's answer about it has changed.
+    db.upsert_file("/in/box.zip", "box.zip", ".zip", "container", 100.0)
+
+    assert db.get_files_by_modality("container") == ["/in/box.zip"]
+    assert db.get_files_by_modality("unknown") == []
+
+
+def test_upsert_does_not_relabel_a_container_child_as_watched(db):
+    """``source`` is history, not a derived fact, so it is left alone.
+
+    A later sweep of the watched folders must not claim the files an archive
+    was unpacked into — ``get_watched_file_state`` would then hand them to the
+    scan, which would delete them as ghosts the moment the extract dir was
+    cleaned up.
+    """
+    db.upsert_file("/in/box/child.txt", "child.txt", ".txt", "text", 100.0,
+                   source="container")
+    db.upsert_file("/in/box/child.txt", "child.txt", ".txt", "text", 200.0)
+
+    assert db.get_watched_file_state() == {}
+
+
+def test_watched_file_state_carries_the_two_facts_the_scan_compares(db):
+    db.upsert_file("/notes/a.md", "a.md", ".md", "text", 100.0)
+
+    assert db.get_watched_file_state() == {"/notes/a.md": (100.0, "text")}
+
+
 def test_remove_file_also_clears_its_tasks(db):
     db.upsert_file("/notes/a.md", "a.md", ".md", "text", 100.0)
     db.enqueue_task("/notes/a.md", "extract_text")

@@ -1032,6 +1032,8 @@ def _rescan_helpers(context, lines: list[str]) -> None:
         lines.append(f"Rescanned parsers: {count} module(s) now active.")
     except Exception as e:
         lines.append(f"Parser rescan failed (restart to apply): {e}")
+    else:
+        _rescan_files(context, lines)
 
     try:
         import llm
@@ -1049,6 +1051,35 @@ def _rescan_helpers(context, lines: list[str]) -> None:
         lines.append(f"Rescanned LLM backends: {count} now available.")
     except Exception as e:
         lines.append(f"LLM backend rescan failed (restart to apply): {e}")
+
+
+def _rescan_files(context, lines: list[str]) -> None:
+    """Re-scan the watched folders, now that a parser has changed what counts.
+
+    The parser rescan above makes a new extension *parseable*; this is what
+    makes files of that extension **visible**. ``FileWatcher._should_process``
+    gates on ``get_supported_extensions()``, so an archive sitting in a sync
+    folder before ``parse_container`` was installed was never entered in the
+    ``files`` table at all — no row to re-resolve, and therefore nothing for
+    the orchestrator to enqueue however many times it was asked. That is why a
+    full rescan rather than a flag flip: the fresh disk walk is the point.
+
+    Reached through ``context.orchestrator.watcher``, the route the module
+    docstring on :class:`Orchestrator` already names for config changes that
+    affect what is watched. Every hop is guarded because none of them is a
+    reason to fail an install — a headless kernel has no watcher, and a
+    rescan that raises should cost the user a line of text and a restart, not
+    the package they just asked for.
+    """
+    watcher = getattr(getattr(context, "orchestrator", None), "watcher", None)
+    rescan = getattr(watcher, "rescan", None)
+    if rescan is None:
+        return
+    try:
+        rescan()
+        lines.append("Rescanned watched folders for newly parseable files.")
+    except Exception as e:
+        lines.append(f"File rescan failed (restart to apply): {e}")
 
 
 def _remove_empty_dirs():

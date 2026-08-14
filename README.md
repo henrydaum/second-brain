@@ -214,7 +214,7 @@ Search tools include:
 | `semantic_search` | Meaning-based retrieval over embeddings |
 | `sql_query` | Read-only inspection of the SQLite database |
 | `read_file` | Exact text reads from source, docs, templates, or sandbox plugins |
-| `render_files` | Return local files to the frontend |
+| `show_files` | Show local files of any type to the user in chat |
 
 These tools give Second Brain the ability to find a needle in a haystack.
 
