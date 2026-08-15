@@ -1,527 +1,330 @@
-<img width="1440" height="569" alt="highreslogotypecrop" src="https://github.com/user-attachments/assets/598ab57f-ed6b-491a-9cd6-142b93b09244" />
+<img width="1440" height="569" alt="Second Brain" src="https://github.com/user-attachments/assets/598ab57f-ed6b-491a-9cd6-142b93b09244" />
 
-# Sponsor
-<div align="center">
-  <img src="https://github.com/user-attachments/assets/9e7ff971-8159-4081-b8bc-9b9ff5edd4ff#gh-light-mode-only" width="500" alt="Atlas Cloud Logo">
-  <img src="https://github.com/user-attachments/assets/8497513e-09a4-4151-8b8d-ed8be782a389#gh-dark-mode-only" width="500" alt="Atlas Cloud Logo">
-</div>
+<p align="center">
+  <b>A local-first AI runtime that can safely write its own features while it's running.</b>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#the-phone-app">Phone App</a> ·
+  <a href="#self-evolution">Self-Evolution</a> ·
+  <a href="#security">Security</a> ·
+  <a href="https://second-brain.art">Live Demo</a>
+</p>
+
+<p align="center">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-2431%20passing%20in%2015s-brightgreen">
+  <img alt="Kernel" src="https://img.shields.io/badge/kernel-~17k%20lines-lightgrey">
+</p>
 
 ---
 
-[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=second-brain) is a full-modal AI inference platform that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to 300+ curated models across all modalities.
-Check out Atlas Cloud's new coding plan promotion for more budget-friendly API access: [https://www.atlascloud.ai/console/coding-plan](https://www.atlascloud.ai/console/coding-plan)
+Most AI agents can write code. Almost none of them can safely **run** what they wrote.
 
-# Second Brain
+Second Brain can. Ask it for a tool it doesn't have, and it will write the plugin, validate it against a capability contract, load it into the running process, and use it — without a restart, and without ever getting direct access to your disk, your network, or your kernel. Every effect it has on the outside world goes through a typed Request that the kernel classifies, approves, and records.
 
-<mark>*NEW!* Second Brain now has a modern and sleek React frontend which can be installed on iPhone as a PWA. It connects to Second Brain using HTTP and streams over the web using Tailscale. It has a familiar, ChatGPT-like UI built with [assistant-ui](https://www.assistant-ui.com/). You can find it [here](https://github.com/henrydaum/second-brain-ui).</mark>
+That's the whole idea: **an agent that grows new abilities on demand, inside a boundary that doesn't grow with it.**
 
-*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
+```
+you › I want to track my electricity bill from the PDFs in ~/bills
 
-Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
+    ⚙ writing tool_parse_bill.py …
+    ⚙ validating … ✓ conforms
+    ⚙ loading … ✓ registered as parse_bill
+    ⚙ scheduling monthly job … ✓
 
-The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, keeps the lightweight Timekeeper event clock running, and gets out of the way. Everything else — file indexing and retrieval, web search, scheduling workflows, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is a programmable conversation runtime that you (and agents) extend while it is running. The kernel is like a brain, while plugins are like the body. The brain and body have a symbiotic relationship — it's the same way with plugins and the kernel.
+Done. I made a parser and a monthly check. Your average is $84/mo,
+up 12% since March. Want me to alert you if it crosses $100?
+```
 
-A fresh install starts almost empty. Run `/setup` and install the `starter` bundle to get a working assistant in one step — see [The Kernel And The Package Store](#the-kernel-and-the-package-store) below.
+---
 
-Second Brain is designed to merge an LLM cleanly into a wide variety of workflows, and chat conversations are the basis of this. Second Brain routes conversations through a robust state machine: participants take actions, turns move between actors, multi-step flows follow resumable phases, and frontends submit actions instead of owning conversation logic. Everything eventually runs through the conversation state machine; it's the bedrock of the system. Think of it like the spinal cord, connecting the brain (LLM) to the body (plugins).
+## Why this one
 
-## What It Can Do
+Three things that are individually rare and, together, the point.
 
-With the right packages installed (the `full` bundle covers most of the list below), Second Brain can:
+### 🔒 A real sandbox, not a promise
 
-- Index documents, code, PDFs, slides, spreadsheets, archives, images, audio, and video.
-- Search local files by keyword, semantics, or hybrid ranking.
-- Answer from your own corpus with citations and exact file reads.
-- Develop a robust memory library.
-- Store and resume conversation history in SQLite.
-- Search the public web.
-- Run path-driven indexing tasks and event-driven background jobs to develop a robust database.
-- Schedule one-time and recurring subagents through Timekeeper cron jobs.
-- Push reminders, findings, daily briefs, and alerts into Telegram.
-- Author, test, and live-load new tools, tasks, services, commands, and frontends. The possibilities are endless.
+Plugin code cannot touch the outside world. It can't call `open()`. It can't import `requests`. It *asks* — through one of 121 typed Requests — and the kernel decides.
 
-This might seem like a lot. However, Second Brain can only do what you tell it to do. It will never edit your files or share information unless you explicitly enable it to. Be careful with which plugins you enable. Although all of the built-in ones are highly tested, they still carry risk — and some more than others.
+A policy function classifies every Request by what it does, who asked, and where it's headed. Safe ones run. Unsafe ones surface a dialog with the full **chain of provenance** — written by the kernel, not by the plugin, so it can't lie about who called it. Agent-authored code always runs in a subprocess with capped CPU, RAM, and filesystem visibility.
 
-## The Kernel And The Package Store
+This is ~19,000 lines of working machinery with a green test suite, not a design document. Sandboxing the agent's own shell and filesystem access is a known-open problem across most self-hosted AI tools — usually an issue on the roadmap. Here it's the foundation everything else was built on top of.
 
-Second Brain ships as a microkernel plus a package store.
+### 🧬 Self-evolution with a ceiling
 
-**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It holds the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM router, the compactor (for LLM context size management), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL admin commands. Parsing is kernel routing rather than a plugin (`parsing/`), and ships one dependency-light text parser. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages. *Even the LLM backends are plugins! LLMs involve heavy and unstable dependencies, so to ensure kernel stability it was best to make them plugins.*
+The agent extends itself by writing plugins — tools, background tasks, services, slash commands, even whole frontends — and hot-loading them. But extending what it can *ask for* never extends what it's *authorized to affect*. The permission boundary is the kernel's, and self-written code is the least trusted code in the system.
 
-**The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and helper is there, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them with the Plugin Watcher.
+Growth and containment usually trade off against each other. Here they're independent.
 
-### Getting started
+### 🪶 A kernel small enough to actually trust
 
-A fresh install has no LLM backend and no frontend beyond the REPL. The fastest path is the onboarding wizard:
+~17,000 lines, near-pure Python, boots fast. It holds a conversation, runs the state machine, persists to SQLite, and loads plugins. That's it. No built-in tools. No bundled model provider. Nothing you didn't ask for.
+
+Everything else — search, embeddings, OCR, transcription, web access, Telegram, shell — installs from a package store as you need it. A dependency you never install is a dependency that can never break your runtime or read your files.
+
+> **Also:** conversations run through a turn-based state machine (think Magic: The Gathering — priority, legal actions, suspendable phases, serializable frames). Interrupted flows survive a crash. Frontends don't own conversation logic, so the REPL, Telegram, and the web app all get approvals, forms, cancellation, and history for free.
+
+---
+
+## Quick Start
+
+```bash
+git clone https://github.com/henrydaum/second-brain
+cd second-brain
+pip install -r requirements.txt
+python main.py
+```
+
+Then, in the REPL:
 
 ```
 /setup
 ```
 
-It installs a bundle with basic plugins, configures an LLM profile, and optionally sets up Telegram. If you would rather drive it by hand, install the essentials bundle directly:
+The wizard installs a starter bundle, configures an LLM provider, and optionally wires up Telegram. Two minutes, and you have a working assistant.
+
+Prefer to drive it by hand?
 
 ```
-/packages install bundle_essentials
+/packages install bundle_essentials     # LLM, file tools, shell, search, subagents
+/packages install bundle_knowledgebase  # every parser, OCR, transcription, embeddings
+/packages install bundle_memory         # the durable memory library
+/packages install bundle_gmail          # mail access
 ```
 
-The **essentials** bundle is the recommended first install: an LLM backend (LiteLLM, which reaches most providers), the Telegram frontend, file read/edit/search, shell and script running, SQL, ask-user-question, plugin validation, subagents, web search, and auto-titling. Note: you cannot chat with an LLM in Second Brain until you install an LLM backend (LiteLLM recommended). Once that works, the natural next step is the **knowledge base** — every file parser, OCR, audio/video transcription, embeddings, and the lexical/semantic/hybrid search tools, so the agent can find things in your own files:
+Or browse everything with `/packages` and pick à la carte — individual packages install by name, e.g. `/packages install tool_web_search`.
 
-```
-/packages install bundle_knowledgebase
-```
+**Requirements:** Python 3.11+, and an LLM endpoint (any provider — LiteLLM reaches most of them).
 
-Browse and manage packages anytime:
+<details>
+<summary><b>Where your data lives</b></summary>
 
-```
-/packages                      # interactive: pick install / uninstall / update
-/packages install              # then a category, then a package, then a card to confirm
-/packages install tools        # start at a category (tasks/services/commands/frontends/parsers/llm/bundles)
-/packages install <stem>       # or name it outright, e.g. tool_web_search or parse_pdf
-/packages uninstall <stem>     # remove it, plus dependencies nothing else still needs
-```
+Created automatically on first run:
 
-Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. You don't need to worry about managing helper files or Python packages (with one rare exception — OCR — which requires a manual pip install since it's platform/OS dependent).
-
-The /packages command automatically maintains a clean separation between the kernel and plugins. All installed plugins and helpers will be within the `installed` folder of the DATA_DIR (data directory, see below). You don't have to use the /packages command to install or remove plugins. You can also simply drag and drop plugins and their helpers into this folder. It'll be automatically picked up by the Plugin Watcher service. However, if you do it this way you will have to pip install their Python dependencies as well, if you haven't got them already.
-
-### Contributing to the store
-
-The store is just a git branch, so adding a plugin is a pull request. Author and test your plugin as a sandbox plugin (see [Plugin System](#plugin-system) and the [Extension Authoring Guide](#extension-authoring-guide)), then open a pull request against the `store` branch that adds your `tool_*.py` / `task_*.py` / `service_*.py` / `command_*.py` / `frontend_*.py` (and any `helpers/`) under the matching family directory. Declare dependencies with the `dependencies_files` and `dependencies_pip` fields so the package manager can resolve them, and to group several files under one install, add a `bundles/<name>.json` manifest listing the store-relative files.
-
-You can also simply send me an email at henrydaum8609@gmail.com with what you want to make :-)
-
-## Core Architecture
-
-Second Brain is built from a few durable pieces:
-
-- `state_machine/` contains the pure conversation primitives: participants, turns, phases, actions, forms, approvals, and serializable phase frames.
-- `runtime/` owns sessions, persistence, approvals, state-machine dispatch, agent turns, and the context passed into plugins.
-- `plugins/` is extension substrate: discovery, watching, registries, and the native adapters used by the sandbox bridge. Implementations live in the three plugin trees described below.
-- `pipeline/` watches files, manages the SQLite task queue, and runs path-driven and event-driven tasks.
-- `agent/` builds the dynamic system prompt, manages the tool registry, and drives LLM tool calls.
-- `events/` provides the pub/sub bus used by tasks, progress updates, notifications, and runtime signals.
-- `config/` owns core settings plus plugin setting persistence.
-
-**It's a highly complex piece of machinery about 13,000 lines of code long.** But what's important is that your Second Brain agent can understand it for you! You do not need to understand how all of this works in order to have a Second Brain agent. Frankly, even I have trouble conceptualizing all of it. Simply ask Second Brain a question about its own code, and it'll use its available tools to dig in and find you an answer (of course, you'll need to have at least the read_file tool installed).
-
-## Conversation Runtime
-
-The conversation runtime is the heart of the current system. It's like the spinal cord connecting the plugins/body to the LLM brain.
-
-`ConversationRuntime.handle_action(...)` is the adapter-facing entry point. A frontend, scheduled job, or other driver submits a labeled action such as `send_text`, `send_attachment`, `call_command`, `submit_form_text`, `answer_approval`, or `cancel`. The runtime loads the session, refreshes command and tool specs, enters the state machine, persists the marker, and drives the agent turn when the action hands priority to the agent.
-
-The state machine models conversations the same way a turn-based game does (think Magic: The Gathering):
-
-- participants have permissions and identities
-- one participant has turn priority
-- actions are legal or illegal depending on phase
-- forms and approvals suspend the current flow
-- phase frames are serializable, so interrupted flows can be restored on crash
-- attachments are carried into the next agent turn with explicit lifecycle rules
-
-Frontends do not own that flow. `BaseFrontend` turns transport input into runtime actions, then renders `RuntimeResult`, attachments, forms, approvals, buttons, errors, and progress events. This is why the REPL and Telegram can share command behavior, approval behavior, form behavior, cancellation, status updates, and session persistence without duplicating the core conversation logic.
-
-## Plugin System
-
-Everything user-extensible has its own plugin family:
-
-| Family | Folder | Prefix | Contract |
-|---|---|---|---|
-| Tools | `tools/` | `tool_` | LLM-callable actions via `BaseTool` |
-| Tasks | `tasks/` | `task_` | Pipeline and event work via `BaseTask` |
-| Services | `services/` | `service_` | Shared backends via `BaseService` |
-| Commands | `commands/` | `command_` | User slash commands via `BaseCommand` |
-| Frontends | `frontends/` | `frontend_` | User transports via `BaseFrontend` |
-
-Three more folders sit beside them, holding code the kernel routes to without a
-base class: `parsers/` (`parse_*.py`, reached by file extension), `llm/`
-(`llm_*.py`, reached by model profile), and `scripts/` (any name — SDK code the
-agent runs rather than registers, where the directory is the whole declaration).
-The prefix is the rule: a folder whose files carry one is *scanned*, a folder
-without one is reached by something naming the file. Code belonging to a single
-plugin goes in that family's own `helpers/` subfolder.
-
-That same set of folders appears in three **trees**, named for where the code
-came from: `bundled/` in the project root ships with the app, `DATA_DIR/installed`
-is delivered by the package store, and `DATA_DIR/workspace` is the agent's own —
-its free-write code tree, because everything under it runs in a
-subprocess. The user can separately open user-owned folders through
-`fs_writable_dirs`; those are work destinations, not extension trees. Bundled plugins are source-controlled; the other two live in the
-Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; the kernel plugin watcher then syncs adds, edits, and deletes live.
-
-The agent can create new plugins on-the-fly. When you ask Second Brain to make
-one, the kernel prompt teaches this install-independent workflow:
-
-1. Read `docs/SDK.md`.
-2. Read the relevant file in `templates/` from top to bottom.
-3. Follow the code pointers in those documents when a detail is still unclear.
-4. Create or edit the file under the matching `DATA_DIR/workspace/` root.
-5. Validate it through `sdk.plugins.validate` or any currently installed tool
-   exposing that Request, then run or register it and verify a small behavior.
-6. If validation or loading fails, fix the same file and repeat until it
-   conforms and works.
-
-Plugins can declare their own system prompt text. If a plugin is not loaded,
-its text takes no context. One name has two shapes: write
-`agent_prompt = "..."` when the text never changes, or
-`def agent_prompt(self, sdk)` when it depends on live state. The system prompt
-is recalculated with every step of the conversation while preserving stable
-prompt blocks for caching.
-
-In other words, the system prompt has been fully engineered.
-
-## Security
-
-Sandbox plugins cannot act on the outside world directly. Every mediated effect
-is a typed Request that the kernel classifies, executes, and records on their
-behalf. Validation blocks direct kernel access; provenance determines process
-isolation; permission policy decides whether each Request is allowed, refused,
-or shown to the user. Agent-authored workspace code is always subprocessed.
-Installed code is subprocessed when its imports or declarations require it.
-
-Third-party libraries are the important limit: their internal I/O cannot be
-converted into Requests, so they are isolated and disclosed rather than
-treated as fully mediated. Treat extension installation as a capability change,
-not as a harmless file copy. See `docs/The Second Brain Security Contract.md`
-for the model, `docs/PERMISSIONS_MAP.md` for the decision order, and
-`docs/SECURITY_CONTRACT_APPENDIX.md` for the Request catalogue.
-
-## File Indexing And Retrieval
-
-Indexing and retrieval are store capabilities — install the `full` bundle (or the indexing/search and parser bundles) to enable them. Once installed, point Second Brain at folders with `sync_directories` and it keeps a live SQLite knowledge base over those files. The kernel ships the pipeline basics (file watcher, task queue, orchestrator DAG); these packages add the processing stages that run on it. You can set a `sync_directory` in the settings to create a database.
-
-The full pipeline includes:
-
-- file watching and debounced change detection
-- parser service dispatch by extension and modality
-- text extraction
-- OCR for images
-- speech-to-text for audio and video (`service_whisper` + `parse_voice` enable Telegram speech-to-text)
-- archive/container extraction
-- tabular textualization
-- text chunking
-- text embeddings
-- image embeddings
-- lexical full-text indexing
-- dependency invalidation when upstream file outputs change
-
-Search tools include:
-
-| Tool | Purpose |
+| OS | Path |
 |---|---|
-| `hybrid_search` | Best default local search over indexed files |
-| `lexical_search` | Exact terms and keyword-heavy queries |
-| `semantic_search` | Meaning-based retrieval over embeddings |
-| `sql_query` | Read-only inspection of the SQLite database |
-| `read_file` | Exact text reads from source, docs, templates, or sandbox plugins |
-| `show_files` | Show local files of any type to the user in chat |
+| Windows | `%LOCALAPPDATA%/Second Brain/` |
+| macOS | `~/Library/Application Support/Second Brain/` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/Second Brain/` |
 
-These tools give Second Brain the ability to find a needle in a haystack.
+Inside: `config.json`, `plugin_config.json`, `database.db`, `installed/` (store packages), and `workspace/` (the agent's own tree — everything under it runs subprocessed).
 
-Supported modalities:
-
-| Modality | Examples |
-|---|---|
-| Text | `.txt`, `.md`, `.py`, `.js`, `.ts`, `.html`, `.css`, `.json`, `.yaml`, `.toml`, `.xml`, `.pdf`, `.docx`, `.pptx`, `.gdoc` |
-| Image | `.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`, `.bmp`, `.ico`, `.heic`, `.heif` |
-| Audio | `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`, `.wma` |
-| Video | `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.wmv`, `.flv` |
-| Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
-| Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
-
-The kernel itself parses only plain text, code and CSV/TSV. To parse the rest, install the knowledge-base bundle, which carries every parser:
-
-`/packages install bundle_knowledgebase`
-
-This will also give you the ability to process attachments with these file extensions. Individual parsers install by name too — `/packages install parse_pdf` — if you only want one.
-
-## Events, Cron Jobs, And Subagents
-
-Second Brain is proactive, not just reactive. `/schedule` and the Timekeeper are kernel; the agent-facing half arrives with the essentials bundle:
-
-`/packages install tool_schedule_subagent`
-
-Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper is the kernel service that creates one-time and recurring event emissions using cron expressions; `tool_schedule_subagent` and `tool_spawn_subagent` are what let the agent use it. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat, depending on their notification mode.
-
-This supports workflows like:
-
-- reminders and follow-ups
-- daily or weekly briefings
-- recurring research checks
-- inbox checks and message triage
-- "watch this folder and tell me what changed"
-- scheduled maintenance or database cleanup
-- background subagents that remember prior runs
-
-It is calendar-capable. Jobs can run silently or notify the active frontend, and subagent conversations remain available through the conversation system. Google and Apple Calendar can be added to Second Brain as well with the right plugins.
-
-## Frontends
-
-The kernel ships the REPL (`bundled/frontends/frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_essentials` bundle or directly via `/packages install frontend_telegram`; once installed it lives under `DATA_DIR/installed/frontends/`. Telegram is highly recommended for the ease of use, but it takes a hot second to set up (again, use /setup for this).
-
-Telegram is useful because the local runtime can reach you anywhere: approvals, proactive reminders, file delivery, scheduled-agent results, and mobile command menus all become part of the same conversation system.
-
-`BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
-
-Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, checked with the validate tool, and live-loaded by the kernel plugin watcher.
-
-## Setup
-
-### Requirements
-
-- Python 3.11+
-- An LLM subscription or local setup — technically optional, but you won't be able to chat without it. I recommend Atlas Cloud's token plan, it's cheap and has good models for this.
-- A Telegram bot token and allowed user ID if you install the Telegram frontend, which is highly recommended.
-- A computer with a GPU for embedding models, if desired.
-
-### Install
-
-```bash
-git clone <https://github.com/henrydaum/second-brain>
-cd "Second Brain"
-pip install -r requirements.txt
-```
-
-`requirements.txt` is intentionally minimal — the kernel stays close to pure Python (`watchdog`, `croniter`, `psutil`, and a few others). Heavier dependencies (`openai`/`litellm`, `Pillow`, `sentence-transformers`, `faster-whisper`, `PyMuPDF`, `python-docx`, `python-pptx`, `pandas`, `python-telegram-bot`, …) belong to store packages and are installed automatically when you install the package that needs them.
-
-### Configure
-
-On first run, Second Brain creates its data directory (the DATA_DIR) automatically:
-
-- Windows: `%LOCALAPPDATA%/Second Brain/`
-- macOS: `~/Library/Application Support/Second Brain/`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
-
-From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["timekeeper"]`; the kernel-owned LLM registry loads the default profile separately.
-
-The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache (`DATA_DIR/workspace/attachments`) is included by default so files sent through frontends can enter the same pipeline. It sits inside the agent's own tree deliberately: a file you hand the agent is one it can then read, convert, rename or delete without a permission dialog for each step. You can add multiple folders here, and they all get synced automatically. As soon as you set a sync directory, the REPL and app.log will be flooded with task status messages. Don't worry — that's the sync working as intended. It'll stop once the sync is complete. (You can use Telegram if you prefer a cleaner chat experience.)
-
-Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Telegram enabled):
-
-```json
-{
-  "sync_directories": [
-    "C:/Users/you/Documents",
-    "C:/Users/you/AppData/Local/Second Brain/workspace/attachments"
-  ],
-  "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["timekeeper"],
-  "telegram_bot_token": "",
-  "telegram_allowed_user_id": 0,
-  "llm_profiles": {
-    "default": {
-      "llm_endpoint": "https://api.atlascloud.ai/v1",
-      "secret_llm_api_key": "ATLAS_API_KEY",
-      "llm_context_size": 0,
-      "llm_service_class": "LiteLLMService"
-    }
-  },
-  "default_llm_profile": "default",
-  "agent_profiles": {
-    "default": {
-      "llm": "default",
-      "prompt_suffix": "",
-      "whitelist_or_blacklist_tools": "blacklist",
-      "tools_list": []
-    }
-  }
-}
-```
-
-Notes:
-
-- Run `/setup` for guided onboarding; it installs a bundle and writes the LLM/Telegram config.
-- Configure LLM profiles with `/llm`, agent profiles with `/agent`, and app/plugin settings with `/config`.
-- `llm_context_size: 0` lets automatic compaction manage context.
-- `LiteLLMService` (from the `starter` bundle) reaches most providers; point `llm_endpoint`/`secret_llm_api_key` at whichever you use.
-- `LiteLLMService`: be careful with the model_name parameter. It may need to be prefixed (like 'openai/gpt-5.4'), but it depends on the cloud provider you are using. Look this up if not sure.
-- Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.
-- Installed 'extension'-type services auto-load when present; you don't need to list them in `autoload_services`.
-- You can edit config.json and plugin_config.json directly.
-
-### Run
-
-```bash
-python main.py
-```
-
-Startup does the following:
-
-1. Loads config and plugin config.
-2. Creates data, attachment, and sandbox directories.
-3. Initializes SQLite.
-4. Discovers services, tasks, tools, commands, and frontends.
-5. Starts the task orchestrator.
-6. Starts the filesystem watcher.
-7. Starts the event-trigger runner.
-8. Launches enabled frontends.
-
-## Commands And Tools
-
-Commands are user-facing plugins. They are available in the REPL and Telegram as slash commands, and they can collect forms through the state machine.
-
-The kernel ships REPL UX and introspection commands only:
-
-| Command | Purpose |
-|---|---|
-| `/setup` | Guided onboarding: install a bundle, configure the LLM and Telegram |
-| `/packages` | Browse, install, and uninstall store packages and bundles |
-| `/agent` | Select, switch, edit, or remove agent profiles |
-| `/llm` | Select, edit, set default, or remove LLM profiles |
-| `/config` | Select and edit config and plugin settings |
-| `/conversations` | Browse, switch, and manage conversations |
-| `/clear` | Clear the current conversation |
-| `/cancel` | Cancel the current interaction |
-| `/frontends` | Enable or disable frontend plugins |
-| `/services` | Select and load or unload services |
-| `/tasks` | Pause, resume, reset, retry, or trigger tasks |
-| `/tools` | Select and call tools |
-| `/commands` | List available commands |
-| `/locations` | Show project and plugin directories |
-| `/debug` | Inspect runtime state & recent errors |
-| `/update` | Pull most recent Repo state |
-
-Other commands arrive with the packages that provide them.
-
-The kernel ships **no built-in tools** — a fresh install can converse but has no agent-callable actions. Tools come from the store; the `starter` and `full` bundles install the common ones, and you can add others individually with `/packages install <stem>`. Frequently installed tools include:
-
-| Tool | Purpose | Bundle |
-|---|---|---|
-| `read_file` | Read exact text from files | starter |
-| `edit_file` | Create, overwrite, replace, append to, or delete UTF-8 text files | starter |
-| `run_command` | Run scoped terminal commands, with approval for broad actions | starter |
-| `sql_query` | Query SQLite read-only | starter |
-| `ask_user_question` | Ask the user a structured question | starter |
-| `validate` | Validate sandbox source and explain contract violations | starter |
-| `hybrid_search` | Search local files with fused lexical and semantic ranking | full |
-| `lexical_search` | Search local files by exact terms and keywords | full |
-| `semantic_search` | Search local files by embedding similarity | full |
-| `web_search` | Search the public web | web_search |
-
-## Project Layout
-
-```text
-Second Brain/
-├── main.py                 # Console entry point
-├── main.pyw                # Windowed startup script
-├── paths.py                # Root, data, attachment, and sandbox paths
-│
-├── state_machine/
-│   ├── conversation.py     # Participants, callable specs, forms, phases
-│   ├── action_map.py       # Action constructors and legal action routing
-│   ├── action.py           # State-machine action implementations
-│   ├── forms.py            # Multi-step form handling
-│   └── approval.py         # Runtime approval request shape
-│
-├── runtime/
-│   ├── conversation_runtime.py # Session gateway for frontend/automation actions
-│   ├── conversation_loop.py    # Agent-turn driver
-│   ├── dispatch.py             # Runtime action helpers
-│   ├── persistence.py          # Conversation/session persistence
-│   ├── runtime_approvals.py    # State-machine approval bridge
-│   ├── runtime_config.py       # Active profile, tools, commands, prompt
-│   └── session.py              # RuntimeSession and RuntimeResult
-│
-├── plugins/                # Discovery, watcher, registries, native adapters
-│   ├── native/
-│   ├── plugin_discovery.py
-│   └── plugin_watcher.py
-├── bundled/                # Implementations shipped with the app
-│   ├── commands/
-│   ├── frontends/
-│   ├── parsers/
-│   └── services/
-│
-├── pipeline/
-│   ├── database.py
-│   ├── event_trigger.py
-│   ├── orchestrator.py
-│   └── watcher.py
-│
-├── agent/
-│   ├── system_prompt.py
-│   └── tool_registry.py
-│
-├── attachments/
-├── config/
-├── events/
-├── docs/
-│   ├── SDK.md                      # The sandbox SDK reference
-│   ├── SECURITY_CONTRACT_APPENDIX.md # The Request catalogue
-│   └── MIGRATING_PLUGINS.md        # Converting a native plugin
-├── templates/
-│   ├── command_template.py
-│   ├── frontend_template.py
-│   ├── hook_template.py
-│   ├── llm_backend_template.py
-│   ├── parser_template.py
-│   ├── script_template.py
-│   ├── service_template.py
-│   ├── task_template.py
-│   └── tool_template.py
-└── DATA_DIR/
-    ├── config.json
-    ├── plugin_config.json
-    ├── database.db
-    ├── workspace/          # the agent-owned, freely writable tree
-    │   ├── tools/
-    │   ├── tasks/
-    │   ├── services/
-    │   ├── commands/
-    │   ├── frontends/
-    │   ├── parsers/
-    │   ├── llm/
-    │   ├── scripts/
-    │   ├── attachments/    # files sent in from a frontend (not a tree root)
-    │   ├── memory/         # MEMORY.md + notes/ + skills/ (not a tree root)
-    │   └── temp/           # scratch (not a tree root)
-    └── installed/          # the package store's tree, same shape
-```
-
-## Extension Authoring Guide
-
-New plugins are written against the sandbox SDK. Read `docs/SDK.md` for the Request
-vocabulary and the return idiom, `sandbox/guest/bases.py` for what each family
-may declare, and then the template for what is specific to that family:
-
-- `templates/tool_template.py`
-- `templates/task_template.py`
-- `templates/service_template.py`
-- `templates/command_template.py`
-- `templates/script_template.py` — sandboxed code that is not a plugin
-- `templates/frontend_template.py`
-- `templates/hook_template.py`
-- `templates/parser_template.py`
-- `templates/llm_backend_template.py`
-
-`docs/MIGRATING_PLUGINS.md` covers converting an existing native plugin.
-
-Authoring rules:
-
-- Tools expose LLM-callable capabilities and return whatever they like; reach
-  for `sdk.ok(...)` only to attach an `llm_summary` or attachments.
-- Tasks are pipeline/event workers and should be idempotent where possible.
-- Services own reusable backends and are the natural persistent box; their
-  state stays inside it and never crosses out.
-- Commands are user-facing conversation actions and can define `FormStep` flows.
-- Frontends are transports; they submit runtime actions and render runtime output.
-- Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
-- Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
-
-For source-controlled additions, place stable app-shipped plugins under the matching `bundled/` family. For live experimentation, keep them under `DATA_DIR/workspace`, validate them, and then run or register them. `DATA_DIR/workspace` is agent-owned. The separate `fs_writable_dirs` setting may open user-owned project folders for no-dialog writes; those remain user data and are not extension discovery roots.
-
-## Philosophy
-
-Second Brain is inspired by the human brain. Explorations into neurons turned into the creation of artificial neural networks, which then paved the way for attention mechanisms and transformers. From there came LLMs, and then came the agentic abilities: RAG, tool calls, and cron jobs. With each iteration, Second Brain became closer to its biological inspiration.
-
-Second Brain is still pretty far from the real brain, in many ways. However, it can also do many things better than the human brain ever could. Building it has helped me to better understand the role of AI in my life, and in society. I found the process of building to be extremely valuable, because I realized that the value of AI is that it can be built into so many things. The role of the person is to guide it into productive and creative areas.
-
-Second Brain ships as an unfinished product: a tiny, pure Python kernel. It's up to you to decide how you want to finish it.
-
-## License
-
-MIT
+</details>
 
 ---
 
-An agent by Henry Daum
+## What it can do
+
+Point it at your folders and it builds a live, searchable index of everything you own.
+
+| | |
+|---|---|
+| 📄 **Read anything** | PDFs, Office docs, code, spreadsheets, archives, images (OCR), audio and video (transcription) |
+| 🔍 **Find anything** | Lexical, semantic, or hybrid-ranked search across your own files, with citations and exact reads |
+| 🧠 **Remember** | Durable memory library, plus full conversation history in SQLite |
+| ⏰ **Act on its own** | Cron-scheduled subagents: daily briefs, inbox triage, folder watches, recurring research |
+| 📱 **Reach you anywhere** | Telegram and a web app — approvals, reminders, files, and results wherever you are |
+| 🛠️ **Build itself** | Author, validate, and hot-load new tools, tasks, services, commands, and frontends |
+| 🌐 **Go outside** | Web search, HTTP, scoped shell — each one an explicit, revocable capability |
+
+Everything above is opt-in. A fresh install can hold a conversation and nothing more. **It can only do what you install.**
+
+> See it running: **[second-brain.art](https://second-brain.art)** — an interactive art exhibition built on Second Brain.
+
+---
+
+## The Phone App
+
+<!-- TODO: drop a phone screenshot here — this is the highest-value image in the README.
+     <img width="220" align="right" alt="Second Brain running as a PWA" src="..."> -->
+
+A modern React frontend that installs to your iPhone or Android home screen as a PWA and talks to the runtime on your own machine over Tailscale. Familiar ChatGPT-style UI, built on [assistant-ui](https://www.assistant-ui.com/). Streaming, approvals, forms, and attachments all work.
+
+Repo: **[henrydaum/second-brain-ui](https://github.com/henrydaum/second-brain-ui)**
+
+Nothing is exposed to the public internet. The kernel binds loopback only; Tailscale gives your phone a private path to it.
+
+### 1 — Install the HTTP frontend
+
+In the Second Brain REPL:
+
+```
+/packages install frontend_http
+```
+
+### 2 — Configure it
+
+```
+/config
+```
+
+Set these four values:
+
+| Setting | Value |
+|---|---|
+| `secret_http_token` | A long random string. Generate one: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `http_port` | `8787` (default) |
+| `http_allowed_origins` | The origin you'll serve the app from, or `*` while testing |
+| `http_static_dir` | Optional — point it at the app's built `dist/` to serve everything from one port |
+
+Then enable it:
+
+```
+/frontends
+```
+
+### 3 — Set up Tailscale
+
+Install [Tailscale](https://tailscale.com/download) on the machine running Second Brain **and** on your phone, and sign both into the same tailnet. Grab the host's tailnet address:
+
+```bash
+tailscale ip -4          # e.g. 100.101.102.103
+tailscale status         # or use the MagicDNS name, e.g. my-desktop.tailnet-name.ts.net
+```
+
+Your phone can now reach `http://100.101.102.103:8787` from anywhere in the world, and nobody else can.
+
+### 4 — Build the app
+
+Requires Node `^20.19.0 || >=22.12.0`.
+
+```bash
+git clone https://github.com/henrydaum/second-brain-ui
+cd second-brain-ui
+npm install
+cp .env.example .env.local
+```
+
+Edit `.env.local`:
+
+```ini
+VITE_SB_URL=http://127.0.0.1:8787   # used by the dev server's proxy
+VITE_SB_TOKEN=<your secret_http_token>
+VITE_SB_THREAD=main                 # two threads = two independent conversations
+```
+
+Run it in development:
+
+```bash
+npm run dev
+```
+
+Or build for real:
+
+```bash
+npm run build      # outputs to dist/
+```
+
+Serve `dist/` however you like — the simplest path is to set `http_static_dir` to that folder in step 2, so Second Brain itself serves the app on port 8787 and there's no CORS to configure at all.
+
+> For a permanent always-on setup (Mac Mini + Caddy, with the token held in a private runtime env instead of the bundle), see [`docs/MACOS_DEPLOYMENT.md`](https://github.com/henrydaum/second-brain-ui/blob/main/docs/MACOS_DEPLOYMENT.md) in the UI repo.
+
+### 5 — Install to your home screen
+
+On your phone, open the app's URL in **Safari** (iOS) or **Chrome** (Android), then:
+
+- **iOS:** Share → *Add to Home Screen*
+- **Android:** ⋮ menu → *Install app*
+
+It launches fullscreen, with no browser chrome. It's your assistant, running on your own hardware, in your pocket.
+
+### Building your own client
+
+The entire HTTP surface is three endpoints — an SSE render stream, one POST that carries any of the 121 Requests, and a file route. There is no second API and no database access. [`docs/HTTP_PROTOCOL.md`](docs/HTTP_PROTOCOL.md) documents all of it, and [`docs/http_reference_client.html`](docs/http_reference_client.html) is a working client to check yours against.
+
+---
+
+## Self-Evolution
+
+Ask for something it can't do, and it builds it:
+
+```
+you › every morning at 7, check my sync folders for files that changed
+      overnight and send me a summary on Telegram
+```
+
+The agent reads the SDK, writes a task plugin into its own workspace tree, validates it against the contract, fixes anything the validator flags, registers it, schedules it through the Timekeeper, and confirms. The plugin persists. Tomorrow at 7am it just runs.
+
+Five plugin families, each a single file with a naming convention:
+
+| Family | Prefix | What it is |
+|---|---|---|
+| **Tools** | `tool_*.py` | LLM-callable actions |
+| **Tasks** | `task_*.py` | Pipeline and event-driven background work |
+| **Services** | `service_*.py` | Shared, stateful backends |
+| **Commands** | `command_*.py` | User-facing slash commands |
+| **Frontends** | `frontend_*.py` | Transports — Discord, HTTP, whatever you want |
+
+Plus `parsers/`, `llm/`, and `scripts/`. Drop a file into the right folder and the plugin watcher picks it up live — no restart, ever.
+
+Plugins can even declare their own system-prompt text, which costs zero context when the plugin isn't loaded.
+
+**Write one yourself:** start with [`docs/SDK.md`](docs/SDK.md), then the matching file in [`templates/`](templates/). Contributions go to the [`store`](../../tree/store) branch as a pull request.
+
+---
+
+## Security
+
+The threat model is honest: **an agent with good intentions and no judgement.**
+
+- **Validation** is an AST pass that never imports the file, so checking code can't run it. It catches direct effects and contract violations, and every error names the Request you should have used instead. It's a conformance linter, and [the source says so out loud](sandbox/validator.py) — static analysis of Python is defeatable by anyone trying, which is exactly why the subprocess exists.
+- **Isolation** follows provenance. Agent-written workspace code is *always* subprocessed. Installed code is subprocessed when its imports or declarations require it.
+- **Policy** decides each Request: allowed, refused, or shown to you. Secrets raise the level. Attendance matters — if nobody is watching a session, an unsafe Request is refused rather than silently approved.
+- **Foreign libraries are the honest limit.** A binary wheel's internal I/O can't be turned into Requests, so it's isolated and *disclosed*, not pretended away.
+
+Treat installing an extension as a capability change, not a file copy.
+
+📖 [The Security Contract](docs/The%20Second%20Brain%20Security%20Contract.md) · [Permissions Map](docs/PERMISSIONS_MAP.md) · [Request Catalogue](docs/SECURITY_CONTRACT_APPENDIX.md)
+
+---
+
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| [`docs/SDK.md`](docs/SDK.md) | The Request vocabulary and return idiom — start here to write a plugin |
+| [`docs/HTTP_PROTOCOL.md`](docs/HTTP_PROTOCOL.md) | The complete client-facing API surface |
+| [`docs/PERMISSIONS_MAP.md`](docs/PERMISSIONS_MAP.md) | Scope, isolation, approval modes, standing permissions |
+| [`docs/SECURITY_CONTRACT_APPENDIX.md`](docs/SECURITY_CONTRACT_APPENDIX.md) | Every Request, classified |
+| [`docs/MIGRATING_PLUGINS.md`](docs/MIGRATING_PLUGINS.md) | Converting a native plugin to the sandbox |
+| [`templates/`](templates/) | A commented starting point for each plugin family |
+
+Or just ask it. Install `read_file` and Second Brain will explain its own source to you.
+
+---
+
+## Contributing
+
+The package store is a git branch, so shipping a plugin is a pull request against [`store`](../../tree/store). Write it as a sandbox plugin, validate it, declare `dependencies_files` and `dependencies_pip`, and open the PR.
+
+Ideas, bug reports, and "I wish it could ___" are all welcome — open an issue, or email **henrydaum8609@gmail.com**.
+
+---
+
+## Philosophy
+
+Second Brain ships as an unfinished product: a tiny, pure-Python kernel with a boundary around it. The brain is the LLM, the plugins are the body, the state machine is the spinal cord, and the sandbox is the immune system.
+
+The value of AI isn't any single feature — it's that it can be built into almost anything. The role of the person is to guide it somewhere productive. So the kernel stays small, the contract stays strict, and what it becomes is up to you.
+
+---
+
+## Sponsor
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/9e7ff971-8159-4081-b8bc-9b9ff5edd4ff#gh-light-mode-only" width="380" alt="Atlas Cloud">
+  <img src="https://github.com/user-attachments/assets/8497513e-09a4-4151-8b8d-ed8be782a389#gh-dark-mode-only" width="380" alt="Atlas Cloud">
+</div>
+
+[**Atlas Cloud**](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=second-brain) is a full-modal AI inference platform — one API for video, image, and LLM generation across 300+ curated models, instead of managing a vendor integration per modality. Their [coding plan](https://www.atlascloud.ai/console/coding-plan) is a cheap, capable default for running Second Brain.
+
+---
+
+## License
+
+MIT — do what you want with it.
+
+<p align="center"><sub>An agent by <a href="https://github.com/henrydaum">Henry Daum</a></sub></p>
