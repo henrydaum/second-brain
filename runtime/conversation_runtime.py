@@ -726,13 +726,26 @@ class ConversationRuntime:
                 cid = getattr(session, "conversation_id", None)
                 if cid is None:
                     continue
+                busy = bool(getattr(session, "busy", False))
                 # A session mid-turn owns its history list — the same reason
                 # ``compact_session`` refuses while ``busy``.
-                if (allow_own and key == session_key
-                        and not getattr(session, "busy", False)):
+                if allow_own and key == session_key and not busy:
                     own = int(cid)
                     continue
-                held.add(int(cid))
+                # **A session existing is not the test — somebody being there
+                # is.** What the exclusion prevents is two sessions writing
+                # into one transcript, which needs a second writer, and an
+                # abandoned session is not one. Nothing prunes
+                # ``self.sessions``: a frontend that keys sessions per tab or
+                # per thread (``frontend_http`` uses ``http:<thread>``) leaves
+                # one behind for every conversation ever opened, each still
+                # naming its ``conversation_id``. Excluding all of them meant
+                # every blank conversation was locked out of reuse the moment
+                # it had once been looked at, and the only one still reachable
+                # was the caller's own — so reuse appeared to work from a blank
+                # conversation and never from anywhere else.
+                if busy or self.is_attended(key):
+                    held.add(int(cid))
 
         def take(target: int) -> int | None:
             """Claim one candidate and announce it, or None if it slipped."""

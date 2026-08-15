@@ -250,10 +250,43 @@ def test_reuse_wipes_the_marker_so_nothing_carries_over(db):
     assert session.history == []
 
 
-def test_a_conversation_another_session_holds_is_never_reused(db):
+def test_a_conversation_somebody_is_watching_is_never_reused(db):
+    """The hazard the exclusion exists for: two sessions in one transcript."""
     runtime = plain_runtime(db)
-    cid = db.create_conversation(title="New conversation")
+    cid = age(db, blank(db))
     runtime.load_conversation("other", cid)
+    runtime.set_session_attended("other", True)
+
+    assert runtime.reuse_unused_conversation(
+        "mine", title="New conversation", allow_own=True) is None
+
+
+def test_a_session_nobody_is_at_does_not_lock_its_conversation_away(db):
+    """A session existing is not a second writer.
+
+    Nothing prunes ``runtime.sessions``, and a frontend keying sessions per tab
+    or per thread leaves one behind for every conversation ever opened. Reading
+    that as "held" locked every blank conversation out of reuse the moment it
+    had once been looked at, which left the caller's own the only reachable one
+    — reuse worked from a blank conversation and nowhere else, and the pile
+    grew from every real one.
+    """
+    runtime = plain_runtime(db)
+    cid = age(db, blank(db))
+    runtime.load_conversation("http:a-tab-from-last-week", cid)
+    runtime.set_session_attended("http:a-tab-from-last-week", False)
+
+    assert runtime.reuse_unused_conversation(
+        "http:today", title="New conversation", allow_own=True) == cid
+
+
+def test_a_busy_session_holds_its_conversation_even_unwatched(db):
+    """A background turn is a writer whether or not anyone is looking."""
+    runtime = plain_runtime(db)
+    cid = age(db, blank(db))
+    session = runtime.load_conversation("spawn_subagent:9", cid)
+    runtime.set_session_attended("spawn_subagent:9", False)
+    session.busy = True
 
     assert runtime.reuse_unused_conversation(
         "mine", title="New conversation", allow_own=True) is None
