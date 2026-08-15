@@ -78,6 +78,19 @@ from pipeline.database import DEFAULT_USER_ID
 
 logger = logging.getLogger("Runtime")
 
+# How long a conversation is hidden from reuse after it was created or taken.
+#
+# Claiming a row bumps ``updated_at``, so this is a reservation that needs no
+# state and cannot leak: a row that was just handed out stops being offered
+# until the window passes. It exists because "held by a live session" is not
+# true *yet* in the gap between a create returning an id and the caller binding
+# a session to it — ``open_session`` and the subagent supervisor both spend a
+# few lines in that gap — and a second reuse landing inside it would hand two
+# callers one conversation. The one case where the delay would be felt, a
+# person typing ``/new`` twice in a row, never consults the finder at all:
+# their own conversation is addressed by id.
+REUSE_QUIET_SECONDS = 30.0
+
 
 class ConversationRuntime:
     """Owns sessions, persistence, commands/forms, approvals, and agent turns."""
@@ -664,11 +677,110 @@ class ConversationRuntime:
         """Create a persisted conversation row (owned by ``user_id``) and return its ID."""
         cid = _persist.create_conversation(self, title, kind=kind, category=category, user_id=user_id)
         if cid is not None:
-            _ledger.record_system(self.db, action_type="conversation_create", ok=True,
-                                  conversation_id=cid, user_id=user_id,
-                                  args={"title": title, "kind": kind, "category": category})
-            bus.emit(CONVERSATION_CHANGED, {"action": "created", "conversation_id": cid, "user_id": user_id, "category": category})
+            self._announce_conversation(cid, title, kind=kind, category=category,
+                                        user_id=user_id)
         return cid
+
+    def reuse_unused_conversation(self, session_key: str | None, *,
+                                  title: str = "New Conversation",
+                                  user_id: int = DEFAULT_USER_ID,
+                                  allow_own: bool = False) -> int | None:
+        """Take over a conversation nobody ever used, or answer None.
+
+        This is what stops blank conversations piling up: starting a new one
+        is overwhelmingly followed by starting another, and each ``/new``
+        used to leave a permanent row behind. Nothing reclaimed them —
+        ``prune_expired`` deletes by ``updated_at``, and a state marker is
+        written after almost every action, so a conversation that was never
+        spoken in still looks freshly active.
+
+        It answers None generously — no database, a database double without
+        the two primitives, nothing eligible, or a row that stopped being
+        eligible between the lookup and the claim. Every one of those means
+        the caller creates a row, which is what it was going to do anyway.
+
+        ``allow_own`` is the caller's own live conversation, and it is off by
+        default because taking it over is only safe when the caller is about
+        to *activate* what it gets back: activation rebuilds the session from
+        the row, so wiping the row underneath it is a reset rather than a
+        theft. A detached create (``activate=False``) handed the same row
+        would erase the state of a session somebody is sitting in and take
+        their next message with it.
+        """
+        if self.db is None:
+            return None
+        finder = getattr(self.db, "find_unused_conversation", None)
+        claim = getattr(self.db, "claim_conversation", None)
+        if finder is None or claim is None:
+            return None
+
+        # Snapshot the live sessions, then let the lock go: this reads
+        # ``self.sessions`` and the two calls below reach the database, and
+        # taking ``db.lock`` inside ``_sessions_lock`` would fix a lock order
+        # that nothing observes today and every future db call from inside a
+        # session loop would deadlock against.
+        held: set[int] = set()
+        own: int | None = None
+        with self._sessions_lock:
+            for key, session in self.sessions.items():
+                cid = getattr(session, "conversation_id", None)
+                if cid is None:
+                    continue
+                # A session mid-turn owns its history list — the same reason
+                # ``compact_session`` refuses while ``busy``.
+                if (allow_own and key == session_key
+                        and not getattr(session, "busy", False)):
+                    own = int(cid)
+                    continue
+                held.add(int(cid))
+
+        target = own
+        if target is None:
+            try:
+                target = finder(
+                    user_id=user_id, exclude=held,
+                    updated_before=time.time() - REUSE_QUIET_SECONDS)
+            except Exception:
+                logger.exception("could not look for a reusable conversation")
+                return None
+        if target is None:
+            return None
+        try:
+            if not claim(target, title, category=None, user_id=user_id):
+                return None
+        except Exception:
+            logger.exception("could not claim conversation %s", target)
+            return None
+
+        self._announce_conversation(target, title, kind="user", category=None,
+                                    user_id=user_id, reused=True)
+        return target
+
+    def _announce_conversation(self, conversation_id: int, title: str, *,
+                               kind: str, category: str | None,
+                               user_id: int, reused: bool = False) -> None:
+        """Record and announce a conversation beginning, created or reused.
+
+        One site for both, because a reuse *is* a conversation starting — the
+        flight recorder must not show a create that never happened, and must
+        not show nothing at all for the id a person is suddenly looking at.
+        So the action type and the bus action stay what they were and carry
+        ``reused`` alongside: anything asking "when did this conversation
+        begin" keeps one name to ask about, and a catalog view that refreshes
+        on ``created`` keeps working untouched.
+
+        A retitle in place would normally also warrant a ``retitled`` event.
+        It cannot be observed here: the only rows eligible for reuse are ones
+        no live session is holding, or the caller's own, which is about to be
+        rebuilt from the row regardless.
+        """
+        _ledger.record_system(self.db, action_type="conversation_create", ok=True,
+                              conversation_id=conversation_id, user_id=user_id,
+                              args={"title": title, "kind": kind,
+                                    "category": category, "reused": reused})
+        bus.emit(CONVERSATION_CHANGED, {
+            "action": "created", "conversation_id": conversation_id,
+            "user_id": user_id, "category": category, "reused": reused})
 
     def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None, override: bool = False) -> RuntimeSession:
         """Load a persisted conversation into a runtime session.

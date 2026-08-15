@@ -468,7 +468,7 @@ catalogues all of them with their policy inputs. The useful subset:
 |---|---|
 | `conv.list` | `category`, `limit`, `offset`, `details` |
 | `conv.read` | `id`, `details` |
-| `conv.create` | `title`, `category`, `activate` |
+| `conv.create` | `title`, `category`, `activate`, `reuse_empty` |
 | `conv.load` | `id` |
 | `conv.set_title` | `id`, `title` |
 | `conv.set_category` | `id`, `category` |

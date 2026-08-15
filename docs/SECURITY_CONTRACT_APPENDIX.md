@@ -270,7 +270,7 @@ these three Requests. Transaction scoping becomes an argument
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `conv.create(title, activate)` | Start a current-user conversation, optionally loading it | user, session | safe |
+| `conv.create(title, activate, reuse_empty)` | Start a current-user conversation, optionally loading it. Safe covers `reuse_empty` resetting one of your own conversations that nobody ever used — a title, a category and state markers, never a transcript | user, session | safe |
 | `conv.read(id)` | Messages and metadata | id, owning user | safe (own), unsafe (other user) |
 | `conv.list(filters)` | Enumerate conversations | user | safe |
 | `conv.append(id, message)` | Add a message | id, owning user | safe (own) |
