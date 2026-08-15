@@ -66,7 +66,7 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        AGENT_SPAWN, AGENT_STOP, APP_STOP,
                        COMMAND_CALL, COMMAND_LIST, CONFIG_READ, CONFIG_WRITE,
                        CONV_APPEND, CONV_CLEAR, CONV_CREATE, CONV_DELETE, CONV_LIST,
-                       CONV_LOAD, CONV_READ, CONV_SET_CATEGORY,
+                       CONV_LOAD, CONV_NEW, CONV_READ, CONV_SET_CATEGORY,
                        CONV_SET_NOTIFICATION_MODE, CONV_SET_TITLE,
                        CRON_CREATE, CRON_ENABLE, CRON_GET, CRON_LIST,
                        CONSOLE_READ, CONSOLE_WRITE,
@@ -393,6 +393,16 @@ class _Conv(_Namespace):
     def load(self, conversation_id):
         """Load a conversation and its saved state into this session."""
         return self._ask(CONV_LOAD, id=conversation_id)
+
+    def new(self):
+        """Start a fresh conversation — the counterpart to ``load``.
+
+        This writes nothing. A conversation is created by the first message
+        sent into it, so calling this twice with nothing said in between costs
+        nothing and leaves nothing behind. The conversation you were in stays
+        where it is and can be loaded again.
+        """
+        return self._ask(CONV_NEW)
 
     def clear(self, conversation_id=None):
         """Clear messages and reload the active conversation."""

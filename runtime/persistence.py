@@ -573,13 +573,43 @@ def conversation_title(runtime, conversation_id: int) -> str:
 
 
 def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") -> None:
-    """Handle ensure conversation."""
-    if session.conversation_id is None and runtime.db:
-        session.conversation_id = runtime.db.create_conversation(
-            (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
-            user_id=runtime.session_user_id(session.key),
-        )
-        announce_session_conversation(runtime, session)
+    """Give this session a conversation if it has none, and adopt what it said.
+
+    **This is how conversations come into being.** A session holds none until
+    somebody sends a message, which is what keeps a conversation nobody used
+    from existing at all — there is no blank row to reclaim, because none was
+    made. Everything else about a session already works without one: commands
+    run, the security mode binds late, and every writer keyed on
+    ``conversation_id`` guards.
+
+    Two things it must do that a bare ``db.create_conversation`` does not.
+
+    It goes through ``runtime.create_conversation``, which is the only site
+    that writes the ``conversation_create`` ledger row and emits
+    ``CONVERSATION_CHANGED``. Reaching past it was survivable while this was a
+    rare path; as *the* path it would mean the flight recorder never recording
+    a conversation starting, and a client's list never learning of one.
+
+    And it writes back ``session.history``, because a session can have said
+    things before it had anywhere to put them — a ``command_note`` from
+    ``reveal_user_commands``, text that did not drive a turn. Those rows live
+    in memory only, and the writer that would have persisted them
+    (``absorb_user_action``) has already run and skipped them. Left alone they
+    reach the model but not the table, so the stored transcript begins partway
+    through a conversation the agent remembers all of.
+    """
+    if session.conversation_id is not None or not runtime.db:
+        return
+    session.conversation_id = runtime.create_conversation(
+        (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
+        user_id=runtime.session_user_id(session.key),
+    )
+    if session.conversation_id is None:
+        return
+    if session.history:
+        runtime.db.replace_conversation_messages(
+            session.conversation_id, list(session.history))
+    announce_session_conversation(runtime, session)
 
 
 def announce_conversation_ended(runtime, session_key: str,

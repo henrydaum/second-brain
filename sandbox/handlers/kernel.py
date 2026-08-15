@@ -30,7 +30,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               LLM_UNLOAD,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
-                              CONV_LOAD, CONV_SET_CATEGORY,
+                              CONV_LOAD, CONV_NEW, CONV_SET_CATEGORY,
                               CONV_SET_NOTIFICATION_MODE, CONV_SET_TITLE,
                               CRON_CREATE,
                               CRON_ENABLE, CRON_GET, CRON_LIST, CRON_REMOVE,
@@ -509,6 +509,28 @@ def _conv_load(ctx, args: dict) -> Result:
         return refused
     return Result(data=_runtime_answer(
         loader(getattr(ctx, "session_key", None), cid)))
+
+
+def _conv_new(ctx, args: dict) -> Result:
+    """Let go of this session's conversation so the next message starts one.
+
+    The counterpart to ``conv.load``: that one binds a session to a
+    conversation, this one releases it. Deliberately *not* ``conv.create`` —
+    nothing is written here, because a conversation is created by the first
+    message. Pressing "new conversation" twice with nothing said in between
+    therefore costs nothing and leaves nothing behind, which is the whole
+    point.
+
+    A frontend can do this without the Request, through ``frontend.submit``
+    with the ``new_conversation`` action. A command cannot: it holds no desk
+    token. This is how ``/new`` reaches it.
+    """
+    runtime = _runtime(ctx)
+    starter = getattr(runtime, "new_conversation", None)
+    if (bad := _need(starter, "conversations")) is not None:
+        return bad
+    return Result(data=_runtime_answer(
+        starter(getattr(ctx, "session_key", None))))
 
 
 def _conv_clear(ctx, args: dict) -> Result:
@@ -3901,7 +3923,8 @@ HANDLERS = {
     CONV_APPEND: _conv_append, CONV_SET_TITLE: _conv_set_title,
     CONV_SET_CATEGORY: _conv_set_category,
     CONV_SET_NOTIFICATION_MODE: _conv_set_notification_mode,
-    CONV_LOAD: _conv_load, CONV_CLEAR: _conv_clear,
+    CONV_LOAD: _conv_load, CONV_NEW: _conv_new,
+    CONV_CLEAR: _conv_clear,
     CONV_DELETE: _conv_delete,
     SESSION_GET: _session_get, SESSION_LIST: _session_list,
     SESSION_PUSH: _session_push, SESSION_STATE_GET: _session_state_get,

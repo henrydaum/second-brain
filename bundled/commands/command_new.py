@@ -9,10 +9,16 @@ class NewCommand(BaseCommand):
     name = "new"
     description = "Start a conversation with default settings"
     category = "Conversation"
-    requests = ["conv.create", "conv.list", "config.read", "session.get"]
+    requests = ["conv.new", "conv.list", "config.read", "session.get"]
 
     def run(self, sdk, args):
-        """Create and switch to a new Main conversation."""
+        """Start a fresh conversation.
+
+        Nothing is written here. The conversation is created by the first
+        message sent into it, so there is no number to report yet and running
+        this twice over leaves nothing behind — which is exactly what stopped
+        blank conversations accumulating.
+        """
         if not _available(sdk):
             return "Conversations are not available in this context."
         if not sdk.config.read("llm_profiles", present=True):
@@ -20,17 +26,9 @@ class NewCommand(BaseCommand):
                 "No LLM is configured yet. Run /setup to add one before "
                 "starting a conversation."
             )
-        before = _mode(sdk)
-        created = sdk.conv.create(
-            "New conversation (Main)",
-            category=None,
-            activate=True,
-        )
-        if not created:
-            return "Failed to create conversation."
+        sdk.conv.new()
         return (
-            f"Started new conversation #{created['id']} under 'Main'.\n"
-            f"Agent: {created.get('profile') or 'default'}\n"
+            "Started a new conversation under 'Main'.\n"
             f"Permission mode: {_mode(sdk)}"
         )
 

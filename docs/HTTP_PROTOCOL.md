@@ -470,6 +470,7 @@ catalogues all of them with their policy inputs. The useful subset:
 | `conv.read` | `id`, `details` |
 | `conv.create` | `title`, `category`, `activate` |
 | `conv.load` | `id` |
+| `conv.new` | *(none)* |
 | `conv.set_title` | `id`, `title` |
 | `conv.set_category` | `id`, `category` |
 | `conv.set_notification_mode` | `id`, `mode` — `"on"` or `"off"` |

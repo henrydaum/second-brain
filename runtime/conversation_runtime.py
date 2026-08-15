@@ -266,26 +266,38 @@ class ConversationRuntime:
             else:
                 return RuntimeResult(False, error={"code": "busy", "message": "Still working. Send /cancel to interrupt."})
 
-        # No-conversation guard: chat actions need a conversation to write
-        # into. Fresh installs (and sessions whose saved conversation was
-        # deleted out from under them) land here with conversation_id=None
-        # and would otherwise silently auto-create a "main" conversation —
-        # the new model funnels conversation creation through
-        # /conversations, so route the user there instead. Skipped when
-        # there is no DB (unit tests without persistence rely on the
-        # implicit auto-create path).
-        if (user_driven and self.db is not None
-                and action_type in {"send_text", "send_attachment"}
-                and session.conversation_id is None):
-            if not (self.config.get("llm_profiles") or {}):
-                return RuntimeResult(False, error={
-                    "code": "no_llm",
-                    "message": "Welcome to Second Brain. Run /setup to configure an LLM and the Telegram frontend."})
+        # **A message is what creates a conversation.** A session holds none
+        # until somebody says something, which is the whole of why blank
+        # conversations cannot pile up: there is no unused row to reclaim,
+        # because none was made. This used to refuse instead ("No conversation
+        # loaded. Try /new."), and everything upstream grew a way to make a row
+        # in advance to get past it — the REPL's /new and, on every single page
+        # load, the web client.
+        #
+        # The ``no_llm`` half stays. It is the only thing that points a fresh
+        # install at /setup, and it has to answer *before* anything is created,
+        # or a first-run message leaves a conversation behind on its way to
+        # failing.
+        starting = (user_driven and self.db is not None
+                    and action_type in {"send_text", "send_attachment"}
+                    and session.conversation_id is None)
+        if starting and not (self.config.get("llm_profiles") or {}):
             return RuntimeResult(False, error={
-                "code": "no_conversation",
-                "message": "No conversation loaded.\nTry /new."})
+                "code": "no_llm",
+                "message": "Welcome to Second Brain. Run /setup to configure an LLM and the Telegram frontend."})
 
         with session.lock:
+            # Before ``_dispatch``, and that ordering is the point rather than
+            # a detail. ``absorb_user_action`` writes the user's row under
+            # ``if runtime.db and session.conversation_id``, so a conversation
+            # created any later — at the top of ``_drive_agent_turn``, where
+            # ``ensure_conversation`` is also called — silently drops the
+            # opening message and leaves a transcript that starts with the
+            # reply. The background path hides it, because ``iterate_agent_turn``
+            # rewrites the whole history afterwards; nothing repairs this one.
+            if starting:
+                _persist.ensure_conversation(
+                    self, session, _disp.text_of(payload))
             _cfg.refresh_specs(self, session)
             try:
                 out = self._dispatch(session, action_type, payload)
@@ -771,10 +783,11 @@ class ConversationRuntime:
         ``/conversations`` deleting the conversation that is currently open).
         The holding session would otherwise keep ``conversation_id`` pointing at
         a row that no longer exists and crash on its next write with a FOREIGN
-        KEY violation. Detaching to ``None`` is safe: the no-conversation guard
-        in ``handle_action`` then routes the user through ``/conversations``
-        (the new-conversation model), and any stale per-user last-active pointer
-        is dropped so startup restore doesn't trip over it either.
+        KEY violation. Detaching to ``None`` is safe, and is now simply the
+        ordinary resting state: a session with no conversation is what every
+        session starts as, and the next message creates one. Any stale per-user
+        last-active pointer is dropped too, so startup restore doesn't trip
+        over it either.
         """
         with self._sessions_lock:
             holders = [s for s in self.sessions.values()

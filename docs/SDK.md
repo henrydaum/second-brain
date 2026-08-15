@@ -542,6 +542,9 @@ sdk.conv.set_title(conversation_id, title)
 sdk.conv.set_category(conversation_id, category)
 sdk.conv.set_notification_mode(conversation_id, mode)
 sdk.conv.load(conversation_id)
+sdk.conv.new()               # let go of it; the next message starts a new
+                             # conversation. Writes nothing, so calling it
+                             # twice over leaves nothing behind.
 sdk.conv.clear(conversation_id=None) # defaults to the active conversation
 sdk.conv.delete(conversation_id)
 

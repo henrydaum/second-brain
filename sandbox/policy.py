@@ -502,7 +502,12 @@ ALWAYS_SAFE = {
     R.DB_QUERY, R.DB_DEFINE,
     R.CONV_READ, R.CONV_LIST, R.CONV_CREATE, R.CONV_APPEND,
     R.CONV_SET_TITLE, R.CONV_SET_CATEGORY, R.CONV_SET_NOTIFICATION_MODE,
-    R.CONV_LOAD, R.CONV_CLEAR,
+    # CONV_NEW is the counterpart to CONV_LOAD — one binds a session to a
+    # conversation, the other lets go of it — and is safe for the stronger of
+    # the two reasons: it touches no row at all. Nothing is created (a
+    # conversation now comes from the first message), nothing is deleted, and
+    # what was open stays in the list to be loaded again.
+    R.CONV_LOAD, R.CONV_NEW, R.CONV_CLEAR,
     R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
     # Reading and settling notifications the kernel wrote *about this user*,
     # scoped in SQL by the context's own ``user_id`` rather than by an argument
