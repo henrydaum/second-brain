@@ -103,10 +103,20 @@ def test_a_message_creates_the_conversation_and_is_in_it(runtime, db):
         ("user", "what is a microkernel")]
 
 
-def test_the_conversation_is_titled_from_the_message(runtime, db):
+def test_the_conversation_is_titled_with_the_placeholder(runtime, db):
+    """The kernel names it, the ``update_titles`` package renames it.
+
+    Naming the row after the first message reads better for the few seconds
+    before anything else happens, and it costs the only real titler its
+    trigger: that package replaces a title still looking kernel-generated and
+    leaves anything else alone, which is what protects a rename you made
+    yourself. A first-message title is indistinguishable from one you chose, so
+    the sweep skipped every conversation and every title stayed the opening
+    sentence, cut off at eighty characters.
+    """
     runtime.handle_action("repl", "send_text", {"text": "what is a microkernel"})
     cid = runtime.sessions["repl"].conversation_id
-    assert db.get_conversation(cid)["title"] == "what is a microkernel"
+    assert db.get_conversation(cid)["title"] == "New Conversation"
 
 
 def test_a_second_message_does_not_create_a_second_conversation(runtime, db):
@@ -167,17 +177,6 @@ def test_what_the_session_said_first_is_carried_in(runtime, db):
         ("command_note", "[SYSTEM NOTE] The user r"),
         (None, "what did I change"),
     ]
-
-
-def test_the_title_is_never_taken_from_a_command_note(runtime, db):
-    session = runtime.sessions["repl"]
-    session.history.append({
-        "role": "user", "author": "command_note",
-        "content": "[SYSTEM NOTE] The user ran the slash command /config."})
-
-    runtime.handle_action("repl", "send_text", {"text": "the real question"})
-    assert db.get_conversation(
-        session.conversation_id)["title"] == "the real question"
 
 
 # ── The one refusal that stays ───────────────────────────────────────

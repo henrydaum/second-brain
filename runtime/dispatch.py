@@ -223,11 +223,16 @@ def latest_user_text(session: RuntimeSession) -> str:
     """Return the latest user-authored text stored in session history.
 
     ``role`` alone is not the test, because the kernel writes user rows the
-    person never typed. This feeds the new conversation's **title**
-    (``ConversationRuntime`` names a conversation after its first message), so
-    reading role alone titled conversations "[The user cancelled the previous
-    turn…]" after a ``/cancel``, or "[SYSTEM NOTE] The user ran /config" with
-    ``reveal_user_commands`` on — with no sign anything had gone wrong.
+    person never typed — a ``/cancel`` notice, a ``reveal_user_commands`` note,
+    a doorman's ``SendBack``. Only ``author`` tells them apart.
+
+    No kernel caller left: this fed the new conversation's **title** until the
+    kernel went back to naming every conversation "New Conversation" and left
+    the real name to the ``update_titles`` package. Kept because "what did the
+    person actually say" is a question with one right answer and a tempting
+    wrong one, and because getting it wrong is silent — reading role alone
+    titled conversations "[The user cancelled the previous turn…]" with no sign
+    anything had gone amiss. ``tests/test_message_authorship.py`` holds that.
     """
     for msg in reversed(session.history):
         if msg.get("role") == "user" and not msg.get("author"):
