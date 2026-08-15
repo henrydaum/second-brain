@@ -734,27 +734,39 @@ class ConversationRuntime:
                     continue
                 held.add(int(cid))
 
-        target = own
-        if target is None:
+        def take(target: int) -> int | None:
+            """Claim one candidate and announce it, or None if it slipped."""
             try:
-                target = finder(
-                    user_id=user_id, exclude=held,
-                    updated_before=time.time() - REUSE_QUIET_SECONDS)
+                if not claim(target, title, category=None, user_id=user_id):
+                    return None
             except Exception:
-                logger.exception("could not look for a reusable conversation")
+                logger.exception("could not claim conversation %s", target)
                 return None
-        if target is None:
-            return None
-        try:
-            if not claim(target, title, category=None, user_id=user_id):
-                return None
-        except Exception:
-            logger.exception("could not claim conversation %s", target)
-            return None
+            self._announce_conversation(target, title, kind="user",
+                                        category=None, user_id=user_id,
+                                        reused=True)
+            return target
 
-        self._announce_conversation(target, title, kind="user", category=None,
-                                    user_id=user_id, reused=True)
-        return target
+        # The caller's own conversation is a **preference, not the answer**.
+        # Taking it when it qualifies is what makes asking for a new
+        # conversation from inside a blank one a reset rather than another row;
+        # failing to take it says nothing about the rest of the table, and the
+        # ordinary case — asking from inside a real conversation — always fails
+        # here. Returning None on that would leave every blank conversation
+        # already in the list unlooked-at, so reuse would appear to work only
+        # where there was nothing to clean up.
+        if own is not None:
+            if (taken := take(own)) is not None:
+                return taken
+            held.add(own)
+
+        try:
+            found = finder(user_id=user_id, exclude=held,
+                           updated_before=time.time() - REUSE_QUIET_SECONDS)
+        except Exception:
+            logger.exception("could not look for a reusable conversation")
+            return None
+        return take(found) if found is not None else None
 
     def _announce_conversation(self, conversation_id: int, title: str, *,
                                kind: str, category: str | None,

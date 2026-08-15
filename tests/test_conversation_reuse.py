@@ -276,6 +276,26 @@ def test_the_callers_own_conversation_is_reusable_only_when_activating(db):
         "mine", title="New conversation", allow_own=True) == cid
 
 
+def test_a_used_conversation_does_not_hide_the_blank_ones(db):
+    """Own is a *preference*, not the answer.
+
+    Treating it as the answer meant asking for a new conversation from inside a
+    real one skipped the search entirely: the claim failed on the row the
+    session was holding, and every blank conversation already in the list went
+    unlooked-at. So reuse worked only from a blank conversation — exactly the
+    case where there was nothing to clean up — and the pile grew from every
+    other one.
+    """
+    runtime = plain_runtime(db)
+    spare = age(db, blank(db))
+    used = db.create_conversation(title="Second Brain Slash Commands")
+    db.save_message(used, "user", "hello")
+    runtime.load_conversation("repl", used)
+
+    assert runtime.reuse_unused_conversation(
+        "repl", title="New conversation (Main)", allow_own=True) == spare
+
+
 def test_a_busy_session_keeps_its_conversation(db):
     runtime = plain_runtime(db)
     cid = db.create_conversation(title="New conversation")
