@@ -279,45 +279,29 @@ def _conv_create(ctx, args: dict) -> Result:
     title = args.get("title") or "New conversation"
     category = args.get("category")
     uid = getattr(ctx, "user_id", None)
-    key = getattr(ctx, "session_key", None)
     runtime = _runtime(ctx)
-
-    # Take over a conversation nobody ever used before inserting another one.
-    # Only for the default bucket: a category is a decision, and a create that
-    # names one is asking for a row of its own.
-    #
-    # ``reuse_empty`` defaults to True, and it is permission rather than a
-    # promise — reuse needs the live session table, so the database-only
-    # fallback below never reuses, and callers get a fresh row. The flag that
-    # guarantees anything is ``False``.
-    activate = bool(args.get("activate"))
-    cid = None
-    reuser = getattr(runtime, "reuse_unused_conversation", None)
-    if reuser is not None and args.get("reuse_empty", True) and not (category or ""):
-        cid = reuser(key, title=title, user_id=uid, allow_own=activate)
-
-    if cid is None:
-        creator = getattr(runtime, "create_conversation", None)
-        if creator is not None:
-            cid = creator(
+    creator = getattr(runtime, "create_conversation", None)
+    if creator is not None:
+        cid = creator(
+            title, kind="user", category=category, user_id=uid)
+    else:
+        try:
+            cid = db.create_conversation(
                 title, kind="user", category=category, user_id=uid)
-        else:
-            try:
-                cid = db.create_conversation(
-                    title, kind="user", category=category, user_id=uid)
-            except TypeError:
-                # Compatibility with small database doubles predating
-                # ownership. Activation still requires the real runtime.
-                if activate:
-                    return Result.failure(
-                        "conversation activation is not available "
-                        "in this context")
-                cid = db.create_conversation(title)
+        except TypeError:
+            # Compatibility with small database doubles predating
+            # ownership. Activation still requires the real runtime.
+            if args.get("activate"):
+                return Result.failure(
+                    "conversation activation is not available "
+                    "in this context")
+            cid = db.create_conversation(title)
     if cid is None:
         return Result.failure("failed to create conversation")
-    if not activate:
+    if not args.get("activate"):
         return Result(data=cid)
 
+    key = getattr(ctx, "session_key", None)
     loader = getattr(runtime, "load_conversation", None)
     if (bad := _need(loader, "conversation loading")) is not None:
         return bad

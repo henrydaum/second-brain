@@ -534,11 +534,7 @@ sdk.db.query(sql, params, max_rows=0)  # -> [dict]; reads only, capped at 500
 sdk.db.write(sql, params)
 sdk.db.define(ddl)             # create a table your plugin owns
 
-sdk.conv.create(title, category=None, activate=False, reuse_empty=True)
-                               # reuse_empty may hand back a conversation of
-                               # yours nobody ever used, reset to look new.
-                               # Permission, not a promise; False guarantees a
-                               # row nothing has ever pointed at.
+sdk.conv.create(title, category=None, activate=False)
 sdk.conv.read(conversation_id, details=False)
 sdk.conv.list(category=None, limit=50, offset=0, details=False)
 sdk.conv.append(conversation_id, role, content)

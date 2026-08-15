@@ -343,23 +343,10 @@ class _Conv(_Namespace):
         *,
         category=None,
         activate: bool = False,
-        reuse_empty: bool = True,
     ):
-        """Create a current-user conversation and optionally activate it.
-
-        ``reuse_empty`` lets the kernel hand back a conversation of yours that
-        nobody ever used — no messages, still called what it was called when
-        it was made, and in no category — resetting it so it is a new
-        conversation in all but its id. That is what stops blank conversations
-        piling up behind every "new conversation" button.
-
-        It is permission, not a promise: you may get a fresh row anyway. Pass
-        ``reuse_empty=False`` when you need the guarantee that nothing else
-        has ever pointed at what you get back.
-        """
+        """Create a current-user conversation and optionally activate it."""
         return self._ask(
-            CONV_CREATE, title=title, category=category, activate=activate,
-            reuse_empty=reuse_empty)
+            CONV_CREATE, title=title, category=category, activate=activate)
 
     def read(self, conversation_id, details: bool = False):
         """Messages and metadata, optionally with restored-state details."""

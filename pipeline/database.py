@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import re
 import sqlite3
 import threading
@@ -72,30 +71,6 @@ def _describe_action(action, arg1, arg2) -> str:
 # (whose data) is orthogonal to authorization (frontend_profile, what's allowed):
 # there is deliberately no privileged "admin" user.
 DEFAULT_USER_ID = 1
-
-# The titles nobody chose — what a conversation is called before anyone has
-# said anything in it. Compared lowercased and stripped. A title outside this
-# set is a decision somebody made, which is what makes the conversation *used*
-# even when it holds no messages, so nothing may quietly take it over.
-#
-# Every default that reaches ``create_conversation`` has to be listed here or
-# the conversation it names is never reclaimed: ``db.create_conversation`` and
-# ``open_session`` say "New Conversation", the ``conv.create`` handler says
-# "New conversation", and ``/new`` says "New conversation (Main)".
-# ``tests/test_conversation_reuse.py`` reads that last one back out of
-# ``bundled/commands/command_new.py``, because the coupling is invisible: get
-# it wrong and reuse simply never fires, which looks exactly like the feature
-# being off.
-PLACEHOLDER_TITLES: tuple[str, ...] = (
-	"", "new conversation", "new conversation (main)")
-
-# ``SB_TRACE_CONV=1`` narrates conversation creation and reuse at WARNING.
-#
-# Both decisions are otherwise invisible: a row nobody can account for looks
-# exactly like a row somebody asked for, and reuse declining looks exactly like
-# reuse being switched off. Read once at import — this is a debugging switch,
-# not a setting, and it must cost nothing when it is off.
-_TRACE_CONV = bool(os.environ.get("SB_TRACE_CONV"))
 
 """
 Database for the task pipeline.
@@ -1565,21 +1540,7 @@ class Database:
 	# =================================================================
 
 	def create_conversation(self, title="New Conversation", kind="user", category=None, user_id=DEFAULT_USER_ID) -> int:
-		"""Create conversation.
-
-		Every path that inserts a conversation row ends here, which is why the
-		trace is here and not at any of them: ``SB_TRACE_CONV=1`` says who
-		asked. A row appearing that nobody can account for is the whole
-		difficulty with conversations piling up — five call sites reach this
-		one, they look identical from the table, and the only thing that tells
-		them apart is the stack.
-		"""
-		if _TRACE_CONV:
-			import traceback
-			logger.warning(
-				"conversation row inserted: title=%r kind=%r category=%r "
-				"user_id=%r\n%s", title, kind, category, user_id,
-				"".join(traceback.format_stack()[:-1]))
+		"""Create conversation."""
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
@@ -1859,103 +1820,3 @@ class Database:
 				"SELECT COUNT(*) as cnt FROM conversation_messages WHERE conversation_id = ?",
 				(conversation_id,))
 			return cur.fetchone()["cnt"]
-
-	# The predicate for "nobody ever used this", shared by the finder and the
-	# claim so the second cannot take a row the first would no longer offer.
-	#
-	# **Empty means no row that is not a state marker.** A message *count* is
-	# never the test: ``save_state_marker`` writes a ``role='system'`` row after
-	# almost every action, so a conversation nobody has spoken in still has
-	# rows. The predicate is stated as a negative — anything that is not a
-	# marker counts against it — rather than as a list of the roles a
-	# transcript uses. ``messages_to_history`` skips ``'system'`` and silently
-	# drops any role it does not recognise, so a positive list would make an
-	# unfamiliar row invisible to a reader and then delete it.
-	_UNUSED_PREDICATE = """
-		    kind = 'user'
-		AND COALESCE(user_id, ?) = ?
-		AND (category IS NULL OR category = '')
-		AND LOWER(TRIM(COALESCE(title, ''))) IN ({titles})
-		AND NOT EXISTS (SELECT 1 FROM conversation_messages m
-		                 WHERE m.conversation_id = conversations.id
-		                   AND (m.role IS NULL OR m.role <> 'system'))
-	"""
-
-	def _unused_clause(self, user_id) -> tuple[str, list]:
-		"""The predicate above, with its parameters."""
-		titles = ", ".join("?" * len(PLACEHOLDER_TITLES))
-		params = [DEFAULT_USER_ID, user_id, *PLACEHOLDER_TITLES]
-		return self._UNUSED_PREDICATE.format(titles=titles), params
-
-	def find_unused_conversation(self, *, user_id=DEFAULT_USER_ID,
-								 exclude=(), updated_before=None) -> int | None:
-		"""The most recently touched conversation nobody ever used, or None.
-
-		"Unused" is deliberately stricter than "empty": besides holding nothing
-		but state markers, the row must still carry a placeholder title and no
-		category. A title or a category is the only intent an empty
-		conversation can express, and taking one over would erase it.
-
-		``exclude`` drops conversations a live session is holding — the caller
-		knows that, SQL cannot. ``updated_before`` is the reservation: a claim
-		bumps ``updated_at``, so a quiet window hides a row that was just taken
-		but not yet bound to a session, without any state to leak or clean up.
-
-		Owner scoping follows ``assert_conversation_access`` rather than the
-		listing methods: a NULL ``user_id`` is a legacy row belonging to the
-		base user, and matching it with a bare ``user_id = ?`` would leave
-		every pre-ownership conversation permanently unreclaimable.
-		"""
-		clause, params = self._unused_clause(user_id)
-		ids = [int(cid) for cid in (exclude or ())]
-		if ids:
-			clause += f" AND id NOT IN ({', '.join('?' * len(ids))})"
-			params += ids
-		if updated_before is not None:
-			clause += " AND COALESCE(updated_at, created_at, 0) < ?"
-			params.append(float(updated_before))
-		with self.lock:
-			cur = self.conn.execute(
-				f"SELECT id FROM conversations WHERE {clause} "
-				"ORDER BY updated_at DESC LIMIT 1", params)
-			row = cur.fetchone()
-		return int(row["id"]) if row else None
-
-	def claim_conversation(self, conversation_id, title="New Conversation", *,
-						   category=None, user_id=DEFAULT_USER_ID) -> bool:
-		"""Reset an unused conversation so it is a new one in all but its id.
-
-		Returns False — changing nothing — when the row stopped being unused
-		since it was found. The predicate is re-checked inside the UPDATE
-		rather than trusted from the lookup, which is what makes the whole
-		operation safe to race: two claimants cannot both win, because the
-		loser's WHERE no longer matches.
-
-		``last_title_check_message_count`` has to be cleared with the messages.
-		``list_conversations_for_title_check`` compares the live count against
-		it, so a row reset from twelve messages carries a high-water mark of
-		twelve into its next life and stays invisible to the re-titling sweep
-		until it is four messages past where it already was.
-
-		``created_at`` moves too. The claim's promise is a conversation
-		indistinguishable from a fresh one, and a "new" conversation dated
-		three weeks ago is not that. The ledger keeps the true story.
-		"""
-		clause, params = self._unused_clause(user_id)
-		now = time.time()
-		with self.lock:
-			cur = self.conn.execute(
-				f"""
-				UPDATE conversations
-				   SET title = ?, category = ?, created_at = ?, updated_at = ?,
-				       last_title_check_message_count = NULL
-				 WHERE id = ? AND {clause}
-				""",
-				[title, category, now, now, conversation_id] + params)
-			claimed = cur.rowcount == 1
-			if claimed:
-				self.conn.execute(
-					"DELETE FROM conversation_messages WHERE conversation_id = ?",
-					(conversation_id,))
-			self.conn.commit()
-		return claimed

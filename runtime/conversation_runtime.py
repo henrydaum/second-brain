@@ -74,22 +74,9 @@ from runtime import dispatch as _disp
 from runtime import ledger as _ledger
 from runtime import notifications as _notifications
 from runtime import persistence as _persist
-from pipeline.database import _TRACE_CONV, DEFAULT_USER_ID
+from pipeline.database import DEFAULT_USER_ID
 
 logger = logging.getLogger("Runtime")
-
-# How long a conversation is hidden from reuse after it was created or taken.
-#
-# Claiming a row bumps ``updated_at``, so this is a reservation that needs no
-# state and cannot leak: a row that was just handed out stops being offered
-# until the window passes. It exists because "held by a live session" is not
-# true *yet* in the gap between a create returning an id and the caller binding
-# a session to it — ``open_session`` and the subagent supervisor both spend a
-# few lines in that gap — and a second reuse landing inside it would hand two
-# callers one conversation. The one case where the delay would be felt, a
-# person typing ``/new`` twice in a row, never consults the finder at all:
-# their own conversation is addressed by id.
-REUSE_QUIET_SECONDS = 30.0
 
 
 class ConversationRuntime:
@@ -677,152 +664,11 @@ class ConversationRuntime:
         """Create a persisted conversation row (owned by ``user_id``) and return its ID."""
         cid = _persist.create_conversation(self, title, kind=kind, category=category, user_id=user_id)
         if cid is not None:
-            self._announce_conversation(cid, title, kind=kind, category=category,
-                                        user_id=user_id)
+            _ledger.record_system(self.db, action_type="conversation_create", ok=True,
+                                  conversation_id=cid, user_id=user_id,
+                                  args={"title": title, "kind": kind, "category": category})
+            bus.emit(CONVERSATION_CHANGED, {"action": "created", "conversation_id": cid, "user_id": user_id, "category": category})
         return cid
-
-    def reuse_unused_conversation(self, session_key: str | None, *,
-                                  title: str = "New Conversation",
-                                  user_id: int = DEFAULT_USER_ID,
-                                  allow_own: bool = False) -> int | None:
-        """Take over a conversation nobody ever used, or answer None.
-
-        This is what stops blank conversations piling up: starting a new one
-        is overwhelmingly followed by starting another, and each ``/new``
-        used to leave a permanent row behind. Nothing reclaimed them —
-        ``prune_expired`` deletes by ``updated_at``, and a state marker is
-        written after almost every action, so a conversation that was never
-        spoken in still looks freshly active.
-
-        It answers None generously — no database, a database double without
-        the two primitives, nothing eligible, or a row that stopped being
-        eligible between the lookup and the claim. Every one of those means
-        the caller creates a row, which is what it was going to do anyway.
-
-        ``allow_own`` is the caller's own live conversation, and it is off by
-        default because taking it over is only safe when the caller is about
-        to *activate* what it gets back: activation rebuilds the session from
-        the row, so wiping the row underneath it is a reset rather than a
-        theft. A detached create (``activate=False``) handed the same row
-        would erase the state of a session somebody is sitting in and take
-        their next message with it.
-        """
-        def declined(why: str) -> None:
-            """Say why, when asked to. Declining is otherwise indistinguishable
-            from the feature being switched off — which is how three separate
-            causes each presented as the identical symptom."""
-            if _TRACE_CONV:
-                logger.warning(
-                    "conversation reuse declined for session=%r "
-                    "(allow_own=%s, user_id=%r): %s",
-                    session_key, allow_own, user_id, why)
-
-        if self.db is None:
-            return declined("this runtime has no database")
-        finder = getattr(self.db, "find_unused_conversation", None)
-        claim = getattr(self.db, "claim_conversation", None)
-        if finder is None or claim is None:
-            return declined("the database does not provide find/claim")
-
-        # Snapshot the live sessions, then let the lock go: this reads
-        # ``self.sessions`` and the two calls below reach the database, and
-        # taking ``db.lock`` inside ``_sessions_lock`` would fix a lock order
-        # that nothing observes today and every future db call from inside a
-        # session loop would deadlock against.
-        held: set[int] = set()
-        own: int | None = None
-        with self._sessions_lock:
-            for key, session in self.sessions.items():
-                cid = getattr(session, "conversation_id", None)
-                if cid is None:
-                    continue
-                busy = bool(getattr(session, "busy", False))
-                # A session mid-turn owns its history list — the same reason
-                # ``compact_session`` refuses while ``busy``.
-                if allow_own and key == session_key and not busy:
-                    own = int(cid)
-                    continue
-                # **A session existing is not the test — somebody being there
-                # is.** What the exclusion prevents is two sessions writing
-                # into one transcript, which needs a second writer, and an
-                # abandoned session is not one. Nothing prunes
-                # ``self.sessions``: a frontend that keys sessions per tab or
-                # per thread (``frontend_http`` uses ``http:<thread>``) leaves
-                # one behind for every conversation ever opened, each still
-                # naming its ``conversation_id``. Excluding all of them meant
-                # every blank conversation was locked out of reuse the moment
-                # it had once been looked at, and the only one still reachable
-                # was the caller's own — so reuse appeared to work from a blank
-                # conversation and never from anywhere else.
-                if busy or self.is_attended(key):
-                    held.add(int(cid))
-
-        def take(target: int) -> int | None:
-            """Claim one candidate and announce it, or None if it slipped."""
-            try:
-                if not claim(target, title, category=None, user_id=user_id):
-                    return None
-            except Exception:
-                logger.exception("could not claim conversation %s", target)
-                return None
-            self._announce_conversation(target, title, kind="user",
-                                        category=None, user_id=user_id,
-                                        reused=True)
-            return target
-
-        # The caller's own conversation is a **preference, not the answer**.
-        # Taking it when it qualifies is what makes asking for a new
-        # conversation from inside a blank one a reset rather than another row;
-        # failing to take it says nothing about the rest of the table, and the
-        # ordinary case — asking from inside a real conversation — always fails
-        # here. Returning None on that would leave every blank conversation
-        # already in the list unlooked-at, so reuse would appear to work only
-        # where there was nothing to clean up.
-        if own is not None:
-            if (taken := take(own)) is not None:
-                return taken
-            declined(f"the caller's own conversation {own} is not unused")
-            held.add(own)
-
-        try:
-            found = finder(user_id=user_id, exclude=held,
-                           updated_before=time.time() - REUSE_QUIET_SECONDS)
-        except Exception:
-            logger.exception("could not look for a reusable conversation")
-            return None
-        if found is None:
-            return declined(
-                f"nothing unused for user {user_id}; {len(held)} conversation(s) "
-                f"held by a watched or busy session: {sorted(held)}")
-        if (taken := take(found)) is None:
-            return declined(f"conversation {found} slipped away before the claim")
-        return taken
-
-    def _announce_conversation(self, conversation_id: int, title: str, *,
-                               kind: str, category: str | None,
-                               user_id: int, reused: bool = False) -> None:
-        """Record and announce a conversation beginning, created or reused.
-
-        One site for both, because a reuse *is* a conversation starting — the
-        flight recorder must not show a create that never happened, and must
-        not show nothing at all for the id a person is suddenly looking at.
-        So the action type and the bus action stay what they were and carry
-        ``reused`` alongside: anything asking "when did this conversation
-        begin" keeps one name to ask about, and a catalog view that refreshes
-        on ``created`` keeps working untouched.
-
-        A retitle in place would normally also warrant a ``retitled`` event.
-        It cannot be observed here: the only rows eligible for reuse are ones
-        no live session is holding, or the caller's own, which is about to be
-        rebuilt from the row regardless.
-        """
-        _ledger.record_system(self.db, action_type="conversation_create", ok=True,
-                              conversation_id=conversation_id, user_id=user_id,
-                              args={"title": title, "kind": kind,
-                                    "category": category, "reused": reused})
-        bus.emit(CONVERSATION_CHANGED, {
-            "action": "created", "conversation_id": conversation_id,
-            "user_id": user_id, "category": category, "reused": reused})
 
     def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None, override: bool = False) -> RuntimeSession:
         """Load a persisted conversation into a runtime session.
