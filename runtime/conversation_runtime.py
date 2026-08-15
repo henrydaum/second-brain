@@ -74,7 +74,7 @@ from runtime import dispatch as _disp
 from runtime import ledger as _ledger
 from runtime import notifications as _notifications
 from runtime import persistence as _persist
-from pipeline.database import DEFAULT_USER_ID
+from pipeline.database import _TRACE_CONV, DEFAULT_USER_ID
 
 logger = logging.getLogger("Runtime")
 
@@ -707,12 +707,22 @@ class ConversationRuntime:
         would erase the state of a session somebody is sitting in and take
         their next message with it.
         """
+        def declined(why: str) -> None:
+            """Say why, when asked to. Declining is otherwise indistinguishable
+            from the feature being switched off — which is how three separate
+            causes each presented as the identical symptom."""
+            if _TRACE_CONV:
+                logger.warning(
+                    "conversation reuse declined for session=%r "
+                    "(allow_own=%s, user_id=%r): %s",
+                    session_key, allow_own, user_id, why)
+
         if self.db is None:
-            return None
+            return declined("this runtime has no database")
         finder = getattr(self.db, "find_unused_conversation", None)
         claim = getattr(self.db, "claim_conversation", None)
         if finder is None or claim is None:
-            return None
+            return declined("the database does not provide find/claim")
 
         # Snapshot the live sessions, then let the lock go: this reads
         # ``self.sessions`` and the two calls below reach the database, and
@@ -771,6 +781,7 @@ class ConversationRuntime:
         if own is not None:
             if (taken := take(own)) is not None:
                 return taken
+            declined(f"the caller's own conversation {own} is not unused")
             held.add(own)
 
         try:
@@ -779,7 +790,13 @@ class ConversationRuntime:
         except Exception:
             logger.exception("could not look for a reusable conversation")
             return None
-        return take(found) if found is not None else None
+        if found is None:
+            return declined(
+                f"nothing unused for user {user_id}; {len(held)} conversation(s) "
+                f"held by a watched or busy session: {sorted(held)}")
+        if (taken := take(found)) is None:
+            return declined(f"conversation {found} slipped away before the claim")
+        return taken
 
     def _announce_conversation(self, conversation_id: int, title: str, *,
                                kind: str, category: str | None,

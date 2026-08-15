@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -87,6 +88,14 @@ DEFAULT_USER_ID = 1
 # being off.
 PLACEHOLDER_TITLES: tuple[str, ...] = (
 	"", "new conversation", "new conversation (main)")
+
+# ``SB_TRACE_CONV=1`` narrates conversation creation and reuse at WARNING.
+#
+# Both decisions are otherwise invisible: a row nobody can account for looks
+# exactly like a row somebody asked for, and reuse declining looks exactly like
+# reuse being switched off. Read once at import — this is a debugging switch,
+# not a setting, and it must cost nothing when it is off.
+_TRACE_CONV = bool(os.environ.get("SB_TRACE_CONV"))
 
 """
 Database for the task pipeline.
@@ -1556,7 +1565,21 @@ class Database:
 	# =================================================================
 
 	def create_conversation(self, title="New Conversation", kind="user", category=None, user_id=DEFAULT_USER_ID) -> int:
-		"""Create conversation."""
+		"""Create conversation.
+
+		Every path that inserts a conversation row ends here, which is why the
+		trace is here and not at any of them: ``SB_TRACE_CONV=1`` says who
+		asked. A row appearing that nobody can account for is the whole
+		difficulty with conversations piling up — five call sites reach this
+		one, they look identical from the table, and the only thing that tells
+		them apart is the stack.
+		"""
+		if _TRACE_CONV:
+			import traceback
+			logger.warning(
+				"conversation row inserted: title=%r kind=%r category=%r "
+				"user_id=%r\n%s", title, kind, category, user_id,
+				"".join(traceback.format_stack()[:-1]))
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
