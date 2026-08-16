@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from typing import Any, NamedTuple
 
 from .guest.hooks import MOMENTS
 from .guest.requests import Result
@@ -122,7 +123,8 @@ def project_payload(moment: str, payload) -> dict | None:
     if moment == "turn_finish":
         return {"ok": bool(getattr(payload, "ok", True)),
                 "cancelled": bool(getattr(payload, "cancelled", False)),
-                "final_text": str(getattr(payload, "final_text", "") or "")}
+                "final_text": str(getattr(payload, "final_text", "") or ""),
+                "reason": str(getattr(payload, "reason", "") or "")}
 
     if moment == "end_turn":
         return {"final_text": str(getattr(payload, "final_text", "") or ""),
@@ -138,9 +140,11 @@ def project_payload(moment: str, payload) -> dict | None:
                 "chain": _project_chain(getattr(payload, "chain", None))}
 
     if moment == "shape_scope":
-        # A registry cannot cross, and a shaper does not need one: hiding and
-        # reordering is expressible in names alone. Adding a tool is a
-        # different act with its own Request (sdk.session.add_tool).
+        # A registry cannot cross, and a shaper does not need one: hiding is
+        # expressible in names alone. Sorting here (and the set ``narrow_scope``
+        # keeps) is what makes a shaper a filter and nothing more — it cannot
+        # reorder, and adding a tool is a different act with its own Request
+        # (sdk.session.add_tool).
         return {"tools": sorted(getattr(payload, "tools", None) or {})}
 
     if moment == "llm_call":
@@ -296,7 +300,83 @@ def narrow_scope(registry, keep):
 
 # ──────────────────────────────────────────────────────────────────────
 # The shim.
+#
+# One walk from a kernel doorway into guest code, written once. It used to be
+# written twice — ``build_shim`` for five moments and ``_build_escort`` for
+# ``llm_call`` — and the two drifted, in the direction this whole module is
+# built to prevent.
+#
+# What drifted: ``for_session`` was added to the generic path so a hook's own
+# Requests would resolve against the session whose doorway it stands at, and
+# the escort did not get it. A boxed escort touching ``sdk.session.*`` reached
+# the kernel's default session instead. Nothing raised, the write returned
+# True, and the text landed nowhere — the identical failure the ``for_session``
+# argument had been introduced to fix one function earlier.
+#
+# The tell was there all along: the *guest* has one entry point
+# (``BasePlugin.__hook__``, one signature, ``token`` defaulting to empty), so
+# two host functions producing that one call was never describing a real
+# difference. What actually differs between the six moments is three things —
+# the fallback when the box is gone, the payload builder, and the token — and
+# those are now arguments rather than a second copy of the walk.
 # ──────────────────────────────────────────────────────────────────────
+
+class _Visit(NamedTuple):
+    """What came back from walking to a doorway.
+
+    ``ok`` is False for *any* reason the guest did not answer — the service is
+    registered but not loaded, its box has died, the method raised inside the
+    box. Those are one case to the kernel and a different case to each caller:
+    a generic hook abstains, while an escort still owes somebody a model call.
+    So this reports the fact and lets the caller decide, rather than baking one
+    of the two answers into the walk.
+    """
+
+    ok: bool
+    data: Any = None
+
+
+def _visit(service, moment: str, method: str, ctx, *, payload,
+           extra: dict | None = None) -> _Visit:
+    """Walk one doorway visit into a service's box.
+
+    The single place that knows the route: find a live box, project the
+    identity, lend the session, call ``__hook__``, and turn every failure into
+    something the caller can read as abstention.
+
+    ``extra`` is for what one moment needs and the others do not — today only
+    the escort's ``token``. Passing it as a mapping rather than a named
+    parameter is deliberate: a second copy of this function is exactly what
+    went wrong before, and a moment that needs one more field should widen this
+    dict rather than fork the walk.
+    """
+    box = _live_box(service)
+    if box is None:
+        # Registered but not loaded: abstain rather than fail. A service can be
+        # unloaded and reloaded under a hook that stays standing.
+        return _Visit(False)
+
+    # ``handler``, not ``method``: PersistentBox.call names its own first
+    # parameter ``method``, and passing one by keyword collides with it.
+    #
+    # ``for_session`` lends the box the session this doorway was opened for.
+    # The projection below has always told the *guest* which session it was
+    # standing in; nothing told the guest's *Requests*, so a hook could read
+    # ``sdk`` fields naming a session and then have every session-scoped
+    # Request answered from the kernel's default one — which is how
+    # ``session.add_prompt_extra`` came to write into ``sessions.get(None)``
+    # and return False, silently, for every turn. Context only: see
+    # ``PersistentBox.call`` for why the chain deliberately does not move.
+    projected = project_context(ctx, moment)
+    result = box.call("__hook__", moment=moment, handler=method,
+                      for_session=projected.get("session_key") or "",
+                      ctx=projected, payload=payload, **(extra or {}))
+    if not result.ok:
+        logger.warning("%s hook %s.%s: %s", moment,
+                       getattr(service, "name", "?"), method, result.error)
+        return _Visit(False)
+    return _Visit(True, result.data)
+
 
 def build_shim(service, moment: str, method: str, make_response=None):
     """Build the callable that stands at ``moment`` on a service's behalf.
@@ -317,37 +397,18 @@ def build_shim(service, moment: str, method: str, make_response=None):
         return _build_escort(service, method, make_response)
 
     def shim(ctx, payload, *rest):
-        """One doorway visit, forwarded into the box."""
-        box = _live_box(service)
-        if box is None:
-            # Registered but not loaded: abstain rather than fail. A service
-            # can be unloaded and reloaded under a hook that stays standing.
-            return None
+        """One doorway visit, forwarded into the box.
 
-        # ``handler``, not ``method``: PersistentBox.call names its own first
-        # parameter ``method``, and passing one by keyword collides with it.
-        #
-        # ``for_session`` lends the box the session this doorway was opened
-        # for, which the projection below has always told the *guest* and
-        # nothing ever told the guest's *Requests*. So a hook could read
-        # ``sdk`` fields naming a session and then have every session-scoped
-        # Request answered from the kernel's default one — which is how
-        # ``session.add_prompt_extra`` came to write into ``sessions.get(None)``
-        # and return False, silently, for every turn. Context only: see
-        # ``PersistentBox.call`` for why the chain deliberately does not move.
-        projected = project_context(ctx, moment)
-        result = box.call("__hook__", moment=moment, handler=method,
-                          for_session=projected.get("session_key") or "",
-                          ctx=projected,
-                          payload=project_payload(moment, payload))
-        if not result.ok:
-            logger.warning("%s hook %s.%s: %s", moment,
-                           getattr(service, "name", "?"), method, result.error)
+        Five of the six moments answer with data and nothing else, so the
+        whole of this is the walk plus one translation on the way back.
+        """
+        visit = _visit(service, moment, method, ctx,
+                       payload=project_payload(moment, payload))
+        if not visit.ok:
             return None
-
         if moment == "shape_scope":
-            return narrow_scope(payload, result.data)
-        return rebuild(moment, result.data)
+            return narrow_scope(payload, visit.data)
+        return rebuild(moment, visit.data)
 
     shim.__name__ = f"sandboxed_{moment}_{method}"
     shim.__doc__ = (f"{getattr(service, 'name', '?')}.{method} standing at "
@@ -375,10 +436,6 @@ def _build_escort(service, method: str, make_response=None):
     """
     def escort(ctx, request, proceed):
         """One model call, escorted through the box."""
-        box = _live_box(service)
-        if box is None:
-            return proceed(request)
-
         runtime = getattr(ctx, "runtime", None)
         placed = {"response": None, "called": False}
 
@@ -389,23 +446,31 @@ def _build_escort(service, method: str, make_response=None):
             placed["called"] = True
             return project_model_response(placed["response"])
 
+        def settled():
+            """The response this call has already produced, or place it now.
+
+            Abstention stays transparent exactly as it is for a native escort:
+            a call the box already placed is never placed twice, and a box
+            that never dialed still owes the kernel its round trip. Every way
+            of *not* answering — a dead box, a raise inside the guest, a
+            literal ``None`` — lands here.
+            """
+            return placed["response"] if placed["called"] else proceed(request)
+
         token = _park(dial)
         try:
-            result = box.call("__hook__", moment="llm_call", handler=method,
-                              ctx=project_context(ctx, "llm_call"),
-                              payload=project_model_request(request),
-                              token=token)
+            visit = _visit(service, "llm_call", method, ctx,
+                           payload=project_model_request(request),
+                           extra={"token": token})
         finally:
             # The phone is disconnected the moment the escort steps away, so a
             # token that leaked cannot be used to place a call later.
             _unpark(token)
 
-        if not result.ok:
-            logger.warning("llm_call escort %s.%s: %s",
-                           getattr(service, "name", "?"), method, result.error)
-            return placed["response"] if placed["called"] else proceed(request)
+        if not visit.ok:
+            return settled()
 
-        answer = result.data
+        answer = visit.data
         if isinstance(answer, dict) and answer.get("content") is not None:
             # The escort answered for itself. If it never dialed, the model was
             # never troubled — which is a legitimate thing for an escort to do
@@ -413,13 +478,27 @@ def _build_escort(service, method: str, make_response=None):
             if placed["called"]:
                 response = placed["response"]
                 response.content = str(answer.get("content") or "")
+                # ``tool_calls`` only when the answer carries the key. An
+                # escort that round-trips what it was given writes back what
+                # was already there, and one that edits them means it — while
+                # an answer that never mentions them leaves the model's own
+                # intent alone.
+                #
+                # This branch used to copy ``content`` and stop, which made the
+                # two halves of one contract disagree: ``bridge._make_response``
+                # (the never-dialed path, just below) has always carried
+                # ``tool_calls`` and ``error`` too. So whether an escort could
+                # shape what the model wanted to *do* depended on whether it
+                # had placed the call — an asymmetry nobody chose.
+                if "tool_calls" in answer:
+                    response.tool_calls = list(answer.get("tool_calls") or [])
                 return response
             if make_response is not None:
                 return make_response(answer)
             logger.warning("escort %s answered without placing the call, but "
                            "there is no way to build a response", method)
 
-        return placed["response"] if placed["called"] else proceed(request)
+        return settled()
 
     escort.__name__ = f"sandboxed_llm_call_{method}"
     escort.__doc__ = (f"{getattr(service, 'name', '?')}.{method} escorting the "

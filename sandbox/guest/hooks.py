@@ -21,8 +21,10 @@ register and therefore nothing to leak.
 **What crosses, and what does not.** A payload is a projection, not the kernel
 object. ``TurnEnding`` is the whole truth; ``PermissionQuery.request`` is a
 Request rendered as data; and the tool registry is projected to *names*, so a
-scope shaper can hide and reorder but cannot synthesize a tool (use
-``sdk.session.add_tool`` for that).
+scope shaper can hide a tool but cannot synthesize one (use
+``sdk.session.add_tool`` for that). It cannot reorder either — the names
+arrive sorted and what it returns is kept as a set — so a shaper is a filter
+and nothing else.
 
 **Abstain by returning None.** It is the default and it composes: a hook that
 speaks only when it must is one that works alongside every other plugin. A
@@ -85,11 +87,24 @@ class TurnEnding:
 
 @dataclass
 class TurnOutcome:
-    """What the ``turn_finish`` observers see once the turn is over."""
+    """What the ``turn_finish`` observers see once the turn is over.
+
+    ``reason`` says how it ended, and matters because ``end_turn`` is only
+    consulted on two of the nine ways a turn can end — a cancel, a priority
+    handoff and a failed action all walk past the doorman. This doorway fires
+    on every one of them, so it is where a doorman finds out what happened
+    when it was not asked.
+
+    Values: ``"model_finished"``, ``"budget_exhausted"`` (both shared with
+    :class:`TurnEnding`), ``"cancelled"``, ``"priority_handoff"``,
+    ``"action_failed"``, ``"no_action"``, ``"crashed"``, ``"redrive"``. Empty
+    means the kernel did not say.
+    """
 
     ok: bool = True
     cancelled: bool = False
     final_text: str = ""
+    reason: str = ""
 
 
 @dataclass
@@ -117,8 +132,16 @@ class PermissionQuery:
 class Scope:
     """The toolbox the agent is about to be shown.
 
-    Return a list of names to keep — a subset, in any order. Names you invent
-    are ignored, because a shaper narrows the toolbox and cannot widen it.
+    Return the names to keep — a subset. Order is not preserved and names you
+    invent are ignored: a shaper narrows the toolbox and can do nothing else
+    to it.
+
+    **You are asked more than once per turn, and sometimes outside one.** The
+    tool list is rebuilt for the state machine's specs, for the loop, and for
+    every model call, so a long turn asks repeatedly; loading a conversation
+    asks too, before any turn exists — and there ``ctx.attended`` is ``False``,
+    because no session is active yet. Answer from what you are given rather
+    than from a count of how often you have been asked.
     """
 
     tools: list = field(default_factory=list)
@@ -160,7 +183,18 @@ class ModelResponse:
 
 @dataclass
 class PermissionVerdict:
-    """A ``vet_permission`` answer. Abstain by returning None instead."""
+    """A ``vet_permission`` answer. Abstain by returning None instead.
+
+    **Deny beats allow.** Every gate is asked and any refusal wins, however
+    late it is registered — so answering ``allow=True`` does not settle the
+    question, it only declines to block it. This is the one doorway that does
+    not work first-answer-wins, because under that rule a permissive gate
+    loaded ahead of a restrictive one decided policy by filename order.
+
+    So answer ``allow=False`` when you mean it and ``None`` when you have no
+    opinion; do not use ``allow=True`` to try to overrule another plugin,
+    because it cannot.
+    """
 
     allow: bool = False
     reason: str = ""

@@ -65,21 +65,41 @@ THE SIX MOMENTS (in the order a turn meets them)
 ABSTAIN BY RETURNING None
 -------------------------
 It is the default and it is what composes. A hook that speaks only when it
-must works alongside every other plugin; one that always answers silences
-everyone behind it, because the first non-None verdict wins.
+must works alongside every other plugin.
 
 A hook that RAISES is logged and skipped — it can never break a turn. So is
 one whose service is unloaded, or whose box has died. The worst a hook can do
 is fall silent.
 
 
+HOW TWO HOOKS SETTLE A DISAGREEMENT
+-----------------------------------
+"end_turn"       first non-None wins. An early Allow waves the agent through
+                 and later doormen are not consulted.
+"vet_permission" DENY BEATS ALLOW. Every gate is asked and any refusal wins,
+                 however late it comes.
+"shape_scope"    folds — every shaper runs, each narrowing what the last one
+                 left.
+
+The two verdict doorways differ because the cost of being wrong differs: a
+doorman that guesses wrong costs a turn, a gate that guesses wrong costs a
+capability. Gates used to be first-wins too, which meant that with one
+permissive gate and one restrictive gate, plugin load order — in practice
+filename order — silently decided policy.
+
+
 KEEP THEM FAST
 --------------
 Hooks run synchronously on the drive thread, inside every turn they touch.
 Each one adds a box round trip (~70µs in-process, ~120µs subprocessed) to the
-latency of every reply. That is cheap, but it is not free, and it is paid on
-every turn whether or not you end up having an opinion. Do the expensive thing
-in a task and read its result here.
+latency of every reply, and it is paid whether or not you end up having an
+opinion.
+
+That is PER CONSULTATION, not per turn, and two doorways are consulted more
+than once. A scope shaper is asked 3 + one-per-model-call times, because the
+tool list is rebuilt for the specs, for the loop, and for every prompt — so a
+six-tool-call turn asks it ten times. A gate is asked once per unsafe Request.
+Do the expensive thing in a task and read its result here.
 
 
 WHAT CROSSES, AND WHAT DOES NOT
@@ -97,8 +117,9 @@ can act on:
 
 Two consequences worth knowing:
 
-  - A scope shaper can HIDE and REORDER, never synthesize. Names you invent
-    are ignored. To add a tool, use sdk.session.add_tool(...).
+  - A scope shaper can only HIDE. Names you invent are ignored, and the order
+    you return them in is discarded — the names arrive sorted and what you
+    hand back is kept as a set. To add a tool, use sdk.session.add_tool(...).
   - request.llm is the backend's NAME, not the backend. Assign another loaded
     backend's name to swap brains for that one call.
 

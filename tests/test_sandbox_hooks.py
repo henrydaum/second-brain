@@ -697,3 +697,264 @@ def test_lending_a_session_moves_the_world_and_never_the_grant(
     assert chain.root == "service:injector", "the grant did not"
     assert chain_session(chain) != "repl"
     assert not chain.attended, "a hook must not become askable"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What the escort doorway carries that the other five do not.
+#
+# ``build_shim`` and ``_build_escort`` are separate code paths, and the
+# differences between them are not all deliberate.
+# ──────────────────────────────────────────────────────────────────────
+
+ESCORT_WRITER = '''
+"""An escort that writes prompt text from inside the call it escorts."""
+
+from guest.bases import BaseService
+
+
+class Writer(BaseService):
+    """Escorts the model call, and tries to touch its own session."""
+
+    name = "writer"
+    exports = ["outcome"]
+    hooks = {"llm_call": "escort"}
+    requests = ["session.add_prompt_extra"]
+
+    def start(self, sdk):
+        """Begin."""
+        self._outcome = "never ran"
+        return True
+
+    def outcome(self, sdk):
+        """What happened when it tried."""
+        return self._outcome
+
+    def escort(self, sdk, ctx, request):
+        """Place the call, and write a note against this session."""
+        try:
+            sdk.session.add_prompt("a note from the escort", slot="escort")
+            self._outcome = "injected"
+        except sdk.Failed as error:
+            self._outcome = f"refused: {error}"
+        return sdk.llm.proceed(request)
+'''
+
+
+def test_an_escort_is_lent_the_session_it_is_escorting(
+        tmp_path, box, runtime, registry, session):
+    """An escort's own Requests resolve against the session it stands in.
+
+    ``build_shim`` hands the box ``for_session=<session key>`` so a hook's own
+    Requests reach the session whose doorway it stands at — the fix for
+    ``sessions.get(None)`` silently swallowing every ``turn_start`` injection.
+    ``_build_escort`` is a separate function and did not get that fix when the
+    other five did, so a boxed escort touching ``sdk.session.*`` reached the
+    kernel's default session instead.
+
+    Silent in exactly the way the original was: nothing raises, the write
+    returns, and the text lands nowhere.
+    """
+    written = {}
+    runtime.sessions = {"repl": session}
+    runtime.add_system_prompt_extra = (
+        lambda key, slot, value: written.setdefault(str(key), {}).update(
+            {slot: value}))
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        config={}, db=None, services={}, runtime=runtime, user_id=7,
+        session_key=session_key))
+
+    path = tmp_path / "service_writer.py"
+    path.write_text(ESCORT_WRITER, encoding="utf-8")
+    module = adapt(path)
+    assert module is not None, "the service did not bridge"
+    service = module.build_services({})["writer"]
+    service.bind_runtime(runtime=runtime)
+    assert service.load() is True
+
+    base, _calls = _backend("answered")
+    try:
+        handler = registry.wrap_llm_call(session, runtime, base)
+        handler(ModelRequest(llm="gpt-4o",
+                             messages=[{"role": "user", "content": "hi"}]))
+        outcome = service.outcome()
+    finally:
+        service.unload()
+        unload_box("service_writer")
+
+    assert outcome != "never ran", "the escort never ran at all"
+    assert outcome == "injected", outcome
+    assert written == {"repl": {"escort": "a note from the escort"}}
+
+
+ESCORT_ANSWERS = '''
+"""An escort that answers for itself after placing the call."""
+
+from guest.bases import BaseService
+from guest.hooks import ModelResponse
+
+
+class Answerer(BaseService):
+    """Dials, then hands back a response of its own construction."""
+
+    name = "answerer"
+    hooks = {"llm_call": "escort"}
+
+    def start(self, sdk):
+        """Begin."""
+        return True
+
+    def escort(self, sdk, ctx, request):
+        """Place the call, then answer with tool calls of our own."""
+        sdk.llm.proceed(request)
+        return ModelResponse(content="rewritten",
+                             tool_calls=[{"id": "x1", "name": "echo",
+                                          "arguments": "{}"}])
+'''
+
+
+def test_a_boxed_escort_can_hand_back_tool_calls(tmp_path, box, runtime,
+                                                 registry, session):
+    """An escort shapes what the model wants to *do*, not just what it said.
+
+    This used to depend on whether the escort had placed the call.
+    ``bridge._make_response`` — the path taken when an escort answers *without*
+    dialing — has always carried ``content``, ``tool_calls`` and ``error``, so
+    the capability existed through one door. The dialed branch copied only
+    ``content``, so the same escort keeping the same object lost the other two.
+
+    That was an inconsistency between two code paths rather than a policy
+    about what a plugin may do, which is why closing it is a fix and not a
+    grant: nothing new became possible, it just stopped depending on a detail
+    the author has no reason to think about.
+    """
+    path = tmp_path / "service_answerer.py"
+    path.write_text(ESCORT_ANSWERS, encoding="utf-8")
+    module = adapt(path)
+    assert module is not None, "the service did not bridge"
+    service = module.build_services({})["answerer"]
+    service.bind_runtime(runtime=runtime)
+    assert service.load() is True
+
+    base, calls = _backend("from the model")
+    try:
+        handler = registry.wrap_llm_call(session, runtime, base)
+        response = handler(ModelRequest(
+            llm="gpt-4o", messages=[{"role": "user", "content": "hi"}]))
+    finally:
+        service.unload()
+        unload_box("service_answerer")
+
+    assert len(calls) == 1
+    assert response.content == "rewritten", "the escort's content was ignored"
+    assert response.tool_calls == [
+        {"id": "x1", "name": "echo", "arguments": "{}"}], (
+        "the escort's tool_calls were dropped on the dialed path")
+
+
+ESCORT_QUIET = '''
+"""An escort that rewrites the text and says nothing about tool calls."""
+
+from guest.bases import BaseService
+
+
+class Quietly(BaseService):
+    """Edits what was said, leaves what was wanted alone."""
+
+    name = "quietly"
+    hooks = {"llm_call": "escort"}
+
+    def start(self, sdk):
+        """Begin."""
+        return True
+
+    def escort(self, sdk, ctx, request):
+        """Place the call, then hand back its own response, edited."""
+        response = sdk.llm.proceed(request)
+        response.content = response.content.upper()
+        return response
+'''
+
+
+def test_an_escort_that_only_edits_text_leaves_tool_calls_alone(
+        tmp_path, box, runtime, registry, session):
+    """The other half of the rule: a round trip must be a no-op.
+
+    ``tool_calls`` is applied only when the answer carries the key, so an
+    escort that took the model's response and changed one field writes back
+    what was already there. Without that condition, closing the asymmetry
+    above would have let an escort silently clear a model's tool calls just by
+    returning a response it had not thought about.
+    """
+    path = tmp_path / "service_quietly.py"
+    path.write_text(ESCORT_QUIET, encoding="utf-8")
+    module = adapt(path)
+    assert module is not None, "the service did not bridge"
+    service = module.build_services({})["quietly"]
+    service.bind_runtime(runtime=runtime)
+    assert service.load() is True
+
+    wanted = [{"id": "t1", "name": "echo", "arguments": "{}"}]
+
+    def base(request):
+        """A model that wants to act."""
+        return SimpleNamespace(content="hello", tool_calls=list(wanted),
+                               error=None, is_error=False)
+
+    try:
+        handler = registry.wrap_llm_call(session, runtime, base)
+        response = handler(ModelRequest(
+            llm="gpt-4o", messages=[{"role": "user", "content": "hi"}]))
+    finally:
+        service.unload()
+        unload_box("service_quietly")
+
+    assert response.content == "HELLO"
+    assert response.tool_calls == wanted, (
+        "an escort that never mentioned tool_calls still changed them")
+
+
+def test_a_boxed_gate_is_not_shown_the_decision():
+    """``PermissionQuery.decision`` reaches a native gate and not a boxed one.
+
+    ``HookRegistry.vet_permission`` takes a ``decision`` and puts it on the
+    query; ``project_payload`` carries ``tool_name``, ``command``, ``stage``,
+    ``origin``, ``request`` and ``chain`` — and stops. So the kernel's own
+    reason for asking is the one thing a sandboxed gate cannot read, which is
+    awkward for the gate that would most like it.
+
+    Recorded rather than fixed: projecting a ``Decision`` means deciding what
+    of it may cross, which is a policy question rather than an oversight.
+    """
+    from sandbox.hooks import project_payload
+
+    query = SimpleNamespace(tool_name="shell", command="rm -rf /",
+                            stage="approval", origin="request",
+                            request=None, chain=None,
+                            decision=SimpleNamespace(reason="unsafe"))
+
+    projected = project_payload("vet_permission", query)
+
+    assert set(projected) == {"tool_name", "command", "stage", "origin",
+                              "request", "chain"}
+
+
+def test_a_shaper_cannot_reorder_the_toolbox_whatever_the_docs_say():
+    """Narrowing keeps names, not order — so "reorder" is not a capability.
+
+    ``guest/hooks.Scope`` and ``templates/hook_template.py`` both tell an
+    author a shaper may "hide and reorder". It cannot: the payload arrives
+    ``sorted()`` and ``narrow_scope`` stores a ``set``, so the order a shaper
+    returns is discarded at both ends. Harmless in itself, and a docs fix
+    rather than a code one — but an author who believed it would write a
+    prioritizer that silently did nothing.
+    """
+    from sandbox.hooks import narrow_scope
+
+    registry = SimpleNamespace(tools={"a": 1, "b": 2, "c": 3},
+                               visible_tool_names=None)
+
+    narrow_scope(registry, ["c", "a"])
+
+    assert registry.visible_tool_names == {"a", "c"}
+    assert isinstance(registry.visible_tool_names, set), (
+        "order now survives; the docs' 'reorder' claim could be made true")

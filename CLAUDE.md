@@ -2442,6 +2442,40 @@ persistent surface; fed by the `SESSION_CONVERSATION_CHANGED` bus channel).
   priority knob is deliberately deferred until two plugins actually conflict. Every agent enact ledger row records the driving model in
   `data_json.llm` (post-escort) and doorway-forced acts carry
   `data_json.hook`.
+
+  **How two hooks at one doorway settle a disagreement is per doorway, and
+  follows the cost of being wrong.** `end_turn` is first-answer-wins, so an
+  early `Allow` silences later doormen — a doorman that guesses wrong costs a
+  turn. `vet_permission` is **deny beats allow**: every gate is asked and any
+  refusal wins however late it comes, because a gate that guesses wrong costs
+  a capability, and under first-wins a permissive gate loaded ahead of a
+  restrictive one decided policy by *filename order*. `shape_scope` folds,
+  each shaper narrowing what the last left. A malformed answer is an
+  abstention everywhere.
+
+  **`end_turn` is consulted on two of the nine ways out of
+  `ConversationLoop.drive`** — a cancel, a priority handoff and a failed
+  action all leave without asking anybody. `turn_finish` fires on all nine and
+  carries `TurnOutcome.reason` (`model_finished`, `budget_exhausted`,
+  `cancelled`, `priority_handoff`, `action_failed`, `no_action`, `crashed`,
+  `redrive`), which is where a doorman finds out about the exits it was not
+  asked about. The loop labels its own exits into `self._exit_reason` — a
+  local would die at `drive`'s single `return`, and the caller has to be able
+  to read it in a `finally` even when `drive` raised. `redrive` reaches an
+  observer only when the drive budget voided a restart, since observers fire
+  once per *logical* turn.
+
+  **A shaper is never handed `runtime.tool_registry` itself.**
+  `narrow_scope` writes `visible_tool_names` in place, and
+  `active_tool_registry`'s layers are all conditional — with no profile scope
+  and no pinned extras the "deepest layer" is the global singleton. So a
+  per-session narrowing escaped process-wide *and* ratcheted, because the
+  intersect is against the previous consultation's answer: a shaper whose
+  answer legitimately varies could narrow but never widen back. It detaches a
+  copy first, guarded by `hooks.has(SHAPE_SCOPE)` so installs with no shaper —
+  every install today — pay nothing. Note the doorway is consulted `3 + one
+  per model call` times per turn, and also at conversation load where
+  `ctx.attended` is `False` because no session is active yet.
 - **Ship a task with a schedule**: create the Timekeeper job from `on_install`
   (`sdk.services.call("timekeeper", "create_job", self.name, self.job)`,
   read-then-skip so an edited cron survives) and remove it from

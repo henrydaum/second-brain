@@ -21,6 +21,9 @@ from typing import Any, Callable
 
 from state_machine.conversation import CallableSpec, ConversationState, Participant
 from runtime.conversation_loop import ConversationLoop, tool_summary
+# ``runtime.hooks`` imports nothing from ``runtime``, so naming the moment
+# rather than repeating the string costs no import-order risk.
+from runtime.hooks import SHAPE_SCOPE
 from state_machine.conversation_phases import BASE_PHASE
 from state_machine.forms import schema_to_form_steps
 from runtime.security_modes import YOLO, prompt_note
@@ -97,27 +100,73 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
     if scope:
         registry = scoped_registry(runtime.tool_registry, scope, db=runtime.db)
     extras = list((session.extra_tool_instances if session else []) or [])
-    # Cloning needs the real ToolRegistry shape (db/config/services). When
-    # the runtime is wired with a stub registry (tests), extras can't be
-    # plumbed through anyway — fall back to the base registry.
-    if extras and hasattr(registry, "db") and hasattr(registry, "config") and hasattr(registry, "services"):
-        from agent.tool_registry import ToolRegistry
-        cloned = ToolRegistry(registry.db, registry.config, registry.services)
-        cloned.orchestrator = getattr(registry, "orchestrator", None)
-        cloned.runtime = getattr(registry, "runtime", None)
-        cloned.tools.update(registry.tools)
-        if getattr(registry, "visible_tool_names", None) is not None:
-            cloned.visible_tool_names = set(registry.visible_tool_names)
-        for tool in extras:
-            cloned.tools[tool.name] = tool
-            if cloned.visible_tool_names is not None:
-                cloned.visible_tool_names.add(tool.name)
-        registry = cloned
-    # Opt-in scope shapers can add/hide tools per session. No-op when no shaper is registered.
+    if extras:
+        cloned = _detached(registry)
+        # Cloning needs the real ToolRegistry shape (db/config/services). When
+        # the runtime is wired with a stub registry (tests), extras can't be
+        # plumbed through anyway — fall back to the base registry.
+        if cloned is not None:
+            for tool in extras:
+                cloned.tools[tool.name] = tool
+                if cloned.visible_tool_names is not None:
+                    cloned.visible_tool_names.add(tool.name)
+            registry = cloned
+    # Opt-in scope shapers can hide tools per session. No-op when no shaper is
+    # registered — which is every install today, so the detach below is free.
     hooks = getattr(runtime, "hooks", None)
-    if hooks is not None and session is not None:
+    if hooks is not None and session is not None and hooks.has(SHAPE_SCOPE):
+        # Never hand a shaper the global registry. ``narrow_scope`` writes
+        # ``visible_tool_names`` *in place*, and the layers above are all
+        # conditional: with no profile scope and no pinned extras — the
+        # ordinary case — ``registry`` is still ``runtime.tool_registry``
+        # itself, the one object every session reads.
+        #
+        # That made a per-session decision permanent and process-wide, and it
+        # ratcheted: ``narrow_scope`` intersects with the previous value, so a
+        # shaper that legitimately varies its answer (the hook template's own
+        # example keys on ``ctx.attended``, and one turn consults this doorway
+        # 3 + one-per-model-call times) could narrow but never widen back. The
+        # visible set walked toward empty and stayed there until restart.
+        #
+        # Detaching also restores the intersect to meaning what it was written
+        # to mean — *this fold, between two shapers in one consultation* —
+        # because each consultation now starts from the profile's own
+        # visibility rather than from whatever the last one left behind.
+        if registry is runtime.tool_registry:
+            registry = _detached(registry) or registry
         registry = hooks.shape_scope(session, registry, runtime=runtime)
     return registry
+
+
+def _detached(registry):
+    """A copy of ``registry`` that can be narrowed without touching the original.
+
+    Returns ``None`` when ``registry`` is not a real :class:`ToolRegistry` —
+    the runtime is wired with a stub in several tests, and there is nothing to
+    clone from one. Callers fall back to the registry they already had.
+
+    Shallow on purpose: ``tools`` is copied so an entry can be added, and
+    ``visible_tool_names`` is copied so it can be narrowed, but the tool
+    *instances* are shared. A tool is stateless with respect to which session
+    can see it.
+    """
+    if not all(hasattr(registry, attr) for attr in ("db", "config", "services")):
+        return None
+    from agent.tool_registry import ToolRegistry
+
+    try:
+        cloned = ToolRegistry(registry.db, registry.config, registry.services)
+    except Exception:                                   # noqa: BLE001
+        # A stub that carries the three attributes but is not constructible.
+        # Answering None keeps the caller on the path it had before.
+        logger.exception("could not detach the tool registry")
+        return None
+    cloned.orchestrator = getattr(registry, "orchestrator", None)
+    cloned.runtime = getattr(registry, "runtime", None)
+    cloned.tools.update(registry.tools)
+    if getattr(registry, "visible_tool_names", None) is not None:
+        cloned.visible_tool_names = set(registry.visible_tool_names)
+    return cloned
 
 
 def active_llm(runtime, session: RuntimeSession | None = None):

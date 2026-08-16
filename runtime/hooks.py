@@ -54,10 +54,22 @@ Registration: ``runtime.hooks.add(moment, fn)`` from a service's
 ``bind_runtime``/``_load``; ``runtime.hooks.remove(fn)`` at unload. See
 ``templates/hook_template.py`` for worked examples of every kind.
 
-Ordering: hooks run in registration order — for verdicts the first non-None
-answer wins, for escorts the first registered is the outermost wrapper — and
-registration order is simply plugin load order. There is deliberately no
-priority knob yet; add one only when two real plugins actually conflict.
+Ordering: hooks run in registration order — which is simply plugin load order —
+and for escorts the first registered is the outermost wrapper. There is
+deliberately no priority knob; add one only when two real plugins actually
+conflict.
+
+How the two *verdict* doorways settle a disagreement differs, on purpose:
+
+- ``end_turn`` is **first non-None wins**. An early ``Allow`` positively waves
+  the agent through and later doormen are not consulted.
+- ``vet_permission`` is **deny beats allow**. Every gate is asked, and any
+  refusal wins however late it comes.
+
+Composition follows the cost of being wrong. A doorman that guesses wrong costs
+a turn; a gate that guesses wrong costs a capability. Under first-wins a
+permissive gate loaded before a restrictive one silently decided policy by
+filename order, which is not a decision anybody makes on purpose.
 """
 
 from __future__ import annotations
@@ -142,11 +154,45 @@ class TurnEnding:
 
 @dataclass
 class TurnOutcome:
-    """What the ``turn_finish`` observers see once the logical turn is over."""
+    """What the ``turn_finish`` observers see once the logical turn is over.
+
+    ``reason`` says *how* it ended, and exists because ``end_turn`` is only
+    consulted on two of the nine ways out of ``ConversationLoop.drive``. A
+    doorman naturally reads itself as "the doorman at the exit"; it is the
+    doorman at *two* exits, and a cancel, a priority handoff or a failed
+    action all walk straight past it. ``turn_finish`` fires on all of them, so
+    this is where an observer can reconcile what it did or did not get asked
+    about.
+
+    The vocabulary extends ``TurnEnding.reason`` rather than competing with
+    it — the first two values are that field's, and mean the same thing here:
+
+    - ``"model_finished"`` — the model produced final text and the doormen let
+      it leave.
+    - ``"budget_exhausted"`` — the loop ran out of tool-call/iteration budget.
+    - ``"cancelled"`` — somebody stopped the turn.
+    - ``"priority_handoff"`` — the state machine gave priority back mid-turn.
+    - ``"action_failed"`` — a non-tool action failed and ended the drive. (A
+      failed *tool* call is feedback, not an ending; the loop continues.)
+    - ``"no_action"`` — the loop asked for an action and got none.
+    - ``"crashed"`` — ``drive`` raised. Set by the runtime, not the loop, which
+      by then is not running.
+    - ``"redrive"`` — the drive ended so the turn could be driven again.
+
+    **``"redrive"`` is rare here and that is not an accident.** Observers fire
+    once per *logical* turn, so a re-driven turn reaches them only on the drive
+    that actually ends it. It surfaces only when ``allow_restart=False`` voided
+    a restart the loop had asked for — a turn that wanted to go round again and
+    was not allowed to.
+
+    Empty string means the loop never said, which should not happen and is
+    left readable rather than guessed at.
+    """
 
     ok: bool = True
     cancelled: bool = False
     final_text: Optional[str] = None
+    reason: str = ""
 
 
 @dataclass
@@ -278,6 +324,20 @@ class HookRegistry:
             except ValueError:
                 pass
 
+    def has(self, moment: str) -> bool:
+        """Whether anybody is standing at ``moment``.
+
+        For callers that must *prepare* something before knocking and would
+        rather not pay for it when the socket is empty — ``active_tool_registry``
+        detaches a copy of the tool registry before letting a shaper near it,
+        and every install today has no shaper at all.
+
+        Deliberately not used to skip the consultation itself: the walk over an
+        empty list already costs nothing, and a caller that branched on this
+        would have two code paths where one would do.
+        """
+        return bool(self._hooks.get(moment))
+
     def stage_attachment(self, session, attachment: Any) -> bool:
         """Queue one attachment for the next LLM call in this session.
 
@@ -308,7 +368,31 @@ class HookRegistry:
                        runtime=None, stage: str = "approval",
                        origin: str = "tool", request=None, chain=None,
                        decision=None) -> PermissionVerdict | None:
-        """Return the first decisive verdict, or None if every gate abstains.
+        """Ask every gate. A refusal wins; otherwise the first allow wins.
+
+        **Deny beats allow, and that is the one place this differs from
+        ``end_turn``.** Doormen are first-non-``None``-wins, so an early
+        ``Allow`` silences the rest. Gates cannot work that way: with a
+        permissive gate and a restrictive one, first-wins meant *plugin load
+        order* — in practice filename order — decided whether a capability was
+        granted. Nobody chooses that, and nothing surfaces it.
+
+        The two doorways differ because the stakes differ, which is worth
+        stating so they do not look merely inconsistent: a wrong ``end_turn``
+        verdict costs a turn, and a wrong ``vet_permission`` allow costs a
+        capability. Composition follows the cost of being wrong, so this
+        doorway fails safe and the other fails cheap.
+
+        The cost is that a question nobody refuses now walks past every gate
+        instead of stopping at the first answer — N box round trips rather than
+        one, for sandboxed gates. A refusal still short-circuits, so the
+        expensive case is the permissive one.
+
+        Anything that is not recognisably a verdict is an abstention, with a
+        warning: ``sandbox.hooks.rebuild`` already draws that line for the
+        sandboxed side ("inventing a verdict from a malformed answer would be
+        worse than hearing nothing"), and the approver reads ``verdict.allow``
+        without guarding it.
 
         ``origin`` and the three fields after it carry a sandboxed Request's
         full context for gates that want it; gates written against
@@ -318,15 +402,28 @@ class HookRegistry:
         query = PermissionQuery(tool_name=tool_name, command=command,
                                 stage=stage, origin=origin, request=request,
                                 chain=chain, decision=decision)
+        allowed = None
         for gate in self._hooks[VET_PERMISSION]:
             try:
                 verdict = gate(ctx, query)
             except Exception:
                 logger.exception("Permission gate raised; treating as abstain")
                 continue
-            if verdict is not None:
+            if verdict is None:
+                continue
+            decided = getattr(verdict, "allow", None)
+            if decided is None:
+                logger.warning("Permission gate answered with %s, not a "
+                               "verdict; treating as abstain",
+                               type(verdict).__name__)
+                continue
+            if not decided:
                 return verdict
-        return None
+            if allowed is None:
+                # Remember it, but keep asking — a later gate may refuse, and
+                # the whole point is that it gets to.
+                allowed = verdict
+        return allowed
 
     def shape_scope(self, session, registry, runtime=None):
         """Fold every shaper over the registry, in registration order."""
@@ -369,6 +466,15 @@ class HookRegistry:
         # Staged-but-undrained attachments do not survive the turn.
         if getattr(session, "staged_attachments", None):
             session.staged_attachments.clear()
+        # Neither does a queued-but-undrained agent action, which
+        # ``runtime/session.py`` has always said shared this exact lifecycle
+        # and which nothing actually cleared. Most turns drain the queue at a
+        # loop boundary and never reach here with anything in it; a turn that
+        # ended some other way — a failed action, a cancel, a priority
+        # handoff — left the action sitting there to fire on somebody's *next*
+        # turn instead, in a session whose state the queuing hook never saw.
+        if getattr(session, "pending_agent_actions", None):
+            session.pending_agent_actions.clear()
         # Neither does a turn-scoped security mode. Cleared here, after the
         # observers rather than by one of them, for the reason the compaction
         # layer and the subagent barrier are stacked rather than registered:

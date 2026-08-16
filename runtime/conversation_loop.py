@@ -294,6 +294,15 @@ class ConversationLoop:
         self._tools_override_once: list | None = None
         self._tool_choice_once = None
         self._suppress_tools_once = False
+        # How this drive ended, for the ``turn_finish`` observers one layer up
+        # (``TurnOutcome.reason``). ``drive`` has nine ways out and returns one
+        # tuple, so the facts that tell them apart — ``restarting``,
+        # ``action_failed``, whether the iteration budget ran out — are locals
+        # that die at the return. An attribute survives it, which is the whole
+        # reason this is not a fourth element of the tuple: the caller must be
+        # able to read it in its own ``finally``, including when ``drive``
+        # raised and returned nothing at all.
+        self._exit_reason = ""
 
     def _call_limit(self, tool) -> int:
         """How many times `tool` may be called this message.
@@ -352,6 +361,11 @@ class ConversationLoop:
         self._tools_override_once = None
         self._tool_choice_once = None
         self._suppress_tools_once = False
+        # Reset here rather than in the ``finally`` below, because the caller
+        # reads it *after* ``drive`` returns. Production builds a fresh loop
+        # per drive (``runtime_config.build_loop``), but tests reuse one rig
+        # across several, so the stale value has to be cleared on the way in.
+        self._exit_reason = ""
 
         new_messages: list[dict[str, Any]] = []
         attachments: list[str] = []
@@ -369,19 +383,30 @@ class ConversationLoop:
 
         try:
             for _ in range(max_iterations):
-                if self._cancelled() or cs.turn_priority != actor_id:
+                # Two different endings, deliberately no longer one branch:
+                # a person stopped the turn, or the state machine handed
+                # priority back mid-flight. They leave by the same door and
+                # mean opposite things to a ``turn_finish`` observer.
+                if self._cancelled():
+                    self._exit_reason = "cancelled"
+                    break
+                if cs.turn_priority != actor_id:
+                    self._exit_reason = "priority_handoff"
                     break
 
                 self._drain_queued_messages(history, new_messages)
                 self._used_attachments_for_last_action = False
                 action_type, content = self._next_action(cs, history, bundle)
                 if not action_type:
+                    # ``_next_action`` only declines when it noticed a cancel.
+                    self._exit_reason = self._exit_reason or "no_action"
                     break
                 if self._used_attachments_for_last_action:
                     # Only the first LLM call of the turn sees the bundle.
                     bundle = AttachmentBundle()
 
                 if self._cancelled():
+                    self._exit_reason = "cancelled"
                     break
                 if action_type == "end_turn":
                     # The doorman at the exit: the agent says "I'm done" —
@@ -390,6 +415,7 @@ class ConversationLoop:
                     gate = self._doorman_gate(cs, content, history, new_messages, db, conversation_id)
                     if gate == "redrive":
                         restarting = True
+                        self._exit_reason = "redrive"
                         break
                     if gate == "again":
                         continue
@@ -431,6 +457,7 @@ class ConversationLoop:
                     # escalation). Exit without end_turn so the agent keeps
                     # priority; the re-driven loop finishes the logical turn.
                     restarting = True
+                    self._exit_reason = "redrive"
                     break
                 if not result.ok:
                     if action_type == "call_tool":
@@ -441,9 +468,16 @@ class ConversationLoop:
                         # course. max_iterations bounds a repeat offender.
                         continue
                     action_failed = True
+                    self._exit_reason = "action_failed"
                     break
                 if action_type == "end_turn":
+                    self._exit_reason = "model_finished"
                     break
+            else:
+                # ``for``/``else``: the loop ran every iteration without
+                # breaking, which is precisely what "ran out of budget" means
+                # and is the one ending with no ``break`` of its own to label.
+                self._exit_reason = "budget_exhausted"
 
             if cs.turn_priority == actor_id and not restarting and not self._restart_requested():
                 # The barrier before anything else that ends the turn. It used
@@ -464,6 +498,7 @@ class ConversationLoop:
                 # agent turn arriving after the person said stop.
                 if not self._cancelled() and self._subagent_barrier(self._session()):
                     restarting = True
+                    self._exit_reason = "redrive"
                 else:
                     # Only nudge the LLM for a wrap-up when the loop genuinely
                     # ran out of budget/iterations — a failed action ending the

@@ -498,6 +498,10 @@ class ConversationRuntime:
         })
         crash_error: str | None = None
         reply, new_messages, attachments = None, [], []
+        # Hoisted so the ``finally`` can read ``loop._exit_reason`` even when
+        # ``build_loop`` or ``drive`` raised. Assigned inside the ``try``, this
+        # was simply not bound on the path that most needs a reason.
+        loop = None
         try:
             loop = _cfg.build_loop(self, session.key)
             reply, new_messages, attachments = loop.drive(
@@ -569,10 +573,23 @@ class ConversationRuntime:
                 # exhausted-budget paths void restart_turn above, so those
                 # turns always reach their observers.)
                 from runtime.hooks import TurnOutcome
+                # The loop labels its own exits; a crash is the one ending it
+                # cannot label, because it stopped running before it could.
+                # Cancellation is checked ahead of the loop's answer too: the
+                # flag can be set between the loop's last check and its return,
+                # and "somebody stopped this" outranks whatever the loop was
+                # doing when they did.
+                if crash_error is not None:
+                    reason = "crashed"
+                elif was_cancelled:
+                    reason = "cancelled"
+                else:
+                    reason = getattr(loop, "_exit_reason", "") or ""
                 hooks.finish_turn(session, TurnOutcome(
                     ok=crash_error is None,
                     cancelled=was_cancelled,
                     final_text=reply or "",
+                    reason=reason,
                 ), runtime=self)
 
         from events.event_channels import SESSION_TURN_COMPLETED

@@ -881,11 +881,31 @@ Six moments: `turn_start`, `shape_scope`, `vet_permission`, `llm_call`,
 `end_turn`, `turn_finish`. Every one is `method(self, sdk, ctx, payload)`, and
 returning `None` abstains. Payloads and verdicts live in `guest.hooks`.
 
+"Once per turn" is the shape, not the count. `shape_scope` is asked `3 +
+one-per-model-call` times, because the tool list is rebuilt for the state
+machine's specs, for the loop, and for every prompt — and also at conversation
+load, before any turn exists. `vet_permission` is asked once per unsafe
+Request. Budget your hook per *consultation*.
+
 `end_turn` is the richest of them and the least used. Its verdicts are `Allow`,
 `SendBack(note)` (push the agent back inside with a note), `RequireTool(name)`
 (make it call something before it may leave), and `Redrive()`. A doorman can
 never trap the agent: past `DOORMAN_FIRE_LIMIT` interventions in one turn the
 kernel lets it out regardless.
+
+It is also only consulted on two of the nine ways a turn can end — a cancel, a
+handoff of priority, a failed action all walk past it. `turn_finish` fires on
+all of them and its `outcome.reason` says which happened
+(`"model_finished"`, `"budget_exhausted"`, `"cancelled"`, `"priority_handoff"`,
+`"action_failed"`, `"no_action"`, `"crashed"`, `"redrive"`), so that is where a
+doorman learns about the exits it never got asked about.
+
+Two hooks at one doorway settle a disagreement differently depending on which
+doorway it is. `end_turn` is first-answer-wins, so an early `Allow` silences
+later doormen. **`vet_permission` is deny-beats-allow**: every gate is asked
+and any refusal wins however late it comes, because otherwise plugin load
+order would decide policy. `shape_scope` folds — each shaper narrows what the
+last one left.
 
 `turn_start` is the mirror image — it runs before the agent begins, and it
 adjusts rather than judges. Staging an attachment into the coming turn is
@@ -909,9 +929,9 @@ brains for that call. `sdk.llm.proceed` works only inside an `llm_call`
 hook; anywhere else there is no call in flight and it is refused.
 
 A scope shaper is handed tool **names** and returns the ones to keep: it can
-hide and reorder but never synthesize, so adding a tool is
-`sdk.session.add_tool`. And a hook that raises, or whose service is unloaded,
-simply abstains — it can never break a turn.
+only hide. Names it invents are ignored and the order it returns them in is
+discarded, so adding a tool is `sdk.session.add_tool`. And a hook that raises,
+or whose service is unloaded, simply abstains — it can never break a turn.
 
 Hooks run synchronously on the drive thread, so they are paid on every turn
 they touch. Keep them fast.

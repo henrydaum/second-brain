@@ -169,11 +169,26 @@ Runs only for UNSAFE. In order, first decisive answer wins:
 
 | # | Stage | Source of truth | Notes |
 |---|---|---|---|
-| 1 | `vet_permission` hooks | any service | stage is `approval` or `unattended_call` by attendance |
+| 1 | `vet_permission` hooks | any service | stage is `approval` or `unattended_call` by attendance; **within the layer, deny beats allow** — see below |
 | 2 | secret ownership | setting registry | a plugin reading the credential it declared |
 | 3 | attendance | `policy.attended_now` | nobody home ⇒ refuse, never block |
 | 4 | **the mode** | `runtime.security_mode(session)` | `lockdown` ⇒ no, `yolo` ⇒ yes, `ask` ⇒ fall through. See §6a |
 | 5 | dialog | `runtime.request_input` | 300 s; timeout and cancel both mean **no**. Its *options* are where a yes can be kept — `sandbox/options.py` |
+
+"First decisive answer wins" above is about the five *layers*. Inside layer 1
+the rule is different: `HookRegistry.vet_permission` asks **every** gate and
+any explicit deny wins, however late it was registered. A refusal
+short-circuits the walk; an allow is remembered and the walk continues.
+
+It was first-answer-wins, which meant that with one permissive gate and one
+restrictive gate the verdict depended on registration order — i.e. on plugin
+load order, i.e. on filenames. That is not a decision anybody makes on
+purpose, and nothing surfaced it. `end_turn` keeps first-wins deliberately:
+composition follows the cost of being wrong, and a doorman that guesses wrong
+costs a turn where a gate that guesses wrong costs a capability.
+
+An answer that is not recognisably a verdict is an abstention, matching what
+`sandbox.hooks.rebuild` already does for the sandboxed side.
 
 ## 6a. The mode — a standing answer, not a new layer
 

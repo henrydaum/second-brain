@@ -247,6 +247,347 @@ def retarget_trees(monkeypatch, tmp_path, **overrides):
     return built
 
 
+# ── Standing at doorways, and writing down what happened ──────────────
+#
+# A hook test asserts about *visits*: which doorway, in what order, shown
+# what. Recording that is the whole rig, and it has to record identically on
+# both sides of the sandbox boundary or the two can never be compared.
+#
+# A native probe appends to a list. A sandboxed one cannot — it shares no
+# memory with the test, and journalling to a file would mean ``sdk.fs.write``,
+# which is a policy event in the middle of the thing being measured. So a
+# boxed probe accumulates in ``self._seen`` and the test reads it back through
+# an export, which is what ``tests/test_sandbox_hooks.py`` already does.
+#
+# Both sides therefore produce *the same list of dicts*, and that is the
+# point: ``assert boxed == native`` is one line that checks the whole
+# projection layer in ``sandbox/hooks.py`` is faithful. Dicts rather than
+# tuples because a tuple crosses the wire as a list.
+
+#: Each moment's payload, narrowed to the fields worth comparing. Kept small
+#: on purpose — a record holding ``messages`` would differ between the two
+#: sides for reasons that are not about hooks.
+def visit(moment, session_key="", user_id=0, conversation_id=0, attended=True,
+          **payload):
+    """One doorway visit, in the shape both sides agree to write."""
+    return {"moment": moment, "session_key": str(session_key or ""),
+            "user_id": int(user_id or 0),
+            "conversation_id": int(conversation_id or 0),
+            "attended": bool(attended), **payload}
+
+
+def native_probe(journal, moments, answers=None):
+    """Native hook callables that write to ``journal``, one per moment.
+
+    ``answers`` maps a moment to what its hook returns — a value, or a
+    callable taking the payload. Anything unnamed abstains.
+
+    Returns ``{moment: fn}``; register with ``hooks.add(moment, fn)``. The
+    records are byte-identical to what :func:`probe_source` produces in a box,
+    so a test can assert the two journals are equal.
+    """
+    answers = dict(answers or {})
+
+    def _answer(moment, payload):
+        reply = answers.get(moment)
+        return reply(payload) if callable(reply) else reply
+
+    def _ident(ctx):
+        session = getattr(ctx, "session", None)
+        runtime = getattr(ctx, "runtime", None)
+        key = str(getattr(session, "key", "") or "")
+        attended = True
+        reader = getattr(runtime, "is_attended", None)
+        if callable(reader) and key:
+            try:
+                attended = bool(reader(key))
+            except Exception:
+                attended = True
+        return {"session_key": key,
+                "user_id": getattr(session, "user_id", 0),
+                "conversation_id": getattr(session, "conversation_id", 0),
+                "attended": attended}
+
+    def turn_start(ctx, payload):
+        journal.append(visit("turn_start", **_ident(ctx)))
+        return _answer("turn_start", payload)
+
+    def shape_scope(ctx, registry):
+        # Native sees a live registry; the guest sees names. Record names, so
+        # the two agree.
+        names = sorted(getattr(registry, "tools", None) or {})
+        journal.append(visit("shape_scope", tools=names, **_ident(ctx)))
+        return _answer("shape_scope", names)
+
+    def vet_permission(ctx, query):
+        journal.append(visit(
+            "vet_permission", **_ident(ctx),
+            tool_name=str(getattr(query, "tool_name", "") or ""),
+            command=str(getattr(query, "command", "") or ""),
+            stage=str(getattr(query, "stage", "") or ""),
+            origin=str(getattr(query, "origin", "") or "")))
+        return _answer("vet_permission", query)
+
+    def llm_call(ctx, request, proceed):
+        journal.append(visit(
+            "llm_call", **_ident(ctx),
+            llm=str(getattr(request, "llm", "") or ""),
+            messages=len(getattr(request, "messages", None) or []),
+            tools=len(getattr(request, "tools", None) or [])))
+        reply = answers.get("llm_call")
+        return reply(request, proceed) if callable(reply) else proceed(request)
+
+    def end_turn(ctx, ending):
+        journal.append(visit(
+            "end_turn", **_ident(ctx),
+            final_text=str(getattr(ending, "final_text", "") or ""),
+            reason=str(getattr(ending, "reason", "") or ""),
+            doorman_fires=int(getattr(ending, "doorman_fires", 0) or 0)))
+        return _answer("end_turn", ending)
+
+    def turn_finish(ctx, outcome):
+        journal.append(visit(
+            "turn_finish", **_ident(ctx),
+            ok=bool(getattr(outcome, "ok", True)),
+            cancelled=bool(getattr(outcome, "cancelled", False)),
+            final_text=str(getattr(outcome, "final_text", "") or ""),
+            reason=str(getattr(outcome, "reason", "") or "")))
+        return _answer("turn_finish", outcome)
+
+    built = {"turn_start": turn_start, "shape_scope": shape_scope,
+             "vet_permission": vet_permission, "llm_call": llm_call,
+             "end_turn": end_turn, "turn_finish": turn_finish}
+    return {m: built[m] for m in moments}
+
+
+def moments_in(journal):
+    """Just the doorway names, in order — what most assertions want."""
+    return [entry["moment"] for entry in journal]
+
+
+def visited(journal):
+    """The doorways that fired, deduplicated, in first-seen order.
+
+    ``shape_scope`` is consulted several times per turn (``tool_specs_for``,
+    ``scoped_tool_names``, ``new_state``, ``build_loop``), which is real and
+    is pinned on its own in ``tests/test_hooks_turn_paths.py``. Every other
+    assertion wants the *set* of doorways a turn reached, not that count.
+    """
+    seen = []
+    for moment in moments_in(journal):
+        if moment not in seen:
+            seen.append(moment)
+    return seen
+
+
+# ── A rig at the loop, and a rig at the runtime ───────────────────────
+
+def loop_rig(tools=None, schemas=None, llm=None, max_tool_calls=5,
+             session_key="s"):
+    """A real ``ConversationLoop`` over a real ``HookRegistry``, no database.
+
+    The fastest place to test a hook that only cares about the loop's own
+    doorways (``shape_scope``, ``llm_call``, ``end_turn``). Turn starters and
+    finishers live one level up and need :func:`make_runtime` instead.
+
+    Lifted from ``tests/test_hooks_moments.py``'s file-local ``_rig`` so the
+    composition tests can share it rather than grow a fourth copy.
+    """
+    import state_machine  # noqa: F401  - settles the runtime import cycle
+    from runtime.conversation_loop import ConversationLoop
+    from runtime.hooks import HookRegistry
+    from runtime.session import RuntimeSession
+    from state_machine.conversation import ConversationState, Participant
+    from state_machine.conversation_phases import BASE_PHASE
+
+    cs = ConversationState(
+        [Participant("user", "user"), Participant("agent", "agent",
+                                                  tools=tools or {})],
+        "agent", BASE_PHASE,
+        {"session_key": session_key,
+         "agent_scoped_tool_names": list((tools or {}).keys())})
+    session = RuntimeSession(session_key, cs)
+    hooks = HookRegistry()
+    runtime = SimpleNamespace(sessions={session_key: session}, hooks=hooks,
+                              services={}, push_message=lambda *a, **k: None)
+    llm = llm or FakeLLM()
+    loop = ConversationLoop(llm, FakeRegistry(schemas or [], max_tool_calls),
+                            {}, "You are a helpful agent.", runtime=runtime,
+                            session_key=session_key)
+    return SimpleNamespace(loop=loop, cs=cs, session=session, hooks=hooks,
+                           llm=llm, runtime=runtime)
+
+
+def echo_tool(record=None, name="echo", result=None):
+    """One callable tool and its schema, for a turn that actually acts."""
+    from plugins.native.tool import ToolResult
+    from state_machine.conversation import CallableSpec
+
+    def handler(cs, actor, args):
+        if record is not None:
+            record.append(args)
+        return result or ToolResult(llm_summary="echoed", data={"ok": True})
+
+    schema = {"type": "function",
+              "function": {"name": name, "parameters": {}}}
+    return {name: CallableSpec(name, handler=handler)}, [schema]
+
+
+def tool_call(name="echo", args="{}", call_id="c1"):
+    """One tool call as a fake model answers with it.
+
+    Flat, not the nested ``{"function": {...}}`` provider envelope — the loop
+    reads ``tc["name"]`` / ``tc["arguments"]`` directly
+    (``conversation_loop.py:557-563``) and re-nests it itself on the way into
+    history.
+    """
+    return {"id": call_id, "name": name, "arguments": args}
+
+
+# ── Loading a sandboxed plugin the way the bridge does ────────────────
+
+def boxed_service(tmp_path, runtime, source, *, filename, name, load=True,
+                  validate=True):
+    """Write a service source, bridge it, bind it, load it.
+
+    The ``_service`` helper that ``tests/test_sandbox_hooks.py`` and
+    ``tests/test_sandbox_bridge.py`` each grew their own copy of. Validates
+    first, because a source with a typo'd hook moment bridges fine and then
+    stands at no doorway at all — silent, which is the failure hooks are most
+    prone to.
+    """
+    from sandbox.bridge import adapt
+    from sandbox.validator import validate_file
+
+    path = Path(tmp_path) / filename
+    path.write_text(source, encoding="utf-8")
+    if validate:
+        report = validate_file(path)
+        assert report.ok, report.render()
+    module = adapt(path)
+    assert module is not None, f"{filename} did not bridge"
+    service = module.build_services({})[name]
+    service.bind_runtime(runtime=runtime)
+    if load:
+        assert service.load() is True, f"{name} did not load"
+    return service
+
+
+def probe_source(moments, *, name="probe", answers=None):
+    """Guest source for a service that journals every doorway it stands at.
+
+    Writes the same records :func:`native_probe` writes, so the two journals
+    can be compared directly. ``answers`` is baked into the source as a
+    literal — a closure cannot cross into a box.
+
+    ``answers`` maps a moment to a literal the hook returns, or to a short
+    guest expression over ``payload``. ``"llm_call"`` is special: its value is
+    a statement block placed inside the escort, which has a phone as well as a
+    payload.
+    """
+    answers = dict(answers or {})
+    declared = ", ".join(f'"{m}": "{_PROBE_METHODS[m]}"' for m in moments)
+    chunks = []
+    for moment in moments:
+        if moment == "llm_call":
+            chunks.append(_PROBE_BODY[moment].format(
+                escort=answers.get("llm_call") or _DEFAULT_ESCORT))
+        else:
+            chunks.append(_PROBE_BODY[moment].format(
+                answer=answers.get(moment, "None")))
+    return _PROBE_TEMPLATE.format(name=name, declared=declared,
+                                  bodies="\n".join(chunks))
+
+
+_PROBE_METHODS = {"turn_start": "on_start", "shape_scope": "narrow",
+                  "vet_permission": "gate", "llm_call": "escort",
+                  "end_turn": "check_done", "turn_finish": "learn"}
+
+_DEFAULT_ESCORT = "        return sdk.llm.proceed(request)"
+
+_PROBE_BODY = {
+    "turn_start": '''
+    def on_start(self, sdk, ctx, payload):
+        """Note the turn starting."""
+        self._note(ctx, "turn_start")
+        return {answer}
+''',
+    "shape_scope": '''
+    def narrow(self, sdk, ctx, scope):
+        """Note the toolbox, then answer."""
+        self._note(ctx, "shape_scope", tools=sorted(scope.tools))
+        payload = sorted(scope.tools)
+        return {answer}
+''',
+    "vet_permission": '''
+    def gate(self, sdk, ctx, payload):
+        """Note the question, then answer."""
+        self._note(ctx, "vet_permission", tool_name=payload.tool_name,
+                   command=payload.command, stage=payload.stage,
+                   origin=payload.origin)
+        return {answer}
+''',
+    "end_turn": '''
+    def check_done(self, sdk, ctx, payload):
+        """Note the exit, then answer."""
+        self._note(ctx, "end_turn", final_text=payload.final_text,
+                   reason=payload.reason, doorman_fires=payload.doorman_fires)
+        return {answer}
+''',
+    "turn_finish": '''
+    def learn(self, sdk, ctx, payload):
+        """Note the outcome. Touch nothing."""
+        self._note(ctx, "turn_finish", ok=payload.ok,
+                   cancelled=payload.cancelled, final_text=payload.final_text,
+                   reason=payload.reason)
+        return {answer}
+''',
+    "llm_call": '''
+    def escort(self, sdk, ctx, request):
+        """Note the call, then place it."""
+        self._note(ctx, "llm_call", llm=request.llm,
+                   messages=len(request.messages),
+                   tools=len(request.tools or []))
+{escort}
+''',
+}
+
+_PROBE_TEMPLATE = '''
+"""A service that writes down every doorway it is called at."""
+
+from guest.bases import BaseService
+from guest.hooks import (Allow, PermissionVerdict, Redrive, RequireTool,
+                         SendBack)
+
+
+class Probe(BaseService):
+    """Stands at whichever doorways the test asked for."""
+
+    name = "{name}"
+    exports = ["journal"]
+    hooks = {{{declared}}}
+
+    def start(self, sdk):
+        """Begin with an empty journal."""
+        self._journal = []
+        return True
+
+    def journal(self, sdk):
+        """Every visit, in order."""
+        return self._journal
+
+    def _note(self, ctx, moment, **payload):
+        """One record, shaped exactly as the native probe writes it."""
+        entry = {{"moment": moment, "session_key": ctx.session_key,
+                 "user_id": ctx.user_id,
+                 "conversation_id": ctx.conversation_id,
+                 "attended": ctx.attended}}
+        entry.update(payload)
+        self._journal.append(entry)
+{bodies}
+'''
+
+
 # ── Calling a handler the way production does ─────────────────────────
 
 def call_handler(request_type: str, ctx, args: dict):
