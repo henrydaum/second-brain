@@ -10,7 +10,7 @@ from guest.bases import BaseTool
 
 
 MAX_TODOS = 50
-_STATUSES = {"pending", "in_progress", "completed"}
+_STATUSES = {"pending", "completed"}
 _NAMESPACE = "todo"
 
 
@@ -20,10 +20,9 @@ class Todo(BaseTool):
     name = "todo"
     description = (
         "Manage this conversation's todo checklist. Use it as your working plan on "
-        "multi-step tasks: add the steps up front, mark exactly one in_progress at a "
-        "time, and complete each item as soon as it is done. 'clear' drops the whole "
-        "checklist when the plan is finished or abandoned. Every call returns the "
-        "full current checklist."
+        "multi-step tasks: add the steps up front and complete each item as soon as "
+        "it is done. 'clear' drops the whole checklist when the plan is finished or "
+        "abandoned. Every call returns the full current checklist."
     )
     parameters = {
         "type": "object",
@@ -48,7 +47,7 @@ class Todo(BaseTool):
             },
             "status": {
                 "type": "string",
-                "enum": ["pending", "in_progress", "completed"],
+                "enum": ["pending", "completed"],
                 "description": "New status (update only).",
             },
         },
@@ -58,7 +57,7 @@ class Todo(BaseTool):
     agent_prompt = (
         "## Todos\n"
         "For any task with 3+ distinct steps, plan with the todo tool: add the steps, "
-        "keep exactly one in_progress, and mark items completed immediately when done."
+        "and mark items completed immediately when done."
     )
 
     def run(self, sdk, **kwargs):
@@ -143,8 +142,6 @@ class Todo(BaseTool):
         for item in items:
             if item.get("status") == "completed":
                 lines.append(f"- [x] #{item['id']} {item['content']}")
-            elif item.get("status") == "in_progress":
-                lines.append(f"- [ ] #{item['id']} **{item['content']}** (in progress)")
             else:
                 lines.append(f"- [ ] #{item['id']} {item['content']}")
         summary = "\n".join(lines)
