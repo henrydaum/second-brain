@@ -1085,3 +1085,142 @@ def test_a_spawn_with_no_spawner_session_falls_back_to_default():
     registry, _ = profile_registry()
     handle = settle(registry, registry.spawn("go", owner=None))
     assert handle.profile == "default"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A synchronous spawn and the caller's own wall clock.
+# ──────────────────────────────────────────────────────────────────────
+
+class _StuckHandle:
+    """A child that never finishes, so the caller's clock is what decides."""
+
+    id = "sa_1"
+    title = "Research"
+    conversation_id = 42
+
+    def report(self):
+        return {"id": self.id, "state": RUNNING, "ok": False, "error": "",
+                "conversation_id": self.conversation_id}
+
+
+class _StuckRegistry:
+    """Enough registry for the ``wait=True`` loop, recording what it cancels."""
+
+    def __init__(self):
+        self.cancelled = []
+
+    def spawn(self, prompt, **kwargs):
+        return _StuckHandle()
+
+    def collect(self, ids, timeout=None):
+        return [_StuckHandle().report()]
+
+    def cancel(self, handle_id):
+        self.cancelled.append(handle_id)
+        return True
+
+
+def _spawn_waiting(wall: float):
+    """Drive ``agent.spawn(wait=True)`` with ``wall`` seconds of ceiling left."""
+    from sandbox import provenance
+    from sandbox.guest.requests import AGENT_SPAWN
+    from sandbox.policy import Chain
+    from tests.support import call_handler
+
+    registry = _StuckRegistry()
+    ctx = SimpleNamespace(
+        runtime=SimpleNamespace(subagents=registry, sessions={}),
+        session_key="repl", user_id=1)
+    execution = SimpleNamespace(
+        cancelled=False,
+        remaining=lambda: {"running": 300.0, "wall": wall,
+                           "deadline": 300.0, "ceiling": 600.0})
+    with provenance.serving(Chain(), None, execution):
+        return call_handler(AGENT_SPAWN, ctx,
+                            {"prompt": "go", "wait": True}), registry
+
+
+def test_a_synchronous_spawn_gives_up_before_its_own_box_is_killed():
+    """The wall ceiling is not discounted for time blocked on the kernel, so a
+    child running to its full deadline outlives the box waiting on it. The
+    handler has to answer first: a starved box never resumes, so the tool's
+    own error branch would not run and nothing would reach the agent but the
+    runner's generic timeout — naming the declared deadline, which is not what
+    killed it."""
+    result, registry = _spawn_waiting(wall=0.5)
+    assert not result.ok
+    assert registry.cancelled == ["sa_1"]
+
+
+def test_a_child_lost_to_the_ceiling_still_names_its_conversation():
+    """The whole cost of dying on the wrong path is the agent believing the
+    work is gone. It is not — the partial transcript is in the child's own
+    conversation, and the id is the only way back to it."""
+    result, _ = _spawn_waiting(wall=0.5)
+    assert "ran out of time" in result.error
+    assert "conversation #42" in result.error
+
+
+def test_plenty_of_wall_clock_left_is_not_a_reason_to_give_up():
+    """The guard is a deadline, not a policy: a caller with time to spare
+    keeps waiting, and one reading no enforced deadline carries on — the
+    convention ``abandoned`` already follows, so a handler written against
+    either reads as "carry on" wherever nothing is being enforced."""
+    from sandbox.provenance import Caller
+
+    def caller(execution):
+        return Caller(chain=None, execution=execution)
+
+    assert not caller(None).out_of_time
+    assert not caller(SimpleNamespace(remaining=lambda: {"wall": None})).out_of_time
+    assert not caller(SimpleNamespace(remaining=lambda: {"wall": 400.0})).out_of_time
+    assert caller(SimpleNamespace(remaining=lambda: {"wall": 0.5})).out_of_time
+
+
+def test_every_blocking_handler_asks_the_same_two_questions():
+    """The four waiting handlers are a real 2x2 — subagent or script, wait now
+    or collect later — but the rule they wait by is one thing. It was written
+    out four times and three of the copies were missing half of it, so what is
+    pinned here is that each site reaches the shared answer rather than
+    rolling its own."""
+    import ast
+    import inspect
+
+    from sandbox.handlers import kernel
+
+    source = inspect.getsource(kernel)
+    tree = ast.parse(source)
+    waiting = {"_agent_spawn", "_agent_collect", "_script_run",
+               "_script_collect"}
+    seen = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in waiting:
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            attrs = {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+            seen[node.name] = bool(
+                "_give_up_waiting" in names
+                or {"abandoned", "out_of_time"} <= attrs)
+    assert seen == {name: True for name in waiting}, seen
+
+
+def test_a_collector_hands_back_what_is_ready_rather_than_dying_with_it():
+    """A collector answers the two questions differently from a spawner: there
+    is nothing to report to somebody who left, but somebody still waiting
+    would rather have the finished children than be killed holding all of
+    them. ``stop`` leaves the running ones alone, so they stay collectable."""
+    release = threading.Event()
+
+    def turn(key, prompt, **kwargs):
+        release.wait(timeout=5.0)
+        return SimpleNamespace(ok=True, messages=["done"], error=None)
+
+    registry, _ = registry_for(turn=turn)
+    handle = registry.spawn("slow", owner="repl")
+    try:
+        reports = registry.collect([handle.id], owner="repl",
+                                   stop=lambda: True)
+        assert [r["state"] for r in reports] == [RUNNING]
+        assert not handle.collected
+    finally:
+        release.set()
+        settle(registry, handle)

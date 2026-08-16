@@ -27,6 +27,12 @@ _MAX_LABEL = 40
 _FALLBACK = "sb-box"
 
 
+#: How much of a caller's wall clock a blocking handler leaves itself to
+#: answer in. Two seconds is far more than an unwind costs and invisible
+#: against the ten-minute ceiling it is protecting.
+WAIT_MARGIN = 2.0
+
+
 @dataclass(frozen=True)
 class Caller:
     """The execution whose Request is being serviced on this thread.
@@ -42,8 +48,8 @@ class Caller:
     starts nested work and then blocks waiting for it — ``script.run`` is the
     case — is not making Requests while it waits, so cancelling the caller sets
     a flag nobody reads and the nested work runs to its own ceiling. Handlers
-    that block on something cancellable poll :meth:`abandoned` and tear it
-    down.
+    that block on something cancellable poll :meth:`abandoned` and
+    :meth:`out_of_time` and tear it down.
     """
     chain: object
     context: object = None
@@ -58,6 +64,34 @@ class Caller:
         which is every test that calls a handler directly.
         """
         return bool(getattr(self.execution, "cancelled", False))
+
+    @property
+    def out_of_time(self) -> bool:
+        """Whether the caller will still be alive to receive an answer.
+
+        The sibling of :meth:`abandoned`, and the other half of the one
+        question a blocking handler has to keep asking: that one is "does the
+        caller still want an answer", this one is "can it still be given one".
+
+        ``watchdog.HARD_CEILING`` is wall clock and is deliberately *not*
+        discounted for time spent blocked on the kernel — that discount
+        applies to the declared deadline only — so nested work running to a
+        deadline as long as the ceiling outlives the box that asked for it.
+        A starved box never resumes, so whatever the handler would have said
+        arrives nowhere and the caller is left with the runner's generic
+        report that it timed out after its *declared* deadline, which is not
+        the limit that fired. Answering while it is still alive is the only
+        way anything useful reaches the caller at all.
+
+        False when there is no execution or no deadline in force, so this
+        reads as "carry on" wherever nothing is being enforced — the same
+        convention :meth:`abandoned` follows, and for the same reason.
+        """
+        remaining = getattr(self.execution, "remaining", None)
+        if not callable(remaining):
+            return False
+        wall = remaining().get("wall")
+        return wall is not None and wall <= WAIT_MARGIN
 
 
 @contextmanager

@@ -1741,9 +1741,11 @@ is not declarable at all. So ten minutes elapsed is the real ceiling on a
 script however it spends them, which is the honest reason the "one that wants
 an hour is a task" line above still holds: a subagent crawl that fans out
 wider than `max_concurrent_subagents` waits in waves of
-`subagent_timeout_seconds` (600 by default, 3600 by config) and can exceed the
-wall ceiling without ever exceeding its deadline. Raising the declared timeout
-does not help that case, and the ceiling is deliberately global.
+`subagent_timeout_seconds` (600, which is also the config maximum — see
+**Deadlines are hard cutoffs** below for why the slider stops exactly at the
+wall ceiling) and can exceed the wall ceiling without ever exceeding its
+deadline. Raising the declared timeout does not help that case, and the
+ceiling is deliberately global.
 
 `handlers/kernel._script_run` waits in slices rather than blocking, because
 cancellation reaches code that is *making* Requests and this handler makes
@@ -2141,6 +2143,40 @@ is cancelled and reported as failed, never silently dropped, because "no news"
 is indistinguishable from "still thinking" and an agent that guesses reports
 findings nobody produced. Concurrency is `max_concurrent_subagents`, which is
 also what `llm/registry._pool_ceiling` derives from — see **The LLM**.
+
+**Its ceiling is the sandbox's wall clock, and the two must not be equal by
+accident.** `wait=True` waits *inside* the calling tool's box, and
+`watchdog.HARD_CEILING` is wall time that is deliberately not discounted for
+being blocked on the kernel — so the caller's clock starts first, before the
+child is even off the concurrency queue, and a child running to a deadline as
+long as the ceiling can never be waited out. That is why the config slider
+stops at 600 rather than the 3600 it used to offer: a setting whose upper half
+silently cannot be reached on the path most callers take is worse than a
+narrower one.
+
+**Which limit ends a child used to decide what the agent was told.** Reaching
+its own deadline produces a *report* — `state == "cancelled"`, carrying
+`conversation_id`. Being killed by the caller's wall ceiling produced nothing
+of the sort: a starved box never resumes, so the tool's error branch is
+unreachable and what reached the agent was `runner.py`'s generic *"timed out
+after 60.0s (declared None)"* — the **declared running-time** deadline, which
+is not the limit that fired and points at a knob that cannot help. An agent
+told only that a tool timed out concludes the work is gone. It is not, and the
+conversation id is the whole of the way back to it.
+
+**So a blocking handler asks two questions, and they live on `Caller`.**
+`abandoned` is "does the caller still want an answer"; `out_of_time`
+(`provenance.WAIT_MARGIN` of wall clock left) is "can it still be given one".
+Four handlers wait like this — `agent.spawn`/`agent.collect` and
+`script.run`/`script.collect`, which is two kinds of child times two phases,
+both splits real. The rule was not: it was written out four times, and three
+copies were missing half of it, with `agent.collect` blocking in a single call
+that neither `/cancel` nor the ceiling could reach. `handlers/kernel.
+_give_up_waiting` is the shared answer, and `registry.collect(stop=...)` is
+what let the fourth site have a loop at all. What to *do* stays per-site,
+because it genuinely differs: the two that started a child cancel it and name
+its conversation, while the two that are collecting hand back what is ready
+and leave the rest collectable.
 
 `/schedule` is a kernel command (it manages *any* Timekeeper job, and the
 Timekeeper is a kernel service). The store keeps only the two agent-facing

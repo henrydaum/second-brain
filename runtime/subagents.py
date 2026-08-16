@@ -561,13 +561,21 @@ class SubagentRegistry:
                     if h.owner == owner and not h.collected]
 
     def collect(self, ids=None, *, owner: str | None = None,
-                timeout: float | None = None) -> list[dict]:
+                timeout: float | None = None, stop=None) -> list[dict]:
         """Wait for children and take their reports.
 
         ``ids=None`` means every uncollected child this owner started.
         ``timeout=0`` polls without waiting; ``None`` waits until each child's
         own deadline. A child still running when the wait runs out is returned
         as it stands and stays uncollected, so a later call can pick it up.
+
+        ``stop`` is an optional predicate asked between slices: truthy ends the
+        wait early and returns what is ready. The registry does not know what
+        a caller is — it is handed a callable — but the sandbox has a reason to
+        pass one, since a guest blocked in here is holding a box that the
+        kernel may be about to kill (see ``Caller.out_of_time``). Without it
+        the default ``timeout=None`` waited on every child's full deadline
+        with no way in for ``/cancel`` either.
         """
         if ids is None:
             wanted = self.pending_for(owner)
@@ -580,7 +588,7 @@ class SubagentRegistry:
 
         limit = None if timeout is None else time.time() + max(0.0, float(timeout))
         for handle in wanted:
-            self._wait_for(handle, limit)
+            self._wait_for(handle, limit, stop)
 
         out = []
         with self._lock:
@@ -590,9 +598,16 @@ class SubagentRegistry:
                 out.append(handle.report())
         return out
 
-    def _wait_for(self, handle: Handle, limit: float | None) -> None:
-        """Wait on one child, enforcing its deadline as a hard cutoff."""
+    def _wait_for(self, handle: Handle, limit: float | None, stop=None) -> None:
+        """Wait on one child, enforcing its deadline as a hard cutoff.
+
+        ``stop`` is asked between slices and leaves the child running — it
+        means the *caller* is done waiting, which is not a reason to end work
+        somebody may still collect.
+        """
         while not handle.finished:
+            if stop is not None and stop():
+                return
             now = time.time()
             if handle.deadline <= now:
                 self.cancel(handle.id)

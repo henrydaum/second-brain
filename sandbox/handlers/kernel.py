@@ -2290,6 +2290,32 @@ def _agent_complete(ctx, args: dict) -> Result:
 
 _SPAWN_POLL = 0.25
 
+def _give_up_waiting(caller) -> str | None:
+    """Why a handler blocking on kernel-started work must stop, or ``None``.
+
+    Four handlers wait like this — ``agent.spawn`` / ``agent.collect`` and
+    ``script.run`` / ``script.collect``, which is two kinds of child
+    (judgement or code) times two phases (wait for one now, or collect what
+    was detached earlier). Both splits are real; what is not is four copies of
+    the waiting rule, which is how three of them came to be missing half of
+    it. The rule is one thing and lives here: stop when the caller has gone
+    away, and stop before the caller's own box is killed under it.
+
+    What to *do* about it is deliberately not shared. The two that started a
+    child cancel it and say where it got to; the two that are merely
+    collecting hand back whatever is ready, since ending early there costs
+    nothing and the rest stay collectable. So this answers a phrase that
+    reads into each caller's own sentence rather than a sentence of its own —
+    what somebody needs to hear names the thing they were waiting for.
+    """
+    if caller is None:
+        return None
+    if caller.abandoned:
+        return "was cancelled"
+    if caller.out_of_time:
+        return "ran out of time and was cancelled"
+    return None
+
 
 def _subagents(ctx):
     """The kernel's subagent registry, or None."""
@@ -2361,24 +2387,36 @@ def _agent_spawn(ctx, args: dict) -> Result:
         if report["state"] != "running":
             return Result(ok=report["ok"], data=report,
                           error=report["error"] or "")
-        if caller is not None and caller.abandoned:
+        if (why := _give_up_waiting(caller)) is not None:
             registry.cancel(handle.id)
             return Result.failure(
-                f"subagent '{handle.title}' was cancelled "
-                f"(partial transcript in conversation #{handle.conversation_id})")
+                f"subagent '{handle.title}' {why} — no final report, but its "
+                f"work so far is in conversation #{handle.conversation_id} "
+                f"and can be read from there.")
 
 
 def _agent_collect(ctx, args: dict) -> Result:
-    """Take the reports of subagents this session started."""
+    """Take the reports of subagents this session started.
+
+    This was one blocking call, so it was the only one of the four waiting
+    handlers that neither ``/cancel`` nor the caller's own ceiling could reach
+    — and with the documented default of ``timeout=None`` it waited on every
+    child's full deadline. Children still running come back as they stand and
+    stay collectable, which is what makes stopping early free.
+    """
+    from .. import provenance
+
     registry = _subagents(ctx)
     if (bad := _need(registry, "subagents")) is not None:
         return bad
     owner, _ = _spawn_owner(ctx)
+    caller = provenance.current()
     timeout = args.get("timeout")
     try:
         return Result(data=registry.collect(
             args.get("ids"), owner=owner,
-            timeout=None if timeout is None else float(timeout)))
+            timeout=None if timeout is None else float(timeout),
+            stop=lambda: _give_up_waiting(caller) is not None))
     except Exception as exc:
         logger.exception("agent_collect failed")
         return Result.failure(f"could not collect subagents: {exc}")
@@ -3791,9 +3829,9 @@ def _script_run(ctx, args: dict) -> Result:
         outcome = run.wait(timeout=_SCRIPT_POLL)
         if run.done:
             return outcome
-        if caller is not None and caller.abandoned:
+        if (why := _give_up_waiting(caller)) is not None:
             run.cancel()
-            return Result.failure(f"{path.name} was cancelled")
+            return Result.failure(f"{path.name} {why}")
 
 
 def _script_collect(ctx, args: dict) -> Result:
@@ -3833,6 +3871,14 @@ def _script_collect(ctx, args: dict) -> Result:
             # would end work a *different* collector may still be owed, and
             # ``interrupt_session`` already reaches anything this turn started.
             return Result.failure("collection was cancelled")
+        if caller is not None and caller.out_of_time:
+            # The caller is still here but its box is about to be killed under
+            # it. The two conditions are asked separately because a collector
+            # answers them differently: there is nothing to report to somebody
+            # who left, but somebody still waiting would rather have what is
+            # ready than be killed holding all of it. Whatever is still
+            # running stays collectable.
+            break
         time.sleep(_SCRIPT_POLL)
 
     reports = []

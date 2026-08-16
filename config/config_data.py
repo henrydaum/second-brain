@@ -117,9 +117,12 @@ SETTINGS_DATA = [
 
     ("Subagent Timeout", "subagent_timeout_seconds",
      "Max seconds a spawned agent may run. A child still running at this "
-     "deadline is cancelled and reported as failed — never silently dropped.",
+     "deadline is cancelled and reported as failed — never silently dropped. "
+     "The maximum is the sandbox's own wall-clock ceiling: a tool waiting on "
+     "a child is charged for the wait, so a longer deadline than this could "
+     "not be waited out.",
      600,
-     {"type": "slider", "range": (30, 3600, 100), "is_float": False}),
+     {"type": "slider", "range": (30, 600, 57), "is_float": False}),
 
     ("Keep Attachments Available Across Turns", "keep_attachments_available_across_turns",
      "Keep attached files available to the model after the first agent response. Useful for repeated media inspection, but native image/audio/video inputs may increase LLM cost.",
