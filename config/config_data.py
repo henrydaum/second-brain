@@ -118,7 +118,7 @@ SETTINGS_DATA = [
     ("Subagent Timeout", "subagent_timeout_seconds",
      "Max seconds a spawned agent may run. A child still running at this "
      "deadline is cancelled and reported as failed — never silently dropped.",
-     300,
+     600,
      {"type": "slider", "range": (30, 3600, 100), "is_float": False}),
 
     ("Keep Attachments Available Across Turns", "keep_attachments_available_across_turns",

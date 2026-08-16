@@ -48,7 +48,7 @@ logger = logging.getLogger("Subagents")
 # on its behalf and every unsafe Request refuses. See sandbox/policy.py.
 SESSION_PREFIX = "spawn_subagent:"
 
-DEFAULT_TIMEOUT = 300
+DEFAULT_TIMEOUT = 600
 DEFAULT_CEILING = 4
 # One level: a turn may spawn, a child may not. Nothing in the tree can answer
 # a dialog, and a fan-out is multiplicative, so the depth someone is willing to

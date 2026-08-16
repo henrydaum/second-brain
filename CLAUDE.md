@@ -1741,7 +1741,7 @@ is not declarable at all. So ten minutes elapsed is the real ceiling on a
 script however it spends them, which is the honest reason the "one that wants
 an hour is a task" line above still holds: a subagent crawl that fans out
 wider than `max_concurrent_subagents` waits in waves of
-`subagent_timeout_seconds` (300 by default, 3600 by config) and can exceed the
+`subagent_timeout_seconds` (600 by default, 3600 by config) and can exceed the
 wall ceiling without ever exceeding its deadline. Raising the declared timeout
 does not help that case, and the ceiling is deliberately global.
 
