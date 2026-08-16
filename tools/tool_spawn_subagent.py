@@ -37,7 +37,7 @@ class SpawnSubagent(BaseTool):
             "title": {"type": "string", "description": "Short title for the agent's conversation."},
             "attachments": {"type": "array", "items": {"type": "string"}, "description": "Optional file paths to attach."},
             "wait": {"type": "boolean", "description": "true (default): block and return the result. false: run in the background and continue."},
-            "timeout_seconds": {"type": "integer", "description": "Max seconds the agent may run before it is cancelled. Capped by the subagent_timeout_seconds setting (default 300)."},
+            "timeout_seconds": {"type": "integer", "description": "Max seconds the agent may run before it is cancelled. Capped by the subagent_timeout_seconds setting, whose default and maximum are both 600."},
             "profile": {"type": "string", "description": "An agent profile name from the user's config, which narrows the tools the child may use. Omit to give it the same profile you have."},
             "narration": {"type": "string", "description": "A few words on what you are delegating and why, shown to the user beside the call. E.g. 'sending an agent to read the three long PDFs'."},
         },
