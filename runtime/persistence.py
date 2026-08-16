@@ -403,7 +403,7 @@ def inject_user_message(
             session = load_conversation(runtime, session_key, conversation_id)
     else:
         session = get_or_create_session(runtime, session_key)
-        ensure_conversation(runtime, session)
+        ensure_conversation(runtime, session, text)
     msg = {"role": "user", "content": text}
     with session.lock:
         session.history.append(msg)
@@ -572,7 +572,7 @@ def conversation_title(runtime, conversation_id: int) -> str:
     return ((row or {}).get("title") or "").strip() or "New Conversation"
 
 
-def ensure_conversation(runtime, session: RuntimeSession) -> None:
+def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") -> None:
     """Give this session a conversation if it has none, and adopt what it said.
 
     **This is how conversations come into being.** A session holds none until
@@ -581,15 +581,6 @@ def ensure_conversation(runtime, session: RuntimeSession) -> None:
     made. Everything else about a session already works without one: commands
     run, the security mode binds late, and every writer keyed on
     ``conversation_id`` guards.
-
-    The title is the placeholder, deliberately, and briefly was not. Naming the
-    row after the first message reads better for the few seconds before
-    anything else happens, and it costs the only real titler its trigger: the
-    ``update_titles`` package replaces a title that still looks
-    kernel-generated and leaves anything else alone, which is what protects a
-    rename you made yourself. A first-message title is not distinguishable from
-    one you chose, so the sweep skipped every conversation forever and every
-    title stayed the opening sentence, truncated at eighty characters.
 
     Two things it must do that a bare ``db.create_conversation`` does not.
 
@@ -610,6 +601,7 @@ def ensure_conversation(runtime, session: RuntimeSession) -> None:
     if session.conversation_id is not None or not runtime.db:
         return
     session.conversation_id = runtime.create_conversation(
+        (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
         user_id=runtime.session_user_id(session.key),
     )
     if session.conversation_id is None:

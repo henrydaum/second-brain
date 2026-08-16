@@ -296,7 +296,8 @@ class ConversationRuntime:
             # reply. The background path hides it, because ``iterate_agent_turn``
             # rewrites the whole history afterwards; nothing repairs this one.
             if starting:
-                _persist.ensure_conversation(self, session)
+                _persist.ensure_conversation(
+                    self, session, _disp.text_of(payload))
             _cfg.refresh_specs(self, session)
             try:
                 out = self._dispatch(session, action_type, payload)
@@ -485,7 +486,7 @@ class ConversationRuntime:
         set (the caller's drive budget is exhausted), so the turn ends
         normally: priority returns to the user and SESSION_TURN_COMPLETED is
         emitted instead of being suppressed for a re-drive that never comes."""
-        _persist.ensure_conversation(session=session, runtime=self)
+        _persist.ensure_conversation(session=session, runtime=self, title_text=_disp.latest_user_text(session))
         session.busy = True
         session.cancel_event.clear()
         _persist.persist_marker(self, session)  # busy=True snapshot for crash recovery
