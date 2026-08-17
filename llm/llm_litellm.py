@@ -121,6 +121,47 @@ class LiteLLMBackend(BaseLLMBackend):
         sdk.log(f"litellm answered in {time.time() - started:.2f}s")
         return response
 
+    @staticmethod
+    def _without_duplicated_reasoning(content: str, reasoning: str) -> str:
+        """Drop an inline ``<think>`` block that merely repeats *reasoning*.
+
+        Some providers send chain-of-thought **twice**: once in its own
+        ``reasoning_content`` field and again wrapped in ``<think>…</think>``
+        inside the ordinary content. Measured against MiniMax M3, the block's
+        inner text is ``reasoning_content`` exactly, modulo surrounding
+        whitespace.
+
+        Removing it *by the text we were given* rather than by scanning for
+        tags is the point. A tag scan has to trust a boundary marker the model
+        generated, and a model that misplaces one costs real prose — that is
+        how replies came to arrive as ``"is a big deal"``. Here the provider
+        has already told us what the reasoning was, so the cut needs no guess
+        and anything the block holds *beyond* that reasoning is answer text
+        that survives.
+
+        Abstains unless the block is recognisably the duplicate: with no
+        ``reasoning_content`` (a provider that only ever inlines) or a block
+        that does not start with it, this returns *content* untouched and
+        ``token_stripper`` remains the backstop it was written to be.
+        """
+        reasoning = (reasoning or "").strip()
+        if not reasoning or not content:
+            return content
+        start = content.find("<think>")
+        if start == -1:
+            return content
+        inner_at = start + len("<think>")
+        end = content.find("</think>", inner_at)
+        if end == -1:
+            return content
+        if not content[inner_at:end].strip().startswith(reasoning):
+            return content
+        # Everything the block held past the reasoning is answer the model put
+        # on the wrong side of its own closer. It comes back.
+        extra = content[inner_at:end].strip()[len(reasoning):]
+        return (content[:start] + extra
+                + content[end + len("</think>"):]).lstrip()
+
     def _blocking(self, model, messages, request, kwargs):
         """One whole answer, at once."""
         raw = self._litellm.completion(
@@ -130,7 +171,9 @@ class LiteLLMBackend(BaseLLMBackend):
         prompt_tokens, cached = self._usage(getattr(raw, "usage", None))
         calls = getattr(choice.message, "tool_calls", None) or []
         return LLMResponse(
-            content=choice.message.content or "",
+            content=self._without_duplicated_reasoning(
+                choice.message.content or "",
+                getattr(choice.message, "reasoning_content", None) or ""),
             tool_calls=[{"id": call.id, "name": call.function.name,
                          "arguments": call.function.arguments}
                         for call in calls],
@@ -157,6 +200,7 @@ class LiteLLMBackend(BaseLLMBackend):
             stream=True, stream_options={"include_usage": True}, **kwargs)
 
         pieces = []
+        thinking = []
         calls_by_index = {}
         prompt_tokens = cached = None
 
@@ -170,6 +214,12 @@ class LiteLLMBackend(BaseLLMBackend):
             if not choices:
                 continue
             delta = choices[0].delta
+            # Never streamed and never appended: this is the field the model
+            # thinks in, and the kernel wants the answer. Kept only so the
+            # returned content can have its inline duplicate cut by exact
+            # match instead of by trusting a tag.
+            if (think := getattr(delta, "reasoning_content", None)):
+                thinking.append(think)
             text = getattr(delta, "content", None)
             if text:
                 pieces.append(text)
@@ -185,7 +235,8 @@ class LiteLLMBackend(BaseLLMBackend):
                     entry["arguments"] += getattr(function, "arguments", None) or ""
 
         return LLMResponse(
-            content="".join(pieces),
+            content=self._without_duplicated_reasoning(
+                "".join(pieces), "".join(thinking)),
             tool_calls=[{"id": entry["id"] or f"call_{index}",
                          "name": entry["name"],
                          "arguments": entry["arguments"] or "{}"}
