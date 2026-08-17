@@ -70,6 +70,17 @@ _RENEW_WITHIN = 300.0
 _PENDING = "authorization_pending"
 _SLOW_DOWN = "slow_down"
 
+# Sourced from OpenClaw's own OAuth documentation, which is where anyone
+# setting this up is going to look anyway. Repeated as constants because
+# ``config_settings`` has to be an AST-readable *literal* — a name reference
+# there reads as nothing at all — and ``on_install`` needs the same values
+# before the settings have been reconciled into config. Keep the two in step;
+# the literals below are the ones a user sees, these are the fallback.
+_DEFAULTS = {
+    "openai_oauth_exchange_url": "https://auth.openai.com/oauth/token",
+    "openai_oauth_scopes": "openid profile email offline_access",
+}
+
 
 def _host_of(url):
     """The host part of a URL, lowercased, or "" if there is none.
@@ -113,11 +124,15 @@ class OpenAIAuth(BaseService):
          "", {"type": "text"}),
         ("OpenAI exchange URL", "openai_oauth_exchange_url",
          "Endpoint that exchanges a device code for tokens, and later "
-         "exchanges a refresh token for a new access token.",
-         "", {"type": "text"}),
+         "exchanges a refresh token for a new access token. Fixed "
+         "infrastructure rather than anything of yours, so it is seeded.",
+         "https://auth.openai.com/oauth/token", {"type": "text"}),
         ("OpenAI OAuth scopes", "openai_oauth_scopes",
-         "Space-separated scopes to request during sign-in.",
-         "", {"type": "text"}),
+         "Space-separated scopes to request during sign-in. Seeded with the "
+         "set OpenClaw documents; offline_access is the one that matters, "
+         "since without it no refresh token is issued and you would be "
+         "signing in again every hour.",
+         "openid profile email offline_access", {"type": "text"}),
         ("OpenAI responses URL", "openai_responses_url",
          "Inference endpoint llm_openai posts to. Read by the backend, "
          "declared here so it is configured in one place with the auth it "
@@ -160,9 +175,10 @@ class OpenAIAuth(BaseService):
         and a list the user has edited since is theirs.
         """
         hosts = [host for host in (
-            _host_of(sdk.config.read(key)) for key in (
-                "openai_oauth_device_url", "openai_oauth_exchange_url",
-                "openai_responses_url")) if host]
+            _host_of(sdk.config.read(key) or _DEFAULTS.get(key))
+            for key in ("openai_oauth_device_url",
+                        "openai_oauth_exchange_url",
+                        "openai_responses_url")) if host]
         allowed = sdk.config.read("net_allowed_hosts") or []
         missing = [host for host in dict.fromkeys(hosts)
                    if host not in allowed]
@@ -183,9 +199,10 @@ class OpenAIAuth(BaseService):
         sdk.config.write("openai_oauth_expires_at", 0)
 
         hosts = {host for host in (
-            _host_of(sdk.config.read(key)) for key in (
-                "openai_oauth_device_url", "openai_oauth_exchange_url",
-                "openai_responses_url")) if host}
+            _host_of(sdk.config.read(key) or _DEFAULTS.get(key))
+            for key in ("openai_oauth_device_url",
+                        "openai_oauth_exchange_url",
+                        "openai_responses_url")) if host}
         allowed = sdk.config.read("net_allowed_hosts") or []
         keep = [host for host in allowed if host not in hosts]
         if len(keep) != len(allowed):
