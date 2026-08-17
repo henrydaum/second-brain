@@ -55,9 +55,17 @@ authenticated call holding a credential it was never given, and cannot leak
 one it never had. The refresh below does the same to itself.
 """
 
+import json
 import time
 
 from guest.bases import BaseService
+
+# Fields worth lifting out of the Codex CLI's credential file. Its schema is
+# not documented anywhere, so this looks for them at the top level and one
+# level down rather than assuming a shape — the cost of being wrong is a
+# sign-in that could have been free, and the cost of being tolerant is
+# nothing.
+_ADOPTABLE = ("refresh_token", "access_token", "client_id")
 
 # How close to expiry is close enough to renew. Generous on purpose: the cost
 # of refreshing early is one HTTP call, and the cost of refreshing late is a
@@ -82,6 +90,28 @@ _DEFAULTS = {
 }
 
 
+def _credential_from(data):
+    """Pull OAuth fields out of a blob whose shape nobody publishes.
+
+    Checks the top level and one level of nesting, which covers both the flat
+    form and the ``{"tokens": {...}}`` form without needing to know which one
+    a given Codex version wrote. Anything absent is simply absent — a partial
+    answer still saves the user a sign-in if the refresh token is in it.
+    """
+    if not isinstance(data, dict):
+        return {}
+    found = {key: data[key] for key in _ADOPTABLE
+             if isinstance(data.get(key), str) and data[key]}
+    for value in data.values():
+        if not isinstance(value, dict):
+            continue
+        for key in _ADOPTABLE:
+            if key not in found and isinstance(value.get(key), str) \
+                    and value[key]:
+                found[key] = value[key]
+    return found
+
+
 def _host_of(url):
     """The host part of a URL, lowercased, or "" if there is none.
 
@@ -102,7 +132,8 @@ class OpenAIAuth(BaseService):
     description = "OAuth tokens for the ChatGPT subscription backend."
 
     exports = ["token", "status", "sign_out"]
-    requests = ["config.read", "config.write", "net.http", "session.push"]
+    requests = ["config.read", "config.write", "env.read", "fs.read",
+                "net.http", "session.push"]
 
     # Short, and deliberately not ``service_drive``'s 3600. Its sign-in blocks
     # inside a single tick, so one tick is all it needs; a device-code flow is
@@ -138,6 +169,12 @@ class OpenAIAuth(BaseService):
          "since without it no refresh token is issued and you would be "
          "signing in again every hour.",
          "openid profile email offline_access", {"type": "text"}),
+        ("Codex credential file", "openai_codex_auth_path",
+         "Where the Codex CLI keeps its login, if you have one. Leave blank "
+         "to look in ~/.codex/auth.json. Signing in with "
+         "'codex login --device-auth' and letting this service adopt the "
+         "result is the least work: Codex knows the endpoints this does not.",
+         "", {"type": "text"}),
         ("OpenAI responses URL", "openai_responses_url",
          "Inference endpoint llm_openai posts to. Read by the backend, "
          "declared here so it is configured in one place with the auth it "
@@ -266,6 +303,12 @@ class OpenAIAuth(BaseService):
         rather than raising, so the pending case is an ordinary branch.
         """
         try:
+            if not self._authorized(sdk) and not self._has_refresh(sdk):
+                # Before the configured check, deliberately: adoption can
+                # supply the client id that check is looking for, so running
+                # it second would refuse to pick up a perfectly good login
+                # over a setting that login was about to fill in.
+                self._adopt_codex(sdk)
             if not self._configured(sdk):
                 return False
             if self._authorized(sdk):
@@ -380,6 +423,71 @@ class OpenAIAuth(BaseService):
                 f"egress to {_host_of(url) or url} was refused. Add it to "
                 f"net_allowed_hosts in /config, then reload openai_auth "
                 f"from /services.") from exc
+
+    def _codex_path(self, sdk):
+        """Where the Codex CLI keeps its login, or "" if it cannot be guessed."""
+        override = sdk.config.read("openai_codex_auth_path")
+        if override:
+            return override
+        home = sdk.env.read("USERPROFILE") or sdk.env.read("HOME") or ""
+        return sdk.path.join(home, ".codex", "auth.json") if home else ""
+
+    def _adopt_codex(self, sdk):
+        """Take over a credential the Codex CLI already holds.
+
+        The same move ``service_gmail`` makes on ``service_drive``'s
+        ``token.json``: one component did the OAuth dance, another reads the
+        result rather than repeating it. Here it is worth more than
+        convenience — Codex knows the device-code endpoint and the client id,
+        which are not published anywhere, so adopting its login is the only
+        route to a working setup that does not involve reading them out of
+        somebody's shipped binary.
+
+        The user's part is unchanged and is what they expected all along:
+        ``codex login --device-auth``, open the link, type the code. This just
+        means they only have to do it once, in one place.
+
+        Returns True when something was adopted. Failure is silent by design —
+        no Codex install is the *normal* case, not an error, and a
+        notification on every tick about a CLI the user never asked for would
+        be noise.
+        """
+        path = self._codex_path(sdk)
+        if not path:
+            return False
+        try:
+            found = _credential_from(json.loads(sdk.fs.read(path)))
+        except (sdk.Failed, ValueError, TypeError):
+            return False
+        if not found.get("refresh_token"):
+            # An access token on its own is worth nothing here: it dies within
+            # the hour and there would be no way to renew it.
+            return False
+
+        sdk.config.write("secret_openai_oauth_refresh",
+                         found["refresh_token"])
+        if found.get("access_token"):
+            sdk.config.write("secret_openai_oauth_access",
+                             found["access_token"])
+        # Expiry is left unknown, which ``_expiring`` reads as "renew now".
+        # Codex's file does not reliably say when its token dies, and
+        # renewing once immediately is cheaper than trusting a guess.
+        sdk.config.write("openai_oauth_expires_at", 0)
+
+        # Only if we do not already have one: a client id the user typed in
+        # themselves is a deliberate choice and outranks a scavenged one.
+        if found.get("client_id") and not sdk.config.read(
+                "openai_oauth_client_id", present=True):
+            sdk.config.write("openai_oauth_client_id", found["client_id"])
+
+        sdk.log(f"adopted an OpenAI login from {path}")
+        self._notify(
+            sdk, "OpenAI is connected",
+            "Second Brain picked up the login the Codex CLI had already "
+            "done, so there was nothing for you to sign in to. It will keep "
+            "the credential renewed from here.",
+            level="info")
+        return True
 
     def _begin(self, sdk):
         """Ask for a device code and tell the user where to type it."""
