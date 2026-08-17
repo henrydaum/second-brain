@@ -120,7 +120,12 @@ class OpenAIAuth(BaseService):
          "credentials.json — nothing is shipped in the package.",
          "", {"type": "text"}),
         ("OpenAI device-code URL", "openai_oauth_device_url",
-         "Endpoint that issues a device code and a user code.",
+         "Endpoint that issues a device code and a user code. NOTE: device "
+         "code login is off by default and must be enabled first, under "
+         "ChatGPT -> Settings -> Security -> 'Allow device code login' (a "
+         "workspace admin has to do it for workspace accounts). Until it is "
+         "on, sign-in fails for a reason nothing here can report. The code a "
+         "user types expires after about 15 minutes.",
          "", {"type": "text"}),
         ("OpenAI exchange URL", "openai_oauth_exchange_url",
          "Endpoint that exchanges a device code for tokens, and later "
