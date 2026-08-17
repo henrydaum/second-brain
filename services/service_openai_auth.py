@@ -269,6 +269,17 @@ class OpenAIAuth(BaseService):
                 if self._expiring(sdk):
                     self._renew(sdk)
                 return False
+            if self._has_refresh(sdk):
+                # A refresh token with no usable access token beside it.
+                # Renew from it rather than starting a fresh sign-in: this is
+                # the state after a restart that lost the access token, and
+                # it is also how somebody arrives who signed in elsewhere and
+                # pasted the refresh token into /config by hand. Renewal does
+                # not care how the credential was first obtained, and a failed
+                # renewal signs out, which lands on the device flow next tick
+                # anyway.
+                self._renew(sdk)
+                return False
             if self._device is None:
                 self._begin(sdk)
             else:
@@ -367,8 +378,17 @@ class OpenAIAuth(BaseService):
 
     def _begin(self, sdk):
         """Ask for a device code and tell the user where to type it."""
+        device_url = sdk.config.read("openai_oauth_device_url")
+        if not device_url:
+            # Checked here rather than in ``_configured`` because this is the
+            # only thing that needs it. Raising reaches ``poll``'s handler,
+            # which notifies once per load rather than every five seconds.
+            raise RuntimeError(
+                "no device-code endpoint configured. Either set "
+                "openai_oauth_device_url, or sign in with another client and "
+                "paste its refresh token into secret_openai_oauth_refresh.")
         answer = self._post(
-            sdk, sdk.config.read("openai_oauth_device_url"),
+            sdk, device_url,
             {"client_id": sdk.config.read("openai_oauth_client_id"),
              "scope": sdk.config.read("openai_oauth_scopes") or ""},
         )
@@ -501,10 +521,22 @@ class OpenAIAuth(BaseService):
     # ── small facts ─────────────────────────────────────────────────
 
     def _configured(self, sdk):
-        """Whether the user has supplied the flow's parameters."""
+        """Whether there is enough to do *anything*.
+
+        Deliberately does not require ``openai_oauth_device_url``: that one is
+        needed only to *start* a sign-in here, and a user who signed in
+        elsewhere and pasted their refresh token into ``/config`` has a fully
+        working setup without it. Requiring it would refuse to renew a
+        perfectly good credential over a missing endpoint nothing was going to
+        call. ``_begin`` checks for it at the point it actually needs it.
+        """
         return all(sdk.config.read(key, present=True) for key in (
-            "openai_oauth_client_id", "openai_oauth_device_url",
-            "openai_oauth_exchange_url"))
+            "openai_oauth_client_id", "openai_oauth_exchange_url"))
+
+    def _has_refresh(self, sdk):
+        """Whether a refresh token exists, however it got here."""
+        return bool(sdk.config.read("secret_openai_oauth_refresh",
+                                    present=True))
 
     def _authorized(self, sdk):
         """Whether a usable access token exists.
