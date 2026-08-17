@@ -54,6 +54,19 @@ effect it performs is a Request the kernel classifies. Same reasoning
 
 lifetime = "persistent"
 
+# The auth service travels with this file. Neither half is useful alone: this
+# backend has no way to authenticate without it, so installing one and not the
+# other leaves a profile that fails every call.
+#
+# Two things this is *not*. It is not an import — the service is reached
+# through ``sdk.services.call``, so isolation is unaffected (the resolver
+# intersects what is declared here with what the AST actually imports, and
+# that intersection is empty). And it is not ownership: uninstall walks this
+# edge *backwards*, so removing ``service_openai_auth`` correctly takes this
+# backend with it, while removing this backend leaves the service in place.
+# Same relationship ``parsers/parse_gdoc.py`` declares with ``service_drive``.
+dependencies_files = ["services/service_openai_auth.py"]
+
 # See "WHAT IT COSTS" above. Not a limitation of the provider — a consequence
 # of refusing to hold the credential.
 supports_streaming = False
