@@ -115,11 +115,33 @@ def _attachment_paths(result) -> list[str]:
     ``data["result"]``, which is the same unwrap ``_format_tool_result`` does.
     Every other action type has no such payload and answers with nothing.
     """
-    payload = getattr(result, "data", None)
-    if not isinstance(payload, dict):
-        return []
-    tool_result = payload.get("result")
+    tool_result = _tool_result(result)
     return [str(p) for p in (getattr(tool_result, "attachment_paths", None) or [])]
+
+
+def _tool_result(result):
+    """The ``ToolResult`` an enact wrapped, or None for every other action.
+
+    The ``call_tool`` action carries it under its own ``data["result"]``, which
+    is the unwrap ``_format_tool_result`` already does. One accessor because
+    two ledger fields need the same reach into the same place.
+    """
+    payload = getattr(result, "data", None)
+    return payload.get("result") if isinstance(payload, dict) else None
+
+
+def _tool_outcome(result) -> tuple[bool, str] | None:
+    """A wrapped tool's own verdict as ``(ok, error)``, or None if there is no
+    tool underneath.
+
+    ``ToolResult`` spells these ``success``/``error`` where an ``ActionResult``
+    spells them ``ok``/``error.message``, which is why the enact site cannot
+    simply hand the inner object to the ledger and be done.
+    """
+    tool_result = _tool_result(result)
+    if tool_result is None or not hasattr(tool_result, "success"):
+        return None
+    return bool(tool_result.success), str(getattr(tool_result, "error", "") or "")
 
 
 def _prompt_sections(prompt: Any) -> list[dict[str, Any]]:
@@ -213,7 +235,18 @@ class ConversationLoop:
 
     OVER_BUDGET_MESSAGE = "I've made too many tool calls. Could you try a more specific question?"
     OVER_BUDGET_NUDGE = "You've hit the tool-call limit. Summarize what you have and stop calling tools."
-    MAX_TOOL_RESULT_CHARS = 12000
+    # This is a backstop against a *runaway* tool, not a second opinion on a
+    # tool that already bounded its own output — and at 12000 it was the
+    # second. ``read_file`` caps itself at 20_000 chars and says so in its own
+    # result ("pass offset/limit to page further"), so the kernel then elided
+    # ~8000 characters out of the *middle* of a file the agent was about to
+    # match ``old_text`` against. The agent could see the marker but had no way
+    # to page around a cap it was never told about, so every ``edit_file``
+    # replace drawn from the middle of a large file failed as "old_text was not
+    # found" — and the agent learned to route around the tool with shell
+    # commands. Keep this >= the largest self-capping tool's own ceiling; the
+    # constant it must not undercut lives in the store, in tool_read_file.py.
+    MAX_TOOL_RESULT_CHARS = 20000
     # An error has its own, smaller budget. It was never truncated at all,
     # which was fine while an error was a sentence and stopped being fine the
     # moment it could carry a stack — or an exception whose str() is a
@@ -564,6 +597,11 @@ class ConversationLoop:
             result=result, error_message=error_message,
             duration_ms=int((time.perf_counter() - enact_started) * 1000),
             data=data,
+            # The enact says the tool was called; this says how the call went.
+            # Without it a failing tool is indistinguishable in the table from
+            # a working one, which is why edit_file could be unreliable for
+            # weeks with 39k ledger rows recording nothing about it.
+            outcome=_tool_outcome(result),
         )
 
     # ──────────────────────────────────────────────────────────────────────

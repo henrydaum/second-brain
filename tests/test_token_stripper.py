@@ -132,6 +132,74 @@ def test_well_formed_blocks_around_nothing_leave_nothing():
     assert filter_text("<think>A</think>. <think>B</think>") == "."
 
 
+# ──────────────────────────────────────────────────────────────────────
+# A misplaced opener must not take the answer with it
+#
+# Reported from the Mac Mini: replies arriving as "I'll look into" and "is a
+# big deal". Both are this — the model put a boundary marker in the wrong
+# place and a matched pair was deleted on its word. The rule that answers it
+# is positional: reasoning precedes an answer, so a pair whose opener arrives
+# after prose is not trustworthy the way one opening the reply is.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_misplaced_opener_does_not_leave_only_the_words_before_it():
+    """The reported bug, verbatim. The whole reply was inside the pair."""
+    raw = "I'll look into <think>the user is asking about edit_file.</think>"
+
+    clean = filter_text(raw)
+
+    assert clean != "I'll look into"
+    assert "edit_file" in clean
+
+
+def test_a_held_region_is_dropped_once_the_answer_resumes():
+    """A pair that really was a mid-answer aside costs nothing: prose after
+    the closer is the answer continuing, which settles the hold."""
+    assert filter_text("Sure — <thinking>hmm</thinking>done.") == "Sure — done."
+    assert filter_text("a<think>r1</think>b<think>r2</think>c") == "abc"
+
+
+def test_a_reply_that_tagged_correctly_once_is_trusted_afterwards():
+    """The verdict is about the model's tagging, not about one tag. A reply
+    opening with a well-formed block has shown it places markers correctly, so
+    a *trailing* block is trailing reasoning rather than a swallowed answer —
+    which is what keeps the punctuation-only case above honest."""
+    assert filter_text("<think>A</think>. <think>B</think>") == "."
+    assert filter_text("<think>A</think>Answer.<think>B</think>") == "Answer."
+
+
+def test_the_misplacement_rule_leaves_tool_call_blocks_alone():
+    """``<tool_call>``/``<invoke>`` are never prose, so position says nothing
+    about them and they are dropped wherever they land."""
+    assert filter_text('Sure <tool_call>{"x":1}</tool_call>') == "Sure"
+    assert filter_text("Sure <invoke>grep</invoke>") == "Sure"
+
+
+@pytest.mark.parametrize("raw", [
+    "I'll look into <think>reasoning</think>",
+    "Sure — <thinking>hmm</thinking>done.",
+    "<think>A</think>. <think>B</think>",
+    "a<think>r1</think>b<think>r2</think>c",
+])
+def test_held_regions_keep_batch_and_streaming_identical(raw):
+    """Holding a region adds state, and state is how the two halves drift.
+
+    A frontend told a *different* final text than it streamed edits the reply
+    down to it, so this is the property the whole module is built to keep.
+    """
+    import random
+
+    rng = random.Random(20260816)
+    for _ in range(400):
+        f = ModelTextFilter()
+        pieces, i = [], 0
+        while i < len(raw):
+            step = rng.randint(1, 6)
+            pieces.append(f.feed(raw[i:i + step]))
+            i += step
+        assert ("".join(pieces) + f.flush()).strip() == filter_text(raw)
+
+
 def test_only_the_tags_are_ever_consumed_by_a_run_of_closers():
     raw = "reasoning</think>First part.</think>Second part."
 

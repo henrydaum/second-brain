@@ -1282,11 +1282,16 @@ def test_the_wire_and_the_transcript_cap_a_long_result_identically():
     change its mind about what happened."""
     from runtime.conversation_loop import ConversationLoop
 
-    tool_result = ToolResult(llm_summary="x" * 20000)
+    # Derived from the cap rather than a literal: the constant is coupled to
+    # what the largest self-capping tool asks for and has been raised once
+    # already, and a hardcoded length turns that into a test failure that
+    # looks like a regression.
+    oversized = ConversationLoop.MAX_TOOL_RESULT_CHARS + 1000
+    tool_result = ToolResult(llm_summary="x" * oversized)
     loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, "prompt")
     stored, _ = loop._format_tool_result(
         "search", SimpleNamespace(ok=True, error=None,
                                   data={"result": tool_result}), {})
 
     assert _finished_payload(tool_result)["summary"] == stored
-    assert len(stored) < 20000
+    assert len(stored) < oversized

@@ -1785,11 +1785,18 @@ class _Path:
     def normalize(path) -> str:
         """A canonical key for comparing two paths.
 
-        Case-folded where the platform is case-insensitive, so a Windows
-        plugin does not treat ``C:\\A.py`` and ``c:\\a.py`` as different
-        files.
+        Case-folded where the platform is case-insensitive, so a plugin does
+        not treat ``C:\\A.py`` and ``c:\\a.py`` as different files.
+
+        ``normcase`` alone does not deliver that promise: it is the identity
+        function on every POSIX platform, macOS included — where APFS is
+        case-insensitive by default. So the fold has to be asked for by
+        platform rather than borrowed from the path flavour, or a Mac keys two
+        spellings of one file differently and ``file_reads`` reports a file the
+        agent just read as never read.
         """
-        return _Path._os().normcase(_Path.absolute(path))
+        canonical = _Path._os().normcase(_Path.absolute(path))
+        return canonical.lower() if sys.platform == "darwin" else canonical
 
     @staticmethod
     def as_posix(path) -> str:

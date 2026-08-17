@@ -68,11 +68,21 @@ def record_enact(db, *, origin: str, session_key: str | None,
                  conversation_id: int | None, user_id: int | None,
                  actor_id: str | None, action_type: str, content: Any,
                  result: Any = None, error_message: str | None = None,
-                 duration_ms: int | None = None, data: Any = None) -> None:
+                 duration_ms: int | None = None, data: Any = None,
+                 outcome: tuple[bool, str] | None = None) -> None:
     """Append one ``cs.enact()`` outcome to the ledger.
 
     Pass ``result`` for a completed enact (its ok/error are recorded), or
     ``error_message`` alone when the enact itself raised.
+
+    ``outcome`` is the verdict of the operation the enact *wrapped*, when there
+    is one underneath — ``(ok, error)``. An enact answers "was the action
+    performed", which for a tool call is true however the tool went, so every
+    tool failure in the table's history was recorded ``ok=1``: 39k rows, and
+    not one of the eighteen tools had ever failed according to the ledger.
+    That makes the flight recorder blind to the single most common thing worth
+    reconstructing after the fact. Where a caller can see the inner verdict it
+    passes it here, and it wins.
     """
     record = getattr(db, "record_action", None)
     if record is None:
@@ -85,6 +95,14 @@ def record_enact(db, *, origin: str, session_key: str | None,
             error_message = getattr(err, "message", None)
         else:
             ok, error_code = False, "exception"
+        if outcome is not None and ok:
+            # Only ever narrows: an enact that already failed keeps its own
+            # reason, which is about the dispatch rather than about the tool.
+            inner_ok, inner_error = outcome
+            if not inner_ok:
+                ok = False
+                error_code = error_code or "tool_failed"
+                error_message = inner_error or error_message
         record(
             origin=origin, action_type=action_type, ok=ok,
             session_key=session_key, conversation_id=conversation_id,

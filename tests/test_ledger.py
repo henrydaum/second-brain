@@ -544,6 +544,96 @@ def test_an_act_that_showed_nothing_records_no_attachments_key(tmp_path):
     assert _attachment_paths(None) == []
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Whether the tool actually worked.
+#
+# The enact answers "was the action performed", which for a tool call is true
+# however the tool went — so every tool failure in the table's history was
+# recorded ok=1. Across 39k rows not one of the eighteen tools had ever failed
+# according to the ledger, which made the flight recorder blind to the single
+# most common thing worth reconstructing after the fact.
+# ──────────────────────────────────────────────────────────────────────
+
+def _enact_tool(db, cid, tool_result):
+    loop = ConversationLoop(FakeLLM([]), None, {}, "prompt", session_key="chat")
+    loop._active_db, loop._active_conversation_id = db, cid
+    loop._record_ledger("call_tool", {"name": "edit_file"}, "agent",
+                        SimpleNamespace(ok=True, error=None,
+                                        data={"result": tool_result}),
+                        None, time.perf_counter())
+    [row] = db.get_ledger_rows(origin="agent_enact")
+    return row
+
+
+def test_a_failed_tool_call_is_recorded_as_failed(tmp_path):
+    from plugins.native.tool import ToolResult
+
+    db = _db(tmp_path)
+    row = _enact_tool(db, db.create_conversation("x"),
+                      ToolResult(success=False, error="old_text was not found."))
+
+    assert row["ok"] == 0
+    assert row["error_message"] == "old_text was not found."
+
+
+def test_a_successful_tool_call_is_still_recorded_as_ok(tmp_path):
+    from plugins.native.tool import ToolResult
+
+    db = _db(tmp_path)
+    row = _enact_tool(db, db.create_conversation("x"),
+                      ToolResult(success=True, llm_summary="Replaced text."))
+
+    assert row["ok"] == 1
+    assert not row["error_message"]
+
+
+def test_an_action_with_no_tool_underneath_keeps_the_enacts_own_verdict(tmp_path):
+    """``end_turn`` and friends carry no ``ToolResult``, so there is nothing to
+    narrow with and the row must read exactly as it always did."""
+    from runtime.conversation_loop import _tool_outcome
+
+    assert _tool_outcome(SimpleNamespace(data={"result": None})) is None
+    assert _tool_outcome(SimpleNamespace(data="just a string")) is None
+    assert _tool_outcome(SimpleNamespace(data=None)) is None
+    assert _tool_outcome(None) is None
+
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    loop = ConversationLoop(FakeLLM([]), None, {}, "prompt", session_key="chat")
+    loop._active_db, loop._active_conversation_id = db, cid
+    loop._record_ledger("end_turn", None, "agent",
+                        SimpleNamespace(ok=True, error=None, data=None),
+                        None, time.perf_counter())
+
+    [row] = db.get_ledger_rows(origin="agent_enact")
+    assert row["ok"] == 1
+
+
+def test_an_enact_that_itself_failed_keeps_its_own_reason(tmp_path):
+    """The inner verdict only ever narrows. A dispatch that failed has a
+    reason about the dispatch, which must not be overwritten by a tool's."""
+    from plugins.native.tool import ToolResult
+    from runtime.ledger import record_enact
+
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    record_enact(db, origin="agent_enact", session_key="chat",
+                 conversation_id=cid, user_id=None, actor_id="agent",
+                 action_type="call_tool", content={"name": "edit_file"},
+                 result=SimpleNamespace(
+                     ok=False,
+                     error=SimpleNamespace(code="denied", message="refused")),
+                 outcome=_tool_ok_pair(ToolResult(success=True)))
+
+    [row] = db.get_ledger_rows(origin="agent_enact")
+    assert row["ok"] == 0
+    assert row["error_message"] == "refused"
+
+
+def _tool_ok_pair(tool_result):
+    return bool(tool_result.success), str(tool_result.error or "")
+
+
 def test_plugin_code_can_finally_see_its_own_sandbox_rows(tmp_path):
     """``my_action_ledger`` scopes on ``user_id``, which every sandbox row left
     NULL — so the virtual table built to let a plugin read the ledger hid from
