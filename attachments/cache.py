@@ -30,6 +30,7 @@ filters miss it) once on the way in and ghost it on the way out.
 import logging
 import re
 import time
+from pathlib import Path
 
 import trees
 
