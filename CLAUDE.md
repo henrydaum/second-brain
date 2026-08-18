@@ -230,6 +230,43 @@ delegating parsers now use `sdk.services.call("google_drive", ...)`, and
 `bundled/parsers/parse_text.py` is the migrated reference — it validates
 clean and loads in a subprocess box, both pinned by tests.
 
+**And it is the one parser that declares `generic=True`**, which answers a
+question `modality` cannot: *is this file's text its own content?* `parse_text`
+registers `.py` as text and the store's `parse_gdoc` registers `.gdoc` as
+text — one word for a source file and for a 150-byte JSON stub naming a
+document that lives in Drive. Anything routing on the modality alone reads the
+stub and reports it as the file.
+
+`tool_read_file` did exactly that, and the shape of the failure is the reason
+this is a declaration rather than a heuristic. Its rule was *"hand it to a
+parser when the bytes do not decode as text"* — deliberately not an extension
+list, which would drift from what is installed. That is right for a PDF and
+inverted for a pointer: `parse_gdoc` opens with `json.loads(sdk.fs.read(path))`,
+so being textual is a *precondition of the parser working*, and being textual
+was taken as proof no parser was needed. The parser was unreachable from that
+tool by construction, and the agent got a successful-looking read of a JSON
+file rather than an error.
+
+Three things about the flag. **`False` is the default and the safe end**, so a
+parser author who never hears of it ships a specialist and their format is
+routed to them; the failure it prevents is silent, so the default has to be
+the one that fails loudly. **It rides on `register`** — the parser is the only
+thing that knows whether it decodes bytes or fetches content, the same
+argument `parse_modalities` makes one paragraph up. And **the kernel exposes
+it, never the extension list**: `parsing.describe_extension` answers
+`{modality, known, generic}` and `sdk.parse.modality(ext, detail=True)` is the
+Request behind it — an argument on the existing type, because the subject is
+the same question. `known` is separate because `get_modality` answers the
+*string* `"unknown"`, which a caller comparing against real modalities gets
+right only by accident.
+
+The rule a caller wants is then three lines, and the order matters: a
+specialist parses **before** any bytes are read, generic and unregistered
+extensions stay on `fs.read`. That last part is not tidiness — `parse_text`
+applies `clean_text` and a char cap, and `edit_file`'s exact-replacement gate
+needs what is byte-for-byte on disk, so routing plain text through the parser
+is the obvious fix and a wrong one.
+
 **The contract lives in the guest** (`sandbox/guest/parsing.py`): `ParseResult`,
 `CROSSABLE`, `clean_text`/`max_chars`, and `register`. A parser is guest code,
 and the child process runs with `sandbox/` as its cwd and *cannot see the

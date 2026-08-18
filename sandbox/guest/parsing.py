@@ -151,13 +151,31 @@ _DECLARED: list = []
 _LOCAL: dict = {}
 
 
-def register(extensions, modality: str, func) -> None:
+def register(extensions, modality: str, func, generic: bool = False) -> None:
     """Declare that ``func`` parses these extensions as ``modality``.
 
     The first modality declared for an extension becomes its default, so
     order matters: a PDF that declares text before image is text by default.
+
+    ``generic`` says this parser is the *fallback* for an extension rather
+    than its specialist -- it reads the file's own bytes and tidies them,
+    rather than knowing a format. Exactly one parser sets it (the kernel's
+    ``parse_text``), and the point of saying so is that a caller holding a
+    path can then tell "this file's text is its content" from "this file's
+    content is somewhere else".
+
+    That distinction is not visible any other way. ``parse_text`` registers
+    ``.py`` as text and ``parse_gdoc`` registers ``.gdoc`` as text, so the
+    modality is the same word for a source file and for a Drive shortcut
+    whose body has to be fetched over the network. A tool routing on modality
+    alone reads the shortcut's JSON and calls it the document.
+
+    Defaulting to ``False`` is what makes that safe: a parser that says
+    nothing is a specialist, so a new format is routed to its parser without
+    its author having to know this flag exists. The failure it prevents is
+    silent, and the default is the safe end of it.
     """
-    _DECLARED.append((extensions, modality, func))
+    _DECLARED.append((extensions, modality, func, bool(generic)))
 
 
 def drain_registrations() -> list:
@@ -179,7 +197,7 @@ def adopt_registrations() -> int:
     Returns how many (extension, modality) routes it gained.
     """
     gained = 0
-    for extensions, modality, func in drain_registrations():
+    for extensions, modality, func, _generic in drain_registrations():
         names = [extensions] if isinstance(extensions, str) else extensions
         for extension in names:
             ext = (extension or "").lower()

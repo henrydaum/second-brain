@@ -15,6 +15,7 @@ destination.
 Skips cleanly when no store ref is reachable.
 """
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -108,3 +109,87 @@ def test_neither_tool_is_asked_about():
     for relative in (READ_FILE, SHOW_FILES):
         declared = _declarations(relative)
         assert not (set(declared["requests"]) & set(CONSEQUENTIAL)), relative
+
+
+# ────────────────────────────────────────────────────────────────────
+# Routing: which branch a file takes, and in what order.
+# ────────────────────────────────────────────────────────────────────
+
+def _run_body() -> ast.FunctionDef:
+    """The tool's ``run`` method, as an AST node."""
+    tree = ast.parse(_source_or_skip(READ_FILE))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "run":
+            return node
+    raise AssertionError("tool_read_file has no run()")
+
+
+def test_read_file_asks_which_parser_owns_the_extension():
+    """The bare call cannot answer it: parse_text registers .py as "text" and
+    parse_gdoc registers .gdoc as "text", so only ``detail=True`` separates a
+    source file from a pointer to a document living in Drive."""
+    body = _run_body()
+
+    detailed = [
+        node for node in ast.walk(body)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "modality"
+        and any(kw.arg == "detail" for kw in node.keywords)
+    ]
+
+    assert detailed, (
+        "read_file resolves the extension without asking whether the parser "
+        "behind it is the generic text fallback — the .gdoc bug")
+
+
+def test_the_parser_branch_runs_before_any_bytes_are_read():
+    """The whole bug was branch *order*, not a missing branch.
+
+    A .gdoc is a small JSON stub: it decodes cleanly, so the binary sniff that
+    used to be the only route to a parser said "this is text" and the parser
+    was never consulted. Deciding from the registry has to happen before
+    ``fs.read``, or the sniff gets there first and answers wrongly again.
+    """
+    body = _run_body()
+
+    first_parse = first_read = None
+    for node in ast.walk(body):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "_parse":
+            if first_parse is None or node.lineno < first_parse:
+                first_parse = node.lineno
+        if (isinstance(func, ast.Attribute) and func.attr == "read"
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "fs"):
+            if first_read is None or node.lineno < first_read:
+                first_read = node.lineno
+
+    assert first_parse is not None and first_read is not None
+    assert first_parse < first_read, (
+        "the first route to a parser is still behind fs.read, so a file whose "
+        "text is not its content is read as though it were")
+
+
+def test_plain_text_still_reaches_fs_read_for_edit_files_sake():
+    """Routing everything through the parser would be the obvious fix and a
+    wrong one: parse_text applies clean_text and a char cap, and edit_file's
+    exact-replacement gate needs what is byte-for-byte on disk. So the generic
+    route must stay on fs.read, and the tool must say why."""
+    source = _source_or_skip(READ_FILE)
+    body = _run_body()
+
+    guarded = [
+        node for node in ast.walk(body)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value == "generic"
+    ]
+
+    assert guarded, "nothing in run() consults the generic flag"
+    assert "edit_file" in source, (
+        "the reason plain text stays on fs.read is not written down, which is "
+        "how it gets 'simplified' into the parser branch later")
+

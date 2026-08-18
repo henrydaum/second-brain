@@ -3640,10 +3640,19 @@ def _parse_modality(ctx, args: dict) -> Result:
 
     Always answerable: the kernel's native defaults cover image/audio/video
     with no parser installed at all, which is what attachment routing needs.
+
+    ``detail`` answers the whole routing decision instead of the modality
+    alone -- see ``parsing.describe_extension``. It is an argument rather
+    than a second Request type because the subject is the same question; the
+    bare call keeps answering a plain string, which is what every existing
+    caller reads.
     """
     import parsing
 
-    return Result(data=parsing.get_modality(args.get("extension") or ""))
+    extension = args.get("extension") or ""
+    if args.get("detail"):
+        return Result(data=parsing.describe_extension(extension))
+    return Result(data=parsing.get_modality(extension))
 
 
 def _ledger_record(ctx, args: dict) -> Result:

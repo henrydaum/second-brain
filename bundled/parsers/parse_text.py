@@ -64,4 +64,4 @@ register([
     ".go", ".rs", ".swift", ".kt",
     ".sql", ".sh", ".bat", ".ps1",
     ".r", ".m", ".scala", ".lua",
-], "text", parse_plaintext)
+], "text", parse_plaintext, generic=True)

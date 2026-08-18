@@ -801,7 +801,7 @@ id is enough to answer and only enough to answer.
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `parse.file(path, modality)` | Parse to text via the registry | path | safe |
-| `parse.modality(ext)` | Resolve a file's modality | — | safe |
+| `parse.modality(ext, detail=False)` | Resolve a file's modality; `detail` also reports whether a specialist parser owns it | — | safe |
 
 ### 15a. LLM backends
 

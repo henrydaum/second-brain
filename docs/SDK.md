@@ -1547,7 +1547,8 @@ sdk.tasks.trigger(name, payload=None)
 sdk.files.register(path, **meta) / list(modality="")
 
 sdk.parse.file(path, modality="text")   # local parser if declared, else kernel
-sdk.parse.modality(extension)
+sdk.parse.modality(extension)                  # -> "text" / "image" / "unknown"
+sdk.parse.modality(extension, detail=True)     # -> {"modality", "known", "generic"}
 
 sdk.ledger.record(action, ok=True, data=None)
 sdk.ledger.read(limit=50)

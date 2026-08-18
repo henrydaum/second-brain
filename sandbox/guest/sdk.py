@@ -1432,9 +1432,26 @@ class _Parse(_Namespace):
                 "also_contains": list(getattr(parsed, "also_contains", None)
                                       or [])}
 
-    def modality(self, extension: str):
-        """Resolve an extension's modality."""
-        return self._ask(PARSE_MODALITY, extension=extension)
+    def modality(self, extension: str, detail: bool = False):
+        """Resolve an extension's modality.
+
+        ``detail=True`` answers ``{"modality", "known", "generic"}`` rather
+        than the bare string, which is what a caller deciding *whether to
+        parse at all* needs:
+
+            info = sdk.parse.modality(sdk.path.suffix(path), detail=True)
+            if info["known"] and not info["generic"]:
+                text = sdk.parse.file(path)     # the parser owns this format
+            else:
+                text = sdk.fs.read(path)        # the bytes are the content
+
+        ``generic`` is true only for the kernel's text parser. Without it a
+        caller cannot tell ``.py`` from ``.gdoc`` -- both register as "text",
+        but one *is* its bytes and the other is a pointer to a document that
+        has to be fetched. Routing on the modality alone hands the agent a
+        JSON stub and calls it the file.
+        """
+        return self._ask(PARSE_MODALITY, extension=extension, detail=detail)
 
 
 class _Ledger(_Namespace):

@@ -58,6 +58,11 @@ _MODALITY_MAP: dict[str, str] = {}
 # place that knows both halves.
 _SOURCES: dict[tuple[str, str], Path] = {}
 
+#: The (extension, modality) routes served by a *generic* parser -- one that
+#: reads the file's own bytes rather than knowing a format. See
+#: :func:`register`. Small by construction: only ``parse_text`` declares it.
+_GENERIC: set[tuple[str, str]] = set()
+
 
 # Native modalities the LLM may ingest directly even when no parser is
 # installed for the extension. The kernel's standing knowledge of "what kind
@@ -93,11 +98,12 @@ def clear():
     """
     _REGISTRY.clear()
     _MODALITY_MAP.clear()
+    _GENERIC.clear()
     _SOURCES.clear()
 
 
 def register(extensions: str | list[str], modality: str, func: callable,
-             source=None):
+             source=None, generic: bool = False):
     """Register a parser for one or more extensions under a modality.
 
     Called at import time by each ``parse_*.py`` helper. The first modality
@@ -106,6 +112,10 @@ def register(extensions: str | list[str], modality: str, func: callable,
     ``source`` is the file the registration came from. Supplied by
     :func:`discover`, which is the only caller that knows it; it is what
     :func:`sources_for` later hands to a box that asked for a modality.
+
+    ``generic`` marks the fallback parser rather than a format specialist --
+    the parser's own declaration, carried through from
+    ``guest.parsing.register``, where the reasoning lives.
     """
     if isinstance(extensions, str):
         extensions = [extensions]
@@ -116,6 +126,10 @@ def register(extensions: str | list[str], modality: str, func: callable,
             _SOURCES[(ext, modality)] = Path(source)
         if ext not in _MODALITY_MAP:
             _MODALITY_MAP[ext] = modality
+        if generic:
+            _GENERIC.add((ext, modality))
+        else:
+            _GENERIC.discard((ext, modality))
 
 
 def sources_for(modalities) -> list[Path]:
@@ -174,6 +188,30 @@ def get_modalities_for(extension: str) -> list[str]:
 def get_supported_extensions() -> set[str]:
     """Every extension with at least one registered parser."""
     return {ext for ext, _ in _REGISTRY}
+
+
+def describe_extension(extension: str) -> dict:
+    """How an extension routes: its modality, and who owns that route.
+
+    ``generic`` answers "is this file's text its own content?" -- true for the
+    kernel's ``parse_text``, false for every format specialist, and false for
+    an extension nothing has registered. It exists because ``modality`` cannot
+    answer it: ``parse_text`` registers ``.py`` as text and ``parse_gdoc``
+    registers ``.gdoc`` as text, so a caller told only "text" reads a Drive
+    shortcut's JSON stub and reports it as the document.
+
+    ``known`` separates "no parser is installed for this" from "a parser said
+    text", which the modality alone also blurs -- ``get_modality`` answers the
+    string "unknown", and a caller comparing that against real modalities gets
+    it right only by accident.
+    """
+    ext = _normalize(extension)
+    modality = get_modality(ext)
+    return {
+        "modality": modality,
+        "known": modality != "unknown",
+        "generic": (ext, modality) in _GENERIC,
+    }
 
 
 def parser_for(extension: str, modality: str):
@@ -267,8 +305,9 @@ def discover() -> int:
             # import; this is where those declarations become the kernel's
             # registry. Draining per module keeps one broken parser from
             # stealing another's registrations.
-            for extensions, modality, func in drain_registrations():
-                register(extensions, modality, func, source=py_file)
+            for extensions, modality, func, generic in drain_registrations():
+                register(extensions, modality, func, source=py_file,
+                         generic=generic)
             seen.add(py_file.stem)
             count += 1
 

@@ -432,3 +432,83 @@ def test_kernel_sdk_stat_matches_guest_metadata_shape(tmp_path):
         "path", "name", "is_file", "is_dir", "is_symlink", "mtime", "size"}
     assert KERNEL_SDK.fs.exists(path)
     assert not KERNEL_SDK.fs.exists(tmp_path / "missing.txt")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Generic vs specialist: which side of the parser boundary a file sits on.
+# ────────────────────────────────────────────────────────────────────
+
+def test_the_text_parser_is_the_only_generic_one():
+    """Every bundled and installed parser, and only parse_text says generic.
+
+    The default is what makes this safe -- a parser author who has never heard
+    of the flag ships a specialist, which is the routing that reads the file
+    properly. Pinned as a *set* so a second generic parser has to be argued
+    for here rather than appearing.
+    """
+    import parsing
+
+    parsing.discover()
+    generic = {ext for (ext, _modality) in parsing.registry._GENERIC}
+
+    assert ".py" in generic and ".md" in generic and ".txt" in generic
+    assert all(parsing.describe_extension(ext)["generic"] for ext in generic)
+
+
+def test_a_specialist_parser_is_distinguishable_from_the_text_fallback():
+    """The bug this exists for: both register as "text", and routing on the
+    modality alone hands the agent a .gdoc's JSON stub as the document."""
+    import parsing
+
+    parsing.discover()
+    parsing.register(".gdoc", "text", lambda sdk, path, config: None)
+
+    plain = parsing.describe_extension(".py")
+    pointer = parsing.describe_extension(".gdoc")
+
+    # Indistinguishable by the old question ...
+    assert plain["modality"] == pointer["modality"] == "text"
+    # ... and separated by the new one.
+    assert plain["generic"] and not pointer["generic"]
+    assert plain["known"] and pointer["known"]
+
+
+def test_an_unregistered_extension_is_neither_known_nor_generic():
+    """`known` is what keeps the parse branch off a file nothing can parse.
+
+    ``get_modality`` answers the *string* "unknown", so a caller comparing it
+    against real modalities gets this right only by accident.
+    """
+    import parsing
+
+    parsing.discover()
+    route = parsing.describe_extension(".sbxyz")
+
+    assert route == {"modality": "unknown", "known": False, "generic": False}
+
+
+def test_clearing_the_registry_forgets_generic_registrations():
+    """_GENERIC is cleared with everything else, or an uninstalled parser
+    keeps voting on how its extension routes."""
+    import parsing
+
+    parsing.discover()
+    parsing.register(".sbtest", "text", lambda sdk, path, config: None,
+                     generic=True)
+    assert parsing.describe_extension(".sbtest")["generic"]
+
+    parsing.clear()
+    assert not parsing.describe_extension(".sbtest")["generic"]
+
+
+def test_registering_a_specialist_over_a_generic_route_clears_the_flag():
+    """Re-registration replaces rather than accumulates, in both directions."""
+    import parsing
+
+    parsing.clear()
+    parsing.register(".sbtest", "text", lambda sdk, path, config: None,
+                     generic=True)
+    parsing.register(".sbtest", "text", lambda sdk, path, config: None)
+
+    assert not parsing.describe_extension(".sbtest")["generic"]
+
