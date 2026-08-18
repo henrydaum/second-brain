@@ -19,15 +19,26 @@ what kind of file it is pointing at before it may look:
 Only the middle one ever worked. ``fs.read`` on a PDF returned decoded binary
 noise, and an image had no route to the model at all.
 
-Two details about how the last branch decides. It is **not** the extension's
-modality: ``parse_pdf`` registers ``.pdf`` as "text" and so does ``parse_text``
-for ``.py``, so the registry cannot tell a document from a source file — both
-are "something produces text from this". And it is not a hardcoded list of
-document extensions, which would drift from whatever is actually installed.
-It is the *bytes*: ``fs.read`` decodes with ``errors="replace"``, so a file
-that comes back full of replacement characters has just said it is not text.
-Asking a parser only then costs nothing on the common path and stays correct
-as parser packages come and go.
+How the last branch decides was the subtle part, and it was wrong in a way
+nothing reported. It could not be the extension's modality, because
+``parse_pdf`` registers ``.pdf`` as "text" and so does ``parse_text`` for
+``.py`` — one word for a document and for a source file. So it was decided on
+the *bytes*: ``fs.read`` decodes with ``errors="replace"``, and a file that
+comes back full of replacement characters has said it is not text.
+
+That is right for a PDF and silently wrong for a **pointer** — a file whose
+text is not its content. A ``.gdoc`` is a 150-byte JSON stub naming a Drive
+document; it decodes perfectly, so it never reached ``parse_gdoc``, and the
+agent got ``{"doc_id": ...}`` back as a successful read. The parser could not
+have been reached by this route at all: it does ``json.loads(sdk.fs.read(...))``,
+so being textual is a precondition of it working, and being textual is what
+this branch took as proof no parser was needed.
+
+The registry answers it now. ``sdk.parse.modality(ext, detail=True)`` reports
+whether the parser behind an extension is the generic text fallback or a
+format specialist, and a specialist owns its format: parse first, no bytes
+read. The byte sniff stays as the fallback for extensions nothing has
+registered, which is the case neither the registry nor a list can cover.
 
 Reading text is deliberately still ``fs.read`` rather than the parser, even
 though ``parse_text`` would answer: it applies ``clean_text`` and a char cap,
@@ -155,9 +166,19 @@ class ReadFile(BaseTool):
 
         target = sdk.path.absolute(raw_path, base=sdk.paths.get("project"))
 
-        modality = sdk.parse.modality(sdk.path.suffix(target))
-        if modality in NATIVE_MODALITIES:
-            return self._attach(sdk, target, modality)
+        route = sdk.parse.modality(sdk.path.suffix(target), detail=True)
+        if route["modality"] in NATIVE_MODALITIES:
+            return self._attach(sdk, target, route["modality"])
+
+        # A specialist parser owns its format, so it decides what the file
+        # says -- before any bytes are read, which is what makes a pointer
+        # like .gdoc work and saves pulling a whole PDF in to discover it is
+        # binary. ``generic`` is the kernel's text parser, whose extensions
+        # are their own content and must stay on fs.read: it applies
+        # clean_text and a char cap, and edit_file's exact-replacement gate
+        # needs what is actually on disk.
+        if route["known"] and not route["generic"]:
+            return self._parse(sdk, target)
 
         try:
             content = sdk.fs.read(target)
