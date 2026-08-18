@@ -31,12 +31,9 @@ the file will load at all, and whether it will be put in a subprocess.
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["plugin.validate", "fs.list", "paths.get"]
+requests = ["plugin.validate"]
 
 from guest.bases import BaseTool
-
-FAMILIES = ("tools", "tasks", "services", "commands", "frontends", "helpers",
-            "scripts")
 
 # Which document explains a finding, keyed by a phrase the validator writes.
 # Phrases are lowercase because the message is lowercased before matching, and
@@ -87,30 +84,21 @@ class Validate(BaseTool):
     }
     requires_services = []
 
-    def agent_prompt(self, sdk) -> str:
-        """The authoring workflow, plus a live listing of what is in the tree."""
-        sandbox_root = sdk.paths.get("workspace")
-        return (
-            f"""## Writing and running your own code
-You can write code into {sandbox_root}/ and run it, without asking permission for either. That is not a loophole: everything under that tree runs in a subprocess and cannot act, only ask. Every effect it performs — disk, network, database, process — is a separate request the kernel judges on its own. So writing code changes what you can *ask for*; it never changes what you are allowed to *affect*.
-
-Two kinds, and the difference is whether the kernel has to register it. **Scripts** are run once by path — the Scripts section of these instructions covers them, and they are what to reach for first. **A plugin** is a capability the kernel registers and calls by name: a tool, task, service, command or frontend. Write one when the thing should still be there tomorrow. It goes in {sandbox_root}/<family>/ with the required prefix — tool_foo.py in {sandbox_root}/tools/, command_foo.py in {sandbox_root}/commands/, and so on.
-
-Whichever you write, your code cannot act — it can only ask. Anything touching disk, network, clock or process goes through the `sdk` object every entry point receives: `sdk.fs.read(path)`, not `open(path)`; `sdk.log(...)`, not `logging`; `sdk.db.query(...)`, not a cursor. Requests return their value and raise on failure, so the code reads as straight-line Python.
-
-Workflow: read docs/SDK.md (its examples are executed by the test suite, so they are correct), then the matching templates/ file for the family, then write the file and call validate(path=...) after every edit until it says the file conforms. Ask clarifying questions first when a missing decision would materially change the design. A conforming plugin loads as soon as it is saved.
-
-Rules that are enforced rather than suggested, so code breaking one will not load:
-- Import a base class from `guest.bases` — `from guest.bases import BaseTool`. Never import kernel modules (runtime, config, plugins, state_machine, agent, pipeline, events, paths): a box cannot see them.
-- No `os`, `sys`, `pathlib`, `subprocess`, `requests`, `open()` or `logging`. Each has an sdk equivalent; `sdk.path.*` covers path arithmetic.
-- Exactly one plugin class per file, with a unique `name`. A script has no class at all, and must not carry a family prefix or it is judged as a plugin and refused.
-- Declarations (`name`, `requests`, `parameters`, `exports`, `hooks`, ...) are read from the source without running it, so they must be plain literals throughout — one computed value discards the whole declaration.
-
-A library outside the standard library still works — declare it in `dependencies_pip` — but the kernel runs that file in a separate process, because it cannot see what the library does. validate tells you when this applies.
-
-## What is in your tree
-{_drafts(sdk, sandbox_root)}"""
-        )
+    agent_prompt = (
+        "## Writing your own code\n"
+        "You can write code into your workspace tree and run it without asking "
+        "permission for either. That is not a loophole: it runs in a subprocess "
+        "and cannot act, only ask — every effect it performs is a separate "
+        "Request the kernel judges on its own.\n"
+        "Read docs/SDK.md before writing any of it, then the matching "
+        "templates/ file for that family. The SDK guide's examples are executed "
+        "by the test suite, so they are correct; code written from memory "
+        "instead will not load. Call validate(path=...) after every edit until "
+        "the file conforms — a conforming plugin loads as soon as it is saved.\n"
+        "A **script** is run once by path and is what to reach for first. A "
+        "**plugin** is a capability the kernel registers and calls by name; it "
+        "goes in workspace/<family>/ under that family's filename prefix."
+    )
 
     def run(self, sdk, **kwargs):
         """Run validate."""
@@ -206,25 +194,3 @@ def _pointer(message: str) -> str:
         if phrase in lowered:
             return pointer
     return DEFAULT_POINTER
-
-
-def _drafts(sdk, sandbox_root) -> str:
-    """Every file currently sitting in the agent's own tree.
-
-    Scripts are listed alongside plugins deliberately: a script kept from an
-    earlier conversation is the thing most worth knowing about, since the
-    cheapest useful move is often to run one that already exists rather than
-    write it again.
-    """
-    found = []
-    for family in FAMILIES:
-        directory = sdk.path.join(sandbox_root, family)
-        try:
-            entries = sdk.fs.list(directory, pattern="*.py")
-        except Exception:
-            continue
-        found.extend(f"  {entry}" for entry in sorted(entries)
-                     if not sdk.path.name(entry).startswith("_"))
-    if not found:
-        return "Nothing yet. Anything you write will show up here."
-    return "\n".join(found)

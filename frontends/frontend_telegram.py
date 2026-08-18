@@ -280,15 +280,13 @@ class TelegramFrontend(BaseFrontend):
 
     agent_prompt = (
         "## Talking over Telegram\n"
-        "This conversation is on Telegram, a mobile chat app. Replies are sent as native "
-        "Rich Messages, so standard Markdown displays with full fidelity: headings, **bold**, "
-        "*italic*, ~~strikethrough~~, `inline code`, fenced code blocks with language tags, "
-        "[links](https://example.com), bulleted and numbered lists, tables, > blockquotes, and "
-        "--- dividers. Use whatever structure serves the reply, but it is still a phone screen: "
-        "keep replies concise and skimmable. On an older Telegram server the same message falls "
-        "back to a simpler renderer where only bold, italic, inline code and code blocks survive, "
-        "so do not let meaning depend on a heading or a table alone. Long messages are split "
-        "across multiple sends, and file uploads are capped at 50 MB."
+        "This conversation is on Telegram. Replies are sent as native Rich "
+        "Messages, so standard Markdown renders with full fidelity — but it is "
+        "a phone screen, so keep replies concise and skimmable. On an older "
+        "Telegram server the same message falls back to a simpler renderer "
+        "where only bold, italic, inline code and code blocks survive, so do "
+        "not let meaning depend on a heading or a table alone. Long messages "
+        "are split across multiple sends, and file uploads are capped at 50 MB."
     )
 
     # How long one poll spends inside the event loop. It is the frontend's
