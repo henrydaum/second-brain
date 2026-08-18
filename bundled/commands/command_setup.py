@@ -1,14 +1,20 @@
 """Slash command plugin for `/setup` — onboarding ramp.
 
-Three phases, all in one pass:
+Four phases, all in one pass:
   1. Packages — a fresh kernel ships no LLM backend or frontend, so setup leads
-     by installing the `starter` bundle (or `full`), and points at /packages for
+     by installing the `essentials` bundle, and points at /packages for
      more. Skipped automatically once an LLM backend is already installed.
   2. LLM — configure a default profile (Atlas Cloud fast-path or another provider,
      via the LiteLLM backend).
   3. Telegram — configure the bot, but only when the Telegram frontend is (being)
      installed.
+  4. Web UI — install the HTTP frontend and mint its token, then print the
+     build steps. The app is a separate repository that has to be cloned and
+     built, so the wizard deliberately stops at what it can actually do:
+     prompting for a `dist` path that does not exist yet would be a dead end.
 """
+
+import secrets
 
 from guest.bases import BaseCommand
 from guest.forms import FormStep
@@ -29,6 +35,14 @@ DEFAULT_BACKEND = "LiteLLMService"
 ESSENTIALS_BUNDLE = "bundle_essentials"
 KNOWLEDGEBASE_BUNDLE = "bundle_knowledgebase"
 TELEGRAM_PACKAGE = "frontend_telegram"
+HTTP_PACKAGE = "frontend_http"
+UI_REPO = "https://github.com/henrydaum/second-brain-ui"
+#: Matches ``frontend_http``'s own declared default, so the URL this wizard
+#: prints is the one the frontend will actually serve on.
+DEFAULT_HTTP_PORT = 8787
+#: 32 bytes of urlsafe base64. Long enough that nobody is guessing it, short
+#: enough to paste into a .env file without wrapping.
+TOKEN_BYTES = 32
 
 #: What each install choice actually installs, in order. A *list* rather than
 #: one name because the second choice is the first plus one — the knowledge
@@ -101,6 +115,16 @@ TELEGRAM_PROMPT = (
 TELEGRAM_TOKEN_PROMPT = "Paste the bot token from @BotFather."
 TELEGRAM_USER_PROMPT = (
     "Enter your Telegram user ID (a number from @userinfobot). Only this user will be allowed to talk to the bot."
+)
+
+WEB_UI_PROMPT = (
+    "Last thing: the web UI — a ChatGPT-style app you open in a browser or "
+    "install to your phone's home screen. It is a much nicer place to live than "
+    "the REPL.\n\n"
+    "Saying yes now installs the HTTP frontend and generates your API token. "
+    "The app itself is a separate repository, so you'll clone and build it "
+    "afterwards — two commands, about two minutes, and they get printed at the "
+    "end along with the token."
 )
 
 PACKAGES_SECTION = (
@@ -176,6 +200,15 @@ class SetupCommand(BaseCommand):
         # is (being) installed.
         if will_have_telegram and _llm_steps_complete(args, llm_choice):
             steps.extend(self._telegram_steps(args))
+
+        # Phase 4 — the web UI, last because it is the only phase whose work
+        # continues outside this wizard. Gated on Telegram being *settled*
+        # rather than merely offered: a form renders every step it is handed,
+        # so asking both at once would present two unrelated questions as one
+        # screen.
+        if (_llm_steps_complete(args, llm_choice)
+                and _telegram_settled(args, will_have_telegram)):
+            steps.extend(self._web_ui_steps())
         return steps
 
     def _atlas_steps(self, args):
@@ -224,6 +257,17 @@ class SetupCommand(BaseCommand):
             steps.append(FormStep("telegram_bot_token", TELEGRAM_TOKEN_PROMPT, True))
             steps.append(FormStep("telegram_allowed_user_id", TELEGRAM_USER_PROMPT, True, "integer"))
         return steps
+
+    def _web_ui_steps(self):
+        """Ask whether to set the web UI up. Takes no ``args`` — it is one
+        question with no follow-ups, because everything after it happens in a
+        terminal this wizard does not own."""
+        return [FormStep(
+            "web_ui_choice", WEB_UI_PROMPT, True,
+            enum=["setup", "skip"],
+            enum_labels=["Set up the web UI", "Skip — I'll use /packages later"],
+            columns=1,
+        )]
 
     def run(self, sdk, args):
         """Execute `/setup` for the active session."""
@@ -277,6 +321,12 @@ class SetupCommand(BaseCommand):
             sections.append(self._save_telegram(sdk, args))
         elif args.get("telegram_choice") == "skip":
             sections.append("Telegram: skipped. Use /config to add `telegram_bot_token` and `telegram_allowed_user_id` later.")
+
+        # Phase 4 — web UI.
+        if args.get("web_ui_choice") == "setup":
+            sections.append(self._save_web_ui(sdk))
+        elif args.get("web_ui_choice") == "skip":
+            sections.append("Web UI: skipped. Install it later with `/packages install " + HTTP_PACKAGE + "`.")
 
         sections.append(PACKAGES_SECTION)
         sections.append(self._location_section(sdk))
@@ -359,6 +409,43 @@ class SetupCommand(BaseCommand):
             "  Restart Second Brain to bring the bot online, then send /start to your bot in Telegram."
         )
 
+    def _save_web_ui(self, sdk):
+        """Install the HTTP frontend, mint its token, and print what is left.
+
+        The remaining work is a clone and a build in another terminal, so this
+        returns instructions rather than doing it. The token is printed because
+        it is the one value the user has to carry across — into the UI's
+        ``.env.local`` — and telling them to go dig it out of /config would be a
+        worse answer than showing it on their own machine."""
+        try:
+            sdk.plugins.install(HTTP_PACKAGE)
+        except sdk.Failed as e:
+            # Reported, not raised: the LLM and Telegram phases already
+            # succeeded and their report must survive this.
+            return (
+                f"Web UI: couldn't install `{HTTP_PACKAGE}`: {e.error}\n"
+                f"  Try `/packages install {HTTP_PACKAGE}` yourself, then follow "
+                "the web UI steps in the README."
+            )
+        token = secrets.token_urlsafe(TOKEN_BYTES)
+        sdk.config.write("secret_http_token", token, scope="plugin")
+        return (
+            "Web UI: HTTP frontend installed, API token generated.\n"
+            f"  Your token: {token}\n"
+            "\n"
+            "  Two minutes left. In a terminal (needs Node 20.19+ or 22.12+):\n"
+            f"    git clone {UI_REPO}\n"
+            "    cd second-brain-ui\n"
+            "    npm install\n"
+            "    cp .env.example .env.local\n"
+            "\n"
+            "  Paste the token above into VITE_SB_TOKEN in .env.local, then:\n"
+            "    npm run dev\n"
+            "\n"
+            "  Opens at http://localhost:5173. Restart Second Brain first so the "
+            f"HTTP frontend comes online on port {DEFAULT_HTTP_PORT}."
+        )
+
     def _skip_section(self):
         """Guidance when the user declines the starter install."""
         return (
@@ -399,6 +486,23 @@ def _llm_steps_complete(args, choice):
         return False
     if choice == "other":
         return bool(args.get("other_model_name") and args.get("other_service_class"))
+    return False
+
+
+def _telegram_settled(args, will_have_telegram):
+    """Whether the Telegram phase has nothing further to ask.
+
+    True when there is no Telegram phase at all, when it was declined, or
+    when both credentials are in hand. Anything else means a step is still
+    on screen and the next phase must not crowd it."""
+    if not will_have_telegram:
+        return True
+    choice = args.get("telegram_choice")
+    if choice == "skip":
+        return True
+    if choice == "setup":
+        return bool(args.get("telegram_bot_token")
+                    and args.get("telegram_allowed_user_id"))
     return False
 
 
