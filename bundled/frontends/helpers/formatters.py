@@ -13,12 +13,19 @@ versions of every one of those primitives are ``sdk.md.*`` in
 ``sandbox/guest/sdk.py``; that is where a command or frontend reaches for one,
 and where a new one goes.
 
-What is left is what still has a caller on *this* side of the boundary:
-``md_table`` for ``plugins/command_registry.py``, which builds the command
-catalog before any guest is involved, and ``render_plain`` as the oracle
-``tests/test_sandbox_console.py`` pins ``sdk.md.plain`` against. The two
-implementations are deliberately not shared code -- the guest half is
+What is left is the two with a caller on *this* side of the boundary, and
+they are kept for different reasons. ``md_table`` has a production one:
+``plugins/command_registry.py``, which builds the command catalog before any
+guest is involved. ``render_plain`` has none -- it is a **reference
+implementation**, kept because ``tests/test_sandbox_console.py`` asserts
+``sdk.md.plain`` produces exactly what it produces, and
+``tests/test_state_machine.py`` renders through it as a stand-in for the REPL.
+The two implementations are deliberately not shared code -- the guest half is
 stdlib-only and self-contained -- and a test is what keeps them agreeing.
+
+That asymmetry is worth knowing before moving anything: deleting
+``render_plain`` does not free a caller, it deletes the thing the guest is
+checked against.
 """
 
 import re
