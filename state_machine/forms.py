@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from state_machine.conversation import FormStep
 
@@ -30,11 +29,6 @@ def _schema_prompt(name: str, info: dict) -> str:
 def _article(label: str) -> str:
     """Internal helper to handle article."""
     return label if label.startswith(("a ", "an ", "the ")) else f"{'an' if label[:1].lower() in 'aeiou' else 'a'} {label}"
-
-
-def coerce_form_value(raw: Any, step: FormStep) -> Any:
-    """Handle coerce form value."""
-    return step.coerce(raw)
 
 
 def history_tool_calls_from_content(content: str) -> dict | None:

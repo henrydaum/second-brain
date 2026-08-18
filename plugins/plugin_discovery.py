@@ -443,8 +443,6 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
     info, err = plugin_info(file_path)
     if err:
         return None, err
-    module_name = info.module_name
-
     module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"
@@ -478,7 +476,6 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
     info, err = plugin_info(file_path)
     if err:
         return None, err
-    module_name = info.module_name
     if frontend_manager is None:
         return None, "No frontend manager available"
 
@@ -506,7 +503,6 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
     info, err = plugin_info(file_path)
     if err:
         return None, err
-    module_name = info.module_name
     if command_registry is None:
         return None, "No command registry available"
 
@@ -531,8 +527,6 @@ def _load_single_task(file_path: Path, orchestrator) -> tuple[str | None, str | 
     info, err = plugin_info(file_path)
     if err:
         return None, err
-    module_name = info.module_name
-
     module = _load_plugin_module(file_path)
     if module is None:
         return None, f"Failed to import {file_path.name}"

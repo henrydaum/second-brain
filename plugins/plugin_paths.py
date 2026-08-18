@@ -13,7 +13,7 @@ from pathlib import Path
 
 import trees
 from paths import DATA_DIR, ROOT_DIR
-from trees import HELPERS_DIRNAME, Tree
+from trees import Tree
 
 #: A tree, under the name discovery has always called it. One object, one
 #: spelling — the old ``PluginRoot`` carried a name, a path and a module string

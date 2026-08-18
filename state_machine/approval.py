@@ -61,17 +61,3 @@ class StateMachineApprovalRequest:
         if not self.is_resolved:
             self.value = value
             self._event.set()
-
-    def to_event(self) -> dict[str, Any]:
-        """Handle to event."""
-        return {
-            "id": self.id,
-            "title": self.title,
-            "body": self.body,
-            "type": self.type,
-            "enum": self.enum,
-            "enum_labels": self.enum_labels,
-            "default": self.default,
-            "pending_action": self.pending_action,
-            "metadata": self.metadata,
-        }

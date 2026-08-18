@@ -47,7 +47,6 @@ from events.event_channels import (
     CHAT_MESSAGE_PUSHED,
     CONVERSATION_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
-    SESSION_CLOSED,
     SESSION_SECURITY_MODE_CHANGED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
 )
@@ -66,7 +65,7 @@ from runtime.security_modes import (
 # method never shadows a global inside its own body, two identical names one
 # indent apart is a line nobody should have to think about twice.
 from runtime.security_modes import security_mode as _normalize_mode
-from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
+from runtime.session import RuntimeResult, RuntimeSession
 
 from runtime import runtime_approvals as _approvals
 from runtime import runtime_config as _cfg

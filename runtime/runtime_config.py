@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from state_machine.conversation import CallableSpec, ConversationState, Participant
 from runtime.conversation_loop import ConversationLoop, tool_summary

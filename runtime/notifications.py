@@ -111,13 +111,6 @@ def load_conversation_command(db, conversation_id: int | None) -> str:
     return f"/conversations {shlex.quote(category)} {conversation_id} 'Load conversation'"
 
 
-def load_conversation_suffix(db, conversation_id: int | None) -> str:
-    """Render the trailing line that lets the user jump to the conversation
-    a notification came from."""
-    cmd = load_conversation_command(db, conversation_id)
-    return f"\n\nLoad this conversation: `{cmd}`" if cmd else ""
-
-
 def notify(*, title: str = "", body: str = "", source: str = "system",
            source_id: str | None = None, level: str = DEFAULT_LEVEL,
            session_key: str | None = None,

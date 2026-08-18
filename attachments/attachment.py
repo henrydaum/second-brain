@@ -119,10 +119,6 @@ class AttachmentBundle:
             suffix_parts.append(blurb)
         return native, "\n\n".join(suffix_parts)
 
-    def to_list(self) -> list[dict[str, Any]]:
-        """Handle to list."""
-        return [a.to_dict() for a in self.items]
-
     @classmethod
     def from_iterable(cls, data: Iterable[Any] | None) -> "AttachmentBundle":
         """Handle from iterable."""

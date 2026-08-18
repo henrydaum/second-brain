@@ -25,7 +25,6 @@ import uuid
 from typing import Any, NamedTuple
 
 from .guest.hooks import MOMENTS
-from .guest.requests import Result
 
 logger = logging.getLogger("Sandbox")
 

@@ -6,8 +6,6 @@ Every module that needs DATA_DIR or ROOT_DIR imports from here.
 
 import os
 import platform
-import subprocess
-import sys
 from pathlib import Path
 
 # Project root (where main.pyw lives)
@@ -31,13 +29,3 @@ else:
 # here no longer: it lives in the agent's own tree now, so it is
 # ``trees.attachment_cache()``. ``migrations.py`` moves an older one across.
 
-
-def open_file(path):
-    """Open a file or folder with the system's default handler."""
-    path = str(path)
-    if _system == "Windows":
-        os.startfile(path)
-    elif _system == "Darwin":
-        subprocess.Popen(["open", path])
-    else:
-        subprocess.Popen(["xdg-open", path])

@@ -99,7 +99,6 @@ def configure(sandbox: Sandbox | None):
 
 def get_sandbox() -> Sandbox:
     """The sandbox plugins run in."""
-    global _SANDBOX
     if _SANDBOX is None:
         # Through ``configure`` rather than assigned directly: that is what
         # sets ``plugin_roots``, and a sandbox without them resolves

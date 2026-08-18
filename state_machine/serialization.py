@@ -50,16 +50,6 @@ def unpack_compaction(content: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and data.get(COMPACTION_MARKER) else None
 
 
-def is_state_marker(row: dict[str, Any]) -> bool:
-    """Return whether state marker."""
-    return row.get("role") == "system" and unpack_state(row.get("content") or "") is not None
-
-
-def is_compaction_marker(row: dict[str, Any]) -> bool:
-    """Return whether compaction marker."""
-    return row.get("role") == "system" and unpack_compaction(row.get("content") or "") is not None
-
-
 def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert DB rows to provider-compatible history, skipping SM markers."""
     compact = latest_compaction(rows)

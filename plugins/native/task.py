@@ -35,7 +35,6 @@ See ``templates/task_template.py`` for what an author actually writes.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 logger = logging.getLogger("BaseTask")
 

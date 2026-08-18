@@ -38,10 +38,8 @@ import logging
 import os
 import threading
 import uuid
-from pathlib import Path
 
-from sandbox.guest.llm import (LLMProviderError, LLMRequest, LLMResponse,
-                               extract_llm_error_text)
+from sandbox.guest.llm import LLMProviderError, LLMRequest, LLMResponse
 
 logger = logging.getLogger("LLMClass")
 

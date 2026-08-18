@@ -37,10 +37,6 @@ from .watchdog import TICK, overdue
 logger = logging.getLogger("Sandbox")
 
 
-class TimedOut(Exception):
-    """Raised inside the worker when the kernel's clamped deadline passes."""
-
-
 def run_in_process(interpreter: Interpreter, fn, *, name: str,
                    chain: Chain | None = None, timeout: float | None = None,
                    kwargs: dict | None = None,
