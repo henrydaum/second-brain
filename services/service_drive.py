@@ -92,6 +92,30 @@ def _exists(sdk, path) -> bool:
         return False
 
 
+def _stored_credentials(sdk, Credentials, path):
+    """Credentials carrying the scopes the token file actually records.
+
+    No ``scopes`` argument, deliberately. Passing them *sets* them on the
+    object, and this file writes the object back on every refresh — so reading
+    a token with ``SCOPES`` alone and rewriting it stripped ``gmail.modify``
+    from a token that genuinely carried it, and ``service_gmail`` asked for a
+    fresh consent every time this service refreshed. The file's own ``scopes``
+    key is the only account of what Google granted, and neither service may
+    widen or narrow the other's record of it.
+
+    A file recording no scopes answers False to every ``has_scopes`` check,
+    which costs one consent screen and is the safe end.
+    """
+    try:
+        return Credentials.from_authorized_user_info(json.loads(sdk.fs.read(path)))
+    except (sdk.Failed, TypeError, ValueError, KeyError) as exc:
+        # A token written by an older format, or half-written. Not an error
+        # worth failing on — the first poll replaces it.
+        sdk.log(f"stored token unusable, signing in on the first poll: {exc}",
+                level="debug")
+        return None
+
+
 class GoogleDriveService(BaseService):
     """Authenticated read-only access to Google Drive."""
 
@@ -150,18 +174,14 @@ class GoogleDriveService(BaseService):
                     level="error")
             return False
 
-        creds = None
         stored = (token_path if _exists(sdk, token_path)
                   else legacy_token if _exists(sdk, legacy_token) else None)
-        if stored:
-            try:
-                creds = Credentials.from_authorized_user_info(
-                    json.loads(sdk.fs.read(stored)), SCOPES)
-            except (ValueError, KeyError) as exc:
-                # A token written by an older scope set, or half-written. Not
-                # an error worth failing on — the first poll replaces it.
-                sdk.log(f"stored token unusable, signing in on the first poll:"
-                        f" {exc}", level="debug")
+        creds = _stored_credentials(sdk, Credentials, stored) if stored else None
+        if creds and not creds.has_scopes(SCOPES):
+            # An older scope set. Refreshing cannot add one — only a fresh
+            # consent grants a scope — so this is the first poll's to fix, and
+            # the file is left as its writer left it meanwhile.
+            creds = None
 
         if creds and creds.valid:
             if stored != token_path:
@@ -222,6 +242,8 @@ class GoogleDriveService(BaseService):
         if self._attempted or (self._creds and self._creds.valid):
             return False
         self._attempted = True
+        if self._adopt_stored(sdk):
+            return False
         try:
             self._authenticate(sdk)
         except Exception as exc:
@@ -242,6 +264,31 @@ class GoogleDriveService(BaseService):
                 "computer.",
                 level="error")
         return False
+
+    def _adopt_stored(self, sdk) -> bool:
+        """Re-read the token, in case somebody else signed in since ``start``.
+
+        The token is shared with ``service_gmail``, and the sharing is
+        one-directional: Gmail asks for Drive's scope alongside its own, so a
+        Gmail consent satisfies this service while a Drive consent can never
+        satisfy Gmail. Both poll threads start at boot, so without this the
+        common first run is two browser windows for one Google account, the
+        second of which is redundant.
+
+        Only ever adopts — it opens nothing and writes nothing, so losing the
+        race costs the window it would have cost anyway.
+        """
+        from google.oauth2.credentials import Credentials
+
+        token_path = self._token_path(sdk)
+        if not _exists(sdk, token_path):
+            return False
+        creds = _stored_credentials(sdk, Credentials, token_path)
+        if not creds or not creds.valid or not creds.has_scopes(SCOPES):
+            return False
+        self._creds = creds
+        sdk.log("google drive adopted a token signed in elsewhere")
+        return True
 
     def _authenticate(self, sdk):
         """Tell the user what is about to happen, then run the OAuth flow.

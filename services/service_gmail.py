@@ -2,11 +2,43 @@
 
 OAuth credentials, refresh state, and Google client objects stay inside this
 service's isolated subprocess. Callers reach only the declared exports and
-receive JSON-shaped values. User-provided ``credentials.json`` and the saved
-Google token established by ``service_drive`` lives at
-``workspace/drive/token.json``. Gmail reuses it when it already carries the
-needed scope, and upgrades it through OAuth when it does not. The legacy
-``gmail_token.json`` is read only as a one-time migration source.
+receive JSON-shaped values.
+
+Credentials:
+    - ``credentials.json`` at the root of DATA_DIR — the OAuth client secret
+      you provide once. Nothing here writes it.
+    - ``token.json`` under ``workspace/drive/`` — the same token
+      ``service_drive`` establishes, shared because it is one Google account
+      and one consent screen. Gmail reuses it when it already carries
+      ``gmail.modify`` and asks for a fresh consent when it does not. The
+      legacy ``gmail_token.json`` beside the client secret is read once as a
+      migration source and then rewritten to the new path.
+
+The token lives in the workspace tree rather than beside the client secret
+because everything under DATA_DIR *except* the workspace is protected by
+policy, and a service loads unattended: an unattended chain is refused rather
+than asked, so writing to the DATA_DIR root was a hard denial, not a dialog
+nobody answered.
+
+**A scope is only what Google granted.** Reading the token with
+``from_authorized_user_info(info, SCOPES)`` *sets* those scopes on the object,
+which makes ``creds.has_scopes(SCOPES)`` a tautology and makes
+``creds.to_json()`` write a record of a grant that was never made. Both halves
+of that failed silently and in opposite directions: this service skipped the
+consent upgrade a Drive-only token needed and then overwrote the honest record
+with a false one, after which Gmail could 403 forever without ever asking
+again; while ``service_drive``, reading the same file with only its own scope,
+downgraded the record of a token that legitimately carried both and forced a
+re-consent on every refresh. The file's own ``scopes`` key is the only account
+of what was consented to, so it is read as written and never widened.
+
+**Signing in is poll's, not start's.** Extension services auto-load on the boot
+thread, so ``run_local_server`` here stopped the whole app behind a browser
+window with nothing on screen to explain it. ``start`` now does only what it
+can do without a human — read a stored token, refresh an expired one — and
+returns in milliseconds; the kernel starts the poll thread afterwards and its
+first tick is immediate. This is the split ``service_drive`` settled on in
+c58f1ea7, and the reasoning there applies here unchanged.
 """
 
 dependencies_files = []
@@ -31,12 +63,48 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
+CLIENT_SECRET_FILE = "credentials.json"
+TOKEN_FILE = "token.json"
+TOKEN_DIR = "drive"
+LEGACY_TOKEN_FILE = "gmail_token.json"
 
-def _exists(sdk, path):
+
+def _exists(sdk, path) -> bool:
+    """Whether a path is there.
+
+    ``sdk.fs.list`` *fails* on a missing path rather than answering with an
+    empty list, and the SDK turns a failed Request into a raise — so
+    ``if sdk.fs.list(p)`` does not test existence, it throws.
+    """
     try:
         return bool(sdk.fs.list(path))
     except sdk.Failed:
         return False
+
+
+def _stored_credentials(sdk, Credentials, path):
+    """Credentials carrying the scopes the token file actually records.
+
+    No ``scopes`` argument, deliberately — see the note in the module
+    docstring. A file recording no scopes at all answers False to every
+    ``has_scopes`` check, which costs one consent screen and is the safe end:
+    the alternative is assuming a grant and discovering it was wrong as a 403
+    from inside a tool call.
+    """
+    try:
+        info = json.loads(sdk.fs.read(path))
+    except (sdk.Failed, TypeError, ValueError) as error:
+        sdk.log(f"stored token at {path} could not be read: {error}",
+                level="debug")
+        return None
+    try:
+        return Credentials.from_authorized_user_info(info)
+    except (TypeError, ValueError) as error:
+        # Written by an older format, or half-written. Not worth failing the
+        # load on — the first poll replaces it.
+        sdk.log(f"stored token at {path} unusable, signing in on the first "
+                f"poll: {error}", level="debug")
+        return None
 
 
 class GmailService(BaseService):
@@ -47,13 +115,26 @@ class GmailService(BaseService):
     # Box calls are serialized, so one credential/client instance is safer
     # and avoids repeating the OAuth flow for different callers.
     shared = True
-    timeout = 300
-    requests = ["paths.get", "fs.read", "fs.write", "fs.read_bytes", "fs.list"]
+    # The OAuth dance waits on a human in a browser, and that wait is *guest*
+    # time — not time blocked on the kernel — so it is charged in full against
+    # this deadline. 600 is the most it can usefully be: the interpreter clamps
+    # a declared timeout to MAX_TIMEOUT_SECONDS and the watchdog's HARD_CEILING
+    # ends any call at ten minutes of wall clock regardless. At the 300 this
+    # used to declare, the sign-in window closed halfway through.
+    timeout = 600
+    requests = ["paths.get", "fs.read", "fs.write", "fs.read_bytes", "fs.list",
+                "session.push"]
     exports = [
         "list_labels", "modify_labels", "get_self_address", "fetch_inbox",
         "search", "get_message", "mark_read", "mark_unread", "send_message",
-        "reply_to",
+        "reply_to", "describe",
     ]
+
+    # Long, because after the one sign-in attempt every tick is a no-op, and a
+    # no-op is still a round trip into the box. The first tick is immediate —
+    # the poll loop calls before it ever waits — which is the only timing this
+    # service actually depends on.
+    poll_interval = 3600.0
 
     def __init__(self):
         self.creds = None
@@ -61,86 +142,236 @@ class GmailService(BaseService):
         self.self_address = ""
         self.labels_cache = None
         self.token_path = ""
+        self.credentials_path = ""
+        self._attempted = False
+
+    # ── lifecycle ───────────────────────────────────────────────────
 
     def start(self, sdk):
-        """Load or create OAuth credentials and build the Gmail client."""
+        """Load, using the stored token when it already carries Gmail access.
+
+        Deliberately does **not** open a browser: everything here is either
+        local or one HTTPS call against a credential we already hold, so the
+        boot thread moves on and the sign-in that needs a person is
+        :meth:`poll`'s.
+
+        Returning True with no client is a real state and the honest one —
+        *installed, not yet signed in*. False is kept for the one absence that
+        no amount of waiting fixes: a missing client secret, which is yours to
+        provide and which nothing here can ask for.
+        """
         try:
-            from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            from googleapiclient.discovery import build
+            # Imported here only to fail early and legibly: a half-installed
+            # bundle should say so at load, not as a ModuleNotFoundError out of
+            # _adopt once a token has already been read.
+            import googleapiclient.discovery  # noqa: F401
         except ImportError as error:
             raise RuntimeError(
-                "Missing Gmail libraries. Reinstall the Gmail bundle: " + str(error))
+                "Missing Gmail libraries. Reinstall the Gmail bundle: "
+                + str(error))
 
         data = sdk.paths.get("data")
-        credentials_path = sdk.path.join(data, "credentials.json")
+        self.credentials_path = sdk.path.join(data, CLIENT_SECRET_FILE)
         self.token_path = sdk.path.join(
-            sdk.paths.get("workspace"), "drive", "token.json")
-        legacy_gmail_token = sdk.path.join(data, "gmail_token.json")
-        try:
-            client_config = json.loads(sdk.fs.read(credentials_path))
-        except (sdk.Failed, TypeError, ValueError) as error:
-            sdk.log(f"Gmail credentials unavailable at {credentials_path}: {error}",
+            sdk.paths.get("workspace"), TOKEN_DIR, TOKEN_FILE)
+        legacy_token = sdk.path.join(data, LEGACY_TOKEN_FILE)
+
+        if not _exists(sdk, self.credentials_path):
+            sdk.log(f"no {CLIENT_SECRET_FILE} at {self.credentials_path}; get "
+                    f"one from the Google Cloud Console and place it there",
                     level="error")
             return False
 
-        creds = None
         stored = (self.token_path if _exists(sdk, self.token_path)
-                  else legacy_gmail_token if _exists(sdk, legacy_gmail_token)
-                  else None)
-        token = {}
+                  else legacy_token if _exists(sdk, legacy_token) else None)
+        creds = _stored_credentials(sdk, Credentials, stored) if stored else None
+
+        if creds and not creds.has_scopes(SCOPES):
+            # Drive's own token, or one from an older scope set. A scope cannot
+            # be added by refreshing — only a fresh consent grants one — so
+            # this is poll's to fix, and the file is left exactly as Drive
+            # wrote it meanwhile.
+            sdk.log("the stored Google token does not carry Gmail access; the "
+                    "first poll will ask for it")
+            return True
+
+        if creds and not creds.valid and creds.expired and creds.refresh_token:
+            self._refresh(sdk, creds)
+
+        if not creds or not creds.valid:
+            sdk.log("gmail is installed but not signed in; the first poll "
+                    "will open a browser")
+            return True
+
+        if stored != self.token_path:
+            # Valid, but at the old address. Copy it across now rather than
+            # waiting for expiry, so the move happens once instead of falling
+            # through this branch on every boot.
+            sdk.fs.write(self.token_path, creds.to_json())
+        self._adopt(sdk, creds)
+        return True
+
+    def poll(self, sdk):
+        """Sign in, once per load, off the boot thread.
+
+        This is the blocking half, and it is here rather than in ``start``
+        purely for *which thread it is on*: the kernel drives poll on a thread
+        of its own that it starts after ``start`` returns, so the app finishes
+        booting and the frontends come up while the browser waits.
+
+        **One attempt per load**, because a retry loop around something that
+        opens a browser is a browser that opens over and over. If the window is
+        missed, the way back is to reload the service (``/services`` → Load),
+        which is a new box and therefore a fresh attempt — and the failure
+        notification says so.
+        """
+        if self._attempted or self.client:
+            return False
+        self._attempted = True
         try:
-            token = json.loads(sdk.fs.read(stored)) if stored else {}
-            creds = Credentials.from_authorized_user_info(token, SCOPES)
-        except (sdk.Failed, TypeError, ValueError):
-            pass
+            self._authenticate(sdk)
+        except Exception as exc:
+            # Swallowed rather than raised: a raising poll counts against
+            # max_poll_failures, and five failures stop the loop for the life
+            # of the process — so an unreachable Google would end the poll
+            # thread over something that will be true again in a minute. The
+            # user is told, which is what the raise would have been for.
+            sdk.log(f"gmail sign-in failed: {exc}", level="error")
+            self._notify(
+                sdk,
+                "Gmail could not be signed in",
+                f"The sign-in did not complete: {exc}\n\n"
+                "Gmail is installed but cannot read or send until it is "
+                "signed in. To try again, reload the service from "
+                "`/services` — pick **gmail**, then **Load it** — while you "
+                "are at this computer.",
+                level="error")
+        return False
+
+    def _authenticate(self, sdk):
+        """Tell the user what is about to happen, then run the OAuth flow.
+
+        The notification goes first and deliberately: a browser window opening
+        by itself is only self-explanatory to somebody watching the screen at
+        that second. It says *where* to sign in, because that is the part
+        nobody can guess and the part that fails silently — the token comes
+        back to a port on this machine, so signing in on a phone, or over SSH
+        from a laptop, hands the credential to a listener that is not us.
+
+        The flow asks for Drive's scope alongside Gmail's, so one consent
+        serves both services and what this writes is a superset of what
+        ``service_drive`` needs.
+        """
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        if not _exists(sdk, self.credentials_path):
+            raise RuntimeError(
+                f"no {CLIENT_SECRET_FILE} at {self.credentials_path}: download "
+                f"the OAuth client secret from the Google Cloud Console and "
+                f"save it there")
+
+        self._notify(
+            sdk,
+            "Gmail needs authorizing",
+            "A browser window is opening so you can grant Second Brain access "
+            "to Gmail.\n\n"
+            "The sign-in has to be completed **on this computer** — the one "
+            "Second Brain is running on — because Google hands the token back "
+            "to a local port here. Signing in on a phone or another machine "
+            "will look like it worked and will not connect.\n\n"
+            "The window stays open for ten minutes. This happens once: the "
+            "token is saved afterwards and refreshed automatically.",
+            level="warning")
+
+        sdk.log("opening a browser to authenticate with Gmail")
+        flow = InstalledAppFlow.from_client_config(
+            json.loads(sdk.fs.read(self.credentials_path)), SCOPES)
+        creds = flow.run_local_server(port=0)
+
+        sdk.fs.write(self.token_path, creds.to_json())
+        self._adopt(sdk, creds)
+        sdk.log("gmail authenticated")
+        self._notify(sdk, "Gmail is connected",
+                     "Signed in. Reading, sending and labelling will work "
+                     "from now on.", level="success")
+
+    def _refresh(self, sdk, creds) -> bool:
+        """One HTTPS call against a credential we already hold."""
+        from google.auth.exceptions import GoogleAuthError
+        from google.auth.transport.requests import Request
 
         try:
-            recorded_scopes = token.get("scopes") or []
-            if isinstance(recorded_scopes, str):
-                recorded_scopes = recorded_scopes.split()
-            has_scopes = bool(
-                creds and all(scope in recorded_scopes for scope in SCOPES))
-            if not creds or not creds.valid or not has_scopes:
-                if creds and creds.expired and creds.refresh_token:
-                    sdk.log("refreshing Gmail OAuth token")
-                    creds.refresh(Request())
-                if not creds.valid or not creds.has_scopes(SCOPES):
-                    sdk.log("opening browser for Gmail OAuth consent")
-                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-                    creds = flow.run_local_server(port=0)
-                sdk.fs.write(self.token_path, creds.to_json())
-            elif stored != self.token_path:
-                sdk.fs.write(self.token_path, creds.to_json())
-            self.creds = creds
-            self.client = build(
-                "gmail", "v1", credentials=creds, cache_discovery=False)
-            return True
-        except Exception as error:
-            sdk.log(f"Gmail authentication failed: {error}", level="error")
-            self.creds = None
-            self.client = None
+            creds.refresh(Request())
+        except GoogleAuthError as error:
+            # The expected end of every refresh token, and the reason this is
+            # caught rather than left to raise: Google expires them after a
+            # week while the OAuth app sits in "Testing", so this is the
+            # *ordinary* weekly path, not a fault. Raising here failed the load
+            # outright — and a service that will not load never reaches the
+            # poll that could have signed it back in, so the one recoverable
+            # failure was the one that locked the door.
+            sdk.log(f"stored token could not be refreshed, signing in on the "
+                    f"first poll: {error}", level="warning")
             return False
+        sdk.fs.write(self.token_path, creds.to_json())
+        sdk.log("gmail token refreshed")
+        return True
+
+    def _adopt(self, sdk, creds) -> bool:
+        """Hold the credentials and build the client."""
+        from googleapiclient.discovery import build
+
+        try:
+            self.client = build("gmail", "v1", credentials=creds,
+                                cache_discovery=False)
+        except Exception as error:
+            sdk.log(f"could not build the Gmail client: {error}", level="error")
+            self.creds = self.client = None
+            return False
+        self.creds = creds
+        return True
+
+    def _notify(self, sdk, title: str, body: str, *, level: str) -> None:
+        """Raise one notification, and never fail for want of somewhere to put it.
+
+        Guarded because of *when* this runs. On an ordinary boot the poll
+        thread starts before the runtime exists, so there is nothing to notify
+        through and the Request fails — which must not be the reason a sign-in
+        does not happen.
+        """
+        try:
+            sdk.session.push(body, title=title, notify=True, level=level)
+        except Exception as exc:
+            sdk.log(f"could not notify ({title}): {exc}", level="debug")
 
     def stop(self, sdk):
         self.creds = None
         self.client = None
         self.self_address = ""
         self.labels_cache = None
+        return None
+
+    def describe(self, sdk):
+        """Loaded and signed in are different states, so both are reported."""
+        return {
+            "loaded": True,
+            "authenticated": bool(self.creds and self.client),
+            "attempted_sign_in": self._attempted,
+            "token_path": self.token_path,
+        }
 
     def _ready(self, sdk):
+        """Whether a call can be served right now, refreshing if it must."""
         if not self.creds or not self.client:
             return False
-        try:
-            from google.auth.transport.requests import Request
-            if self.creds.expired and self.creds.refresh_token:
-                self.creds.refresh(Request())
-                sdk.fs.write(self.token_path, self.creds.to_json())
+        if not self.creds.expired or not self.creds.refresh_token:
             return True
-        except Exception as error:
-            sdk.log(f"Gmail token refresh failed: {error}", level="error")
-            return False
+        if self._refresh(sdk, self.creds):
+            return True
+        sdk.log("gmail token refresh failed; reload the service from "
+                "/services to sign in again", level="error")
+        return False
 
     def list_labels(self, sdk, force_refresh=False):
         if self.labels_cache is not None and not force_refresh:
