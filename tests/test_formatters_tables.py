@@ -7,7 +7,9 @@ surfaces render the markdown natively.
 
 import re
 
-from bundled.frontends.helpers.formatters import align_md_tables, detail_card, format_tasks, md_table, render_plain
+from bundled.frontends.helpers.formatters import align_md_tables, md_table, render_plain
+from plugins.command_registry import CommandRegistry
+from plugins.native.command import BaseCommand
 
 
 def _tables_start_their_own_block(text: str) -> bool:
@@ -49,17 +51,6 @@ def test_align_md_tables_round_trips_escaped_pipes():
     assert "\\|" not in aligned
 
 
-def test_detail_card_title_becomes_header():
-    card = detail_card("default (active)", [("LLM", "default"), ("Tool list", "(none)")])
-    aligned = align_md_tables(card)
-    lines = aligned.split("\n")
-
-    assert card.startswith("| default (active) |  |")
-    assert lines[0] == "default (active)"
-    assert lines[2].startswith("LLM")
-    assert "(none)" in lines[3]
-
-
 def test_render_plain_strips_fence_markers_and_aligns():
     text = "**State**\n```\nTurn: user\nPhase: base\n```\n\n" + md_table(["A", "B"], [(1, 2)])
     out = render_plain(text)
@@ -74,13 +65,20 @@ def test_align_md_tables_leaves_prose_untouched():
     assert align_md_tables(text) == text
 
 
-def test_task_section_tables_start_their_own_block():
-    text = format_tasks([
-        {"name": "index", "trigger": "path", "counts": {}, "paused": False},
-        {"name": "spawn", "trigger": "event", "counts": {}, "paused": True},
-    ])
+def test_command_help_tables_start_their_own_block():
+    """help_text() is the one live md_table caller, and it interleaves tables
+    with **bold** category headings -- exactly the shape that folds."""
+    class _Cmd(BaseCommand):
+        name = "demo"
+        description = "A demo command"
+        category = "System"
+
+    registry = CommandRegistry()
+    registry.register(_Cmd())
+    text = registry.help_text()
+
     assert _tables_start_their_own_block(text)
-    assert "**Path-driven tasks**\n\n|" in text
+    assert "**System**\n\n|" in text
 
 
 def test_align_md_tables_handles_table_between_prose():

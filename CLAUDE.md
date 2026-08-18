@@ -1444,12 +1444,14 @@ already lost the claim cannot revoke its successor's. `sdk.md.plain()` is the
 guest's counterpart to the kernel's `render_plain` for monospace rendering —
 same *output*, pinned by a test, but not the same code, and the difference
 matters if anyone goes looking for duplication to delete. Nothing in
-`sdk._Markdown` is a copy of `formatters.py`: measured line-for-line, the six
-name-alike pairs (`table`/`md_table`, `card`/`detail_card`, `quote`/
-`quote_block`, `plain`/`render_plain`, `truncate`/`truncate_cell`) share **0%**
-of their bodies, and `align_tables`/`align_md_tables` shares 43%. The host side
-delegates and the guest side is stdlib-only; they agree on results because a
-test says so, which is the right coupling. Same finding holds for the hook
+`sdk._Markdown` is a copy of `formatters.py`: measured line-for-line when both
+still held the full set, the six name-alike pairs (`table`/`md_table`,
+`card`/`detail_card`, `quote`/`quote_block`, `plain`/`render_plain`,
+`truncate`/`truncate_cell`) shared **0%** of their bodies, and
+`align_tables`/`align_md_tables` shared 43%. Four of those host-side halves
+have since been deleted for want of a caller; the two that remain agree with
+their guest counterparts because a test says so, which is the right
+coupling. Same finding holds for the hook
 types — `runtime/hooks.py` and `guest/hooks.py` look duplicated by name, but
 `HookContext` and `ModelRequest` differ in their *fields* (live `session`/
 `runtime`/`attachments` against `session_key`/`user_id`/`conversation_id`).
@@ -2414,15 +2416,29 @@ message in place; the REPL prints the same shapes to stdout.
 ## Presentation convention: markdown on the wire
 
 Command/tool output is a **string of GitHub-flavored markdown**, built with
-the primitives in
-[bundled/frontends/helpers/formatters.py](bundled/frontends/helpers/formatters.py):
-`md_table` for data tables, `detail_card(title, pairs)` for describe-style
-key/value cards, `quote_block` for prose under a card (descriptions,
-previews, payloads), and fenced code blocks for multi-line technical dumps
+the primitives in `sdk.md`
+([sandbox/guest/sdk.py](sandbox/guest/sdk.py)): `table` for data tables,
+`card(title, pairs)` for describe-style key/value cards, `quote` for prose
+under a card (descriptions, previews, payloads), and fenced code blocks for
+multi-line technical dumps
 (/debug, /locations — rich renderers collapse single newlines in prose).
 Tables must start their own block (blank line before), or GFM parsers fold
-them into the preceding paragraph. Each frontend then renders by policy, not
-by sender: the REPL runs `render_plain` (aligns tables, strips fence
+them into the preceding paragraph.
+
+**They live in the guest because the callers do.** Every one of these was a
+function in
+[bundled/frontends/helpers/formatters.py](bundled/frontends/helpers/formatters.py),
+back when commands and frontends were native code that could import it. A
+sandboxed guest cannot import a host module at all, so the primitives were
+rewritten guest-side and the host copies lost their callers one migration at a
+time — the file kept fourteen of them for a while after the last one left.
+What is still there is `md_table`, which `plugins/command_registry.py` uses to
+build the command catalog before any guest is involved, and `render_plain`,
+which is the oracle `sdk.md.plain` is pinned against. Reach for `sdk.md.*`;
+add to `formatters.py` only for something the *kernel* itself renders.
+
+Each frontend then renders by policy, not by sender: the REPL runs
+`sdk.md.plain` (aligns tables, strips fence
 markers); Telegram's rich path renders markdown natively but compacts
 detail-card-shaped tables into code blocks, and its HTML fallback renders
 tables/quotes as `<pre>`/`<blockquote>`. Don't invent a structured message
@@ -2612,8 +2628,7 @@ move between built-in, sandbox, and installed trees.
   routing, discovery, and `parser_for` (the importable half). Not a service,
   on purpose.
 - [llm/registry.py](llm/registry.py) — the model authority: profiles to
-  `Brain`s, the box pools, load/unload, and the dual-mode adapter that keeps
-  unmigrated backends working. Not a service, for the same reason.
+  `Brain`s, the box pools, load/unload. Not a service, for the same reason.
 - [agent/system_prompt.py](agent/system_prompt.py) — single entry point for
   building the agent system prompt; gates sections by which tools the
   current scope exposes.

@@ -569,7 +569,6 @@ def test_orchestrator_stop_unsubscribes_service_loaded_handler():
 # ────────────────────────────────────────────────────────────────────
 
 from plugins.native.service import BaseService, EXTENSION, forget_stale_autoloads, is_user_managed_service, should_autoload_service
-from bundled.frontends.helpers.formatters import format_services
 
 
 class ManagedService(BaseService):
@@ -629,18 +628,6 @@ def test_nothing_is_saved_when_every_autoload_entry_resolves(monkeypatch):
 
     assert forget_stale_autoloads(config, {"timekeeper": object()}) == []
     assert writes == []
-
-
-def test_format_services_labels_lifecycles():
-    text = format_services([
-        {"name": "extension", "loaded": True, "lifecycle": "extension"},
-        {"name": "managed", "loaded": True, "lifecycle": "managed"},
-        {"name": "cold", "loaded": False, "lifecycle": "managed"},
-    ])
-
-    assert "| extension | Extension |" in text
-    assert "| managed | Loaded |" in text
-    assert "| cold | Unloaded |" in text
 
 
 # ────────────────────────────────────────────────────────────────────
