@@ -429,6 +429,11 @@ class SetupCommand(BaseCommand):
             )
         token = secrets.token_urlsafe(TOKEN_BYTES)
         sdk.config.write("secret_http_token", token, scope="plugin")
+        # cmd.exe has no ``cp``, and this is the one line the user has to
+        # retype rather than read, so print the one that will work.
+        windows = str(sdk.paths.get("platform") or "").startswith("win")
+        copy_env = ("copy .env.example .env.local" if windows
+                    else "cp .env.example .env.local")
         return (
             "Web UI: HTTP frontend installed, API token generated.\n"
             f"  Your token: {token}\n"
@@ -437,7 +442,7 @@ class SetupCommand(BaseCommand):
             f"    git clone {UI_REPO}\n"
             "    cd second-brain-ui\n"
             "    npm install\n"
-            "    cp .env.example .env.local\n"
+            f"    {copy_env}\n"
             "\n"
             "  Paste the token above into VITE_SB_TOKEN in .env.local, then:\n"
             "    npm run dev\n"

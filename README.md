@@ -94,7 +94,7 @@ The wizard walks you through everything in one pass:
 1. **Install the `essentials` bundle** — an LLM backend, file read/edit/search, shell and script running, SQL, web search, subagents, and the Telegram frontend.
 2. **Connect a model** — paste an API key. [Atlas Cloud](https://www.atlascloud.ai/console/coding-plan) is the sponsored fast path (300+ models behind one key), but any provider works.
 3. **Telegram (optional)** — chat with your Second Brain from your phone. Needs a bot token from [@BotFather](https://t.me/BotFather) and your user ID from [@userinfobot](https://t.me/userinfobot).
-4. **Web UI (optional)** — installs the HTTP frontend and generates your API token, then prints the two commands that build the app. [More below.](#install-the-ui)
+4. **Web UI (optional)** — installs the HTTP frontend and generates your API token, then prints the exact steps to set the app up. [More below.](#install-the-ui)
 
 Say hello. You now have a working assistant. If you have questions, just ask.
 
@@ -137,53 +137,80 @@ Set **`sync_directories`** to the folders you want indexed. Expect a flood of ta
 
 # Install the UI
 
-A modern React frontend built on [assistant-ui](https://www.assistant-ui.com/) — familiar chat interface, installable on your phone as a PWA. It lives in its own repo: **[second-brain-ui](https://github.com/henrydaum/second-brain-ui)**.
+A modern React frontend built on [assistant-ui](https://www.assistant-ui.com/) — a familiar chat interface you can add to your phone's home screen. It lives in its own repo: **[second-brain-ui](https://github.com/henrydaum/second-brain-ui)**.
 
-Works on Windows, macOS and Linux.
+Works on Windows, macOS and Linux. Takes about ten minutes.
 
-### 1. Open the HTTP door in Second Brain
+**Before you start:** Second Brain has to be *running* while you use the UI — the UI is just a face for it. Leave it going in its terminal and open a **second terminal** for everything below. You'll also need [Node 20.19+ or 22.12+](https://nodejs.org/).
 
-In the REPL:
+### 1. Get your API token
+
+The UI proves it's allowed to talk to Second Brain with a token. You need one before anything else.
+
+**If you said yes to the web UI during `/setup`,** you already have it — the wizard printed it. Copy it and go to step 2.
+
+**Otherwise,** in the Second Brain REPL:
 
 ```
 /packages install frontend_http
 ```
 
-Then run `/config` and set:
+Then run `/config`, find **`secret_http_token`**, and set it to any long random string — mash the keyboard, it just has to be hard to guess. Copy what you set. Then restart Second Brain so the frontend comes online:
 
-| Setting | Value |
-|---|---|
-| `secret_http_token` | Any long random string. Keep it handy — you paste it in step 2. |
-| `http_port` | `8787` (the default is fine) |
+```
+/restart
+```
 
-Restart Second Brain. The frontend is enabled automatically when you install it.
+### 2. Set up the UI
 
-### 2. Run the UI
-
-You need [Node 20.19+ or 22.12+](https://nodejs.org/).
+In your second terminal:
 
 ```bash
 git clone https://github.com/henrydaum/second-brain-ui
 cd second-brain-ui
 npm install
-cp .env.example .env.local
 ```
 
-Open `.env.local` and paste your token from earlier into `VITE_SB_TOKEN`. Then:
+Now make your own config file from the example:
+
+| | |
+|---|---|
+| **Windows** | `copy .env.example .env.local` |
+| **macOS / Linux** | `cp .env.example .env.local` |
+
+Open **`.env.local`** in any editor. Find the line that reads `VITE_SB_TOKEN=` and paste your token right after the `=`, with no quotes and no spaces:
+
+```
+VITE_SB_TOKEN=the-token-you-copied
+```
+
+Leave the other two lines (`VITE_SB_URL`, `VITE_SB_THREAD`) exactly as they are — the defaults are correct. Save and close.
+
+### 3. Start it
 
 ```bash
 npm run dev
 ```
 
-Open **http://localhost:5173**. That's it — the UI proxies to Second Brain on its own origin, so CORS never enters the picture.
+Open **http://localhost:5173** in your browser. You should see your Second Brain, ready to chat.
 
-### On your phone
+If you get a blank screen or a `401`, the token in `.env.local` doesn't match the one in `/config` — that's almost always the problem. Fix it and restart `npm run dev`.
 
-Run the dev server on your computer with `npm run dev -- --host`, then reach your machine over [Tailscale](https://tailscale.com/) and choose *Add to Home Screen* — on iPhone, press the three dots, then Share and scroll down to 'Add to home screen'. Click it, and you're done. It's like a real app from there.
+### Put it on your phone
 
-### A note on production builds
+Start the dev server so it accepts connections from other devices on your network:
 
-`npm run build` produces a `dist` folder, and `frontend_http` can serve it directly via the `http_static_dir` setting — but **a production bundle deliberately contains no API token**, so a browser pointed straight at it gets `401` on every request, including the page itself. A production deployment needs a loopback reverse proxy that adds the bearer token upstream, which is what the UI repo's [macOS deployment](https://github.com/henrydaum/second-brain-ui/blob/main/docs/MACOS_DEPLOYMENT.md) sets up with Caddy. On Windows and Linux, use the dev server above.
+```bash
+npm run dev -- --host
+```
+
+That prints a second URL (a `192.168.x.x` address). To reach it from anywhere rather than just your home Wi-Fi, install [Tailscale](https://tailscale.com/) on both your computer and your phone, and use your machine's Tailscale address instead.
+
+Open that URL in your phone's browser, then add it to your home screen — on iPhone, press the three dots, then **Share**, and scroll down to **Add to Home Screen**. Click it, and you're done. It's like a real app from there.
+
+### Why the dev server?
+
+Because it's the only thing that works on every platform today. `npm run build` produces a `dist` folder that `frontend_http` can serve directly (the `http_static_dir` setting), but a production build deliberately ships **no API token** — so a browser pointed at it is refused before the page even loads. Serving a build needs a reverse proxy that adds the token, which today exists only in the UI repo's [macOS deployment](https://github.com/henrydaum/second-brain-ui/blob/main/docs/MACOS_DEPLOYMENT.md). The dev server is perfectly fine for personal use.
 
 ---
 
