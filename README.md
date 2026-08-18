@@ -79,7 +79,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-That's it — you're in the REPL. `requirements.txt` is tiny on purpose; everything heavy arrives later, only if you ask for it.
+That's it — you're in the REPL. `requirements.txt` is nearly pure Python.
 
 ## 2. Run `/setup`
 
@@ -94,7 +94,7 @@ The wizard walks you through everything in one pass:
 3. **Telegram (optional)** — chat with your Second Brain from your phone. Needs a bot token from [@BotFather](https://t.me/BotFather) and your user ID from [@userinfobot](https://t.me/userinfobot).
 4. **Web UI (optional)** — installs the HTTP frontend and generates your API token, then prints the two commands that build the app. [More below.](#install-the-ui)
 
-Say hello. You now have a working assistant.
+Say hello. You now have a working assistant. If you have questions, just ask.
 
 ## 3. Get out of the terminal
 
@@ -102,8 +102,8 @@ The REPL works, but it isn't where you want to live. Two much nicer options, in 
 
 | | Effort | What it's like |
 |---|---|---|
-| **Telegram** | Zero — `/setup` already offered it | Push notifications, attachments, inline buttons, and it's on your phone already. Nothing to build. |
-| **Web UI** | ~2 minutes | A ChatGPT-style app you open in a browser or add to your phone's home screen. [Set it up below.](#install-the-ui) |
+| **Telegram** | ~5 minutes — `/setup` shows the way | Push notifications, attachments, inline buttons, and available on all major platforms. |
+| **Web UI** | ~10 minutes | A ChatGPT-style app you open in a browser or add to your phone's home screen. [Set it up below.](#install-the-ui) |
 
 Skipped one during `/setup`? Just run `/setup` again.
 
@@ -115,12 +115,12 @@ A fresh install is deliberately small. Add capabilities whenever you want:
 /packages install
 ```
 
-That opens a picker — browse by category and choose. The bundles worth knowing:
+On the Web UI, you can do this in Settings. That opens a picker — browse by category and choose. The bundles worth knowing:
 
 | Bundle | What you get |
 |---|---|
 | `bundle_knowledgebase` | Index and search your own files — PDF, Office, images, audio, video, spreadsheets, archives. OCR, transcription, embeddings, and three search tools. **Large download.** |
-| `bundle_memory` | Durable memory that maintains itself. Notes are surfaced when relevant and written down in the background, as plain markdown you can edit. |
+| `bundle_memory` | Durable memory that maintains itself. Notes and skills are surfaced when relevant and written down in the background, as plain markdown you can edit. |
 | `bundle_gmail` | Read, send, reply, label. |
 
 Then tell it which folders to watch:
@@ -167,7 +167,7 @@ npm install
 cp .env.example .env.local
 ```
 
-Open `.env.local` and paste your token into `VITE_SB_TOKEN`. Then:
+Open `.env.local` and paste your token from earlier into `VITE_SB_TOKEN`. Then:
 
 ```bash
 npm run dev
@@ -177,7 +177,7 @@ Open **http://localhost:5173**. That's it — the UI proxies to Second Brain on 
 
 ### On your phone
 
-Run the dev server with `npm run dev -- --host` so it listens beyond localhost, then reach your machine over [Tailscale](https://tailscale.com/) and choose *Add to Home Screen*. Second Brain's own port stays loopback-only, which is how it should stay.
+Run the dev server on your computer with `npm run dev -- --host`, then reach your machine over [Tailscale](https://tailscale.com/) and choose *Add to Home Screen* — on iPhone, press the three dots, then Share and scroll down to 'Add to home screen'. Click it, and you're done. It's like a real app from there.
 
 ### A note on production builds
 
