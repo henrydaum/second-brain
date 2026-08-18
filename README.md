@@ -11,9 +11,7 @@
 [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=second-brain) is a full-modal AI inference platform that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to 300+ curated models across all modalities.
 Check out Atlas Cloud's new coding plan promotion for more budget-friendly API access: [https://www.atlascloud.ai/console/coding-plan](https://www.atlascloud.ai/console/coding-plan)
 
-# Second Brain
-
-<mark>*NEW!* Second Brain now has a modern and sleek React frontend which can be installed on iPhone as a PWA. It connects to Second Brain using HTTP and streams over the web using Tailscale. It has a familiar, ChatGPT-like UI built with [assistant-ui](https://www.assistant-ui.com/). You can find it [here](https://github.com/henrydaum/second-brain-ui).</mark>
+# Second Brain Example
 
 *For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
 
@@ -49,6 +47,9 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 ## 10. Sandbox & SDK
 <img width="960" height="720" alt="10  Sandbox   SDK" src="https://github.com/user-attachments/assets/aed96e0d-e4ac-4d1e-9a62-625f2d5f2b6b" />
 
+# Video demo
+
+https://github.com/user-attachments/assets/26124782-12e3-41d1-8e8f-43256887acc3
 
 # How Second Brain works, in written form
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
@@ -549,8 +550,6 @@ For source-controlled additions, place stable app-shipped plugins under the matc
 Second Brain is inspired by the human brain. Explorations into neurons turned into the creation of artificial neural networks, which then paved the way for attention mechanisms and transformers. From there came LLMs, and then came the agentic abilities: RAG, tool calls, and cron jobs. With each iteration, Second Brain became closer to its biological inspiration.
 
 Second Brain is still pretty far from the real brain, in many ways. However, it can also do many things better than the human brain ever could. Building it has helped me to better understand the role of AI in my life, and in society. I found the process of building to be extremely valuable, because I realized that the value of AI is that it can be built into so many things. The role of the person is to guide it into productive and creative areas.
-
-Second Brain ships as an unfinished product: a tiny, pure Python kernel. It's up to you to decide how you want to finish it.
 
 ## License
 
