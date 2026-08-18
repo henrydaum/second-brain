@@ -250,3 +250,30 @@ def test_both_shapes_are_collected_when_both_are_present(data_dir):
 
     assert "GUIDANCE-FROM-A-STRING" in system["content"]
     assert "GUIDANCE-FROM-A-METHOD" in dynamic["content"]
+
+
+def test_the_static_prompt_stays_within_its_budget():
+    """The static prompt is paid on every turn, including the ones that have
+    nothing to do with this codebase.
+
+    It had grown to 10 KB, most of it a plugin-authoring tutorial duplicating
+    ``docs/SDK.md`` and a research procedure the model already knows — enough
+    preamble that the agent remarked on it while answering a mundane question.
+    The rule that keeps it down is *keep what is Second-Brain-specific and
+    could not be inferred*: paths, grants, catalogs, kernel behaviour, the
+    ``[SYSTEM CONTEXT UPDATE]`` structure. Long-form guidance belongs in
+    ``docs/``, which the file itself points at and the agent can read on
+    demand.
+
+    A cap rather than a golden file: the wording should stay free to change,
+    and only the budget is worth defending. Raise it deliberately, or not at
+    all.
+    """
+    from agent.system_prompt import _STATIC_PROMPT_PATH
+
+    size = len(_STATIC_PROMPT_PATH.read_text(encoding="utf-8"))
+
+    assert size <= 7000, (
+        f"agent/system_prompt_static.md is {size} chars. Anything long-form "
+        "belongs in docs/ with a pointer here, not inlined into every turn."
+    )

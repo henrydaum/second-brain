@@ -22,9 +22,22 @@ AUTHORING_SOURCES = (
 
 
 def test_the_authoring_roots_come_from_the_kernel_table():
-    """The system prompt must teach every root the kernel actually routes."""
-    documented = (ROOT / "agent" / "system_prompt_static.md").read_text(
-        encoding="utf-8")
+    """Every root the kernel routes is taught where an author is sent to read.
+
+    This used to check the system prompt, which carried the eight roots as an
+    ASCII table. That table left with the rest of the authoring tutorial: the
+    prompt is paid on every turn including the ones about nothing in this
+    codebase, and the roots are only needed at the moment somebody writes a
+    file. What the prompt keeps is the pointer.
+
+    So the invariant moved rather than went away, and it is the same one — a
+    root the kernel routes but no authoring source names is a folder an agent
+    can only find by guessing. It is checked across the sources collectively
+    because that is how they divide the work: each template names its own
+    family folder, and SDK.md covers the roots that belong to no family.
+    """
+    documented = "\n".join(path.read_text(encoding="utf-8")
+                            for path in AUTHORING_SOURCES)
     for root in trees.ROOTS:
         assert f"{root.name}/" in documented, root.name
 

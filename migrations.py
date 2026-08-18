@@ -1,9 +1,9 @@
 """One-shot DATA_DIR layout migrations, run at boot before anything reads it.
 
-Stdlib only and import-light: this runs ahead of the app proper, in the same
-spirit as the supervisor's raw config peek in ``main.pyw``. Every step is
-idempotent and guarded by "does the old thing still exist", so a second boot is
-a no-op and an interrupted run resumes.
+Stdlib only and import-light: this runs ahead of the app proper, before the
+config package or anything else that reads the trees. Every step is idempotent
+and guarded by "does the old thing still exist", so a second boot is a no-op
+and an interrupted run resumes.
 
 The rule throughout is **never guess**. A file that does not match what a step
 expects is left where it is and reported, because the cost of leaving a stray
@@ -39,9 +39,9 @@ _HELPER_SPLITS = (
 #: Junk from features that no longer exist, and whether deleting one is
 #: allowed to destroy content.
 #:
-#: ``heartbeat`` holds "<pid> <timestamp>" written by the stall watchdog that
-#: ``main.pyw`` explains the removal of — there is no reading of those two
-#: numbers that is worth keeping, so it goes whatever it contains.
+#: ``heartbeat`` holds "<pid> <timestamp>" written by a stall watchdog that no
+#: longer exists — there is no reading of those two numbers that is worth
+#: keeping, so it goes whatever it contains.
 #: ``memory.md`` is different: it was only ever ``touch``-ed empty at boot and
 #: was never the memory system (that is ``workspace/memory/``), but it sits in a folder
 #: where a person might reasonably have typed notes into a file by that name.

@@ -181,13 +181,6 @@ SETTINGS_DATA = [
      90,
      {"type": "slider", "range": (0, 3650, 100), "is_float": False}),
 
-    ("Restart On Crash", "restart_on_crash",
-     "Relaunch Second Brain automatically if the process crashes (including hard "
-     "native crashes). Clean exits (/quit, Ctrl+C) never restart. Checked at "
-     "launch, so enabling it takes effect on the next start.",
-     True,
-     {"type": "bool"}),
-
     ("Scheduled Jobs", "scheduled_jobs",
      "JSON object keyed by job name describing scheduled event emissions.",
      DEFAULT_SCHEDULED_JOBS,

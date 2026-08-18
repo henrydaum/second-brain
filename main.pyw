@@ -47,118 +47,9 @@ for _made in _trees.materialize():
 	logger.info("created tree root: %s", _made)
 
 
-# ── Crash-restart launcher ───────────────────────────────────────────
-#
-# When ``restart_on_crash`` is enabled (the default), the process started by
-# the user becomes a tiny supervisor: it runs the real app as a child process
-# (marked with SB_SUPERVISED=1) and relaunches it whenever it dies with a
-# non-zero exit code — including hard native crashes (segfaults, OOM kills)
-# that no in-process supervision can survive. The persistence layer restores
-# conversations and suspended forms on the way back up, so a crash costs
-# seconds, not state. Clean exits (/quit, Ctrl+C) stop everything.
-#
-# This branch runs before the heavy imports below, so the supervisor process
-# stays a few-MB stdlib-only watchdog.
-#
-# There was also a stall watchdog here: the child touched a heartbeat file
-# while every registered loop kept beating, and a launcher that saw the file
-# go stale killed the process tree. It was removed. Its false-positive bias
-# was so strong that it excused itself from boot hangs, shutdown hangs, and
-# post-suspend windows — every situation where a freeze actually happens —
-# and the case it did target (foreign code hogging the GIL for minutes) now
-# belongs to sandbox/watchdog.py, which bounds it per box where that code
-# actually runs.
-
-_RESTART_EXIT_CODE = 42  # child asks the supervisor for an intentional relaunch
-# Exit codes that mean "the user stopped it", never "it crashed":
-# STATUS_CONTROL_C_EXIT on Windows (signed/unsigned), SIGINT death on POSIX.
-_CLEAN_STOP_CODES = {0, 0xC000013A, -1073741510, -2, 130}
-_SUPERVISE_POLL = 5.0          # seconds between child liveness polls
-
-
-def _restart_on_crash_enabled() -> bool:
-	"""Read restart_on_crash straight from config.json (default True).
-
-	The supervisor must not import the config package (it would drag in the
-	app), so this is a raw JSON peek. Missing file/key means the default.
-	"""
-	import json
-	try:
-		with open(DATA_DIR / "config.json", "r") as f:
-			return bool(json.load(f).get("restart_on_crash", True))
-	except Exception:
-		return True
-
-
-def _supervise() -> int:
-	"""Run the app as a supervised child; relaunch on crash.
-	Returns the launcher's exit code."""
-	import subprocess
-
-	launcher_log = logging.getLogger("Launcher")
-	stop_requested = threading.Event()
-	signal.signal(signal.SIGINT, lambda *_: stop_requested.set())
-	signal.signal(signal.SIGTERM, lambda *_: stop_requested.set())
-
-	args = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
-	rapid_failures = 0
-	# Why the previous generation ended ("crash", or "" for a first start,
-	# clean stop, or intentional /restart) — exported to the child so startup
-	# messaging can say "back online after a crash" vs plain "online".
-	restart_reason = ""
-
-	while True:
-		started = time.time()
-		env = {**os.environ, "SB_SUPERVISED": "1", "SB_RESTART_REASON": restart_reason}
-		proc = subprocess.Popen(args, env=env, cwd=str(Path(__file__).parent))
-
-		while True:
-			try:
-				code = proc.wait(timeout=_SUPERVISE_POLL)
-				break
-			except subprocess.TimeoutExpired:
-				pass
-
-		uptime = time.time() - started
-
-		if code == _RESTART_EXIT_CODE:
-			launcher_log.info("Restart requested — relaunching.")
-			rapid_failures = 0
-			restart_reason = ""  # intentional restart reads as a normal startup
-			continue
-		if stop_requested.is_set() or code in _CLEAN_STOP_CODES:
-			return 0
-		if not _restart_on_crash_enabled():
-			launcher_log.error(f"App exited with code {code}; restart_on_crash is disabled — not restarting.")
-			return code
-
-		restart_reason = "crash"
-		# Backoff: a crash after a long healthy run restarts almost instantly;
-		# a boot-crash loop backs off and eventually gives up instead of
-		# spinning forever on a broken install or bad config.
-		rapid_failures = 0 if uptime >= 60 else rapid_failures + 1
-		if rapid_failures >= 5:
-			launcher_log.error(
-				f"App crashed {rapid_failures} times in quick succession (exit {code}) — "
-				f"giving up. Check {LOG_FILE} for the cause.")
-			return code
-		delay = min(2 ** rapid_failures, 60)
-		launcher_log.error(f"App exited with code {code} after {uptime:.0f}s — restarting in {delay}s (Ctrl+C to stop).")
-
-		for _ in range(delay):
-			if stop_requested.is_set():
-				return 0
-			time.sleep(1)
-
-
-if __name__ == "__main__" and os.environ.get("SB_SUPERVISED") != "1" and _restart_on_crash_enabled():
-	sys.exit(_supervise())
-
-
-# ── The real app (supervised child, or direct run when the launcher is off) ──
-
-# Preserve the previous run's log before truncating: a crash-restart must not
-# destroy the traceback that explains why the last generation died.
+# Preserve the previous run's log before truncating: whatever ended the last
+# generation explains itself there, and an unclean exit is exactly when that
+# traceback is worth having.
 try:
 	if LOG_FILE.exists():
 		os.replace(LOG_FILE, LOG_FILE.parent / (LOG_FILE.name + ".1"))
@@ -210,13 +101,6 @@ _shutdown = threading.Event()
 
 def main():
 	t_start = time.time()
-
-	# --- 0. Note an unclean previous generation (set by the launcher) ---
-	_restart_reason = os.environ.get("SB_RESTART_REASON", "")
-	if _restart_reason:
-		logger.warning(
-			f"Recovering from a {_restart_reason} — "
-			f"the previous run's log was rotated to {LOG_FILE}.1.")
 
 	# --- 1. Load config ---
 	config = config_manager.load()
@@ -405,11 +289,6 @@ def main():
 		def _exec_self():
 			if not _restart_lock.acquire(blocking=False):
 				return
-			if os.environ.get("SB_SUPERVISED") == "1":
-				# Running under the crash-restart launcher: exit with the
-				# sentinel code and let it relaunch us in the same console.
-				logger.info("Restarting via launcher.")
-				os._exit(_RESTART_EXIT_CODE)
 			logger.info("Re-execing process now.")
 			args = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
 			if sys.platform == "win32":
