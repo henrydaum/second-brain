@@ -392,6 +392,29 @@ def test_the_kernels_own_tables_are_never_swept(db):
     assert "extracted_text" in tables
 
 
+def test_the_kernel_denylist_still_matches_the_schema(tmp_path):
+    """The sweep tells kernel tables from task output by an explicit list, and a
+    new kernel table carrying a path column would silently join the sweep.
+
+    Derived from a fresh database rather than restated, because the failure is
+    deletion of rows nothing was supposed to touch — and it would show up as
+    missing data long after the commit that caused it.
+    """
+    fresh = Database(str(tmp_path / "fresh.db"))
+    with_path = {
+        name for name in (
+            r["name"] for r in fresh.conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        )
+        if any(c["name"] == "path"
+               for c in fresh.conn.execute(f"PRAGMA table_info({name})"))
+    }
+
+    assert with_path == set(Database._KERNEL_PATH_TABLES)
+    assert fresh.path_keyed_output_tables() == []
+
+
 def test_an_fts_index_is_never_deleted_from_directly(db):
     """``lexical_index`` is external-content FTS5 over ``lexical_content``,
     maintained by triggers. Deleting from the content table de-indexes it
