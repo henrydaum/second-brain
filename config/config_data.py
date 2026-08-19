@@ -48,12 +48,16 @@ SETTINGS_DATA = [
 
     # --- File Filtering ---
     ("Ignored Extensions", "ignored_extensions",
-     "File extensions to skip during sync (JSON array, e.g. [\".tmp\", \".log\"]).",
+     "File extensions to skip, and to remove from the index when added "
+     "(JSON array, e.g. [\".tmp\", \".log\"]). The dot and the case do not "
+     "matter: \"LOG\" and \".log\" mean the same thing.",
      [],
      {"type": "json_list"}),
 
     ("Ignored Folders", "ignored_folders",
-     "Folder names to skip during sync.",
+     "Folders to skip, and to remove from the index when added. A bare name "
+     "like \"node_modules\" matches anywhere; a full path matches only that "
+     "folder and everything under it.",
      ["node_modules", "__pycache__", ".git", ".venv", "venv"],
      {"type": "json_list"}),
 

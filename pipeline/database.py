@@ -855,6 +855,78 @@ class Database:
 			self.conn.commit()
 			return True
 
+	# The only two kernel tables carrying a path column. Everything else
+	# that has one is a task's output, which is what makes the schema a
+	# usable substitute for asking the registered tasks — and the
+	# registered tasks are exactly what a removal cannot rely on, since the
+	# package that wrote a row may have been uninstalled since.
+	_KERNEL_PATH_TABLES = frozenset({"files", "task_queue"})
+
+	def path_keyed_output_tables(self) -> list:
+		"""Every task-output table keyed by path, read from the schema itself.
+
+		Virtual tables are excluded deliberately: ``lexical_index`` is an
+		external-content FTS5 index over ``lexical_content``, maintained by
+		triggers. Deleting from the content table de-indexes it correctly,
+		while deleting from the index directly corrupts it. FTS shadow tables
+		(``lexical_index_data`` and friends) are ordinary tables but carry no
+		path column, so the column check drops them on its own.
+		"""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT name FROM sqlite_master "
+				"WHERE type = 'table' "
+				"AND name NOT LIKE 'sqlite_%' "
+				"AND sql NOT LIKE 'CREATE VIRTUAL%'"
+			)
+			names = [row["name"] for row in cur.fetchall()]
+			return [
+				name for name in names
+				if name not in self._KERNEL_PATH_TABLES
+				and _VALID_IDENTIFIER.match(name)
+				and self._table_has_column_unlocked(name, "path")
+			]
+
+	def sweep_orphaned_output_rows(self) -> dict:
+		"""Delete output rows whose path is gone from the files table.
+
+		Returns ``{table: rows_removed}`` for whatever it touched.
+
+		This is the only reachable cleanup for rows that ``on_file_deleted``
+		left behind. That function cleans the tables of *currently registered*
+		tasks and then drops the files row regardless of what it cleaned, so a
+		file removed while its pipeline package was uninstalled stranded that
+		package's rows for good: with no files row the path can never be a
+		ghost again, and nothing that reconciles by path can name it.
+
+		The guard matters more than the sweep. An empty files table is what a
+		fresh database looks like before its first scan, and that is
+		indistinguishable here from one whose every file was removed — so
+		refusing to act on an empty table is what stops a first boot from
+		wiping output a previous install produced.
+		"""
+		removed = {}
+		with self.lock:
+			cur = self.conn.execute("SELECT EXISTS (SELECT 1 FROM files)")
+			if not cur.fetchone()[0]:
+				return removed
+
+		# Outside the lock above: path_keyed_output_tables takes it itself.
+		for table in self.path_keyed_output_tables():
+			with self.lock:
+				try:
+					cur = self.conn.execute(
+						f"DELETE FROM {table} "
+						"WHERE path NOT IN (SELECT path FROM files)"
+					)
+					self.conn.commit()
+				except sqlite3.OperationalError as e:
+					logger.warning(f"Could not sweep '{table}': {e}")
+					continue
+				if cur.rowcount > 0:
+					removed[table] = cur.rowcount
+		return removed
+
 	def _table_has_column_unlocked(self, table_name: str, column_name: str) -> bool:
 		"""Return whether a table has a column. Caller must hold self.lock."""
 		self._validate_identifier(table_name)

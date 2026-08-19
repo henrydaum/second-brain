@@ -10,6 +10,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from pipeline.database import set_thread_priority_low
+from pipeline.ignore_rules import IgnoreRules
 from parsing import get_modality, get_supported_extensions
 logger = logging.getLogger("Watcher")
 
@@ -57,15 +58,12 @@ class Watcher:
 		# Known extensions from the parser registry
 		self.supported_extensions = get_supported_extensions()
 
-		# Ignored extensions from config
-		self.ignored_extensions = set(config.get("ignored_extensions", []))
+		# What may be indexed at all. The settings are normalized rather than
+		# compared as typed — see pipeline/ignore_rules.py.
+		self.rules = IgnoreRules.from_config(config)
 
 		# Mtime cache — detects false alarms from Windows
 		self._known_mtimes: dict[str, float] = {}
-
-		# Ignored folders
-		self.ignored_folders = set(config.get("ignored_folders", []))
-		self.skip_hidden = config.get("skip_hidden_folders", True)
 
 	# =================================================================
 	# START / STOP
@@ -85,8 +83,8 @@ class Watcher:
 
 		self.observer.start()
 
-		# Initial scan in background — doesn't block startup
-		threading.Thread(target=self._initial_scan, args=(valid_dirs,), daemon=True).start()
+		# Sync in background — doesn't block startup
+		threading.Thread(target=self._sync_worker, args=(valid_dirs,), daemon=True).start()
 
 	def rescan(self):
 		"""Re-read sync_directories from config, update observers, run fresh scan."""
@@ -95,9 +93,7 @@ class Watcher:
 		if isinstance(raw_dirs, str):
 			raw_dirs = [raw_dirs]
 		self.watch_dirs = raw_dirs
-		self.ignored_extensions = set(self.config.get("ignored_extensions", []))
-		self.ignored_folders = set(self.config.get("ignored_folders", []))
-		self.skip_hidden = self.config.get("skip_hidden_folders", True)
+		self.rules = IgnoreRules.from_config(self.config)
 
 		# And the one piece of state that is not config's. Installing a parser
 		# is what makes an extension worth looking at, and _should_process gates
@@ -112,6 +108,13 @@ class Watcher:
 		self.supported_extensions = get_supported_extensions()
 
 		valid_dirs = [d for d in self.watch_dirs if d and os.path.exists(d)]
+
+		# The sync runs whether or not there is anywhere left to watch. Pruning
+		# what the rules now exclude is a question about config, not about what
+		# is mounted, and returning early here meant an unplugged drive quietly
+		# cancelled the prune the user had just asked for.
+		threading.Thread(target=self._sync_worker, args=(valid_dirs,), daemon=True).start()
+
 		if not valid_dirs:
 			logger.warning("No valid sync directories after rescan. Use /configure sync_directories to add a folder.")
 			return
@@ -128,7 +131,6 @@ class Watcher:
 			logger.info(f"Watching: {d}")
 
 		self.observer.start()
-		threading.Thread(target=self._initial_scan, args=(valid_dirs,), daemon=True).start()
 		logger.info("Rescan triggered.")
 
 	def stop(self):
@@ -141,6 +143,70 @@ class Watcher:
 	# =================================================================
 	# INITIAL SCAN
 	# =================================================================
+
+	def _sync_worker(self, valid_dirs):
+		"""Bring the database back in line with config, then with disk.
+
+		The order is the point. Pruning what the ignore settings exclude is a
+		question about *config*, so it runs first and unconditionally; the disk
+		walk is a separate question and must not be able to starve it. Ghost
+		cleanup used to be the last statement of an unguarded scan on an
+		unguarded daemon thread, so one unreadable file killed the whole
+		reconciliation, silently, on every boot — and a setting the user had
+		just changed appeared to do nothing at all.
+		"""
+		set_thread_priority_low()
+
+		try:
+			self._prune_by_rules()
+		except Exception:
+			logger.exception("Ignore-rule prune failed")
+
+		try:
+			self._sweep_orphans()
+		except Exception:
+			logger.exception("Orphan sweep failed")
+
+		if not valid_dirs:
+			return
+
+		try:
+			self._initial_scan(valid_dirs)
+		except Exception:
+			logger.exception("Initial scan failed")
+
+	def _prune_by_rules(self):
+		"""Drop everything the current ignore settings exclude.
+
+		Reads ``get_all_files()`` rather than ``get_watched_file_state()``,
+		which ghost cleanup cannot do: container-extracted children live under
+		a temp ``extract_dir`` outside every watch dir, so a disk diff would
+		call all of them ghosts. This loop is safe over the whole table
+		precisely because it only ever deletes on an explicit rule match, and
+		that is also what lets it remove a child sitting under a newly ignored
+		folder directly rather than only when its parent archive goes.
+		"""
+		pruned = 0
+		for path in self.db.get_all_files():
+			if self.rules.excludes(path):
+				logger.info(f"[Rules] Excluded: {Path(path).name}")
+				self.orchestrator.on_file_deleted(path)
+				pruned += 1
+		if pruned:
+			logger.info(f"Ignore rules pruned {pruned} file(s) from the index.")
+
+	def _sweep_orphans(self):
+		"""Delete output rows whose file is no longer in the files table.
+
+		``on_file_deleted`` knows only the tables of *currently registered*
+		tasks, and it drops the files row regardless of what it managed to
+		clean. So removing a file while its pipeline package was uninstalled
+		stranded that package's rows permanently: with no files row the path
+		can never be a ghost again, and nothing that reconciles by path can
+		reach it. This is the only thing that can.
+		"""
+		for table, removed in self.db.sweep_orphaned_output_rows().items():
+			logger.info(f"[Sweep] Removed {removed} orphaned row(s) from {table}.")
 
 	def _initial_scan(self, valid_dirs):
 		"""
@@ -155,21 +221,34 @@ class Watcher:
 		than it did when the row was written. Comparing only mtimes meant such
 		a file was skipped forever — the row kept saying ``unknown`` and no
 		modality-rooted task ever found it.
+
+		Ghost cleanup is the destructive half, and everything below is arranged
+		so it only ever runs on a complete picture of the disk: a file that
+		cannot be read is claimed as on-disk anyway, and a walk that hit an
+		error suppresses the sweep entirely.
 		"""
-		# Background scan: its DB writes yield the shared lock to the conversation.
-		set_thread_priority_low()
 		t0 = time.time()
 		db_state = self.db.get_watched_file_state()  # {path: (mtime, modality)}
 		disk_files = set()
 		new_count = 0
 		modified_count = 0
 		reclassified_count = 0
+		walk_ok = True
+
+		def on_walk_error(error):
+			# os.walk swallows directory errors by default, so an unreadable
+			# subtree reads as an empty one — and an empty subtree is exactly
+			# what a deleted subtree looks like. Left alone, one permission
+			# error would have ghost cleanup delete every file beneath it.
+			nonlocal walk_ok
+			walk_ok = False
+			logger.warning(f"[Scan] Could not read {getattr(error, 'filename', '?')}: {error}")
 
 		for watch_dir in valid_dirs:
 			if self._is_ignored(watch_dir):
 				continue
 
-			for root, dirs, files in os.walk(watch_dir):
+			for root, dirs, files in os.walk(watch_dir, onerror=on_walk_error):
 				if self._is_ignored(root):
 					continue
 				# Prune ignored dirs in-place so os.walk skips them
@@ -182,8 +261,22 @@ class Watcher:
 					if not self._is_valid_file(path):
 						continue
 
+					try:
+						mtime = os.path.getmtime(path)
+					except FileNotFoundError:
+						# Vanished between the listing and the stat. Genuinely
+						# gone, so leaving it out of disk_files is correct and
+						# ghost cleanup is the right answer for it.
+						continue
+					except OSError as e:
+						# Present but unreadable. Claim it as on-disk so the
+						# sweep below cannot delete a file that exists; this
+						# used to escape and kill the scan thread outright.
+						logger.warning(f"[Scan] Could not stat {name}: {e}")
+						disk_files.add(path)
+						continue
+
 					disk_files.add(path)
-					mtime = os.path.getmtime(path)
 					self._known_mtimes[path] = mtime
 
 					if path not in db_state:
@@ -201,11 +294,18 @@ class Watcher:
 
 		# Ghost cleanup — files in DB but not on disk
 		ghost_count = 0
-		for db_path in db_state:
-			if db_path not in disk_files:
-				logger.info(f"[Scan] Removed: {Path(db_path).name}")
-				self.orchestrator.on_file_deleted(db_path)
-				ghost_count += 1
+		if walk_ok:
+			for db_path in db_state:
+				if db_path not in disk_files:
+					logger.info(f"[Scan] Removed: {Path(db_path).name}")
+					self.orchestrator.on_file_deleted(db_path)
+					ghost_count += 1
+		else:
+			logger.warning(
+				"Skipping ghost cleanup: the walk could not read every "
+				"directory, so a deleted file cannot be told from an "
+				"unreadable one."
+			)
 
 		elapsed = time.time() - t0
 		logger.info(
@@ -328,19 +428,14 @@ class Watcher:
 			return False
 
 		# Ignored extensions from config
-		if p.suffix.lower() in self.ignored_extensions:
+		if self.rules.ignores_extension(p.suffix):
 			return False
 
 		return p.suffix.lower() in self.supported_extensions
 
 	def _is_ignored(self, path: str) -> bool:
-		"""Return whether ignored."""
-		parts = Path(path).parts
-		if any(part in self.ignored_folders for part in parts):
-			return True
-		if self.skip_hidden and any(part.startswith(".") for part in parts):
-			return True
-		return False
+		"""Return whether a directory is excluded by the current ignore rules."""
+		return self.rules.ignores_folder(path)
 
 
 class DebouncedHandler(FileSystemEventHandler):
