@@ -523,6 +523,16 @@ class BaseFrontend:
                 return self.submit(session_key, ACTION_BACK_FORM)
             if stripped.startswith("/") and ACTION_CALL_COMMAND in legal:
                 name, _, arg = stripped[1:].partition(" ")
+                # Switching commands mid-form is a shortcut, and a step that
+                # takes paths is where it stops being one: the reported value
+                # "/Users/henry/My Drive/..." was split on its first space and
+                # came back as the unknown command "Users/henry/My", so
+                # ``ignored_folders`` could not be given a folder from a Mac.
+                # ``FormStep.takes_literal_text`` says which steps those are —
+                # the step knows, and the frontend cannot tell from the text.
+                step = self._current_form_step(session_key)
+                if step is not None and getattr(step, "takes_literal_text", False):
+                    return self.submit(session_key, ACTION_SUBMIT_FORM_TEXT, stripped)
                 cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None
                 if cmd and not self.command_allowed(name):
                     return self._command_not_allowed(session_key, name)

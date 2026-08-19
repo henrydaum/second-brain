@@ -665,3 +665,168 @@ def test_the_agents_reply_is_never_command_output():
         frontend._render_result("s", RuntimeResult(messages=["Here you go."]))
         assert frontend.rendered == ["Here you go."]
         assert getattr(frontend, "output", []) == []
+
+
+# ── A form field that has to hold a path ─────────────────────────────
+
+
+class _FormFrontend(BaseFrontend):
+    """A frontend parked on one form step, with one command installed."""
+
+    name = "form-test"
+
+    def __init__(self, step):
+        super().__init__()
+        from state_machine.conversation_phases import PHASE_FILLING_COMMAND_FORM
+
+        frame = SimpleNamespace(
+            phase=PHASE_FILLING_COMMAND_FORM, name="config", step=step, data={})
+        self.session = SimpleNamespace(
+            cs=SimpleNamespace(phase=PHASE_FILLING_COMMAND_FORM, frame=frame),
+            conversation_id=1, frontend_name=self.name, user_id=1, busy=False)
+        self.acted = []
+        self.errors = []
+        self.commands = SimpleNamespace(
+            all_commands=lambda: [SimpleNamespace(name="commands")])
+        self.runtime = SimpleNamespace(
+            get_session=lambda _key: self.session,
+            handle_action=self._record)
+
+    def _record(self, _key, action_type, payload=None):
+        self.acted.append((action_type, payload))
+        return RuntimeResult()
+
+    def render_error(self, _key, error):
+        self.errors.append(error)
+
+
+def _value_step(type_="array"):
+    from state_machine.conversation import FormStep
+    return FormStep("value", "Enter the new value.", True, type_)
+
+
+# The reported value, verbatim: an absolute POSIX path with spaces.
+_PHOTOS = "/Users/henry/My Drive/_Photos and Media/Photos/Misc/Extra Photos/"
+
+
+def test_a_path_is_a_value_not_a_command_inside_a_form():
+    """The whole bug, in one line of input.
+
+    A form step is a *question*, and text starting with ``/`` was dispatched to
+    the command table before anything asked whether it answered that question.
+    Every absolute path on macOS and Linux starts with the same character a
+    command does, so ``ignored_folders`` — a setting whose entire purpose is to
+    hold folders — could not be given one from any frontend. The value was
+    split on its first space and reported as the unknown command
+    ``Users/henry/My``.
+    """
+    frontend = _FormFrontend(_value_step())
+
+    frontend.submit_text("s", _PHOTOS)
+
+    assert frontend.errors == []
+    assert frontend.acted == [("submit_form_text", _PHOTOS)]
+
+
+def test_a_mistyped_command_in_a_form_still_says_so():
+    """A step that does not take paths keeps the old reading, typos included.
+
+    This is what "only switch on a *valid* command" would have lost: a fumbled
+    ``/skip`` would have been silently accepted as the answer.
+    """
+    frontend = _FormFrontend(_value_step("integer"))
+
+    frontend.submit_text("s", "/skpi")
+
+    assert frontend.acted == []
+    assert frontend.errors[-1]["code"] == "unknown_command"
+
+
+def test_a_real_command_still_runs_from_inside_a_form():
+    """Switching commands mid-form is narrowed, not removed — so it is pinned
+    rather than assumed. A free-text step is not one that takes paths."""
+    frontend = _FormFrontend(_value_step("string"))
+
+    frontend.submit_text("s", "/commands")
+
+    assert frontend.acted == [("call_command", {"name": "commands", "args": {}})]
+
+
+def test_a_path_step_takes_a_real_commands_name_as_its_value():
+    """The edge case the shortcut could never serve: a step whose legitimate
+    answer collides with a command. On a literal-text step the answer wins, so
+    there is no value the field cannot hold."""
+    frontend = _FormFrontend(_value_step("path"))
+
+    frontend.submit_text("s", "/commands")
+
+    assert frontend.acted == [("submit_form_text", "/commands")]
+
+
+def test_which_steps_take_a_slash_literally():
+    """The rule itself, stated once.
+
+    Paths and lists are answered with paths; numbers, booleans and free text
+    are not, and an enum's answers are its own options.
+    """
+    literal = {"path", "path_list", "array"}
+    for type_ in literal | {"string", "integer", "number", "boolean", "object"}:
+        assert _value_step(type_).takes_literal_text is (type_ in literal), type_
+
+    from state_machine.conversation import FormStep
+    constrained = FormStep("value", "Pick one.", True, "array", enum=[["a"], ["b"]])
+    assert constrained.takes_literal_text is False
+
+
+def test_the_form_control_words_still_win_over_a_value():
+    """``/skip`` and ``/back`` are matched exactly, ahead of any value reading,
+    so a step that would happily accept the literal text cannot capture them."""
+    for word, action in (("/skip", "skip_form"), ("/back", "back_form")):
+        frontend = _FormFrontend(_value_step())
+        frontend.submit_text("s", word)
+        assert frontend.acted == [(action, None)], word
+
+
+def test_the_reported_path_survives_the_whole_trip():
+    """Frontend, coercion, and the ignore rules agree end to end.
+
+    ``json_list`` coerces non-JSON text one item per line, so the bare path
+    becomes a one-element list — which is why the field never needed to be a
+    ``path_list`` (that type validates every item as an existing directory, and
+    the setting must keep accepting bare names like ``node_modules``).
+    """
+    from pipeline.ignore_rules import IgnoreRules
+
+    step = _value_step()
+    frontend = _FormFrontend(step)
+    frontend.submit_text("s", _PHOTOS)
+    _, submitted = frontend.acted[0]
+
+    rules = IgnoreRules.from_config({"ignored_folders": step.coerce(submitted)})
+
+    assert rules.excludes(_PHOTOS + "IMG_0001.jpg")
+    assert not rules.excludes(
+        "/Users/henry/My Drive/_Photos and Media/Photos/Misc/Extra Photos Backup/x.jpg")
+
+
+def test_the_rule_survives_the_sandbox_round_trip():
+    """``/config`` is sandboxed, so its steps cross the wire as plain dicts.
+
+    Deriving the rule from ``type`` rather than declaring it separately is what
+    makes this work with nothing threaded through the boundary: a guest step
+    already carries its type, and the kernel rebuilds a real ``FormStep`` from
+    it. A hand-declared flag would have had to be added to the guest contract,
+    the serializer and every caller — and would read as False on every step
+    written before it existed, which is silently the broken answer.
+    """
+    from sandbox.guest.forms import FormStep as GuestStep
+    from state_machine.conversation import PhaseFrame
+
+    guest = GuestStep("value", "Enter the new value.", True, "array")
+    frame = PhaseFrame.from_dict({
+        "phase": "filling_command_form", "action_type": "call_command",
+        "actor_id": "user", "name": "config", "data": {},
+        "steps": [dict(guest)], "step_index": 0,
+    })
+
+    assert frame.step.takes_literal_text is True

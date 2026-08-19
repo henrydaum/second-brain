@@ -84,6 +84,31 @@ class FormStep:
     prompt_when_missing: bool = False
     columns: int | None = None
 
+    # Types whose answers routinely open with "/" — a POSIX absolute path is
+    # the expected shape of a value here, not an unusual one.
+    _LITERAL_SLASH_TYPES = {"path", "path_list", "array"}
+
+    @property
+    def takes_literal_text(self) -> bool:
+        """Whether a leading ``/`` in this step's input is a value, not a command.
+
+        A frontend lets you switch commands mid-form by typing another one,
+        which costs nothing until the form is *asking for a path* — and then
+        every answer on macOS or Linux opens with the character a command opens
+        with. ``ignored_folders`` could not be given a folder from a Mac at all.
+
+        The step is what knows, so the step is what answers, rather than the
+        frontend guessing from the text. Guessing does not work here: content
+        cannot separate a mistyped ``/doctor`` from a one-segment path ``/etc``,
+        and a free-text step accepts either, so any test built on "would this
+        validate" swallows the typo and answers the question with it.
+
+        Turning the shortcut off is safe because ``/cancel``, ``/back`` and
+        ``/skip`` are matched exactly and *before* it, so there is always a way
+        out of a form that takes slashes literally.
+        """
+        return self.type in self._LITERAL_SLASH_TYPES and not self.enum
+
     def coerce(self, value: Any) -> Any:
         # Form values arrive from text boxes, buttons, or future callbacks, so
         # normalize them before handlers see the collected args.
