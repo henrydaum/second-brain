@@ -272,12 +272,16 @@ class _Frontend:
     does — park a desk, claim the port, bind the token, drive poll and render.
     """
 
-    def __init__(self, box, server, token, desk, runtime):
+    def __init__(self, box, server, token, desk, runtime, settings):
         self._box = box
         self.server = server
         self.token = token
         self.desk = desk
         self.runtime = runtime
+        #: The live config the box reads through its context. Mutable, so a
+        #: test can arrange for a Request to answer with something particular
+        #: — including something too large to cross.
+        self.settings = settings
 
     @property
     def state(self):
@@ -354,7 +358,7 @@ def running(tmp_path, source, owns_its_token):
     assert box.call("__bind__", token=token).ok
     assert box.call("start").ok, "the frontend refused to start"
     try:
-        yield _Frontend(box, server, token, desk, runtime)
+        yield _Frontend(box, server, token, desk, runtime, settings)
     finally:
         module.SERVER = previous_server
         configure(previous_sandbox)
@@ -1131,3 +1135,65 @@ def test_a_file_with_no_extension_is_served_too(running, tmp_path):
     conn.close()
 
     assert _status(raw) == 200 and _body(raw) == b"MIT"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# An answer that cannot be delivered.
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.store
+def test_an_undeliverable_answer_is_a_status_rather_than_a_hang(running):
+    """The client is told, instead of waiting for a reply nobody still has.
+
+    ``interpreter._settle`` substitutes a coded failure for a Result that will
+    not fit on one message, so what arrives here is an ordinary failed outcome.
+    That matters because delivery is one-shot: ``facade.collect_act`` drops the
+    act's result *before* it crosses, so by the time this frontend learns the
+    collect failed the answer is already gone and retrying the handle would
+    wait forever. Answering 413 is the difference between a request that failed
+    and a browser holding a connection open until it times out.
+    """
+    from sandbox.guest.protocol import MAX_MESSAGE_BYTES
+
+    running.settings["http_static_dir"] = "x" * (MAX_MESSAGE_BYTES + 1)
+
+    conn = _open(running, _request("POST", "/sdk/config.read?thread=big",
+                                   body=json.dumps({"key": "http_static_dir"})))
+    running.settle()
+    raw = _read(conn, until=b"}", timeout=5.0)
+    conn.close()
+
+    assert _status(raw) == 413
+    assert _json_body(raw)["code"] == "too_large"
+
+
+@pytest.mark.store
+def test_one_undeliverable_answer_does_not_stop_the_other_clients(running):
+    """The bug that took the UI down, in one test.
+
+    ``_deliver`` runs *before* ``sdk.http.drain()``. When it raised, the drain
+    never happened — so one client asking for something too large stopped every
+    other client's request from being served, and the kernel's poll-failure
+    counter reset on the next good tick and never reached the five that stop a
+    frontend. A dead transport, and nothing anywhere said so.
+    """
+    from sandbox.guest.protocol import MAX_MESSAGE_BYTES
+
+    running.settings["http_static_dir"] = "x" * (MAX_MESSAGE_BYTES + 1)
+    running.settings["http_allowed_origins"] = "https://example.test"
+
+    doomed = _open(running, _request("POST", "/sdk/config.read?thread=big",
+                                     body=json.dumps({"key": "http_static_dir"})))
+    ordinary = _open(running, _request(
+        "POST", "/sdk/config.read?thread=small",
+        body=json.dumps({"key": "http_allowed_origins"})))
+    running.settle()
+
+    doomed_raw = _read(doomed, until=b"}", timeout=5.0)
+    ordinary_raw = _read(ordinary, until=b"}", timeout=5.0)
+    doomed.close()
+    ordinary.close()
+
+    assert _status(doomed_raw) == 413
+    assert _status(ordinary_raw) == 200, "the drain never ran"
+    assert _json_body(ordinary_raw)["data"] == "https://example.test"

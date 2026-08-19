@@ -265,6 +265,46 @@ class PhaseFrame:
         return cls(data["phase"], data["action_type"], data["actor_id"], data.get("name"), data.get("data") or {}, [FormStep.from_dict(s) for s in data.get("steps", [])], data.get("step_index", 0), data.get("previous_phase", BASE_PHASE))
 
 
+#: The most any single value inside a marker's action history may carry.
+#: An event is a note that something happened, not a copy of what it carried.
+#:
+#: 512 rather than something larger because the curve flattens there: measured
+#: on the marker that prompted this, 4096 gives 3x, 512 gives 5x and 256 gives
+#: no more, since past that point the floor is the hundred events' own
+#: structure rather than their payloads. Half a kilobyte still shows what a
+#: tool was called with, which is the whole reason to keep the field.
+MARKER_VALUE_CAP = 512
+
+
+def _slim(value: Any) -> Any:
+    """One history event with oversized leaves replaced by a note.
+
+    ``ConversationState.history`` is written on every action and read by
+    nothing — no restore path assigns it, and the UI builds its tool calls from
+    ``conversation_messages`` instead. It was still 84% of the database,
+    because a ``call_tool`` event carries the tool's *arguments* and one
+    ``edit_file`` argument was the whole 102 KB body of a file. Bounded by
+    ``[-100:]``, that one event then rode along in every marker for the next
+    hundred actions.
+
+    Events are *kept* rather than dropped, and only their values are clamped.
+    The ledger already records every enact with full arguments, so nothing here
+    is the last copy of a payload — but ``turn_changed``, ``form_started``,
+    ``approval_requested`` and each event's ``phase`` exist nowhere else, and
+    those are exactly the cheap parts. Clamping keeps the whole shape of what
+    happened and throws away only what is duplicated twice over.
+    """
+    if isinstance(value, str):
+        if len(value) <= MARKER_VALUE_CAP:
+            return value
+        return f"{value[:MARKER_VALUE_CAP]}… <clamped, {len(value)} chars>"
+    if isinstance(value, dict):
+        return {key: _slim(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_slim(item) for item in value]
+    return value
+
+
 class ConversationState:
     """The pure state machine: turn priority, current phase, and phase stack."""
 
@@ -413,7 +453,9 @@ class ConversationState:
             "turn_priority": self.turn_priority,
             "phase": self.phase,
             "cache": {**self.cache, "phases": [f.to_dict() if hasattr(f, "to_dict") else f for f in self.cache.get("phases", [])]},
-            "history": self.history[-100:],
+            # Clamped on the way out only: the live list is untouched, so
+            # nothing that reads an event mid-turn sees a truncated one.
+            "history": [_slim(event) for event in self.history[-100:]],
             "participants": [{"id": p.id, "kind": p.kind, "name": p.name} for p in self.participants.values()],
             "pending_attachments": attachments_payload,
         }

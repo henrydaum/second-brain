@@ -877,7 +877,9 @@ class ConversationRuntime:
         if not allowed:
             return None
         from runtime.notifications import notification_mode as normalize
-        from state_machine.serialization import latest_state, save_state_marker
+        from state_machine.serialization import (STATE_PREFIX, latest_state,
+                                                 save_state_marker,
+                                                 unpack_state)
         normalized = normalize(mode)
         for session in list(self.sessions.values()):
             if session.conversation_id == conversation_id:
@@ -887,7 +889,13 @@ class ConversationRuntime:
                     _persist.persist_marker(self, session)
                 return normalized
         if self.db:
-            marker = (latest_state(self.db.get_conversation_messages(conversation_id)) or {}).copy()
+            # Sought directly rather than scanned out of every row the
+            # conversation holds. This read the whole transcript — 20 MB on a
+            # long one — to find the single newest marker, which is exactly
+            # what ``get_latest_marker`` exists to avoid.
+            marker = (unpack_state(
+                self.db.get_latest_marker(conversation_id, STATE_PREFIX) or ""
+            ) or {}).copy()
             marker["notification_mode"] = normalized
             save_state_marker(self.db, conversation_id, marker)
         return normalized

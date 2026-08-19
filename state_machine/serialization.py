@@ -17,6 +17,15 @@ from state_machine.forms import history_tool_calls_from_content
 STATE_MARKER = "__second_brain_state_machine__"
 COMPACTION_MARKER = "__second_brain_compaction__"
 
+#: What a packed state marker's content starts with.
+#:
+#: Derived from the sentinel rather than written out, so it cannot drift from
+#: what ``pack_state`` actually produces. Callers match on the *prefix* so the
+#: test is ``substr(content, 1, n)``, which lets SQLite reject a row without
+#: reading a 200 KB value out of its overflow pages — the difference between
+#: seeking the newest marker and scanning a whole transcript to find it.
+STATE_PREFIX = f'{{"{STATE_MARKER}"'
+
 
 def pack_state(state: dict[str, Any]) -> str:
     """Handle pack state."""

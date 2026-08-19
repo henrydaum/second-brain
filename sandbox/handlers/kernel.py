@@ -322,13 +322,18 @@ def _conv_create(ctx, args: dict) -> Result:
     return Result(data={"id": cid, "profile": profile})
 
 
-#: What a state marker's content starts with. The prefix rather than the
-#: sentinel itself, so the test is ``substr(content, 1, n)`` and SQLite never
-#: has to read a 200 KB value out of its overflow pages to reject it.
-#: ``tests/test_conversation_reads.py`` pins it against ``pack_state``, because
-#: this is a copy of a fact ``state_machine/serialization`` owns and a copy that
-#: drifts would silently start shipping bookkeeping again.
-_STATE_PREFIX = '{"__second_brain_state_machine__"'
+def _state_prefix() -> str:
+    """What a packed state marker's content starts with.
+
+    Fetched from ``state_machine.serialization`` rather than restated here,
+    which it was until the second caller appeared: a copy of somebody else's
+    fact drifts, and what it drifts into is bookkeeping quietly reaching a
+    reader again. Imported inside the function like this module's other
+    ``state_machine`` uses, to keep the handler table cheap to import.
+    """
+    from state_machine.serialization import STATE_PREFIX
+
+    return STATE_PREFIX
 
 #: The most one ``conv.read`` may answer with, derived from the wire the way
 #: ``fs_net.MAX_READ_BINARY`` is and for the identical reason: a constant
@@ -400,7 +405,7 @@ def _conv_read(ctx, args: dict) -> Result:
 
     messages, has_more = db.get_conversation_messages_page(
         cid, limit=limit, max_bytes=max_bytes, before_id=before_id,
-        since_id=since_id, skip_prefixes=(_STATE_PREFIX,))
+        since_id=since_id, skip_prefixes=(_state_prefix(),))
     messages = _rows(messages)
     data = {
         "conversation": dict(db.get_conversation(cid) or {}),
@@ -425,7 +430,7 @@ def _conv_read(ctx, args: dict) -> Result:
         # exists to leave behind, and nothing in the kernel, the store, the UI
         # or the protocol document ever read it. The two fields derived from
         # it are what ``details`` was always for.
-        state = unpack_state(db.get_latest_marker(cid, _STATE_PREFIX) or "") or {}
+        state = unpack_state(db.get_latest_marker(cid, _state_prefix()) or "") or {}
         data["agent_profile"] = (
             state.get("profile_override")
             or state.get("active_agent_profile")

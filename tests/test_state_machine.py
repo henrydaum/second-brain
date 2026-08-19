@@ -15,6 +15,7 @@ from state_machine.form_display import form_step_display
 from state_machine.forms import schema_to_form_steps
 from state_machine.serialization import (
     latest_state,
+    pack_state,
     messages_to_history,
     save_compaction_marker,
     save_state_marker,
@@ -340,3 +341,67 @@ def test_compaction_marker_preserves_db_rows_but_hides_pre_checkpoint_replay():
         {"role": "user", "content": "after"},
     ]
     assert latest_state(db.rows)["active_agent_profile"] == "builder"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What a marker carries, and what it deliberately does not.
+# ──────────────────────────────────────────────────────────────────────
+
+def _state_with(event_args):
+    state = ConversationState(
+        participants=[Participant("user", "user"), Participant("agent", "agent")])
+    state.event("call_tool", actor_id="agent", name="edit_file", args=event_args)
+    return state
+
+
+def test_a_marker_keeps_every_event_and_clamps_only_their_values():
+    """The bloat was never the events, it was one of them carrying a file.
+
+    ``ConversationState.history`` is written on every action and read by
+    nothing — no restore path assigns it, and a client builds its tool calls
+    from ``conversation_messages``. It was still 84% of the database, because a
+    ``call_tool`` event carries the tool's *arguments* and one ``edit_file``
+    argument was a whole 102 KB file body, which then rode along in every
+    marker for the next hundred actions.
+
+    Events are kept rather than dropped: ``turn_changed``, ``form_started``,
+    ``approval_requested`` and each event's ``phase`` exist nowhere else, while
+    the payloads are duplicated in both the ledger and the transcript.
+    """
+    state = _state_with({"path": "/x.py", "content": "y" * 100_000})
+
+    [event] = state.to_dict()["history"]
+
+    assert event["type"] == "call_tool"
+    assert event["name"] == "edit_file"
+    assert event["phase"] == state.phase
+    assert event["args"]["path"] == "/x.py", "small values are untouched"
+    assert len(event["args"]["content"]) < 1_000
+    assert "clamped" in event["args"]["content"]
+    assert "100000 chars" in event["args"]["content"]
+
+
+def test_clamping_does_not_touch_the_live_history():
+    """Only the way out is clamped. Anything reading an event mid-turn — a
+    hook, a doorman, the loop itself — must still see what was actually
+    passed."""
+    state = _state_with({"content": "y" * 100_000})
+
+    state.to_dict()
+
+    assert len(state.history[-1]["args"]["content"]) == 100_000
+
+
+def test_a_marker_stays_small_however_large_the_arguments_were():
+    state = ConversationState(
+        participants=[Participant("user", "user"), Participant("agent", "agent")])
+    for i in range(120):
+        state.event("call_tool", actor_id="agent", name="edit_file",
+                    args={"content": "z" * 50_000})
+
+    packed = pack_state(state.to_dict())
+
+    # A hundred events of 50 KB each is 5 MB unclamped; the marker is what a
+    # row can afford to be when one is written per action.
+    assert len(packed) < 200_000
+    assert len(state.to_dict()["history"]) == 100

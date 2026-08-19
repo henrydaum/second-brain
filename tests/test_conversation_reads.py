@@ -25,8 +25,9 @@ from sandbox.guest.codes import ERROR_TOO_LARGE
 from sandbox.guest.protocol import MAX_MESSAGE_BYTES
 from sandbox.guest.requests import CONV_READ
 from sandbox.handlers.kernel import (CONV_MAX_BYTES, CONV_MAX_ROWS,
-                                     CONV_PAGE_ROWS, _STATE_PREFIX)
-from state_machine.serialization import (pack_compaction, pack_state,
+                                     CONV_PAGE_ROWS)
+from state_machine.serialization import (STATE_PREFIX, pack_compaction,
+                                         pack_state,
                                          save_compaction_marker,
                                          save_state_marker)
 from tests.support import call_handler
@@ -68,12 +69,14 @@ def _read(db, **args):
 # ── The prefix is a copy, and copies drift ────────────────────────────
 
 def test_the_state_prefix_matches_what_the_packer_writes():
-    """``_STATE_PREFIX`` restates a fact ``serialization`` owns, because
-    importing that module from ``pipeline.database`` closes a cycle through
-    ``state_machine.conversation``. A copy that drifts does not raise — it
-    silently starts shipping bookkeeping again, which is the whole bug."""
-    assert pack_state({"phase": "x"}).startswith(_STATE_PREFIX)
-    assert not pack_compaction("summary").startswith(_STATE_PREFIX)
+    """The prefix is derived from the sentinel, and this pins that it matches
+    what ``pack_state`` actually writes. A prefix that drifts does not raise —
+    it silently starts shipping bookkeeping to readers again, which is the
+    whole bug. ``pipeline.database`` takes it as an argument rather than
+    importing it, because that import closes a cycle through
+    ``state_machine.conversation``."""
+    assert pack_state({"phase": "x"}).startswith(STATE_PREFIX)
+    assert not pack_compaction("summary").startswith(STATE_PREFIX)
 
 
 # ── What reaches a reader ─────────────────────────────────────────────
@@ -85,7 +88,7 @@ def test_state_markers_do_not_reach_a_reader(db):
 
     assert messages, "the conversation itself must still come back"
     assert not [m for m in messages
-                if (m["content"] or "").startswith(_STATE_PREFIX)]
+                if (m["content"] or "").startswith(STATE_PREFIX)]
     assert [m["role"] for m in messages] == ["user", "assistant"] * 4
 
 
@@ -307,4 +310,4 @@ def test_the_unbounded_reader_still_returns_markers(db):
 
     rows = db.get_conversation_messages(cid)
 
-    assert [r for r in rows if (r["content"] or "").startswith(_STATE_PREFIX)]
+    assert [r for r in rows if (r["content"] or "").startswith(STATE_PREFIX)]
