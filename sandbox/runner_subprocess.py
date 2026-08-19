@@ -274,10 +274,23 @@ def drain() -> None:
 
 
 def send(proc, message: dict) -> bool:
-    """Write one message to the child; False if the channel is gone."""
+    """Write one message to the child; False if the channel is gone.
+
+    ``ProtocolError`` is caught for a different reason than the other two and
+    must not be folded into them: the pipe is *fine*, the message is not. It
+    escaped for a long time, straight out of ``service_until`` and through the
+    serve loop, which killed a resident box outright — so an oversized answer
+    took a frontend down instead of failing one call. ``interpreter._settle``
+    now guarantees nothing oversized reaches here, and this stays as the
+    backstop for the message shapes that are not Results (a START payload, a
+    CALL's arguments) and never passed through that funnel.
+    """
     try:
         protocol.write_message(proc.stdin, message)
         return True
+    except protocol.ProtocolError:
+        logger.exception("dropping a message the wire cannot carry")
+        return False
     except (OSError, ValueError):
         return False
 

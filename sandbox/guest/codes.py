@@ -45,6 +45,7 @@ ERROR_NO_HANDLER = "no_handler"                # a vocabulary entry with no wiri
 ERROR_GUEST_FAULT = "guest_fault"              # sandboxed code raised
 ERROR_GUEST_EXITED = "guest_exited"            # the child died
 ERROR_CONFLICT = "conflict"                    # already exists, or wrong state
+ERROR_TOO_LARGE = "too_large"                  # the answer will not fit on the wire
 
 #: The codes that mean "refused" rather than "broke". ``Result.denied`` is
 #: membership in this set, and ``sdk.Denied`` is raised for exactly these — so

@@ -535,7 +535,13 @@ sdk.db.write(sql, params)
 sdk.db.define(ddl)             # create a table your plugin owns
 
 sdk.conv.create(title, category=None, activate=False)
-sdk.conv.read(conversation_id, details=False)
+sdk.conv.read(conversation_id, details=False, limit=None,
+              before_id=None, since_id=None)
+                               # -> {conversation, messages, has_more,
+                               #     oldest_id, newest_id}; ONE PAGE, newest
+                               #     first-paint. before_id walks up,
+                               #     since_id=0 is the oldest page,
+                               #     limit=0 is metadata only.
 sdk.conv.list(category=None, limit=50, offset=0, details=False)
 sdk.conv.append(conversation_id, role, content)
 sdk.conv.set_title(conversation_id, title)

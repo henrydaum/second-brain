@@ -37,7 +37,7 @@ from .policy import Chain, Decision, classify
 from .guest.channel import Terminated
 from .guest.codes import (ERROR_APPROVAL_DECLINED, ERROR_CANCELLED,
                          ERROR_HANDLER_ERROR, ERROR_NO_HANDLER,
-                         ERROR_SHUTTING_DOWN)
+                         ERROR_SHUTTING_DOWN, ERROR_TOO_LARGE)
 from .guest.requests import SELF_RESPOND, Request, Result
 
 logger = logging.getLogger("Sandbox")
@@ -84,6 +84,62 @@ def _shutting_down() -> Result:
 def _cancelled() -> Result:
     """The answer to a cancelled execution — answered, never serviced."""
     return Result.refusal("execution cancelled", code=ERROR_CANCELLED)
+
+
+def _deliverable(request: Request, result: Result) -> Result:
+    """The answer, or a small failure saying it would not fit.
+
+    An answer that cannot cross is not an answer, and this is the one funnel
+    every serviced Request passes through — so checking here is what makes the
+    guarantee kernel-wide instead of per-handler. Both runners inherit it:
+    in-process, the oversized value would have raised out of
+    ``Result.crossing``; over a pipe, ``protocol.encode`` raises inside
+    ``runner_subprocess.send``, which catches only ``OSError``/``ValueError``
+    and therefore let a ``ProtocolError`` escape the serve loop and take a
+    resident box down with it.
+
+    **Substituting beats raising**, because the caller is a plugin that asked
+    an ordinary question and a fault is not an ordinary answer to one. It is
+    the same move ``guest/child.py:_send_result`` already makes on its side of
+    the wire, and the same reasoning ``handlers/fs_net`` uses to cap a read
+    rather than let it become "a crash-shaped answer to an ordinary request".
+
+    The cost is one ``json.dumps`` per Request, ~3 microseconds on a typical
+    result. It is not new: both paths already serialized every result — the
+    in-process one in ``InterpreterChannel.send``, the subprocess one in
+    ``send`` — so this moves the encode earlier rather than adding one, and
+    ``InterpreterChannel`` no longer repeats it.
+
+    Note what this does **not** do: it never truncates. A handler that can
+    answer a large question in pieces has to say so in its own vocabulary —
+    ``conv.read`` pages, ``fs.read`` caps, ``db.query`` limits rows — because
+    only the handler knows what half an answer would mean. This is the
+    backstop for everything that got the estimate wrong anyway.
+    """
+    # Two calls rather than one, because they fail for opposite reasons and a
+    # plugin branches on the difference. ``to_dict`` refuses a live object --
+    # the handler's own bug, nothing about size, and no amount of asking for
+    # less will help. ``encode`` refuses a payload that is merely too big,
+    # which is a question worth asking again more narrowly. Folded together,
+    # the size wording was printed over a live object and pointed whoever read
+    # it at the wrong fix.
+    try:
+        payload = result.to_dict()
+    except protocol.ProtocolError as exc:
+        logger.exception("%s answered with something unsendable", request.type)
+        return Result.failure(f"{request.type} answered with something that"
+                              f" cannot cross the boundary: {exc}",
+                              code=ERROR_HANDLER_ERROR)
+    try:
+        protocol.encode({"kind": "result", "result": payload})
+    except protocol.ProtocolError as exc:
+        logger.warning("%s answered with more than the wire carries: %s",
+                       request.type, exc)
+        return Result.failure(
+            f"{request.type} answered with more than the wire carries: {exc}."
+            " Ask for less of it at a time.",
+            code=ERROR_TOO_LARGE)
+    return result
 
 
 def clamp_timeout(declared: float | None) -> float:
@@ -512,7 +568,7 @@ class Interpreter:
                 epoch.bump()
         except Exception:
             logger.exception("epoch bump failed")
-        execution.inbox.put(result)
+        execution.inbox.put(_deliverable(request, result))
 
     # ──────────────────────────────────────────────────────────────
     # The channel sandboxed code talks through.
@@ -612,12 +668,13 @@ class InterpreterChannel:
         result = self._interpreter.submit(self._execution, request)
         if self._execution.cancelled:
             raise Terminated(None)
-        try:
-            return result.crossing()
-        except protocol.ProtocolError as exc:
-            return Result.failure(
-                f"handler returned an unsendable result: {exc}",
-                code=ERROR_HANDLER_ERROR)
+        # No size check here any more: ``_settle`` runs it for every serviced
+        # Request, so what arrives is already known to fit. Repeating it cost a
+        # second ``json.dumps`` of every answer, and — worse — it was the *only*
+        # place that checked, which is why the subprocess path had no guard at
+        # all. ``crossing`` still canonicalizes; ``from_dict`` is what makes an
+        # in-process answer identical to one that really travelled.
+        return Result.from_dict(result.to_dict())
 
     def notify(self, request: Request) -> None:
         """Send a Request without waiting for its answer.

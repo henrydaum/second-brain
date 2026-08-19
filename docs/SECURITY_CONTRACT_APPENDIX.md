@@ -271,7 +271,7 @@ these three Requests. Transaction scoping becomes an argument
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `conv.create(title, activate)` | Start a current-user conversation, optionally loading it | user, session | safe |
-| `conv.read(id)` | Messages and metadata | id, owning user | safe (own), unsafe (other user) |
+| `conv.read(id, limit, before_id, since_id)` | One page of messages, plus metadata | id, owning user | safe (own), unsafe (other user) |
 | `conv.list(filters)` | Enumerate conversations | user | safe |
 | `conv.append(id, message)` | Add a message | id, owning user | safe (own) |
 | `conv.set_title(id, title)` | Retitle | id, owning user | safe (own) |
@@ -282,6 +282,28 @@ these three Requests. Transaction scoping becomes an argument
 | `conv.clear(id)` | Drop messages, keep conversation | id, owning user | safe (own) |
 | `conv.delete(id)` | Delete conversation and messages | id, owning user | unsafe |
 | `conv.enact(id, action)` | Drive an agent turn | id, owning user, root | unsafe from an unattended root |
+
+**`conv.read` answers with a page, not a conversation.** It was an unbounded
+`SELECT *`, and on a real conversation that came to 20.13 MB — of which 19.25
+MB was the state machine's own marker rows, re-serialized in full on every
+action. Past `protocol.MAX_MESSAGE_BYTES` the answer stopped being deliverable
+at all, and because the caller was a frontend's `poll`, the failure took the
+whole transport out rather than one request.
+
+Two changes, and the second is the one that lasts. Bookkeeping is filtered
+kernel-side (compaction markers survive — those are a fact about the
+conversation, and a client draws them). And the read is bounded by **bytes**,
+because a row cap bounds nothing when one row can be a 100 KB `edit_file`
+argument, and because a transcript grows without limit whatever the model's
+context window is: compaction shrinks what the model *sees* and deletes
+nothing, so there is no fixed size at which "all of it" stays answerable.
+
+The paging arguments are `ledger.read`'s, which had the same problem first —
+`before_id` walks backwards from a row, `since_id` walks forwards from one, and
+`since_id=0` is therefore the oldest page with no third argument to get wrong.
+`limit=0` asks for metadata only, for the callers that came for a title.
+`CONV_MAX_BYTES` is derived from the wire exactly as `fs_net.MAX_READ_BINARY`
+is, so the two cannot drift into an unsendable result again.
 
 Ownership is checked on every id-bearing Request, mirroring
 `runtime.assert_conversation_access`. Cross-user access is refused and recorded,

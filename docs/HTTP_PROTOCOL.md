@@ -432,6 +432,7 @@ Failures carry the kernel's own error code:
 | 400 | Bad arguments, or an unknown Request type |
 | 403 | Refused — declined, or nobody was there to ask |
 | 404 | The thing does not exist |
+| 413 | The answer will not fit on one message — ask for less of it |
 | 499 | Cancelled |
 | 503 | That subsystem is not available in this kernel |
 | 504 | Timed out |
@@ -467,7 +468,7 @@ catalogues all of them with their policy inputs. The useful subset:
 | Request | Arguments |
 |---|---|
 | `conv.list` | `category`, `limit`, `offset`, `details` |
-| `conv.read` | `id`, `details` |
+| `conv.read` | `id`, `details`, `limit`, `before_id`, `since_id`, `max_bytes` |
 | `conv.create` | `title`, `category`, `activate` |
 | `conv.load` | `id` |
 | `conv.new` | *(none)* |
@@ -492,9 +493,43 @@ filtering, which is exactly what breaks once subagent runs outnumber your own.
 Page with `offset` and stop when `has_more` is false. There is no total and no
 cursor; asking past the end is an empty `items` rather than an error.
 
-`conv.read` with `details` adds `notification_mode` (`"on"`/`"off"`) alongside
-the rows — it is derived from the state machine rather than stored on the
-conversation, so `conv.list` cannot carry it.
+**`conv.read` answers with one page, and you have to page it.** It hands back
+`{conversation, messages, has_more, oldest_id, newest_id}`. With no paging
+arguments you get the **newest** rows, which is what opening a conversation
+means; `has_more` says the conversation continues above them.
+
+- `before_id` — the newest rows *older* than that id. This is the scroll-up
+  case: pass the `oldest_id` you were last given, and prepend what comes back.
+- `since_id` — the oldest rows *newer* than that id, for reading forwards.
+  `since_id: 0` is therefore how to ask for the very beginning of a
+  conversation, which is what a titler or a summariser wants.
+- `limit` — rows per page (default 200). `limit: 0` asks for no messages at
+  all, for when you only wanted the conversation's own row.
+
+**Do not try to defeat this by raising `limit`.** The answer is capped by
+*bytes* as well as rows, and the byte cap is the one that binds — a single row
+can be a 100 KB file edit. Ask for a page too large to carry and the Request
+fails with `too_large` (HTTP 413) rather than answering, which is the whole
+point: this call used to answer with every row a conversation held, and on a
+long one that exceeded what the kernel can put on a single wire message. The
+frontend's poll then failed on every tick and served *nothing* — so a client
+that pages is not being polite, it is the only client that works.
+
+Note this is unrelated to the model's context window, and does not scale with
+it: compaction shrinks what the model sees and deletes nothing, so a
+conversation's stored transcript grows without limit however large a window you
+give it.
+
+**Bookkeeping never reaches you.** The kernel filters out the state machine's
+own `role: "system"` marker rows. Compaction markers still arrive — those say
+the agent's view was replaced by a summary at that point, which is a fact about
+the conversation worth drawing.
+
+`conv.read` with `details` adds `notification_mode` (`"on"`/`"off"`) and
+`agent_profile` alongside the rows — both derived from the state machine rather
+than stored on the conversation, so `conv.list` cannot carry them. It no longer
+returns the raw `state` blob: that was the marker itself, and nothing ever read
+it.
 
 A `conv.read` message row is
 `{id, conversation_id, role, content, tool_call_id, tool_name, timestamp,

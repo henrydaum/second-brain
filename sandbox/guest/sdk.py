@@ -348,10 +348,44 @@ class _Conv(_Namespace):
         return self._ask(
             CONV_CREATE, title=title, category=category, activate=activate)
 
-    def read(self, conversation_id, details: bool = False):
-        """Messages and metadata, optionally with restored-state details."""
-        return self._ask(
-            CONV_READ, id=conversation_id, details=details)
+    def read(self, conversation_id, details: bool = False, *,
+             limit: int | None = None, before_id=None, since_id=None,
+             max_bytes: int | None = None):
+        """One page of a conversation, newest by default, plus its metadata.
+
+        Answers ``{conversation, messages, has_more, oldest_id, newest_id}``,
+        and with ``details`` also ``agent_profile`` and ``notification_mode``.
+        Messages always arrive oldest-first, whichever way you paged to them.
+
+        **It is a page, not the conversation.** A transcript grows forever —
+        compaction shrinks what the model sees and deletes nothing — so a call
+        that answered with all of it was a call that eventually could not be
+        answered at all. Read ``has_more`` and page, or accept that you are
+        looking at the recent end.
+
+        - ``before_id`` walks backwards: the newest rows *older* than that id.
+          This is what a scrollback asks for as somebody scrolls up.
+        - ``since_id`` walks forwards: the oldest rows *newer* than that id.
+          ``since_id=0`` is therefore how to ask for the very start of a
+          conversation, which is what a titler or a summariser wants.
+        - ``limit=0`` asks for no messages at all — for when you came only for
+          the conversation's own row and would otherwise pull a transcript to
+          read a title.
+
+        Kernel bookkeeping never comes back: the state machine's markers are
+        filtered out kernel-side. Compaction markers do, because those say
+        something about the conversation rather than about the kernel.
+        """
+        payload = {"id": conversation_id, "details": details}
+        if limit is not None:
+            payload["limit"] = limit
+        if before_id is not None:
+            payload["before_id"] = before_id
+        if since_id is not None:
+            payload["since_id"] = since_id
+        if max_bytes is not None:
+            payload["max_bytes"] = max_bytes
+        return self._ask(CONV_READ, **payload)
 
     def list(
         self,

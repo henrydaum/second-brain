@@ -70,6 +70,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               USER_WRITE, ALL_TYPES, Request, Result)
 from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
                           ERROR_NOT_PERMITTED, ERROR_UNAVAILABLE)
+from ..guest import protocol
 from .args import float_arg, int_arg
 from ..credentials import lookup_from, redact, redact_nested, resolve
 from ..events import publish as _publish_event
@@ -321,25 +322,110 @@ def _conv_create(ctx, args: dict) -> Result:
     return Result(data={"id": cid, "profile": profile})
 
 
+#: What a state marker's content starts with. The prefix rather than the
+#: sentinel itself, so the test is ``substr(content, 1, n)`` and SQLite never
+#: has to read a 200 KB value out of its overflow pages to reject it.
+#: ``tests/test_conversation_reads.py`` pins it against ``pack_state``, because
+#: this is a copy of a fact ``state_machine/serialization`` owns and a copy that
+#: drifts would silently start shipping bookkeeping again.
+_STATE_PREFIX = '{"__second_brain_state_machine__"'
+
+#: The most one ``conv.read`` may answer with, derived from the wire the way
+#: ``fs_net.MAX_READ_BINARY`` is and for the identical reason: a constant
+#: guessed independently drifts, and the failure it drifts into is an
+#: unsendable result — a crash-shaped answer to an ordinary question. The
+#: megabyte of headroom is the envelope, the conversation row and the paging
+#: keys, none of which are counted while rows are being collected.
+CONV_MAX_BYTES = protocol.MAX_MESSAGE_BYTES - 1024 * 1024
+
+#: Rows per page when the caller does not say. Generous, because ``max_bytes``
+#: is the cap that actually holds and this one only decides how much of a
+#: scrollback arrives in the first paint.
+CONV_PAGE_ROWS = 200
+CONV_MAX_ROWS = 2000
+
+
 def _conv_read(ctx, args: dict) -> Result:
-    """Messages and metadata for one conversation."""
+    """One bounded page of a conversation, plus its metadata.
+
+    **This used to be an unbounded ``SELECT *``**, and it is how a frontend
+    could be killed by a conversation getting long. Every row ever written came
+    back — including the state markers, which are the state machine's own
+    serialised bookkeeping, re-saved in full on every action. On the
+    conversation that found this, they were 19.25 MB of a 20.13 MB answer:
+    23 times the size of the actual conversation, for something the model
+    never sees (``messages_to_history`` skips them) and no client renders.
+    Past ``protocol.MAX_MESSAGE_BYTES`` the answer stopped being deliverable
+    at all, and the HTTP frontend's poll raised on every attempt.
+
+    So two things changed, and the second is the one that lasts. Bookkeeping
+    is no longer shipped — compaction markers stay, because those *are* a fact
+    about the conversation and a client draws them. And the read is
+    **paged**, because a transcript is unbounded independently of any context
+    window: compaction shrinks what the model sees and never deletes a row, so
+    a conversation that lives long enough exceeds any fixed ceiling. Dropping
+    the markers alone would only have moved the wall further out.
+
+    Paging is arguments rather than a new Request type, and the arguments are
+    ``ledger.read``'s, which had the same problem first — see
+    ``get_conversation_messages_page``. Asking for nothing still answers
+    something useful: the newest page, which is what opening a conversation
+    means.
+    """
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
     cid = args.get("id")
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
-    messages = _rows(db.get_conversation_messages(cid))
+
+    limit, bad = int_arg(args, "limit", CONV_PAGE_ROWS,
+                         lo=0, hi=CONV_MAX_ROWS)
+    if bad is not None:
+        return bad
+    max_bytes, bad = int_arg(args, "max_bytes", CONV_MAX_BYTES,
+                             lo=1024, hi=CONV_MAX_BYTES)
+    if bad is not None:
+        return bad
+
+    before_id = since_id = None
+    if args.get("before_id") not in (None, ""):
+        before_id, bad = int_arg(args, "before_id", 0, lo=0)
+        if bad is not None:
+            return bad
+    if args.get("since_id") not in (None, ""):
+        since_id, bad = int_arg(args, "since_id", 0, lo=0)
+        if bad is not None:
+            return bad
+
+    messages, has_more = db.get_conversation_messages_page(
+        cid, limit=limit, max_bytes=max_bytes, before_id=before_id,
+        since_id=since_id, skip_prefixes=(_STATE_PREFIX,))
+    messages = _rows(messages)
     data = {
         "conversation": dict(db.get_conversation(cid) or {}),
         "messages": messages,
+        # The three keys a pager needs and cannot derive: whether to ask
+        # again, and the two edges to ask from. Without the ids a client has
+        # to reach into ``messages[0]``, which is empty exactly when the
+        # conversation is long enough for paging to matter.
+        "has_more": bool(has_more),
+        "oldest_id": messages[0]["id"] if messages else None,
+        "newest_id": messages[-1]["id"] if messages else None,
     }
     if args.get("details"):
         from runtime.notifications import notification_mode
-        from state_machine.serialization import latest_state
+        from state_machine.serialization import unpack_state
 
-        state = latest_state(messages) or {}
-        data["state"] = state
+        # Sought directly rather than scanned out of ``messages``. That scan
+        # is why the markers had to be in the answer in the first place, and
+        # it stopped working the moment a page might not contain the newest
+        # one. The raw ``state`` is deliberately *not* returned any more: it is
+        # the marker itself, ~200 KB of the exact bookkeeping this call now
+        # exists to leave behind, and nothing in the kernel, the store, the UI
+        # or the protocol document ever read it. The two fields derived from
+        # it are what ``details`` was always for.
+        state = unpack_state(db.get_latest_marker(cid, _STATE_PREFIX) or "") or {}
         data["agent_profile"] = (
             state.get("profile_override")
             or state.get("active_agent_profile")

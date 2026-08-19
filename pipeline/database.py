@@ -1744,6 +1744,120 @@ class Database:
 			row["attachments"] = _unpack_attachments(row.get("attachments"))
 		return rows
 
+	def get_conversation_messages_page(self, conversation_id, *, limit=200,
+									   max_bytes=None, before_id=None,
+									   since_id=None, skip_prefixes=()):
+		"""One bounded page of a conversation, oldest first.
+
+		The counterpart to :meth:`get_conversation_messages`, which stays
+		unbounded because its callers rebuild agent history and genuinely need
+		every row, markers included. This one exists for readers that want to
+		*show* a conversation, and its whole job is to never answer with more
+		than was asked for.
+
+		**The cap that matters is ``max_bytes``, not ``limit``.** A row count
+		bounds nothing when one row can be a 100 KB ``edit_file`` argument —
+		which is exactly how a conversation reached 18.7 MB and stopped being
+		readable at all. Rows are measured as they are collected rather than
+		estimated, because the JSON escaping that inflates them is content
+		dependent and an estimate that is wrong in the generous direction
+		recreates the bug it was added to prevent.
+
+		``skip_prefixes`` drops rows whose content starts with one of them,
+		which is how kernel bookkeeping is kept out of a reader's answer. The
+		prefixes are passed in rather than known here: what counts as
+		bookkeeping is ``state_machine/serialization``'s to say, and importing
+		it from this module would close a cycle through
+		``state_machine.conversation``.
+
+		Paging is ``ledger.read``'s vocabulary, for the same reason it is that
+		one's: ``before_id`` walks backwards from a point (what a scrollback
+		does as somebody scrolls up), ``since_id`` walks forwards from one
+		(what an incremental reader does). Neither given, the newest page comes
+		back — the one a client opening a conversation wants. ``since_id=0`` is
+		therefore how to ask for the *oldest* page, which is what a titler
+		wants, with no third argument to get wrong.
+
+		Returns ``(rows, has_more)`` where ``has_more`` says whether the
+		conversation continues in the direction being paged.
+		"""
+		limit = max(0, int(limit))
+		if limit == 0:
+			return [], self.count_conversation_messages(conversation_id) > 0
+
+		# Ascending for a forward walk, descending otherwise -- and descending is
+		# what makes "no arguments" mean the *newest* page rather than the first
+		# ``limit`` rows of a conversation that may have thousands.
+		forward = since_id is not None
+		where = ["conversation_id = ?"]
+		params = [conversation_id]
+		if since_id is not None:
+			where.append("id > ?")
+			params.append(int(since_id))
+		if before_id is not None:
+			where.append("id < ?")
+			params.append(int(before_id))
+		sql = (f"SELECT * FROM conversation_messages WHERE {' AND '.join(where)}"
+			   f" ORDER BY id {'ASC' if forward else 'DESC'}")
+
+		# One past the page, so "is there more" is answered by what the cursor
+		# holds rather than by a second COUNT over the same rows.
+		budget = int(max_bytes) if max_bytes else None
+		rows, spent, has_more = [], 0, False
+		with self.lock:
+			cur = self.conn.execute(sql, params)
+			for raw in cur:
+				if len(rows) >= limit:
+					has_more = True
+					break
+				row = dict(raw)
+				content = row.get("content") or ""
+				if any(content.startswith(p) for p in skip_prefixes):
+					continue
+				if budget is not None:
+					# Measured, not estimated -- see the docstring. The first row
+					# is always kept even when it alone busts the budget, because
+					# an empty page with ``has_more`` set is a client that pages
+					# forever and never advances.
+					spent += len(json.dumps(row, default=str).encode("utf-8"))
+					if spent > budget and rows:
+						has_more = True
+						break
+				rows.append(row)
+			cur.close()
+
+		if not forward:
+			rows.reverse()
+		for row in rows:
+			row["attachments"] = _unpack_attachments(row.get("attachments"))
+		return rows, has_more
+
+	def count_conversation_messages(self, conversation_id) -> int:
+		"""How many rows this conversation holds, bookkeeping included."""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT COUNT(*) FROM conversation_messages"
+				" WHERE conversation_id = ?", (conversation_id,))
+			return int((cur.fetchone() or [0])[0])
+
+	def get_latest_marker(self, conversation_id, prefix: str):
+		"""The newest row whose content starts with ``prefix``, or None.
+
+		The state a conversation was left in used to be recovered by scanning
+		every row it had -- fine while the caller was reading them all anyway,
+		and the reason ``conv.read`` could not simply stop returning markers.
+		Seeking the last one directly is what lets it.
+		"""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT content FROM conversation_messages"
+				" WHERE conversation_id = ? AND role = 'system'"
+				" AND substr(content, 1, ?) = ?"
+				" ORDER BY id DESC LIMIT 1",
+				(conversation_id, len(prefix), prefix))
+			row = cur.fetchone()
+		return row[0] if row else None
+
 	def replace_conversation_messages(self, conversation_id, history: list[dict]) -> None:
 		"""Atomically replace a conversation's persisted messages with `history`.
 

@@ -792,6 +792,73 @@ prompt. Row well-formedness is pinned by `tests/test_ledger.py`.
 Query/inspection UX (`/ledger`) is deliberately a
 future store package, not kernel.
 
+## Reading a conversation back
+
+`conv.read` answers with a **page**, and the read is bounded by **bytes**. Both
+halves are load-bearing, and the second is the one that lasts.
+
+It was an unbounded `SELECT *`. On a real conversation that came to 20.13 MB,
+of which **19.25 MB was state markers** — `save_state_marker` appends a row
+carrying the whole packed state on every action, and `to_dict` bounds
+`history[-100:]` by *count*, so one `edit_file` argument of 102 KB rode along in
+every marker for the next hundred actions. 96% of the table was bookkeeping the
+model never sees (`messages_to_history` skips it) and no client renders.
+
+Past `protocol.MAX_MESSAGE_BYTES` the answer stopped being deliverable, and the
+shape of what followed is the part worth remembering. The caller was the HTTP
+frontend's `poll`; `_deliver` ran *before* `sdk.http.drain()` and was
+unguarded, so one oversized answer stopped every other client's request from
+being served. `facade.collect_act` deletes an act's result **before** it
+crosses, so the one-shot delivery was consumed and destroyed — a browser
+waiting forever on an answer nobody still had. And `_drive_polls` resets its
+failure count on any success, so it hovered at 1/5 forever and never reached
+the five that stop a frontend. A dead UI, and nothing anywhere said so.
+
+**Dropping the markers alone would only have moved the wall**, which is the
+reasoning to keep. A transcript grows without limit *independently of any
+context window*: compaction shrinks what the model sees and deletes nothing, so
+there is no fixed size at which "all of it" stays answerable. Markers out is a
+23× reduction and buys a 2M-token context comfortably; paging is what makes the
+question answerable forever.
+
+**Bytes rather than rows**, because a row count bounds nothing when one row can
+be a 100 KB file edit — the exact thing that caused this. Rows are measured as
+they are collected rather than estimated, since JSON escaping is content
+dependent and an estimate wrong in the generous direction recreates the bug.
+`CONV_MAX_BYTES` is derived from the wire the way `fs_net.MAX_READ_BINARY` is,
+for the reason that comment already gives: two constants guessed apart drift,
+and what they drift into is an unsendable result.
+
+The paging arguments are **`ledger.read`'s**, not a new Request type —
+`before_id` walks backwards, `since_id` walks forwards, and `since_id=0` is
+therefore the oldest page with no third `order` argument to get wrong.
+`limit=0` is metadata only, for the three callers that pulled a transcript to
+read a title. The default is the *newest* page, because that is what opening a
+conversation means; the one caller wanting the other end (`task_update_titles`,
+which slices `[:12]`) has to say so, and would otherwise have started titling
+conversations from wherever they had got to.
+
+Two things stayed as they were, deliberately. `get_conversation_messages` is
+still unbounded and still returns markers: its callers rebuild agent history
+and `latest_state` needs them, so narrowing it would have broken restart
+recovery to fix a display problem. And **compaction markers still cross** — a
+state marker is bookkeeping, a compaction marker is a fact about the
+conversation, and a client draws a divider from it. `details` no longer returns
+the raw `state` blob at all; it is the marker itself, and the two fields
+derived from it were what `details` was ever for.
+
+**And the boundary now degrades rather than dying** (`interpreter._deliverable`).
+An answer that cannot cross is replaced by a small coded failure at `_settle` —
+the one funnel every serviced Request passes through, which is what makes it a
+property of the kernel instead of of whichever handler was patched last. Both
+runners needed it and only one had anything: in-process `InterpreterChannel`
+caught the `ProtocolError`, while `runner_subprocess.send` catches `OSError`
+and `ValueError` only, so over a pipe the error escaped `service_until` and
+killed the box. `ERROR_TOO_LARGE` is breakage rather than a denial — nobody
+said no, it simply did not fit — and the two causes are caught separately,
+because `to_dict` refusing a live object is the handler's own bug while
+`encode` refusing a payload is a question worth asking again more narrowly.
+
 ## A message's files
 
 `conversation_messages.attachments` is a JSON list of records —
