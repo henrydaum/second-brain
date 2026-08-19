@@ -55,9 +55,11 @@ SETTINGS_DATA = [
      {"type": "json_list"}),
 
     ("Ignored Folders", "ignored_folders",
-     "Folders to skip, and to remove from the index when added. A bare name "
-     "like \"node_modules\" matches anywhere; a full path matches only that "
-     "folder and everything under it.",
+     "Folders to skip, and to remove from the index when added. A full path "
+     "matches that folder and everything under it; anything else matches "
+     "wherever those folder names appear in a row, so \"node_modules\" and "
+     "\"Photos/Misc\" both work. Either slash is fine, and spacing, casing "
+     "and a trailing slash do not matter.",
      ["node_modules", "__pycache__", ".git", ".venv", "venv"],
      {"type": "json_list"}),
 

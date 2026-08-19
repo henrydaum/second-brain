@@ -430,3 +430,115 @@ def test_an_fts_index_is_never_deleted_from_directly(db):
 
     assert "lexical_content" in tables
     assert "lexical_index" not in tables
+
+
+# ── Spelling a folder the way a person actually types it ─────────────
+
+_PHOTOS = "Users/henry/My Drive/_Photos and Media/Photos"
+_UNDER = str(Path("/Users/henry/My Drive/_Photos and Media/Photos/Misc/a.jpg"))
+
+
+def _folders(*entries):
+    return IgnoreRules.from_config({"ignored_folders": list(entries),
+                                    "skip_hidden_folders": False})
+
+
+def test_a_path_missing_its_leading_slash_still_matches():
+    """The entry a person types when they drop the root.
+
+    Nothing guesses the missing "/" — that would be inventing a root. An entry
+    that is not absolute is simply not anchored, so its segments match wherever
+    they run consecutively, which includes the absolute place that was meant.
+    """
+    assert _folders(_PHOTOS).excludes(_UNDER)
+
+
+def test_a_trailing_separator_does_not_change_the_meaning():
+    assert _folders("/" + _PHOTOS + "/").excludes(_UNDER)
+
+
+def test_repeated_separators_collapse():
+    assert _folders("/Users//henry//My Drive").excludes(_UNDER)
+
+
+def test_the_foreign_separator_is_accepted():
+    """A path pasted from the other platform still means what it looks like.
+
+    The cost is naming a POSIX folder that contains a literal backslash, which
+    is a legal filename character and not something anybody types into a
+    settings field on purpose.
+    """
+    foreign = "\\" if os.sep == "/" else "/"
+    entry = foreign + foreign.join(["Users", "henry", "My Drive"])
+
+    assert _folders(entry).excludes(_UNDER)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a leading // is a UNC host on Windows")
+def test_a_doubled_leading_separator_collapses_on_posix():
+    """POSIX normpath keeps exactly two leading slashes — a real distinction in
+    the standard, and never one an indexed path carries."""
+    assert _folders("//Users/henry/My Drive").excludes(_UNDER)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC paths only exist on Windows")
+def test_a_unc_host_survives_on_windows():
+    """The two leading separators mean a host here, not a doubled slash, so
+    collapsing them would rewrite the entry into a different location.
+
+    A share *root* is still dropped, like every other root: naming one excludes
+    an entire volume, and the way to stop indexing a volume is to remove it
+    from ``sync_directories``, not to ignore its root.
+    """
+    # Built rather than written, so the literal cannot be mangled in transit.
+    share = os.sep * 2 + "server" + os.sep + "share"
+
+    assert _folders(share).folders == ()
+
+    rule = _folders(share + os.sep + "Archive").folders[0]
+    assert rule.anchored
+    assert rule.segments[0].startswith(os.sep * 2)
+
+
+def test_an_anchored_entry_stays_anchored():
+    """Absolute means "starting at the root", not "these segments somewhere"."""
+    assert not _folders(str(Path("/vault/Archive"))).excludes(
+        str(Path("/elsewhere/vault/Archive/old.md")))
+
+
+def test_a_relative_run_must_be_consecutive():
+    """Otherwise "Photos/Misc" would claim every path holding both words."""
+    assert _folders("Photos/Misc").excludes(str(Path("/a/Photos/Misc/x.jpg")))
+    assert not _folders("Photos/Misc").excludes(str(Path("/a/Photos/b/Misc/x.jpg")))
+
+
+def test_a_bare_name_is_just_the_one_segment_case():
+    """The two rules that used to be separate. A bare name is unanchored and one
+    segment long, which is why it matches any component — nothing special."""
+    rule = _folders("node_modules").folders[0]
+
+    assert rule.anchored is False
+    assert len(rule.segments) == 1
+
+
+def test_the_glob_spelling_of_an_extension_works():
+    """``*.log`` is what people reach for first, and it named nothing."""
+    rules = IgnoreRules.from_config({"ignored_extensions": ["*.log"]})
+
+    assert rules.excludes("/vault/debug.log")
+
+
+@pytest.mark.parametrize("entry", ["", "   ", ".", "/", "//", "\\", "./"])
+def test_an_entry_naming_no_folder_becomes_no_rule(entry):
+    """The one mistake that is total, so the one worth refusing outright.
+
+    A root respells to a single root segment, and as an ordinary unanchored
+    rule that matches the root segment *every* absolute path begins with — so
+    one stray "/" left in the settings field would have excluded the whole
+    index, which the prune would then delete. Everything here names no folder
+    and must produce no rule at all.
+    """
+    rules = _folders(entry)
+
+    assert rules.folders == ()
+    assert not rules.excludes(_UNDER)
