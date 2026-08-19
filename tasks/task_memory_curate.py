@@ -543,7 +543,9 @@ class MemoryCurate(BaseTask):
     def _title(self, sdk, cid):
         """The conversation's title, for the curator's orientation only."""
         try:
-            record = sdk.conv.read(cid) or {}
+            # ``limit=0`` because this wants a title, and the transcript it
+            # was pulling to get one reached 20 MB on a long conversation.
+            record = sdk.conv.read(cid, limit=0) or {}
         except sdk.Failed:
             return "untitled"
         return str((record.get("conversation") or {}).get("title") or "untitled")

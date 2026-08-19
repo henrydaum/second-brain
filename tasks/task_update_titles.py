@@ -286,7 +286,13 @@ class UpdateTitles(BaseTask):
         """Title one conversation. Returns whether a title was written."""
         wrote = False
         try:
-            messages = (sdk.conv.read(conversation_id) or {}).get("messages") or []
+            # ``since_id=0`` is "walk forwards from the beginning", so this
+            # asks for the twelve rows ``_transcript`` was already slicing to.
+            # It has to be explicit: ``conv.read`` answers with the *newest*
+            # page by default, and taking ``[:12]`` of that would title every
+            # conversation from wherever it happened to have got to.
+            messages = (sdk.conv.read(conversation_id, since_id=0, limit=12)
+                        or {}).get("messages") or []
             transcript = _transcript(messages)
             if not transcript:
                 return False

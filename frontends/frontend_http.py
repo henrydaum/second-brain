@@ -174,7 +174,12 @@ _MAX_BUFFERED = 500
 # anything else is a genuine server-side fault and says so.
 _STATUS = {"approval_declined": 403, "not_permitted": 403,
            "not_found": 404, "invalid_argument": 400,
-           "unavailable": 503, "timeout": 504, "cancelled": 499}
+           "unavailable": 503, "timeout": 504, "cancelled": 499,
+           # 413 rather than 500, because it is the one failure here a client
+           # can do something about: ask for less. A conversation too long to
+           # answer in one page reaches this if a caller overrides the paging
+           # defaults, and "payload too large" says exactly that.
+           "too_large": 413}
 
 
 class HTTP(BaseFrontend):
@@ -326,8 +331,22 @@ class HTTP(BaseFrontend):
     # ──────────────────────────────────────────────────────────────────
 
     def poll(self, sdk):
-        """Answer whatever arrived, and deliver whatever finished."""
-        worked = self._deliver(sdk)
+        """Answer whatever arrived, and deliver whatever finished.
+
+        ``_deliver`` is guarded because it runs *first*: when it raised, the
+        drain below never happened, so one client's undeliverable answer
+        stopped every other client's request from being served. A frozen
+        transport from one bad handle, and nothing on screen to say so — the
+        kernel logs a poll failure and resets the counter on the next good
+        tick, so it never even reached the five that stop a frontend.
+        """
+        try:
+            worked = self._deliver(sdk)
+        except Exception as exc:
+            # Not merely defensive: whatever went wrong, the requests waiting
+            # in the drain are unrelated to it and must still be answered.
+            sdk.log(f"HTTP delivery failed: {exc}", "warning")
+            worked = True
         arrived = sdk.http.drain()
         if not arrived:
             return worked
@@ -353,7 +372,23 @@ class HTTP(BaseFrontend):
             return False
         worked = False
         for handle, request_id in list(self._waiting.items()):
-            outcome = sdk.frontend.collect(handle)
+            try:
+                outcome = sdk.frontend.collect(handle)
+            except sdk.Failed as failed:
+                # The collect itself failing is a different thing from the
+                # Request having been refused — a refusal arrives as an
+                # ordinary ``outcome`` to forward on. Delivery is one-shot, so
+                # the answer is already gone and retrying this handle would
+                # wait for it forever. Drop it and tell the client something,
+                # which is the whole difference between a request that failed
+                # and a browser hanging on a reply nobody still has.
+                sdk.log(f"collecting {handle} failed: {failed}", "warning")
+                del self._waiting[handle]
+                worked = True
+                self._answer(sdk, request_id,
+                             {"ok": False, "error": str(failed),
+                              "code": failed.result.code})
+                continue
             if outcome is None:
                 continue
             del self._waiting[handle]

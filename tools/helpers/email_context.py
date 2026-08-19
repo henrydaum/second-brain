@@ -16,7 +16,10 @@ def is_main_conversation(sdk):
     conversation_id = session.get("conversation_id")
     if not conversation_id:
         return True
-    row = (sdk.conv.read(conversation_id) or {}).get("conversation") or {}
+    # ``limit=0``: only the conversation's own row is wanted here, and
+    # reading a whole transcript to reach it is the same mistake everywhere.
+    row = (sdk.conv.read(conversation_id, limit=0)
+           or {}).get("conversation") or {}
     return str(row.get("category") or "").strip() in {"", "Main"}
 
 
