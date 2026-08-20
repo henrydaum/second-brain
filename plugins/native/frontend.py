@@ -1151,6 +1151,7 @@ class BaseFrontend:
             metadata={
                 "session_key": session_key,
                 "render_result_on_resolve": True,
+                **({"detail": data["detail"]} if data.get("detail") else {}),
             },
         )
 

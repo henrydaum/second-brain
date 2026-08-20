@@ -336,6 +336,35 @@ def test_an_approvals_options_cross_with_their_labels():
     json.loads(json.dumps(projected))
 
 
+def test_an_approvals_machine_detail_crosses():
+    """The typed half of a permission question reaches the box as data.
+
+    A sandboxed client answering by rule needs the Request type and its
+    salient arguments; without this key it would parse them back out of
+    ``body``, and a reworded dialog would silently change policy. ``None``
+    when absent, so an ordinary question (``ui.ask``) is distinguishable from
+    a gate.
+    """
+    import json
+
+    from state_machine.approval import StateMachineApprovalRequest
+
+    request = StateMachineApprovalRequest(
+        title="Make network requests", body="", type="string")
+    request.metadata["detail"] = {"type": "net.http", "method": "POST",
+                                  "url": "https://example.invalid/collect"}
+
+    projected = project_approval(request)
+
+    assert projected["detail"]["type"] == "net.http"
+    assert projected["detail"]["url"] == "https://example.invalid/collect"
+    json.loads(json.dumps(projected))
+
+    bare = project_approval(StateMachineApprovalRequest(
+        title="Pick one", body="", type="string"))
+    assert bare["detail"] is None
+
+
 def test_the_render_kinds_are_the_documented_ones():
     """The guest documents these and the adapter emits them; a typo on either
     side would silently show a person nothing."""

@@ -168,9 +168,12 @@ below exists.
 | `enum` | `list \| None` | Allowed answers. |
 | `enum_labels` | `list \| None` | **Paired with `enum` by index.** May be `None` even when `enum` is not. |
 | `default` | any | |
+| `detail` | `dict \| None` | The machine-readable half, present only when the question is a sandbox permission gate. Always carries `type` (the Request type, e.g. `"net.http"`) and usually `asker` (the plugin that asked); then per family: `command`/`cwd`/`prefixes` for `proc.*` (`prefixes` is the same `(program, subcommand)` unit `shell_allowed_prefixes` grants use, and is absent when the line does not decompose), `method`/`url` for `net.http`, `path`/`dst` for `fs.*`, `subject` otherwise. A client that answers by rule matches on this — **never on `title`/`body`, which are prose renderings of the same facts.** |
 
 Answer the **value**, show the **label** — putting internal spellings on a
-person's buttons is the failure this pairing exists to prevent.
+person's buttons is the failure this pairing exists to prevent. A `detail` of
+`None` is itself information: the question is not a permission gate, so
+whatever policy a client applies to grants does not apply to it.
 
 **This frame is the whole notification.** The approval lifecycle sends no
 `messages` frame — not when a question is raised, not when it is answered or

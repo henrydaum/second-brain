@@ -99,6 +99,13 @@ def project_approval(request) -> dict:
         # with; the label is the only part meant to be read.
         "enum_labels": list(getattr(request, "enum_labels", None) or []) or None,
         "default": getattr(request, "default", None),
+        # The machine-readable half, when the question is a sandbox permission
+        # gate (``sandbox.approval.detail_for``): the Request type and its
+        # salient arguments, so a client that answers by rule matches on data
+        # rather than parsing the English back out of ``body``. ``None`` for
+        # every other question this kind carries (``ui.ask``, a tool's typed
+        # input), which is itself the tell that there is no permission here.
+        "detail": (getattr(request, "metadata", None) or {}).get("detail"),
     }
 
 

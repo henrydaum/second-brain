@@ -468,6 +468,8 @@ def restore_pending_requests(runtime, session: RuntimeSession) -> None:
             default=data.get("default"),
         )
         req.metadata.update({"session_key": session.key, "conversation_id": session.conversation_id})
+        if detail := data.get("detail"):
+            req.metadata["detail"] = detail
         runtime._approval_requests.setdefault(req.id, req)
         runtime.emit_event("approval_requested", req)
 

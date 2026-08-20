@@ -520,6 +520,50 @@ def test_the_dialog_is_asked_as_a_string_with_matched_options():
     assert asked["enum"][0] == "allow" and asked["enum"][-1] == "deny"
 
 
+def test_the_dialog_carries_its_machine_readable_detail():
+    """A client that answers by rule matches on data, not on the prose.
+
+    ``title`` and ``body`` are renderings; a policy client (a benchmark
+    driver, a GUI with per-host rules) needs the same facts as data, or it is
+    back to parsing English — the mistake the pointer-line rewrite killed for
+    attachments. The detail rides ``request_input`` so it lands in the request
+    metadata and the phase frame together.
+    """
+    runtime = FakeRuntime()
+    request, decision = _egress()
+    build_approver(runtime)(Chain(root="user").push("summarize"), request,
+                            decision)
+
+    detail = runtime.asked[0]["kwargs"]["detail"]
+    assert detail["type"] == "net.http"
+    assert detail["method"] == "POST"
+    assert detail["url"] == "https://example.invalid/collect"
+    assert detail["asker"] == "summarize"
+
+
+def test_shell_detail_speaks_the_grant_vocabulary():
+    """``prefixes`` uses ``shell.command_prefix`` units, or is absent.
+
+    A rule stored as ``git status`` must match a question asked as
+    ``git status`` — one vocabulary, same as ``shell_allowed_prefixes``. A
+    line the lexer refuses offers no prefixes at all rather than wrong ones,
+    which is the recognizers' own all-or-nothing answer.
+    """
+    from sandbox.approval import detail_for
+
+    chain = Chain(root="user").push("run_command")
+    plain = detail_for(chain, Request(R.PROC_RUN,
+                                      {"argv": ["git", "status"]}))
+    assert plain["prefixes"] == ["git status"]
+    assert plain["command"]
+
+    opaque = detail_for(chain, Request(R.PROC_RUN,
+                                       {"argv": "echo $HOME > ~/.bashrc",
+                                        "shell": "default"}))
+    assert "prefixes" not in opaque
+    assert opaque["command"]
+
+
 def test_choosing_a_remembering_option_grants_and_allows(monkeypatch):
     """And a grant that cannot be written down is still an approval."""
     from sandbox import options

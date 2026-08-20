@@ -43,6 +43,7 @@ def request_input(
     default: Any = None,
     required: bool = True,
     pending_action: dict[str, Any] | None = None,
+    detail: dict[str, Any] | None = None,
 ) -> StateMachineApprovalRequest:
     """Push an approval phase and emit an ``approval_requested`` event.
 
@@ -52,6 +53,12 @@ def request_input(
 
     ``enum_labels`` pairs with ``enum`` by index — the value answers, the label
     reads. Both are filtered together; see :func:`_sane_enum`.
+
+    ``detail`` is the machine-readable half of the question — plain data a
+    frontend can match on instead of parsing ``prompt`` (see
+    ``sandbox.approval.detail_for``, its one producer). It rides the metadata
+    and the frame so a rebuilt dialog keeps it, and crosses to sandboxed
+    frontends via ``sandbox.frontends.project_approval``.
     """
     enum, enum_labels = _sane_enum(enum, enum_labels)
     session = get_or_create_session(runtime, session_key)
@@ -61,6 +68,8 @@ def request_input(
             type=type, enum=enum, enum_labels=enum_labels, default=default,
         )
         req.metadata.update({"session_key": session_key, "conversation_id": session.conversation_id})
+        if detail:
+            req.metadata["detail"] = detail
         runtime._approval_requests[req.id] = req
         session.cs.push_phase(PhaseFrame(
             PHASE_APPROVING_REQUEST, "answer_approval", "user", title,
@@ -74,6 +83,7 @@ def request_input(
                 "title": title,
                 "prompt": prompt,
                 "pending": pending_action,
+                "detail": detail,
                 "previous_priority": session.cs.turn_priority,
             },
         ))

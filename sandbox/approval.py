@@ -103,6 +103,55 @@ def describe_asker(chain) -> str:
     return links[-1] if links else ""
 
 
+def detail_for(chain, request) -> dict:
+    """The machine-readable half of the dialog, for whoever answers by code.
+
+    :func:`describe` renders the question for a person; this carries the same
+    facts as data, so a frontend that answers programmatically — a policy
+    client, a benchmark driver, a GUI drawing a richer dialog — matches on the
+    Request type and its salient arguments instead of parsing the English back
+    out of ``body``. The prose is a rendering; this is the record.
+
+    Shell commands carry ``prefixes`` in the :func:`shell.command_prefix`
+    vocabulary — the same unit ``shell_allowed_prefixes`` grants are written
+    in, so a stored rule and a live question speak one language. Empty means
+    the line did not decompose (a glob, a redirect, a named shell), which is
+    the recognizers' own all-or-nothing answer; a caller then has only
+    ``command`` to match, rendered by the same :func:`shell.render_command`
+    the person and the ledger see.
+    """
+    args = request.args or {}
+    kind = request.type
+    detail: dict = {"type": kind}
+    if asker := describe_asker(chain):
+        detail["asker"] = asker
+    if kind in ("proc.run", "proc.start"):
+        from .shell import command_prefixes, render_command
+
+        detail["command"] = render_command(args)
+        if cwd := args.get("cwd"):
+            detail["cwd"] = str(cwd)
+        if prefixes := command_prefixes(args):
+            detail["prefixes"] = prefixes
+    elif kind == "net.http":
+        detail["method"] = (args.get("method") or "GET").upper()
+        detail["url"] = str(args.get("url") or "")
+    elif kind.startswith("fs."):
+        if target := args.get("path") or args.get("src"):
+            detail["path"] = str(target)
+        if destination := args.get("dst"):
+            detail["dst"] = str(destination)
+    else:
+        # The same subject scan ``_detail`` falls back on, so the two halves
+        # of one dialog can never name different things.
+        for field in ("name", "stem", "package_id", "tool", "key", "channel",
+                      "id", "path", "mode"):
+            if value := args.get(field):
+                detail["subject"] = str(value)
+                break
+    return detail
+
+
 def _action_line(request) -> str:
     """One line naming the effect, in the user's terms rather than ours.
 
@@ -577,7 +626,8 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
             pending = runtime.request_input(
                 target, title, body, type="string",
                 enum=[option.value for option in options],
-                enum_labels=[option.label for option in options])
+                enum_labels=[option.label for option in options],
+                detail=detail_for(chain, request))
         except Exception:
             logger.exception("could not render an approval dialog")
             return False

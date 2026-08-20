@@ -1294,12 +1294,13 @@ class ConversationRuntime:
         default: Any = None,
         required: bool = True,
         pending_action: dict[str, Any] | None = None,
+        detail: dict[str, Any] | None = None,
     ) -> StateMachineApprovalRequest:
         """Suspend a session on a typed-input request."""
         return _approvals.request_input(
             self, session_key, title, prompt,
             type=type, enum=enum, enum_labels=enum_labels, default=default,
-            required=required, pending_action=pending_action,
+            required=required, pending_action=pending_action, detail=detail,
         )
 
     def answer_request(self, session_key: str, request_id: str, value) -> RuntimeResult:

@@ -245,6 +245,30 @@ def test_option_labels_survive_a_restart(tmp_path):
                                        "Deny"]
 
 
+def test_the_machine_detail_survives_a_restart(tmp_path):
+    """A rebuilt dialog keeps its typed half, not only its prose.
+
+    A policy client that answers by ``detail`` would otherwise meet a
+    restart-restored question it can only parse — and silently fall back to
+    denying it, which reads as the mechanism working.
+    """
+    rt, session = _session(tmp_path)
+    rt.request_input("s", "Make network requests", "**POST** `x`",
+                     type="string",
+                     detail={"type": "net.http", "method": "POST",
+                             "url": "https://api.example"})
+
+    assert session.cs.frame.data["detail"]["url"] == "https://api.example"
+
+    rebuilt = []
+    rt.emit_event = lambda name, req: rebuilt.append(req)
+    from runtime.persistence import restore_pending_requests
+    restore_pending_requests(rt, session)
+
+    assert rebuilt[-1].metadata["detail"] == {
+        "type": "net.http", "method": "POST", "url": "https://api.example"}
+
+
 def test_a_typed_option_label_answers_the_dialog(tmp_path):
     """A person answers with the words they were shown, not the value.
 
