@@ -1,0 +1,63 @@
+# One service, three ways to start it. See docs/DOCKER.md for the long form.
+#
+#   docker compose run --rm second-brain          a REPL attached to this terminal
+#   docker compose up -d second-brain             headless, in the background
+#   docker compose run --rm second-brain test     the test suite
+#
+# Run one at a time. They share ``sb-data``, and two apps writing one SQLite
+# database is not something the kernel expects of itself.
+
+name: second-brain
+
+services:
+  second-brain:
+    build:
+      context: .
+      args:
+        # UID/GID only matter if you swap the volume below for a host
+        # directory; a named volume takes the image's ownership.
+        #   UID=$(id -u) GID=$(id -g) docker compose build
+        PYTHON_VERSION: "${PYTHON_VERSION:-3.14}"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+    image: second-brain:latest
+
+    # PID 1 becomes docker-init, which reaps orphans. The agent starts real
+    # processes — ``proc.start`` servers, subprocess boxes — and a Python
+    # process serving as PID 1 reaps nothing it did not itself wait on.
+    init: true
+
+    # The REPL is a frontend like any other and reads the container's stdin.
+    # Without these, ``compose up`` gives it EOF, the console closes, and the
+    # REPL stops itself while the app goes on running with no frontend.
+    stdin_open: true
+    tty: true
+
+    environment:
+      # Cron schedules are read in this zone. Default UTC, which is honest but
+      # rarely what "9am" meant.
+      TZ: "${TZ:-UTC}"
+      # Set to 8787 to run the loopback forwarder that makes the published
+      # port below reach the HTTP frontend. Empty means no forwarder.
+      SB_EXPOSE_HTTP: "${SB_EXPOSE_HTTP:-}"
+
+    # Bound to the host's loopback deliberately: this is a personal assistant
+    # holding your files and your keys. Widen it only behind something that
+    # terminates TLS, and only with a long ``secret_http_token``.
+    ports:
+      - "127.0.0.1:${SB_HTTP_PUBLISH:-8787}:8787"
+
+    volumes:
+      - sb-data:/data
+      # A host directory instead, if you would rather see the data tree:
+      # - ./sb-data:/data
+      # Live-editing the kernel from the host — for developing the app itself,
+      # not for running it. Nothing else needs it:
+      # - .:/app
+
+    # API keys and tokens, if you would rather not type them into /config:
+    # env_file:
+    #   - .env
+
+volumes:
+  sb-data:

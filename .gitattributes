@@ -1,0 +1,8 @@
+# The shell files a Linux container runs have to be checked out with LF
+# endings whatever the developer's platform does by default. A CRLF
+# ``docker-entrypoint.sh`` fails the container at start with
+# "exec /app/docker-entrypoint.sh: no such file or directory" — which names the
+# file it just found and says nothing about the carriage return it choked on.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf

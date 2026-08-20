@@ -988,9 +988,10 @@ def test_binding_a_runtime_puts_the_question_to_the_user(request_update):
 
     Deliberately not ``result.ok``. What happens after the yes is the
     package manager's business, and it shells out to ``git`` against a real
-    store — so in a checkout without one (a container built from the source
-    tree, where ``.dockerignore`` drops ``.git``) this failed on the work
-    rather than on the permission, which is the one thing it is not about.
+    store — so in a checkout without one (a source tarball, a clone that has
+    never fetched ``origin/store``, an image built without ``.git``) this
+    failed on the work rather than on the permission, which is the one thing
+    it is not about.
     A refusal is what the sibling test above pins; the absence of one is what
     this pins.
     """

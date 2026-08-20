@@ -83,6 +83,17 @@ python main.py
 
 That's it — you're in the REPL. `requirements.txt` is nearly pure Python.
 
+**Prefer a container?** There's a Dockerfile:
+
+```bash
+docker build -t second-brain .
+docker run --rm -it --init -v sb-data:/data second-brain
+```
+
+Same REPL, and your data lives in the `sb-data` volume. [docs/DOCKER.md](docs/DOCKER.md)
+covers the rest — headless runs, the web UI's port, and Docker itself if this
+is your first time.
+
 ## 2. Run `/setup`
 
 ```

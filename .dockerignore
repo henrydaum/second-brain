@@ -1,8 +1,41 @@
-.git
+# What not to send to the daemon as build context.
+#
+# Note ``.git`` is deliberately *absent* from this list. The package store is a
+# git ref read out of the app tree (``git ls-tree origin/store``), so an image
+# built without it boots perfectly and can never install a package. It is ~20MB
+# and it is the difference between a kernel and a product.
+
 .venv
+venv
 **/__pycache__
 *.pyc
+*.pyo
 .pytest_cache
-.pytest_tmp
+.pytest_tmp*
+pytest-cache-files-*
+.hypothesis
+.mypy_cache
+.ruff_cache
+
+# Local state that must never be baked into an image: a database, a config
+# holding API keys, logs from somebody's laptop. DATA_DIR lives outside the
+# image, but these can exist in a source checkout.
+config.json
+plugin_config.json
+database.db*
+*.log
+
+# Editor, OS and CI noise.
+.vscode
+.idea
+.claude
+.github
+.DS_Store
+desktop.ini
+.VSCodeCounter
+
+# The build's own inputs. Changing a comment in the Dockerfile should not
+# invalidate the COPY layer beneath it.
 Dockerfile
 .dockerignore
+docker-compose.yml
