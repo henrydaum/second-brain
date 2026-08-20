@@ -194,6 +194,7 @@ class LLMResponse:
     tool_calls: list[dict] = field(default_factory=list)
     prompt_tokens: int | None = None
     cached_prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     error: str | None = None
     error_code: str | None = None
 
@@ -224,6 +225,7 @@ class LLMResponse:
             "content": self.content, "tool_calls": self.tool_calls,
             "prompt_tokens": self.prompt_tokens,
             "cached_prompt_tokens": self.cached_prompt_tokens,
+            "completion_tokens": self.completion_tokens,
             "error": self.error, "error_code": self.error_code,
         }
 
@@ -246,6 +248,7 @@ class LLMResponse:
             tool_calls=list(calls) if isinstance(calls, list) else [],
             prompt_tokens=data.get("prompt_tokens"),
             cached_prompt_tokens=data.get("cached_prompt_tokens"),
+            completion_tokens=data.get("completion_tokens"),
             error=data.get("error"),
             error_code=data.get("error_code"),
         )

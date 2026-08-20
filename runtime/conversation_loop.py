@@ -1070,14 +1070,31 @@ class ConversationLoop:
         return response
 
     def _emit_llm_finished(self, llm, started_at, *, ok, response=None, error=None):
-        """Announce the outcome of one LLM call (paired with AGENT_LLM_CALL_STARTED)."""
+        """Announce the outcome of one LLM call (paired with AGENT_LLM_CALL_STARTED).
+
+        The three token counts are the provider's own, taken from the ``usage``
+        block of its response rather than computed here — no tokenizer is
+        involved, and none would be as accurate, since only the provider knows
+        how it serialised the chat template and tool schemas.
+
+        ``None`` means *the provider did not say*, which is not zero. A
+        provider that ignores ``stream_options={"include_usage": True}``
+        reports nothing, and a consumer that averages a missing count as zero
+        would understate cost without ever looking wrong.
+        """
         bus.emit(AGENT_LLM_CALL_FINISHED, {
             "session_key": self.session_key,
             "model": getattr(llm, "model_name", None),
             "ok": ok,
             "error": error,
             "duration_s": round(time.time() - started_at, 3),
+            # Billed input for this one call: the whole conversation so far,
+            # which is why the value climbs across a turn. Summing it over a
+            # task gives total billed input, not context size.
             "prompt_tokens": getattr(response, "prompt_tokens", None),
+            # The discounted share of ``prompt_tokens``, not an addition to it.
+            "cached_prompt_tokens": getattr(response, "cached_prompt_tokens", None),
+            "completion_tokens": getattr(response, "completion_tokens", None),
             "has_tool_calls": bool(getattr(response, "has_tool_calls", False)),
         })
 
