@@ -90,7 +90,13 @@ fi
 # ERRORs that read exactly like a crash to anyone reading ``docker logs`` for
 # the first time. The app is fine; it simply has no frontend. Saying so first
 # costs a line and turns an alarming log into an expected one.
-if [ "${1:-run}" = "run" ] && [ ! -t 0 ]; then
+# The test is /dev/null specifically, not "is stdin a terminal". ``docker run``
+# without -i hands the container /dev/null, which is EOF on the first read —
+# that is the case this warns about. With -i and no -t, stdin is a pipe that
+# stays open and the REPL runs perfectly well on it, which is how a script
+# drives one; warning there would promise a failure that never arrives.
+if [ "${1:-run}" = "run" ] && [ ! -t 0 ] \
+   && [ "$(readlink /proc/self/fd/0 2>/dev/null)" = "/dev/null" ]; then
     echo "second-brain: no terminal on stdin — the REPL frontend will stop itself" >&2
     echo "              shortly, with warnings that look worse than they are. Use" >&2
     echo "              'docker run -it' for a REPL; otherwise configure a" >&2

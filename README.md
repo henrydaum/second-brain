@@ -83,16 +83,19 @@ python main.py
 
 That's it — you're in the REPL. `requirements.txt` is nearly pure Python.
 
-**Prefer a container?** There's a Dockerfile:
+**There's also a Dockerfile**, if you'd rather not install anything:
 
 ```bash
 docker build -t second-brain .
 docker run --rm -it --init -v sb-data:/data second-brain
 ```
 
-Same REPL, and your data lives in the `sb-data` volume. [docs/DOCKER.md](docs/DOCKER.md)
-covers the rest — headless runs, the web UI's port, and Docker itself if this
-is your first time.
+Same REPL, with everything kept in the `sb-data` volume. The path above is
+still the better one for day-to-day use — Second Brain is an assistant for
+*your machine*, and a container starts out unable to see it. Reach for this
+when the machine isn't one you want to install on: a server or a NAS, or a
+reproducible Linux to test against. [docs/DOCKER.md](docs/DOCKER.md) covers it,
+including Docker itself if this is your first time.
 
 ## 2. Run `/setup`
 
