@@ -168,7 +168,7 @@ class LiteLLMBackend(BaseLLMBackend):
             model=model, messages=messages,
             tools=request.tools or None, **kwargs)
         choice = raw.choices[0]
-        prompt_tokens, cached = self._usage(getattr(raw, "usage", None))
+        prompt_tokens, cached, completion = self._usage(getattr(raw, "usage", None))
         calls = getattr(choice.message, "tool_calls", None) or []
         return LLMResponse(
             content=self._without_duplicated_reasoning(
@@ -177,7 +177,8 @@ class LiteLLMBackend(BaseLLMBackend):
             tool_calls=[{"id": call.id, "name": call.function.name,
                          "arguments": call.function.arguments}
                         for call in calls],
-            prompt_tokens=prompt_tokens, cached_prompt_tokens=cached)
+            prompt_tokens=prompt_tokens, cached_prompt_tokens=cached,
+            completion_tokens=completion)
 
     def _stream(self, sdk, model, messages, request, kwargs):
         """The same answer, pushed as it arrives *and* returned whole.
@@ -202,14 +203,21 @@ class LiteLLMBackend(BaseLLMBackend):
         pieces = []
         thinking = []
         calls_by_index = {}
-        prompt_tokens = cached = None
+        prompt_tokens = cached = completion = None
 
         for chunk in stream:
             usage = getattr(chunk, "usage", None)
             if usage is not None:
-                seen, seen_cached = self._usage(usage)
-                prompt_tokens = seen or prompt_tokens
-                cached = seen_cached or cached
+                seen, seen_cached, seen_completion = self._usage(usage)
+                # Kept as ``is not None`` rather than ``or``: a completion of
+                # zero tokens is a real answer from the provider, and ``or``
+                # would discard it and report "never told us" instead.
+                if seen is not None:
+                    prompt_tokens = seen
+                if seen_cached is not None:
+                    cached = seen_cached
+                if seen_completion is not None:
+                    completion = seen_completion
             choices = getattr(chunk, "choices", None) or []
             if not choices:
                 continue
@@ -242,7 +250,8 @@ class LiteLLMBackend(BaseLLMBackend):
                          "arguments": entry["arguments"] or "{}"}
                         for index, entry in sorted(calls_by_index.items())
                         if entry["name"]],
-            prompt_tokens=prompt_tokens, cached_prompt_tokens=cached)
+            prompt_tokens=prompt_tokens, cached_prompt_tokens=cached,
+            completion_tokens=completion)
 
     # ── shaping the request ───────────────────────────────────────────
 
@@ -270,16 +279,27 @@ class LiteLLMBackend(BaseLLMBackend):
         return name
 
     def _usage(self, usage):
-        """``(prompt_tokens, cached_prompt_tokens)`` from a usage object."""
+        """``(prompt_tokens, cached_prompt_tokens, completion_tokens)``.
+
+        All three are the provider's own counts, lifted from the ``usage``
+        block it returns. Nothing here tokenises anything: only the provider
+        knows how it serialised the chat template and the tool schemas, so its
+        number is the billable one and a local estimate would merely be a
+        second opinion nobody charges by.
+
+        ``cached_prompt_tokens`` is the discounted *share of*
+        ``prompt_tokens``, not an addition to it.
+        """
         if not usage:
-            return None, None
+            return None, None, None
         prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
         details = getattr(usage, "prompt_tokens_details", None)
         if not details:
-            return prompt_tokens, None
+            return prompt_tokens, None, completion_tokens
         cached = (details.get("cached_tokens") if isinstance(details, dict)
                   else getattr(details, "cached_tokens", None))
-        return prompt_tokens, cached
+        return prompt_tokens, cached, completion_tokens
 
     def _classified(self, exc):
         """Re-raise with a code the kernel acts on.
