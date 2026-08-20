@@ -2106,6 +2106,25 @@ def _service_call(ctx, args: dict) -> Result:
     fn = getattr(service, method or "", None)
     if not callable(fn):
         return Result.failure(f"{name} has no method {method!r}")
+
+    # ``args`` is positional here and named everywhere else. Three of the four
+    # Requests that carry an ``args`` key — ``command.call``, ``agent.spawn``'s
+    # inner payload, ``task.run`` — take a dict of *named* values, and this one
+    # alone splats it. So passing a dict is the natural mistake rather than an
+    # exotic one, and ``*{"query": "x"}`` yields the **keys**: the callee is
+    # handed the string ``"query"`` and runs perfectly on the wrong input. A
+    # search for "query" comes back 200 with five results about queries, and
+    # nothing anywhere says the argument was dropped.
+    #
+    # Refused rather than coerced to ``kwargs``, because guessing which one was
+    # meant is how a Request grows two spellings. Anyone wanting to pass a dict
+    # *as* one positional argument still writes ``args: [{...}]``.
+    if isinstance(args.get("args"), dict):
+        return Result.failure(
+            f"{name}.{method}: 'args' is positional and was given a dict, "
+            "whose keys would be passed as the values. Use 'kwargs' for "
+            "named arguments, or 'args': [{...}] to pass one dict.",
+            code=ERROR_INVALID_ARGUMENT)
     try:
         return Result(data=fn(*(args.get("args") or ()),
                               **(args.get("kwargs") or {})))

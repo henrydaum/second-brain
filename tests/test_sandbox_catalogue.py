@@ -555,6 +555,47 @@ def test_an_export_is_callable_positionally():
     assert mixed.data == "0 4 * * *".upper()
 
 
+def test_a_dict_in_the_positional_slot_is_refused_not_splatted():
+    """``args`` is positional here and named in every neighbour.
+
+    ``command.call`` and the two spawn payloads all take ``args`` as a dict of
+    named values, so handing this one a dict is the natural mistake — and
+    ``*{"query": "x"}`` yields the **keys**, so the callee runs happily on the
+    string ``"query"``. Found for real: a web search for "microkernel" came
+    back 200 with five results about queries, and a second argument became the
+    string ``"count"``, which surfaced as a ``TypeError`` from a slice deep
+    inside plugin code.
+
+    Refused rather than quietly treated as ``kwargs``: guessing which was meant
+    is how one Request grows two spellings.
+    """
+    class Service:
+        exports = ["search"]
+
+        def search(self, query, count=5):
+            return {"query": query, "count": count}
+
+    ctx = type("Ctx", (), {"services": {"svc": Service()}})()
+
+    refused = call_handler(R.SERVICE_CALL, ctx, {
+        "name": "svc", "method": "search",
+        "args": {"query": "microkernel", "count": 3}})
+    assert not refused.ok
+    assert refused.code == "invalid_argument"
+    assert "kwargs" in refused.error
+
+    # The spelling it points at works, and so does a dict passed *as* one
+    # positional argument.
+    named = call_handler(R.SERVICE_CALL, ctx, {
+        "name": "svc", "method": "search",
+        "kwargs": {"query": "microkernel", "count": 3}})
+    assert named.data == {"query": "microkernel", "count": 3}
+
+    boxed = call_handler(R.SERVICE_CALL, ctx, {
+        "name": "svc", "method": "search", "args": [{"a": 1}]})
+    assert boxed.data == {"query": {"a": 1}, "count": 5}
+
+
 def test_the_call_positions_cannot_collide_with_the_callees_arguments():
     """``service`` and ``method`` are positional-only, and that is the fix.
 
