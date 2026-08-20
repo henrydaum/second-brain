@@ -4,6 +4,14 @@
 # into a derived image (the benchmark path).
 FROM python:3.14-slim
 
+# git is not a convenience: the package manager reads the store over it
+# (``store_backend.list_tree_files`` shells out to ``git ls-tree``), so a
+# container without it can boot but can never install a package — and the
+# failure surfaces as a bare FileNotFoundError two layers down.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

@@ -12,6 +12,7 @@ from sandbox import Chain, Interpreter, Request, Sandbox
 from sandbox.approval import build_approver, describe
 from sandbox.guest import requests as R
 from sandbox.policy import classify
+from sandbox.guest.codes import ERROR_NOT_PERMITTED
 from sandbox.guest.requests import SECRET_REVEAL
 
 
@@ -983,6 +984,16 @@ def test_an_unwired_sandbox_refuses_without_asking(request_update):
 
 
 def test_binding_a_runtime_puts_the_question_to_the_user(request_update):
+    """The dialog is rendered and the Request is *permitted*.
+
+    Deliberately not ``result.ok``. What happens after the yes is the
+    package manager's business, and it shells out to ``git`` against a real
+    store — so in a checkout without one (a container built from the source
+    tree, where ``.dockerignore`` drops ``.git``) this failed on the work
+    rather than on the permission, which is the one thing it is not about.
+    A refusal is what the sibling test above pins; the absence of one is what
+    this pins.
+    """
     asked: list = []
     sandbox = Sandbox()
     sandbox.bind_runtime(_runtime(True, asked))
@@ -991,7 +1002,8 @@ def test_binding_a_runtime_puts_the_question_to_the_user(request_update):
     result = _gate(sandbox, request_update)
 
     assert asked, "no dialog was rendered"
-    assert result.ok
+    assert result.code != ERROR_NOT_PERMITTED
+    assert "changes what the system can do" not in (result.error or "")
 
 
 def test_a_user_saying_no_is_still_a_refusal(request_update):
@@ -1015,7 +1027,10 @@ def test_binding_does_not_clobber_an_explicit_approver(request_update):
     sandbox.bind_runtime(_runtime(False, []))
 
     result = _gate(sandbox, request_update)
-    assert calls and result.ok
+    # The supplied approver ran and its yes stood — not that the update
+    # itself succeeded, which needs a store. See the note two tests up.
+    assert calls
+    assert result.code != ERROR_NOT_PERMITTED
 
 
 def test_binding_nothing_is_a_no_op():

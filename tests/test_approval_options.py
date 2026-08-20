@@ -9,6 +9,7 @@ policy will then refuse to honour is worse than no option: it is a grant the
 person believes they made.
 """
 
+import os
 import threading
 
 import pytest
@@ -250,11 +251,30 @@ def test_config_remains_the_way_to_grant_one_anyway():
 def test_no_command_option_when_there_is_no_unit_to_describe():
     """Everything the read-only recognizer refuses to look at."""
     for args in ({"argv": ["git", "push", "|", "tee", "log"]},
-                 {"argv": "git push && rm -rf /", "shell": "default"},
                  {"argv": "git push > ~/out.txt", "shell": "cmd"},
                  {"argv": ["/usr/bin/git", "push"]},
                  {"argv": []}):
         assert _grants(Request(PROC_RUN, args)) == [], args
+
+
+def test_a_posix_shell_decomposes_where_cmd_cannot():
+    """The same Request answers differently by platform, on purpose.
+
+    ``shell="default"`` is ``/bin/sh`` on POSIX and ``cmd.exe`` on Windows, and
+    ``_posix_shell`` asks the platform rather than trusting the name — so this
+    line has two units on one and none the lexer will describe on the other.
+    Where it decomposes, the grant has to cover *both*, which is the module's
+    own worked example: ``git push && rm -rf /`` needs ``rm`` granted too.
+
+    This lived in the list above as a case that offers nothing, which was true
+    only on the machine it was written on.
+    """
+    grants = _grants(Request(PROC_RUN, {"argv": "git push && rm -rf /",
+                                        "shell": "default"}))
+    if os.name == "nt":
+        assert grants == []
+    else:
+        assert [option.value for option in grants] == ["always:git push, rm"]
 
 
 def test_a_command_through_a_shell_is_still_offered_when_the_line_is_inert():

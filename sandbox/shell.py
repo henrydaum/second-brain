@@ -544,7 +544,14 @@ def files_touched(args: dict) -> tuple[list, list]:
     cwd = str(args.get("cwd") or "") or None
     paths, deleted = [], []
     for argv in segments:
-        program = os.path.basename(str(argv[0])).lower()
+        # Both separators, on both platforms. ``os.path.basename`` splits on
+        # ``\`` under Windows only, so a program named by a Windows path read
+        # as one long unrecognised name on Linux and the row said nothing at
+        # all. This is the *display* path, which already abstains generously
+        # and can afford to be generous here; the authorization recognizers
+        # (``command_prefix``, ``_read_only_segment``) deliberately refuse a
+        # program named by any path, and that stays strict.
+        program = str(argv[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
         program = program[:-4] if program.endswith(".exe") else program
         if (spec := _FILE_COMMANDS.get(program)) is None:
             continue                      # not a file command; says nothing

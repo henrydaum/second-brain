@@ -58,6 +58,11 @@ logger = logging.getLogger("Sandbox")
 # How many unanswered requests to hold before dropping the oldest. A frontend
 # that has stopped draining is already broken, and a client that can queue
 # without bound is a way to spend the kernel's memory from outside it.
+#: How long ``_retire`` waits for the listener to let go of the port. Bounded
+#: rather than indefinite: a stuck loop must not wedge a stop, and the caller
+#: is better served by a port that is probably free than by never returning.
+RETIRE_TIMEOUT = 2.0
+
 MAX_PENDING = 200
 
 # The largest request body accepted. Attachments arrive as file paths through
@@ -365,14 +370,35 @@ class HttpServer:
             return True
 
     def _retire(self) -> None:
-        """Close whatever is listening now. Caller holds the lock."""
+        """Close whatever is listening now, and wait for the port to be free.
+
+        ``server_close`` closes the socket *object*, but the port stays bound
+        until the ``serve_forever`` loop notices the shutdown request and lets
+        go of it — up to one poll interval later. Returning before that makes
+        the caller's next move a coin toss: ``claim`` on the same port fails,
+        and anything checking whether the port is free finds a live listener.
+
+        Windows hid this completely. Connecting to a port in that half-closed
+        window times out there, and a timeout is an ``OSError`` like a refusal
+        is, so the one test that asks passed for the wrong reason; on Linux
+        the connection simply succeeds.
+
+        ``shutdown`` stays on its own thread because it blocks until the loop
+        acknowledges, and calling it *from* the listener would deadlock. The
+        join carries the same guard for the same reason — a stop reached from
+        inside a request handler must not wait on itself.
+        """
         httpd, self._httpd = self._httpd, None
-        if httpd is not None:
-            threading.Thread(target=httpd.shutdown, daemon=True).start()
-            try:
-                httpd.server_close()
-            except OSError:
-                pass
+        listener = self._thread
+        if httpd is None:
+            return
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+        try:
+            httpd.server_close()
+        except OSError:
+            pass
+        if listener is not None and listener is not threading.current_thread():
+            listener.join(timeout=RETIRE_TIMEOUT)
 
     def _serve_source(self, source, generation: int) -> None:
         """Take pre-built ``(request, writer)`` pairs. The test path."""

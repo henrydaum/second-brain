@@ -319,7 +319,20 @@ def test_release_leaves_the_socket_bound(server):
 
 
 def test_stop_closes_it(server):
-    """Teardown really does let the port go."""
+    """Teardown really does let the port go — by the time ``stop`` returns.
+
+    **What this catches is the connection *succeeding*.** ``server_close``
+    closes the socket object, but the serve loop keeps the port in LISTEN for
+    up to a poll interval after it; during that window Linux accepts the
+    connection outright. So ``stop`` was returning before the one thing it
+    promises had happened, and a ``claim`` on the same port right after it was
+    a coin toss. ``_retire`` waits for the listener now.
+
+    Which *error* a freed port produces is environmental and deliberately not
+    asserted. Linux refuses immediately; a Windows box that drops rather than
+    rejects loopback packets times out instead, which is why this test could
+    never have failed there — it is the Linux run that gives it teeth.
+    """
     server.claim("a", 0)
     port = server.port
     server.stop()
