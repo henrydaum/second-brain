@@ -672,6 +672,53 @@ def _check_requests(walker: _Walker, node):
                    close[0] if close else "")
 
 
+def _check_prompt_cue(walker: _Walker, node, cls):
+    """Check an ``agent_prompt_refresh`` declaration can do anything at all.
+
+    Same family of failure as ``subscribed_channels``: the declaration is read
+    by AST and never validated at run time, so a wrong one is silent. Here
+    "silent" means the prompt refreshes on a cadence the author did not pick —
+    which reads exactly like a plugin with nothing new to say.
+
+    Four ways to get it wrong, and the last two are the interesting ones. A
+    name outside the ladder falls back to the default, so the plugin is merely
+    slower than it asked to be. ``never`` is refused outright rather than
+    accepted: a method that is never recomputed is precisely the permanent
+    cache the write rung was introduced to kill, and the string shape already
+    expresses "this text is fixed" honestly. And a cue on a plugin whose
+    ``agent_prompt`` is a literal — or absent — means the author expected the
+    method shape and did not write it, which is worth saying out loud, because
+    the kernel resolves that case to ``never`` and nothing else would complain.
+    """
+    from prompt_cues import DECLARABLE, LADDER
+
+    value = _literal(node.value)
+    methods = {item.name for item in cls.body
+               if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if "agent_prompt" not in methods:
+        walker.add(ERROR, node,
+                   "agent_prompt_refresh needs an agent_prompt *method* — a "
+                   "string is settled at load and is never recomputed",
+                   "def agent_prompt(self, sdk)")
+        return
+    if not isinstance(value, str):
+        walker.add(ERROR, node,
+                   "agent_prompt_refresh must be a string literal — it is read "
+                   "without importing the file")
+        return
+    if value in DECLARABLE:
+        return
+    if value in LADDER:
+        walker.add(ERROR, node,
+                   f"{value!r} is not declarable — it is what the string shape "
+                   "already means",
+                   "drop the method and declare agent_prompt = \"...\"")
+        return
+    close = difflib.get_close_matches(value, sorted(DECLARABLE), 1, 0.7)
+    walker.add(ERROR, node, f"{value!r} is not a prompt refresh cue",
+               close[0] if close else " | ".join(DECLARABLE))
+
+
 def _check_subscribed_channels(walker: _Walker, node, cls, family: str):
     """Check a ``subscribed_channels`` declaration can actually be honoured.
 
@@ -991,6 +1038,13 @@ def _check_class(walker: _Walker, family: str, base: str, cls, known_names):
     if "subscribed_channels" in assigned:
         _check_subscribed_channels(walker, assigned["subscribed_channels"],
                                    cls, family)
+
+    # How often a prompt contribution is recomputed, and which block it rides
+    # in. Declared rather than inferred, and silent when wrong in either
+    # direction — too rare and the text goes stale, too frequent and a box is
+    # spawned per model call for a sentence that never moves.
+    if "agent_prompt_refresh" in assigned:
+        _check_prompt_cue(walker, assigned["agent_prompt_refresh"], cls)
 
     # A setting holding a credential is declared by its name. Catching the
     # omission here is the whole reason the name heuristic still exists: it

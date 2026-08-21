@@ -193,7 +193,9 @@ class Chat(BaseFrontend):
     name = "chat"
     description = "Relays a chat service into Second Brain."
     # Guidance added to the agent's system prompt for sessions running on
-    # this frontend. A method (``def agent_prompt(self, sdk)``) works too.
+    # this frontend. A method (``def agent_prompt(self, sdk)``) works too,
+    # and takes an ``agent_prompt_refresh`` cue saying how often it moves —
+    # see ``prompt_cues.py``.
     agent_prompt = "## Chat\nReplies render as markdown; keep them short."
 
     # Paid only when a poll finds nothing. Keep it small: it is also the

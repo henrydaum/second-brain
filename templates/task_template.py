@@ -113,7 +113,9 @@ class WordStats(BaseTask):
     name = "word_stats"
     description = "Count words and lines in every text file discovered."
     # Guidance added to the agent's system prompt while this task is
-    # registered. A method (``def agent_prompt(self, sdk)``) works too.
+    # registered. A method (``def agent_prompt(self, sdk)``) works too, and
+    # takes an ``agent_prompt_refresh`` cue saying how often it moves —
+    # see ``prompt_cues.py``.
     agent_prompt = "## Word stats\nCounts land in the word_stats table."
 
     trigger = "path"

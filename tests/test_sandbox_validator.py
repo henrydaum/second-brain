@@ -538,3 +538,69 @@ def test_kernel_modules_are_not_called_foreign_libraries():
         report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
         assert not report.ok, module
         assert "kernel side" in _messages(report), module
+
+
+# ────────────────────────────────────────────────────────────────────
+# agent_prompt_refresh: a cue that does nothing is a cue nobody notices
+# ────────────────────────────────────────────────────────────────────
+
+_CUED = '''from guest.bases import BaseTool
+
+
+class Advisor(BaseTool):
+    name = "advisor"
+    description = "d"
+    parameters = {}
+    agent_prompt_refresh = "%s"
+
+    def agent_prompt(self, sdk):
+        return "guidance"
+
+    def run(self, sdk, **kwargs):
+        return "ok"
+'''
+
+
+def test_every_declarable_cue_validates():
+    from prompt_cues import DECLARABLE
+
+    for cue in DECLARABLE:
+        report = _validate(_CUED % cue, filename="tool_advisor.py")
+        assert report.ok, f"{cue}: {_messages(report)}"
+
+
+def test_an_unknown_cue_is_refused_with_a_suggestion():
+    """The ``requests`` precedent: a name matching nothing does nothing."""
+    report = _validate(_CUED % "sesion", filename="tool_advisor.py")
+    assert not report.ok
+    messages = _messages(report)
+    assert "'sesion' is not a prompt refresh cue" in messages
+    assert "session" in messages
+
+
+def test_never_is_refused_because_the_string_shape_already_says_it():
+    """A method that never recomputes is the permanent cache, reintroduced."""
+    report = _validate(_CUED % "never", filename="tool_advisor.py")
+    assert not report.ok
+    assert "is not declarable" in _messages(report)
+
+
+def test_a_cue_without_a_prompt_method_is_refused():
+    """The author expected the method shape and did not write it.
+
+    The kernel resolves this to ``never`` and says nothing, so the only place
+    it can be caught is here.
+    """
+    source = _CUED % "session"
+    source = source.replace('    def agent_prompt(self, sdk):\n'
+                            '        return "guidance"\n\n',
+                            '    agent_prompt = "fixed guidance"\n\n')
+    report = _validate(source, filename="tool_advisor.py")
+    assert not report.ok
+    assert "needs an agent_prompt *method*" in _messages(report)
+
+
+def test_a_declared_cue_is_read_back_as_a_declaration():
+    report = _validate(_CUED % "config", filename="tool_advisor.py")
+    assert report.ok
+    assert report.declarations["agent_prompt_refresh"] == "config"

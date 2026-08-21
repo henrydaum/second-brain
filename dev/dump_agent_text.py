@@ -76,7 +76,7 @@ KERNEL_SITES = (
 #: because a tool's name is the first thing a model matches on, and renaming
 #: one is as much an authoring decision as rewriting its description.
 PLUGIN_DECLS = ("name", "description", "parameters", "agent_prompt",
-                "llm_summary")
+                "agent_prompt_refresh", "llm_summary")
 
 #: Store families worth scanning. ``parsers/`` is omitted deliberately — a
 #: parser has no agent-facing surface at all; it is reached by extension.
@@ -224,6 +224,23 @@ def _enclosing(tree: ast.AST) -> dict[int, str]:
     return where
 
 
+def _declared_cue(scope) -> str:
+    """The ``agent_prompt_refresh`` sibling of a dynamic prompt, if any.
+
+    The one part of a dynamic contribution that is readable without running
+    anything, and the part that says how much of the prompt it churns.
+    """
+    for node in getattr(scope, "body", []):
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "agent_prompt_refresh"
+               for t in node.targets):
+            value = _evaluate(node.value)
+            if isinstance(value, str) and value:
+                return value
+    return "write (the default)"
+
+
 def kernel_strings(relative: str) -> list[tuple[int, str, str]]:
     """``(line, enclosing_function, text)`` for one kernel module."""
     path = ROOT / relative
@@ -283,10 +300,14 @@ def plugin_declarations(source: str) -> list[tuple[int, str, str]]:
             elif (isinstance(node, ast.FunctionDef)
                   and node.name == "agent_prompt"):
                 # The dynamic shape. Its text depends on live state, so the
-                # only honest thing to print is that it exists and where.
+                # only honest thing to print is that it exists, where, and how
+                # often it moves — the cue is the one part of a dynamic
+                # contribution that *is* readable without running anything.
+                cue = _declared_cue(scope)
                 found.append((node.lineno, "agent_prompt",
-                              "<dynamic — computed per call; see the assembled "
-                              "prompt above for the installed result>"))
+                              f"<dynamic, refreshes on {cue}; see the "
+                              "assembled prompt above for the installed "
+                              "result>"))
     return sorted(found)
 
 

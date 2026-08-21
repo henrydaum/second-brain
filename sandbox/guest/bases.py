@@ -151,10 +151,30 @@ class BasePlugin:
     # by AST at load and never calls into the box for it. Override with
     # ``def agent_prompt(self, sdk)`` when it depends on live state. Its SDK is
     # scoped to the session whose prompt is being built, so session facts such
-    # as the effective security mode come from ``sdk.session.get()``. A method
-    # costs a real box call, so the result is cached until the world or its
-    # session context changes. Either way keep it cheap and stable.
+    # as the effective security mode come from ``sdk.session.get()``. Either
+    # way keep it cheap and stable.
     agent_prompt: str = ""
+
+    # When a method-shaped ``agent_prompt`` goes stale, least to most frequent:
+    #
+    #   "load"     the set of installed plugins changed
+    #   "config"   a setting was written
+    #   "session"  this session's mode, conversation, user or profile moved
+    #   "turn"     once per agent turn
+    #   "write"    anything at all was written  (the default)
+    #   "call"     never cached
+    #
+    # Each rung includes the rarer ones, so "session" also refreshes on a
+    # config write. Declare the rarest rung that is still true: the prompt is
+    # rebuilt on every model call, and for an ephemeral plugin every recompute
+    # is a fresh box. Saying nothing keeps "write", which is never stale.
+    #
+    # Two consequences beyond speed. "load" and "config" cannot change within a
+    # conversation, so their text rides in the cacheable prefix of the prompt
+    # rather than the block that is re-read every call — and for that to be
+    # true they are answered with no session at all, so ``sdk.session.get()``
+    # tells them nothing. Ask for "session" or finer if you need it.
+    agent_prompt_refresh: str = ""
 
     # ── introspection ──────────────────────────────────────────────
 

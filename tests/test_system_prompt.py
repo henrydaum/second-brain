@@ -252,6 +252,81 @@ def test_live_native_prompt_context_includes_session_and_mode(data_dir):
     assert "SESSION=chat MODE=lockdown" in dynamic["content"]
 
 
+def _cued_tool(name, cue, text):
+    """A live-shaped tool declaring which rung its text follows."""
+    return SimpleNamespace(name=name, description="", parameters={},
+                           agent_prompt=lambda ctx: text,
+                           agent_prompt_refresh=cue)
+
+
+def test_a_config_cued_contribution_rides_in_the_cacheable_prefix(data_dir):
+    """The rung that actually moves text, and the point of the whole ladder.
+
+    A method whose answer follows configuration cannot change within a
+    conversation, so there is nothing for it to gain from the volatile end of
+    the prompt — and a great deal to lose, since the dynamic block is rebuilt
+    and re-read on every call of the turn.
+    """
+    tool = _cued_tool("stable", "config", "GUIDANCE-FROM-A-CONFIG-CUE")
+    system, dynamic = _sections_with([tool])
+
+    assert "GUIDANCE-FROM-A-CONFIG-CUE" in system["content"]
+    assert "GUIDANCE-FROM-A-CONFIG-CUE" not in dynamic["content"]
+
+
+def test_a_session_cued_contribution_stays_in_the_dynamic_block(data_dir):
+    """The threshold's other side: a mode can change mid-conversation."""
+    tool = _cued_tool("live", "session", "GUIDANCE-FROM-A-SESSION-CUE")
+    system, dynamic = _sections_with([tool])
+
+    assert "GUIDANCE-FROM-A-SESSION-CUE" in dynamic["content"]
+    assert "GUIDANCE-FROM-A-SESSION-CUE" not in system["content"]
+
+
+def test_contributions_are_ordered_rarest_first(data_dir):
+    """Within a block, the stable end comes first.
+
+    That is what a prefix-caching provider reads from: everything before the
+    first byte that changed is reused, so text that moves belongs after text
+    that does not.
+    """
+    tools = [_cued_tool("c", "write", "RUNG-WRITE"),
+             _cued_tool("a", "turn", "RUNG-TURN"),
+             _cued_tool("b", "session", "RUNG-SESSION")]
+    _, dynamic = _sections_with(tools)
+    body = dynamic["content"]
+
+    assert (body.index("RUNG-SESSION") < body.index("RUNG-TURN")
+            < body.index("RUNG-WRITE"))
+
+
+def test_contributions_on_one_rung_keep_their_reading_order(data_dir):
+    """The sort is stable, and that property is invisible without a test.
+
+    ``_in_scope`` orders the populations deliberately — tools, then services,
+    tasks, commands, the frontend — and a sort that reshuffled ties would
+    scramble it for the rung most plugins are on.
+    """
+    tools = [_cued_tool("first", "write", "TIE-FIRST"),
+             _cued_tool("second", "write", "TIE-SECOND"),
+             _cued_tool("third", "write", "TIE-THIRD")]
+    _, dynamic = _sections_with(tools)
+    body = dynamic["content"]
+
+    assert body.index("TIE-FIRST") < body.index("TIE-SECOND") < body.index("TIE-THIRD")
+
+
+def test_a_string_shape_ignores_a_cue_it_declares(data_dir):
+    """The shape decides first, so a fixed string cannot be talked out of the prefix."""
+    tool = SimpleNamespace(name="confused", description="", parameters={},
+                           agent_prompt="GUIDANCE-FROM-A-CONFUSED-PLUGIN",
+                           agent_prompt_refresh="write")
+    system, dynamic = _sections_with([tool])
+
+    assert "GUIDANCE-FROM-A-CONFUSED-PLUGIN" in system["content"]
+    assert "GUIDANCE-FROM-A-CONFUSED-PLUGIN" not in dynamic["content"]
+
+
 def test_static_prompt_requires_finishing_accepted_work(data_dir):
     from agent.system_prompt import _static_prompt
 

@@ -148,23 +148,35 @@ class RecentNotes(BaseTool):
         },
     }
 
+    # This prompt counts rows, so it wants to notice a write. That is the
+    # default rung, spelled out here because a template is where the
+    # vocabulary gets discovered — see ``prompt_cues.py`` for the ladder, and
+    # declare the rarest rung that is still true for your text.
+    agent_prompt_refresh = "write"
+
     def agent_prompt(self, sdk):
         """The other shape of the same declaration: a method, when the text
         depends on something only the running system knows.
 
         Same name as the string form on purpose — the collector accepts
-        either. This one is a real call into your box, so it is cached until
-        something in the system *changes*: reads are free, and any effect
-        anywhere invalidates it before the next model call. So the count below
-        is genuinely live — a conversation started this turn is reflected on
-        the agent's next call, which is the only reason to prefer this shape.
+        either. This one is a real call into your box, so it is cached, and
+        the cue above is what decides for how long. On "write" a read-only
+        stretch is free and any effect anywhere invalidates it before the next
+        model call, so the count below is genuinely live — a conversation
+        started this turn is reflected on the agent's next call, which is the
+        only reason to prefer this shape.
 
-        The SDK belongs to the session whose prompt is being built. Read
-        ``(sdk.session.get() or {}).get("mode")`` when guidance depends on the
-        effective security mode.
+        The SDK belongs to the session whose prompt is being built, for cues of
+        "session" or finer. Read ``(sdk.session.get() or {}).get("mode")`` when
+        guidance depends on the effective security mode — and declare
+        ``agent_prompt_refresh = "session"`` when that is *all* it depends on,
+        which is both faster and moves the text into the cacheable part of the
+        prompt.
 
         Keep it cheap: it runs on the turn thread. And never perform an effect
-        here — you would invalidate your own cache and recompute forever.
+        here — on "write" you would invalidate your own cache and recompute
+        forever, and on anything rarer you would do it without even that
+        warning.
         """
         rows = sdk.db.query("SELECT COUNT(*) AS n FROM my_conversations")
         return (f"## Recent notes\n"

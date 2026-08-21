@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import prompt_cues
 from runtime.agent_scope import AgentScope
 from runtime.security_modes import security_mode as normalize_security_mode
 
@@ -111,7 +112,7 @@ def build_prompt_sections(
         _environment(),
         _tool_catalog(r),
         _command_catalog(commands, command_filter),
-        _collect(populations, pctx, live=False),
+        _collect(populations, pctx, stable=True),
     ]
     dynamic = [
         "Runtime-generated context (see 'Runtime Context' in the static prompt): "
@@ -126,7 +127,7 @@ def build_prompt_sections(
         _filesystem_access(config),
         _sync_dirs(config),
         _agent_memory(config),
-        _collect(populations, pctx, live=True),
+        _collect(populations, pctx, stable=False),
         _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
         notification_suffix,
@@ -164,8 +165,8 @@ def _in_scope(registry, services, orchestrator, commands, command_filter,
     ]
 
 
-def _collect(plugins, ctx: PromptContext, *, live: bool) -> str:
-    """Join ``agent_prompt`` contributions of one shape from in-scope plugins.
+def _collect(plugins, ctx: PromptContext, *, stable: bool) -> str:
+    """Join the ``agent_prompt`` contributions belonging in one block.
 
     One name, two shapes. A plugin with nothing conditional to say declares a
     plain string (``agent_prompt = "..."``), which the loader reads by AST and
@@ -175,31 +176,42 @@ def _collect(plugins, ctx: PromptContext, *, live: bool) -> str:
     would otherwise raise ``TypeError`` into the ``except`` below and the
     guidance would vanish with no symptom at all.
 
-    ``live`` is which shape to take, and it decides *where the text lands*. A
-    string is fixed at load, so it belongs in the semi-stable block inside the
-    cacheable position-0 prefix. A method exists precisely because its answer
-    moves — the installed store's script listing, its table list — so leaving
-    it in that prefix would mean every refresh rewrites the one message
-    providers cache across a conversation. It goes in the dynamic block with
-    the kernel's own live state, which is exactly the argument ``_mode_suffix``
+    The shape decides *how to ask*, and it is still ``callable`` that answers —
+    deliberately its own question, since the tolerance above is what depends on
+    it. What decides *where the text lands* is the plugin's declared cue:
+    ``prompt_cues.stable`` is true for the rungs that cannot move within a
+    conversation, and their text rides in the semi-stable block of the
+    cacheable position-0 prefix. Everything finer goes to the dynamic block
+    with the kernel's own live state, which is the argument ``_mode_suffix``
     makes for itself in ``runtime/runtime_config.py``.
 
-    No declaration is needed to tell the two apart: the native bases declare
-    ``agent_prompt: str = ""`` and the bridge attaches a bound method only when
-    the guest actually wrote one, so ``callable`` is already an exact answer.
+    The two used to be one question — a string in the prefix, a method in the
+    dynamic block, and no declaration needed to tell them apart. That was right
+    about the string and too coarse about the method: a prompt that only
+    follows the permission mode does not move within a conversation any more
+    than a fixed one does, and paying for it at the volatile end of the prompt
+    on every call was the only option it had.
+
+    Within a block, rarest first. That ordering pays in the prefix, where a
+    provider re-reads from the first byte that changed; in the dynamic block it
+    is cosmetic, since the whole message is rebuilt per call either way. The
+    sort is **stable**, so contributions on one rung keep ``_in_scope``'s
+    reading order — tools, then services, tasks, commands and the frontend.
     """
-    parts = []
+    entries = []
     for plugin in plugins:
         try:
             raw = getattr(plugin, "agent_prompt", "")
-            if callable(raw) != live:
+            cue = prompt_cues.of(plugin)
+            if prompt_cues.stable(cue) != stable:
                 continue
-            text = ((raw(ctx) if live else raw) or "").strip()
+            text = ((raw(ctx) if callable(raw) else raw) or "").strip()
         except Exception:
             text = ""
         if text:
-            parts.append(text)
-    return "\n\n".join(parts)
+            entries.append((prompt_cues.rank(cue), text))
+    entries.sort(key=lambda entry: entry[0])
+    return "\n\n".join(text for _, text in entries)
 
 
 def _visible_tools_for_prompt(registry):

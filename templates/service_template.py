@@ -126,7 +126,9 @@ class Embedder(BaseService):
     description = "Sentence embeddings for search and clustering."
     # Guidance added to the agent's system prompt while this service is
     # loaded, and gone when it is not. Use ``def agent_prompt(self, sdk)``
-    # instead when the text depends on live state.
+    # instead when the text depends on live state, with an
+    # ``agent_prompt_refresh`` cue saying how often it moves — see
+    # ``prompt_cues.py``.
     agent_prompt = (
         "## Embeddings\n"
         "Ask the embedder service for vectors; do not compute them yourself."

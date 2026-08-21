@@ -61,9 +61,17 @@ class BaseService(ABC):
     # --- Agent system-prompt contribution ---
     # Guidance injected into the agent's system prompt when this service is loaded.
     # Declare a plain string, or override with ``def agent_prompt(self, ctx)``
-    # when the text depends on the session (``ctx`` is a PromptContext:
-    # db/services/orchestrator/config/scope/...). The collector accepts either.
+    # when the text depends on live state. ``ctx`` is a PromptContext,
+    # carrying the session facts ``prompt_cues.SESSION_FACTS`` names —
+    # session_key, conversation_id, user_id, profile_name, frontend_name,
+    # security_mode — plus db/services/orchestrator/config/scope. The
+    # collector accepts either shape.
     agent_prompt: str = ""
+
+    # When a method-shaped contribution goes stale, and therefore which
+    # block of the prompt it rides in. See ``prompt_cues.py`` for the
+    # ladder; "" means the default rung.
+    agent_prompt_refresh: str = ""
 
     def __init__(self):
         """Initialize the base service."""

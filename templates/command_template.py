@@ -108,7 +108,8 @@ class Note(BaseCommand):
     description = "Append a short note to the current conversation."
     # Guidance added to the agent's system prompt while this command is in
     # scope. A method (``def agent_prompt(self, sdk)``) works too when the
-    # text depends on live state.
+    # text depends on live state; it then takes an ``agent_prompt_refresh``
+    # cue saying how often that state moves — see ``prompt_cues.py``.
     agent_prompt = "## Notes\nUse /note for a one-liner worth keeping."
     category = "Conversation"
 

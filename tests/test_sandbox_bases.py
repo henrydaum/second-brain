@@ -53,7 +53,8 @@ def test_every_family_descends_from_baseplugin(cls, family):
 
 @pytest.mark.parametrize("attr", [
     "name", "description", "dependencies_files", "dependencies_pip",
-    "requires_services", "config_settings", "agent_prompt", "requests",
+    "requires_services", "config_settings", "agent_prompt",
+    "agent_prompt_refresh", "requests",
     "box", "lifetime", "timeout", "memory_mb",
 ])
 def test_shared_declarations_live_on_the_ancestor(attr):
