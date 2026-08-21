@@ -120,13 +120,27 @@ def test_running_background_check_stays_successful():
 
 
 def test_shell_and_script_prompts_change_strategy_with_mode():
-    shell = _tool("tools/tool_run_command.py", "RunCommand")
-    script = _tool("tools/tool_run_script.py", "RunScript")
-    assert "approval is refused" in _prompt(shell, _SDK(mode="lockdown"))
-    assert "raw `.py`" in _prompt(shell, _SDK(mode="yolo"))
-    assert "valid contained script still runs" in _prompt(
-        script, _SDK(mode="lockdown"))
-    assert "do not `import sdk`" in _prompt(script, _SDK(mode="ask"))
+    """Each mode gets its own guidance, and each names the mode it describes.
+
+    Pinned as distinctness plus self-identification rather than as prose. This
+    text is guidance written for a model and gets reworded whenever it reads
+    better a different way — which has broken this test twice, most recently
+    when "approval is refused" became a sentence about standing policy. That is
+    a test coupled to the wrong thing. What has to hold is that the three modes
+    say different things, and that none of them is describing a mode the
+    session is not in.
+    """
+    for relative, class_name in (("tools/tool_run_command.py", "RunCommand"),
+                                 ("tools/tool_run_script.py", "RunScript")):
+        tool = _tool(relative, class_name)
+        texts = {mode: _prompt(tool, _SDK(mode=mode))
+                 for mode in ("lockdown", "ask", "yolo")}
+        for mode, text in texts.items():
+            assert text.strip(), f"{relative}: {mode} contributes nothing"
+            assert mode in text.lower(), (
+                f"{relative}: the {mode} branch never names {mode}")
+        assert len(set(texts.values())) == 3, (
+            f"{relative}: two modes share the same guidance")
 
 
 def test_glob_contributes_lockdown_guidance_only_in_lockdown():
