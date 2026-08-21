@@ -26,7 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # Everything outside plugins/ that boots or runs the kernel.
 CORE_DIRS = ("agent", "attachments", "config", "events", "pipeline",
              "runtime", "state_machine")
-CORE_FILES = ("main.py", "main.pyw", "paths.py", "trees.py", "migrations.py")
+CORE_FILES = ("main.py", "main.pyw", "paths.py", "trees.py", "migrations.py",
+              "prompt_cues.py")
 
 # ``plugins/`` is now *exclusively* substrate — base classes, discovery, the
 # watcher, path metadata, the command registry. The app's own capabilities
