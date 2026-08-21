@@ -55,6 +55,48 @@ def _unquote(text):
     return text
 
 
+#: What a shell prints when it was handed the first word of a path it split.
+#: One per shell family; matching the *message* rather than the exit code is
+#: what keeps this from firing on an ordinary missing file.
+_SPLIT_PATH_ERRORS = (
+    "no such file or directory",
+    "cannot access",
+    "cannot find the path",
+    "can't cd to",
+    "is not recognized as an internal or external command",
+)
+
+
+def _unquoted_path_hint(command, stderr):
+    """Name the space that broke this line, or return ``""``.
+
+    A shell splits ``/data/Second Brain/notes`` into two operands and then
+    complains about ``/data/Second`` — a message that describes a path nobody
+    typed, which is why the mistake is easy to repeat. The default data
+    directory has a space in it, so this is not an exotic case; it is the
+    common one the moment a command names an absolute path.
+
+    Deliberately quiet: it needs an unquoted candidate in the command *and* a
+    shell-shaped complaint in the output, so an ordinary missing file still
+    fails with its own message and nothing else.
+    """
+    lowered = (stderr or "").lower()
+    if not any(marker in lowered for marker in _SPLIT_PATH_ERRORS):
+        return ""
+    # Whatever remains outside quotes is what the shell was free to split.
+    outside = re.sub(r"\"[^\"]*\"|'[^']*'", " ", command or "")
+    for match in re.finditer(r"(?:[A-Za-z]:)?[\\/][^\s\"';|&<>]*", outside):
+        head = match.group(0)
+        tail = outside[match.end():]
+        # A path-looking token followed by another word that continues it: the
+        # signature of one path the shell read as two.
+        if re.match(r"\s+[^\s\"';|&<>]*[\\/]", tail):
+            return (f"Hint: {head!r} looks like the start of a path containing a space. "
+                    "The shell split it there. Quote the whole path, or set cwd and use "
+                    "a relative path.")
+    return ""
+
+
 def _roots(sdk):
     """Where commands may run: the project, and the data directory."""
     return [sdk.paths.get("project"), sdk.paths.get("data")]
@@ -190,7 +232,11 @@ class RunCommand(BaseTool):
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The command line to run. Pipes, redirection and && work.",
+                "description": "The command line to run. Pipes, redirection and && work. "
+                               "A shell splits on spaces, so a path containing one must be "
+                               "quoted: \"/data/Second Brain/notes\", not /data/Second Brain/notes. "
+                               "Setting cwd once and then using relative paths avoids the "
+                               "problem entirely and is usually shorter.",
             },
             "narration": {
                 "type": "string",
@@ -431,7 +477,8 @@ class RunCommand(BaseTool):
 
         summary = "\n".join(parts) if parts else "(no output)"
         if failed:
-            return sdk.fail(summary)
+            hint = _unquoted_path_hint(command, stderr)
+            return sdk.fail(f"{summary}\n{hint}" if hint else summary)
         return sdk.ok({"stdout": stdout, "stderr": stderr,
                        "code": done.get("code"), "spill_path": spilled,
                        "cwd": cwd, "shell": shell},
