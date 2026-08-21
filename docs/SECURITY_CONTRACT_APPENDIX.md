@@ -1008,6 +1008,11 @@ the same aggregate size cap as `fs.read`. Globs, devices, directories, stdin,
 redirection, substitution, unsupported flags, and non-POSIX shell aliases
 abstain. Adding coverage remains a deliberate policy widening.
 
+Neither recognizer may outrank `sandbox/protected.py`. A command line naming a
+file that `fs.read` refuses gets no allowance from either — a remembered
+`cat` grant does not reach `config.json` — and the withdrawal sends it to the
+dialog rather than refusing it outright.
+
 The three read-and-narrow members are safe. `status` and `list` read a
 registry the kernel owns, which holds nothing that was not approved at
 `start`. `stop` is safe for the reason `session.remove_tool` is: it narrows.

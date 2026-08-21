@@ -328,11 +328,27 @@ def test_a_string_shape_ignores_a_cue_it_declares(data_dir):
 
 
 def test_static_prompt_requires_finishing_accepted_work(data_dir):
+    """Finish the work, and know the two things that legitimately stop it.
+
+    The exit clause is the load-bearing half. Naming only *information* left
+    an agent in lockdown with no sanctioned way to stop: a refusal is not a
+    fact the user can supply, so the rule read as "keep going" over the one
+    thing the mode says never to retry. Permission is the second exit, and
+    the last sentence is what keeps it from becoming the first — one refused
+    step is not a refused task.
+
+    It says *finish the parts it does not block* rather than anything about
+    routes, deliberately. Lockdown's own note forbids looking for another
+    route to the same effect, so a sentence inviting one would have the two
+    halves of the prompt arguing in front of the model.
+    """
     from agent.system_prompt import _static_prompt
 
     prompt = _static_prompt()
-    assert "do not end on a plan, promise, retry" in prompt
-    assert "blocked on information only the user can provide" in prompt
+    assert "do not end on a plan, a promise, or an intention to retry" in prompt
+    assert "only the user can provide — a fact, or a permission" in prompt
+    assert "A refused step does not end the task" in prompt
+    assert "finish the parts it does not block" in prompt
 
 
 def test_both_shapes_are_collected_when_both_are_present(data_dir):

@@ -165,6 +165,10 @@ designed extension point, and a recognizer can only ever widen.
 The structural recognizer includes conservative `ls` display forms and `cat`
 only for regular, non-protected files that fit the mediated text-read cap;
 globs, redirects, substitutions, devices, stdin, and shell aliases abstain.
+Both recognizers are then capped by `_names_protected_path`: a line naming a
+file the deny-list keeps out of `fs.read` gets no allowance from either, so a
+remembered `cat` grant cannot reach `config.json`. The cap withdraws the
+allowance and does not deny — the command still reaches the dialog.
 
 ## 6. Layer 5 — The approver
 

@@ -82,6 +82,59 @@ def test_cat_refuses_protected_paths_and_symlinks(tmp_path, monkeypatch):
     assert not _allowed(["cat", str(alias)])
 
 
+def test_no_recognizer_may_allow_a_read_the_deny_list_refuses(tmp_path,
+                                                              monkeypatch):
+    """The cap on both recognizers, and it was the *remembered* one that leaked.
+
+    ``_read_only_cat`` consults ``protected.py`` itself, so the structural half
+    was never the hole. ``_remembered_prefix`` asks about coverage and nothing
+    else — so one "always allow: cat" turned ``cat config.json`` into a SAFE
+    Request that handed over every ``secret_*`` setting with no dialog, which
+    is precisely the back door ``fs.read`` is guarded against.
+    """
+    from sandbox import protected, shell
+
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(
+        protected, "protected_paths",
+        lambda: {config.resolve(): protected.CONFIG_REASON})
+
+    # Structural: it checks for itself, and always did.
+    assert not _allowed(["cat", "config.json"], cwd=str(tmp_path))
+    # Remembered: granting the program does not grant the file.
+    monkeypatch.setattr(shell, "kernel_list", lambda key: ["cat"])
+    assert not _allowed(["cat", "config.json"], cwd=str(tmp_path))
+    assert not _allowed(["cat", str(config)])
+    # A grant that names something else entirely still cannot reach it.
+    monkeypatch.setattr(shell, "kernel_list", lambda key: ["grep"])
+    assert not _allowed(["grep", "secret_", "config.json"], cwd=str(tmp_path))
+    # And nothing legitimate was narrowed on the way past.
+    assert _allowed(["cat", "notes.txt"], cwd=str(tmp_path))
+    assert _allowed(["git", "status"], cwd=str(tmp_path))
+
+
+def test_a_withdrawn_allowance_asks_rather_than_denies(tmp_path, monkeypatch):
+    """The deny-list caps the recognizers; it does not become a third one.
+
+    "Abstain, never deny" is what makes a bug here cost a dialog, so the
+    backstop has to leave the command exactly where no recognizer would have:
+    UNSAFE, at the dialog, not refused outright.
+    """
+    from sandbox import protected
+
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        protected, "protected_paths",
+        lambda: {config.resolve(): protected.CONFIG_REASON})
+
+    decision = _run(["cat", "config.json"], cwd=str(tmp_path))
+    assert decision.level == UNSAFE
+    assert "run shell command: cat config.json" in decision.reason
+
+
 def test_cat_uses_the_same_aggregate_cap_as_read_file(tmp_path, monkeypatch):
     from sandbox import shell
 
@@ -426,11 +479,28 @@ def test_a_glob_in_the_program_position_names_nothing_grantable(posix):
     Elsewhere in the line a glob is ordinary argument expansion, and arguments
     are unchecked by design — so this is only about ``argv[0]``.
     """
-    from sandbox.shell import command_prefix, command_prefixes
+    from sandbox.shell import command_prefix
 
     assert command_prefix(["*", "--help"]) == ""
     assert command_prefix(["~/bin/tool"]) == ""
+    # An argument glob elsewhere is not this rule's business, and does not
+    # stop the program itself being a describable unit.
+    assert command_prefix(["git", "log", "*.py"]) == "git log"
+
+
+def test_a_glob_operand_leaves_the_two_reading_verbs_ungrantable(posix):
+    """The one exception, and it is about the deny-list rather than the label.
+
+    ``_names_protected_path`` caps a grant at the files ``fs.read`` refuses,
+    and it reads literal operands only. ``cat``/``ls`` are the programs whose
+    operands *are* the act, so a remembered grant plus a glob would reach
+    around the cap; nothing is offered for those two instead.
+    """
+    from sandbox.shell import command_prefix, command_prefixes
+
     assert command_prefixes({"argv": "cat *.py", "shell": "default"}) == []
+    assert command_prefix(["ls", "~/secrets"]) == ""
+    assert command_prefix(["cat", "notes.txt"]) == "cat"
 
 
 def test_read_only_holds_across_a_pipeline(posix):

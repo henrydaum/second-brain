@@ -108,8 +108,15 @@ _SHELL_METACHARACTERS = frozenset("|&;<>$`()\n\r")
 #:     module-level code runs. It looks inert and is not.
 #:   - ``find`` — read-only until ``-exec``, and ``-exec`` is a flag.
 #:   - ``git config`` — sets exactly as readily as it gets.
-#:   - ``cat``/``ls`` — ``sdk.fs.read`` and ``sdk.fs.list`` do these mediated
-#:     and better. A dialog is the right nudge toward the SDK.
+#:
+#: ``cat`` and ``ls`` were once on that list, on the argument that
+#: ``sdk.fs.read`` and ``sdk.fs.list`` do the same thing mediated and that a
+#: dialog is the right nudge toward the SDK. They are handled below instead —
+#: not by an entry here, because this table decides on *flags* and those two
+#: turn on their *operands*. ``_read_only_cat`` admits only the files
+#: ``fs.read`` would have handed over anyway (:func:`~sandbox.protected.
+#: reason_for`, a regular file, the same size cap), so it grants no reach the
+#: SDK did not already have — it removes a dialog, not a boundary.
 _READ_ONLY_COMMANDS = {
     ("git", ""): (frozenset({"--version"}), False),
     ("git", "status"): (frozenset({"-s", "--short", "-b", "--branch",
@@ -489,6 +496,14 @@ def command_prefix(argv) -> str:
     if not program:
         return ""
     rest = argv[1:]
+    # The one place an *argument* votes, and the exception that proves the
+    # rule above. ``_names_protected_path`` caps every grant at the deny-list,
+    # but it can only read operands that are literally there — a glob names
+    # nothing until a shell expands it. For the two programs whose whole job is
+    # to read what they are pointed at, that gap is reachable: one remembered
+    # "cat" would otherwise cover ``cat *.json`` and with it the config file
+    # the cap exists to keep out. Declining to name a grant closes it, at the
+    # cost of a dialog for a glob, which is the cheap failure.
     if (program in {"cat", "ls"}
             and any(set(part) & _PATH_EXPANSIONS for part in rest)):
         return ""
@@ -554,10 +569,54 @@ def render_command(args: dict) -> str:
     return f"{rendered} [{shell}]" if shell and shell != "default" else rendered
 
 
+def _names_protected_path(args: dict) -> bool:
+    """Whether this line names, literally, a file no read may return.
+
+    A **cap on the recognizers, not a third recognizer.** Both of them widen,
+    and neither consulted :mod:`sandbox.protected`: a person who once answered
+    "always" to ``cat`` thereby allowed ``cat config.json``, handing over every
+    ``secret_*`` setting in plaintext with no dialog — the exact back door that
+    module exists to close, reopened one layer up. ``fs.read`` refuses those
+    bytes whoever is asking, so a shell spelling of the same read must not be
+    the cheaper door.
+
+    It **withdraws an allowance and never denies**: the command falls through
+    to the dialog it would have reached with no recognizer at all, so the
+    "abstain, never deny" shape above is intact.
+
+    Literal operands only. A glob names nothing until a shell expands it, and
+    chasing that is the undecidable direction this module refuses to go — so
+    ``cat *.json`` is out of scope here, and stays out of reach by way of
+    :func:`command_prefix`, which declines to name a grant for it.
+    """
+    segments = _command_segments(args)
+    if not segments:
+        return False
+    for argv in segments:
+        for part in argv[1:]:
+            # Per token, and swallowing whatever the platform's path type
+            # objects to — the same answer ``protected._resolve`` gives for a
+            # string it cannot turn into a path, and sound in this direction:
+            # a token no ``Path`` will construct is not one a shell will open
+            # as the config file either. Failing the whole line closed instead
+            # would send an ordinary ``git log`` to a dialog over one odd
+            # argument.
+            try:
+                path = Path(part)
+                if not path.is_absolute():
+                    path = Path(str(args.get("cwd") or os.getcwd())) / path
+                if reason_for(path):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def classify_shell(kind: str, args: dict) -> Decision:
     """Decide about one shell Request — the entry point ``policy`` calls."""
     shown = render_command(args)
-    for recognize in _SHELL_RECOGNIZERS:
+    recognizers = () if _names_protected_path(args) else _SHELL_RECOGNIZERS
+    for recognize in recognizers:
         try:
             if (why := recognize(shown, args)):
                 return Decision(SAFE, why)

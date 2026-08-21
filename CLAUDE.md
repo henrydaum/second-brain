@@ -1846,6 +1846,21 @@ The structural recognizer also admits conservative `ls` display forms and
 `cat` only for the same regular, non-protected, size-bounded files `fs.read`
 would expose. Globs, stdin, devices, unsupported flags and non-POSIX aliases
 abstain.
+
+**And `protected.py` caps both recognizers, which it did not always.**
+`_read_only_cat` consults the deny-list itself, so the structural half was
+never the hole; `_remembered_prefix` asks about *coverage* and nothing else, so
+one "always allow: cat" made `cat config.json` a SAFE Request that returned
+every `secret_*` setting in plaintext with no dialog — the exact back door
+`protected.py` exists to close, reopened one layer up where nothing was looking
+for it. `_names_protected_path` is the cap, and its shape matters twice over:
+it **withdraws an allowance rather than denying**, so the command lands at the
+dialog it would have reached with no recognizer at all and "abstain, never
+deny" survives intact; and it reads **literal operands only**, because a glob
+names nothing until a shell expands it and chasing that is the undecidable
+direction. That last gap is closed from the other end — `command_prefix`
+declines to name a grant for `cat`/`ls` carrying a path expansion, so there is
+nothing for a remembered grant to match.
 `shell.render_command` is the one renderer the dialog and the ledger row
 share, so what a person approves is what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
 processes already approved at `start`, and stopping narrows — a dev server the

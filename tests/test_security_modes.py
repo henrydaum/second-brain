@@ -10,6 +10,8 @@ line and the boundaries are where a permission feature goes wrong:
 - and neither may reach what the kernel refuses structurally.
 """
 
+import re
+
 import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
@@ -163,9 +165,17 @@ def test_lockdown_prompt_tells_the_agent_not_to_retry():
 
 
 def test_kernel_mode_guidance_names_no_optional_plugins():
-    text = (prompt_note(LOCKDOWN) + prompt_note(YOLO)).lower()
-    for optional_name in ("run_script", "run_command", "glob", "read_file"):
-        assert optional_name not in text
+    """The kernel cannot promise a capability a package supplies.
+
+    Whole words, not substrings: the tool is ``glob`` and the English is
+    ``global``, and a check that cannot tell them apart fails on a sentence
+    nobody would object to.
+    """
+    words = set(re.findall(r"[a-z_]+",
+                           (prompt_note(LOCKDOWN) + prompt_note(YOLO)).lower()))
+    for optional_name in ("run_script", "run_command", "glob", "read_file",
+                          "grep", "edit_file", "sql_query"):
+        assert optional_name not in words
 
 
 # ──────────────────────────────────────────────────────────────────────

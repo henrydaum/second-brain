@@ -3923,18 +3923,31 @@ def _script_run(ctx, args: dict) -> Result:
 
     caller = provenance.current()
     chain = caller.chain if caller is not None else None
-    request_approved = bool(
-        caller is not None and caller.approved_request == SCRIPT_RUN)
-    command_approved = bool(
-        chain is not None and chain.approved and SCRIPT_RUN in chain.approved)
-    launch_approved = request_approved or command_approved
-    if report.unmediated and not launch_approved:
-        libraries = ", ".join(sorted(report.unmediated))
-        return Result.refusal(
-            f"{path.name} imports {libraries}, whose own actions are not "
-            "mediated; script launch was not approved",
-            code=ERROR_NOT_PERMITTED,
-        )
+    # Two ways this launch can have been answered for, and they are different
+    # grants: the approver said yes to *this* Request, or a command declared
+    # ``script.run`` and the user approved the command.
+    launch_approved = bool(
+        (caller is not None and caller.approved_request == SCRIPT_RUN)
+        or (chain is not None and chain.approved
+            and SCRIPT_RUN in chain.approved))
+
+    def _unapproved(current_report):
+        """Why this report may not launch, or "" if it may.
+
+        Asked twice of two different readings of the file — once here, so a
+        refusal costs no sandbox, and once from inside ``Sandbox.start`` on
+        the report whose digest actually runs. One function because the two
+        answers must be the same rule and, when they refuse, the same
+        sentence.
+        """
+        if not current_report.unmediated:
+            return ""
+        libraries = ", ".join(sorted(current_report.unmediated))
+        return (f"{path.name} imports {libraries}, whose own actions are not "
+                "mediated; script launch was not approved")
+
+    if not launch_approved and (why := _unapproved(report)):
+        return Result.refusal(why, code=ERROR_NOT_PERMITTED)
     entry = (args.get("entry") or "main").strip()
     kwargs = dict(args.get("args") or {})
 
@@ -3946,10 +3959,14 @@ def _script_run(ctx, args: dict) -> Result:
         pass
 
     def _guard_launch(current_report):
-        """Judge the report whose digest ``Sandbox.start`` will execute."""
-        if current_report.unmediated and not launch_approved:
-            libraries = ", ".join(sorted(current_report.unmediated))
-            raise _ScriptApprovalRequired(libraries)
+        """Judge the report whose digest ``Sandbox.start`` will execute.
+
+        Raising is how a verdict leaves a callback the facade only calls: it
+        closes the window between the preflight above and the bytes the loader
+        verifies, where a script could otherwise gain a foreign import.
+        """
+        if not launch_approved and (refusal := _unapproved(current_report)):
+            raise _ScriptApprovalRequired(refusal)
 
     wait = args.get("wait", True)
     try:
@@ -3961,11 +3978,7 @@ def _script_run(ctx, args: dict) -> Result:
                             # nothing left to come back for.
                             collect_owner=None if wait else _script_owner(chain))
     except _ScriptApprovalRequired as exc:
-        return Result.refusal(
-            f"{path.name} imports {exc}, whose own actions are not mediated; "
-            "script launch was not approved",
-            code=ERROR_NOT_PERMITTED,
-        )
+        return Result.refusal(str(exc), code=ERROR_NOT_PERMITTED)
     except Exception as exc:
         # A BoxError here is the useful case: a script declaring a persistent
         # lifetime is told to be opened rather than run, which is a real

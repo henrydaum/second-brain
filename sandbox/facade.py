@@ -479,6 +479,11 @@ class Sandbox:
         plugin still has one-shot moments — ``on_install``, ``on_uninstall`` —
         and calling one named method and discarding the box is not the mistake
         that check exists to catch.
+
+        ``report_guard`` is handed the validator's reading of the exact bytes
+        this start will execute, and raises to stop it. Kernel callers only:
+        it is how ``script.run`` authorizes a property of the source without
+        the classification and the launch reading two different files.
         """
         report, spec, opts = self._prepare(source, isolated=isolated,
                                            timeout=timeout, name=name)
