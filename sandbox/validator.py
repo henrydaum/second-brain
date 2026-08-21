@@ -672,6 +672,85 @@ def _check_requests(walker: _Walker, node):
                    close[0] if close else "")
 
 
+#: Cue rungs a prompt body can be *recognised* as belonging to, by the SDK
+#: namespaces it reads. ``paths`` rides along with both because it answers
+#: constants — where the project root is does not move.
+_CUE_EVIDENCE = ((CONFIG_CUE := "config", {"config", "paths"}),
+                 (SESSION_CUE := "session", {"session", "paths"}))
+
+
+def _sdk_namespaces(node) -> set:
+    """The ``sdk.<namespace>`` families a body reads, or None if it hides some.
+
+    None when the body hands ``sdk`` to something else — a module-level helper,
+    a method on self. What that callee reads is invisible here, and the store's
+    own ``tool_run_script`` is exactly that shape: its prompt reads the session
+    and a path directly, and lists a live directory through ``_existing(sdk,
+    …)``. Reading only what is in front of us would call that a session-cued
+    prompt and be badly wrong, so an opaque call abstains outright.
+    """
+    namespaces = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Attribute) and _sdk_rooted(child):
+            inner = child.value
+            if isinstance(inner, ast.Name) and inner.id == "sdk":
+                namespaces.add(child.attr)
+        elif isinstance(child, ast.Call):
+            for argument in [*child.args, *(kw.value for kw in child.keywords)]:
+                if isinstance(argument, ast.Name) and argument.id == "sdk":
+                    return None
+    return namespaces
+
+
+def _sdk_rooted(attribute) -> bool:
+    """Whether an attribute chain is rooted at the ``sdk`` handle."""
+    node = attribute
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return isinstance(node, ast.Name) and node.id == "sdk"
+
+
+def _check_undeclared_prompt_cue(walker: _Walker, cls):
+    """Suggest a cue when a prompt body plainly belongs on one.
+
+    Deliberately silent unless there is something specific to say. The default
+    (``write``) is the never-stale rung, so an author who declares nothing is
+    correct and merely slower — which makes a note on *every* undeclared prompt
+    pure noise, and noise on every load teaches people to stop reading notes.
+    It fires only where the default is likely to be the wrong answer *and* the
+    right one is legible from the body.
+
+    Advisory rather than an error for the same reason the declaration is
+    optional at all: forced to name a rung, an author who does not yet know the
+    ladder picks whatever clears the message, and five of the six ways to be
+    wrong are silent ones.
+    """
+    method = next((item for item in cls.body
+                   if isinstance(item, ast.FunctionDef)
+                   and item.name == "agent_prompt"), None)
+    if method is None:
+        return
+    namespaces = _sdk_namespaces(method)
+    if namespaces is None:
+        return
+    if not namespaces:
+        walker.add(NOTE, method,
+                   "agent_prompt declares no refresh cue and reads nothing "
+                   "through the sdk, so it costs a box call per model call "
+                   "for an answer nothing in it can change",
+                   'a plain string, or agent_prompt_refresh = "load" when the '
+                   'text comes from state set at load')
+        return
+    for cue, allowed in _CUE_EVIDENCE:
+        if cue in namespaces and namespaces <= allowed:
+            walker.add(NOTE, method,
+                       f"agent_prompt declares no refresh cue, so it "
+                       f"recomputes on every write; this body reads only "
+                       f"sdk.{cue}",
+                       f'agent_prompt_refresh = "{cue}"')
+            return
+
+
 def _check_prompt_cue(walker: _Walker, node, cls):
     """Check an ``agent_prompt_refresh`` declaration can do anything at all.
 
@@ -1045,6 +1124,8 @@ def _check_class(walker: _Walker, family: str, base: str, cls, known_names):
     # spawned per model call for a sentence that never moves.
     if "agent_prompt_refresh" in assigned:
         _check_prompt_cue(walker, assigned["agent_prompt_refresh"], cls)
+    else:
+        _check_undeclared_prompt_cue(walker, cls)
 
     # A setting holding a credential is declared by its name. Catching the
     # omission here is the whole reason the name heuristic still exists: it

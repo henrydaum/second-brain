@@ -604,3 +604,95 @@ def test_a_declared_cue_is_read_back_as_a_declaration():
     report = _validate(_CUED % "config", filename="tool_advisor.py")
     assert report.ok
     assert report.declarations["agent_prompt_refresh"] == "config"
+
+
+# ────────────────────────────────────────────────────────────────────
+# Suggesting a cue: advisory, and silent unless it has something to say
+# ────────────────────────────────────────────────────────────────────
+
+_UNCUED = '''from guest.bases import BaseTool
+
+
+class Advisor(BaseTool):
+    name = "advisor"
+    description = "d"
+    parameters = {}
+    requests = ["session.get", "config.read", "db.query", "paths.get"]
+
+    def agent_prompt(self, sdk):
+        return %s
+
+    def run(self, sdk, **kwargs):
+        return "ok"
+'''
+
+
+def _advice(body):
+    report = _validate(_UNCUED % body, filename="tool_advisor.py")
+    assert report.ok, _messages(report)
+    return [line for line in report.render().splitlines()
+            if "agent_prompt" in line]
+
+
+def test_a_session_only_prompt_is_told_which_cue_it_wants():
+    """The case worth catching: the default is wrong and the answer is legible.
+
+    Three store tools were exactly this shape and were found by hand. The
+    advisory finds them without one.
+    """
+    advice = _advice('str((sdk.session.get() or {}).get("mode"))')
+    assert advice and 'agent_prompt_refresh = "session"' in advice[0]
+
+
+def test_a_config_only_prompt_is_pointed_at_the_config_cue():
+    advice = _advice('str(sdk.config.read("sync_directories"))')
+    assert advice and 'agent_prompt_refresh = "config"' in advice[0]
+
+
+def test_reading_a_constant_alongside_the_session_still_reads_as_session():
+    """``paths`` answers where things are, which does not move."""
+    advice = _advice('sdk.paths.get("project") + str(sdk.session.get())')
+    assert advice and 'agent_prompt_refresh = "session"' in advice[0]
+
+
+def test_a_prompt_reading_live_data_is_left_alone():
+    """The default is the right answer here, so there is nothing to say.
+
+    A note on every undeclared prompt would be noise, and noise on every load
+    is how a project teaches people to stop reading notes.
+    """
+    assert _advice('str(sdk.db.query("SELECT 1"))') == []
+
+
+def test_handing_the_sdk_to_a_helper_abstains_rather_than_guessing():
+    """What the callee reads is invisible from here.
+
+    ``tool_run_script`` is this shape: its prompt reads the session and a path
+    directly, and lists a live directory through a module-level helper. Reading
+    only what is in front of us would call it session-cued and be wrong.
+    """
+    assert _advice('_listing(sdk) + str(sdk.session.get())') == []
+
+
+def test_a_prompt_that_reads_nothing_live_is_told_so():
+    """A method with no sdk access is a string paying for a box call."""
+    advice = _advice('"fixed text"')
+    assert advice and "reads nothing through the sdk" in advice[0]
+
+
+def test_the_advice_never_blocks_a_load():
+    """Advisory, because being forced to name a rung is how a wrong one gets
+    picked: five of the six ways to be wrong fail silently."""
+    report = _validate(_UNCUED % 'str(sdk.session.get())',
+                       filename="tool_advisor.py")
+    assert report.ok
+
+
+def test_a_declared_cue_silences_the_advice():
+    source = (_UNCUED % 'str(sdk.session.get())').replace(
+        "    parameters = {}",
+        '    parameters = {}\n    agent_prompt_refresh = "session"')
+    report = _validate(source, filename="tool_advisor.py")
+    assert report.ok
+    assert not [line for line in report.render().splitlines()
+                if "declares no refresh cue" in line]

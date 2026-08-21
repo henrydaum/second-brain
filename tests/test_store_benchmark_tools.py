@@ -4,18 +4,48 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import sandbox  # noqa: F401 - installs the guest package alias
 from guest.requests import Result
 
 from tests.support import store_source
 
 
+def _source_or_skip(relative: str) -> str:
+    """The store's copy, or skip — same guard as the frontend contracts.
+
+    Every assertion below reads a file that lives on another branch, so a
+    clone with no store ref has nothing to be right or wrong about. Without
+    this the missing source reached ``compile`` as ``None`` and the whole file
+    failed with a ``TypeError`` naming neither the branch nor the file.
+    """
+    text = store_source(relative)
+    if text is None:
+        pytest.skip(f"{relative} is not present on a local store ref")
+    return text
+
+
 def _tool(relative: str, class_name: str):
     """Load a dependency-free store tool without importing the store tree."""
     namespace = {"__name__": f"test_{class_name.lower()}"}
-    source = store_source(relative)
-    exec(compile(source, relative, "exec"), namespace)
+    exec(compile(_source_or_skip(relative), relative, "exec"), namespace)
     return namespace[class_name]()
+
+
+def _prompt(tool, sdk) -> str:
+    """A tool's live contribution, or a failure that says what is missing.
+
+    ``agent_prompt`` is a plain ``str`` on the base, so a store copy that has
+    not gained the method yet answers ``TypeError: 'str' object is not
+    callable`` — which reads as a broken test rather than as what it is: this
+    clone's store ref predates the change being pinned.
+    """
+    method = getattr(type(tool), "agent_prompt")
+    assert callable(method), (
+        f"{type(tool).__name__} still declares a static agent_prompt; this "
+        f"clone's store ref predates the mode-aware guidance")
+    return tool.agent_prompt(sdk)
 
 
 class _Paths:
@@ -92,21 +122,21 @@ def test_running_background_check_stays_successful():
 def test_shell_and_script_prompts_change_strategy_with_mode():
     shell = _tool("tools/tool_run_command.py", "RunCommand")
     script = _tool("tools/tool_run_script.py", "RunScript")
-    assert "approval is refused" in shell.agent_prompt(_SDK(mode="lockdown"))
-    assert "raw `.py`" in shell.agent_prompt(_SDK(mode="yolo"))
-    assert "valid contained script still runs" in script.agent_prompt(
-        _SDK(mode="lockdown"))
-    assert "do not `import sdk`" in script.agent_prompt(_SDK(mode="ask"))
+    assert "approval is refused" in _prompt(shell, _SDK(mode="lockdown"))
+    assert "raw `.py`" in _prompt(shell, _SDK(mode="yolo"))
+    assert "valid contained script still runs" in _prompt(
+        script, _SDK(mode="lockdown"))
+    assert "do not `import sdk`" in _prompt(script, _SDK(mode="ask"))
 
 
 def test_glob_contributes_lockdown_guidance_only_in_lockdown():
     tool = _tool("tools/tool_glob.py", "GlobFiles")
-    assert "directory discovery" in tool.agent_prompt(_SDK(mode="lockdown"))
-    assert tool.agent_prompt(_SDK(mode="yolo")) == ""
+    assert "directory discovery" in _prompt(tool, _SDK(mode="lockdown"))
+    assert _prompt(tool, _SDK(mode="yolo")) == ""
 
 
 def test_read_file_owns_lockdown_file_guidance():
-    source = store_source("tools/tool_read_file.py")
+    source = _source_or_skip("tools/tool_read_file.py")
     assert "def agent_prompt(self, sdk)" in source
     assert "use read_file for its contents" in source
 
@@ -123,7 +153,7 @@ def test_the_mode_only_prompts_declare_the_session_cue():
 
     for relative in ("tools/tool_glob.py", "tools/tool_read_file.py",
                      "tools/tool_run_command.py"):
-        source = store_source(relative)
+        source = _source_or_skip(relative)
         assert 'agent_prompt_refresh = "session"' in source, relative
         assert "sdk.session.get()" in source, relative
 
@@ -136,7 +166,7 @@ def test_the_live_listing_prompts_stay_on_the_default_rung():
     to prevent, so the absence is deliberate and pinned.
     """
     for relative in ("tools/tool_run_script.py", "tools/tool_sql_query.py"):
-        source = store_source(relative)
+        source = _source_or_skip(relative)
         assert "agent_prompt_refresh" not in source.replace("# ", ""), relative
 
 
@@ -148,16 +178,16 @@ def test_grep_completes_the_lockdown_trio():
     shell alternative is most tempting and most likely to be refused.
     """
     tool = _tool("tools/tool_grep.py", "Grep")
-    guidance = tool.agent_prompt(_SDK(mode="lockdown"))
+    guidance = _prompt(tool, _SDK(mode="lockdown"))
     assert "grep for content search" in guidance
-    assert tool.agent_prompt(_SDK(mode="yolo")) == ""
+    assert _prompt(tool, _SDK(mode="yolo")) == ""
 
 
 def _hybrid(indexed, scope=("hybrid_search", "lexical_search",
                             "semantic_search")):
     """Hybrid search plus an SDK answering a corpus size and a tool scope."""
     namespace = {"__name__": "test_hybridsearch"}
-    source = store_source("tools/tool_hybrid_search.py").replace(
+    source = _source_or_skip("tools/tool_hybrid_search.py").replace(
         "from .tool_lexical_search import _search_summary",
         "_search_summary = None")
     exec(compile(source, "tool_hybrid_search.py", "exec"), namespace)
@@ -180,7 +210,7 @@ def test_search_guidance_names_an_empty_corpus():
     was not there.
     """
     tool, sdk = _hybrid(0)
-    guidance = tool.agent_prompt(sdk)
+    guidance = _prompt(tool, sdk)
     assert "Nothing is indexed yet" in guidance
     assert "not a missing fact" in guidance
     assert "hybrid_search:" not in guidance
@@ -188,7 +218,7 @@ def test_search_guidance_names_an_empty_corpus():
 
 def test_search_guidance_counts_what_is_indexed():
     tool, sdk = _hybrid(412)
-    assert "412 documents indexed" in tool.agent_prompt(sdk)
+    assert "412 documents indexed" in _prompt(tool, sdk)
 
 
 def test_search_guidance_names_only_the_tools_in_scope():
@@ -199,7 +229,7 @@ def test_search_guidance_names_only_the_tools_in_scope():
     partial one got told about tools it did not have.
     """
     tool, sdk = _hybrid(412, scope=("hybrid_search", "lexical_search"))
-    guidance = tool.agent_prompt(sdk)
+    guidance = _prompt(tool, sdk)
     assert "- lexical_search:" in guidance
     assert "- semantic_search:" not in guidance
 
@@ -209,6 +239,6 @@ def test_search_guidance_does_not_claim_an_empty_corpus_it_cannot_verify():
     conclusion in the other direction, and the reason ``_indexed`` answers
     None rather than 0."""
     tool, sdk = _hybrid(None)
-    guidance = tool.agent_prompt(sdk)
+    guidance = _prompt(tool, sdk)
     assert "Nothing is indexed yet" not in guidance
     assert "Search covers your sync_directories" in guidance

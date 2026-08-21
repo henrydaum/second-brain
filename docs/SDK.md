@@ -1742,7 +1742,9 @@ is what says for how long. Least to most frequent:
 
 Each rung includes the rarer ones, so `session` also refreshes on a config
 write. **Declare the rarest rung that is still true.** Saying nothing keeps
-`write`, which is never stale — but a prompt that reads only the security mode
+`write`, which is never stale — and the validator will suggest a rung when your
+body plainly belongs on one (it reads only `sdk.session`, say). It stays quiet
+when the default is the right answer — but a prompt that reads only the security mode
 and declares `session` stops paying a box for every file the agent writes.
 
 Two things follow beyond speed. `load` and `config` cannot change within a
