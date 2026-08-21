@@ -138,3 +138,77 @@ def test_the_live_listing_prompts_stay_on_the_default_rung():
     for relative in ("tools/tool_run_script.py", "tools/tool_sql_query.py"):
         source = store_source(relative)
         assert "agent_prompt_refresh" not in source.replace("# ", ""), relative
+
+
+def test_grep_completes_the_lockdown_trio():
+    """glob and read_file already steer off the shell; grep did not.
+
+    In lockdown the agent was told to use glob for listing and read_file for
+    contents, and nothing about content *search* — the one of the three whose
+    shell alternative is most tempting and most likely to be refused.
+    """
+    tool = _tool("tools/tool_grep.py", "Grep")
+    guidance = tool.agent_prompt(_SDK(mode="lockdown"))
+    assert "grep for content search" in guidance
+    assert tool.agent_prompt(_SDK(mode="yolo")) == ""
+
+
+def _hybrid(indexed, scope=("hybrid_search", "lexical_search",
+                            "semantic_search")):
+    """Hybrid search plus an SDK answering a corpus size and a tool scope."""
+    namespace = {"__name__": "test_hybridsearch"}
+    source = store_source("tools/tool_hybrid_search.py").replace(
+        "from .tool_lexical_search import _search_summary",
+        "_search_summary = None")
+    exec(compile(source, "tool_hybrid_search.py", "exec"), namespace)
+
+    sdk = _SDK()
+    sdk.Failed = Exception
+    sdk.tools = SimpleNamespace(list=lambda details=False: list(scope))
+    sdk.db = SimpleNamespace(
+        query=lambda sql: [{"n": indexed}] if indexed is not None
+        else (_ for _ in ()).throw(Exception("no such table")))
+    return namespace["HybridSearch"](), sdk
+
+
+def test_search_guidance_names_an_empty_corpus():
+    """An empty result reads exactly like the fact not existing.
+
+    Both sub-tools comment on this failure in their own source; the prompt
+    asserted "three retrieval tools search the indexed corpus" regardless, so
+    an agent searched three ways over nothing and concluded the information
+    was not there.
+    """
+    tool, sdk = _hybrid(0)
+    guidance = tool.agent_prompt(sdk)
+    assert "Nothing is indexed yet" in guidance
+    assert "not a missing fact" in guidance
+    assert "hybrid_search:" not in guidance
+
+
+def test_search_guidance_counts_what_is_indexed():
+    tool, sdk = _hybrid(412)
+    assert "412 documents indexed" in tool.agent_prompt(sdk)
+
+
+def test_search_guidance_names_only_the_tools_in_scope():
+    """Installing lexical_search alone is legitimate, and used to say nothing.
+
+    The guidance lives on hybrid_search, which pulls the other two as
+    dependencies — one-directional, so a lighter install got no guidance and a
+    partial one got told about tools it did not have.
+    """
+    tool, sdk = _hybrid(412, scope=("hybrid_search", "lexical_search"))
+    guidance = tool.agent_prompt(sdk)
+    assert "- lexical_search:" in guidance
+    assert "- semantic_search:" not in guidance
+
+
+def test_search_guidance_does_not_claim_an_empty_corpus_it_cannot_verify():
+    """A missing table is not proof of nothing indexed — the same wrong
+    conclusion in the other direction, and the reason ``_indexed`` answers
+    None rather than 0."""
+    tool, sdk = _hybrid(None)
+    guidance = tool.agent_prompt(sdk)
+    assert "Nothing is indexed yet" not in guidance
+    assert "Search covers your sync_directories" in guidance
