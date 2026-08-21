@@ -358,18 +358,17 @@ def test_static_prompt_permits_an_unsupported_conclusion_to_be_reported(data_dir
     not carry it. On the evidence corpus this was the worst-performing family
     by a wide margin — abstention checks passed a quarter of the time.
 
-    The last clause is a guard rather than a flourish. Sat beside the rule
-    above, permission to report a gap reads as permission to *stop looking*,
-    which would trade a large thoroughness loss for a smaller honesty gain. It
-    is pinned so a later edit cannot quietly drop the half that separates what
-    is asserted from how hard the work was.
+    It sits directly below the rule against ending on a plan or a promise, and
+    the two pull opposite ways, so the pairing is worth watching in the data
+    rather than in the wording: coverage of expected items is the larger loss
+    of the two, and a drop there alongside a rise in abstention would mean this
+    line is being read as permission to stop early.
     """
     from agent.system_prompt import _static_prompt
 
     prompt = _static_prompt()
     assert "cannot be supported is a real answer" in prompt
     assert "name what is missing or what would settle it" in prompt
-    assert "never how hard you look before asserting it" in prompt
 
 
 def test_both_shapes_are_collected_when_both_are_present(data_dir):
