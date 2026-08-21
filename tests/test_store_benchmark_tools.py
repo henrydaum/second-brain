@@ -109,3 +109,32 @@ def test_read_file_owns_lockdown_file_guidance():
     source = store_source("tools/tool_read_file.py")
     assert "def agent_prompt(self, sdk)" in source
     assert "use read_file for its contents" in source
+
+
+def test_the_mode_only_prompts_declare_the_session_cue():
+    """Three tools whose prompt reads the mode and nothing else.
+
+    Left on the default rung they recompute on every ``fs.write`` in the
+    process — a fresh box each, to re-read something that changes once a
+    conversation. This is the case ``prompt_cues`` was built for, so it is
+    worth stating that they actually claim it.
+    """
+    from sandbox.validator import validate_file
+
+    for relative in ("tools/tool_glob.py", "tools/tool_read_file.py",
+                     "tools/tool_run_command.py"):
+        source = store_source(relative)
+        assert 'agent_prompt_refresh = "session"' in source, relative
+        assert "sdk.session.get()" in source, relative
+
+
+def test_the_live_listing_prompts_stay_on_the_default_rung():
+    """And these must not: their text is a directory and a table list.
+
+    Declaring anything rarer would leave the agent reading a listing that
+    predates the file it just wrote — the exact failure the write rung exists
+    to prevent, so the absence is deliberate and pinned.
+    """
+    for relative in ("tools/tool_run_script.py", "tools/tool_sql_query.py"):
+        source = store_source(relative)
+        assert "agent_prompt_refresh" not in source.replace("# ", ""), relative
