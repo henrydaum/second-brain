@@ -19,7 +19,8 @@ import pytest
 
 import paths
 from runtime.context import set_kernel_parts
-from sandbox.guest.requests import FS_DELETE, FS_MOVE, FS_WRITE, Request
+from sandbox.guest.requests import (FS_DELETE, FS_MKDIR, FS_MOVE, FS_WRITE,
+                                    Request)
 from sandbox.policy import SAFE, UNSAFE, Chain, classify
 
 
@@ -99,6 +100,23 @@ def test_deletes_and_moves_are_included(layout):
     assert classify(Request(FS_MOVE, {"src": str(layout / "a"),
                                       "dst": str(layout / "b")}),
                     chain).level == SAFE
+
+
+def test_mkdir_asks_the_same_question_as_a_write(layout):
+    """A folder the agent may create but not write into is not a distinction
+    worth having, so the two branches read the same list."""
+    _allow(layout / "project")
+    chain = Chain(root="repl").push("tool_edit")
+
+    assert classify(Request(FS_MKDIR, {"path": str(layout / "project" / "out")}),
+                    chain).level == SAFE
+    assert classify(Request(FS_MKDIR, {"path": str(layout / "elsewhere" / "out")}),
+                    chain).level == UNSAFE
+    # And it tracks fs.write rather than being separately maintained.
+    for folder in (layout / "project" / "out", layout / "elsewhere" / "out"):
+        assert (classify(Request(FS_MKDIR, {"path": str(folder)}), chain).level
+                == classify(Request(FS_WRITE, {"path": str(folder / "f.txt"),
+                                               "data": "x"}), chain).level)
 
 
 def test_a_move_needs_both_ends(layout):

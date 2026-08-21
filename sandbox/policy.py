@@ -27,8 +27,8 @@ from pathlib import Path
 
 from .guest import requests as R
 from .guest.requests import (AGENT_SCHEDULE, CONFIG_READ, CONV_DELETE,
-                             ENV_READ, FS_DELETE, FS_MOVE, FS_TEMP, FS_WRITE,
-                             NET_HTTP, PROC_RUN, SESSION_ADD_PROMPT,
+                             ENV_READ, FS_DELETE, FS_MKDIR, FS_MOVE, FS_TEMP,
+                             FS_WRITE, NET_HTTP, PROC_RUN, SESSION_ADD_PROMPT,
                              SESSION_ADD_TOOL, UI_ASK, Request)
 from .credentials import is_secret, redact
 
@@ -663,7 +663,7 @@ ALWAYS_SAFE = {
 _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
              R.DB_WRITE,
              FS_WRITE, R.FS_WRITE_BYTES,
-             FS_MOVE, FS_DELETE, FS_TEMP,
+             FS_MOVE, FS_DELETE, FS_TEMP, FS_MKDIR,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
              R.COMMAND_CALL,
              UI_ASK, R.UI_APPROVE, SESSION_ADD_TOOL, R.SESSION_COMPACT,
@@ -1144,6 +1144,17 @@ def classify(request: Request, chain: Chain) -> Decision:
             return Decision(SAFE, _write_reason(args.get("path"),
                                                 verb="delete"))
         return Decision(UNSAFE, f"delete {args.get('path')}",
+                        say="That is outside the folders you allow writes in.")
+
+    if kind == FS_MKDIR:
+        # The same question ``fs.write`` asks, because it is the same reach:
+        # anywhere a file may be created, the folder holding it may be too.
+        # Answering it separately would let the two drift, and a directory the
+        # agent may make but not write into is not a useful distinction.
+        if _freely_writable(args.get("path")):
+            return Decision(SAFE, _write_reason(args.get("path"),
+                                                verb="create folder in"))
+        return Decision(UNSAFE, f"create directory {args.get('path')}",
                         say="That is outside the folders you allow writes in.")
 
     if kind == FS_TEMP:

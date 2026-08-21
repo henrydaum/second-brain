@@ -26,7 +26,8 @@ from pathlib import Path
 from .. import provenance, walk
 from ..guest import protocol
 from ..guest.codes import ERROR_NOT_FOUND, ERROR_NOT_PERMITTED
-from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
+from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MKDIR, FS_MOVE,
+                              FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
                               FS_STAT, FS_WRITE_BYTES, NET_HTTP, PROC_LIST,
                               PROC_RUN,
@@ -617,6 +618,33 @@ def _fs_delete(ctx, args: dict) -> Result:
         return Result.failure(f"delete failed: {exc}")
 
 
+def _fs_mkdir(ctx, args: dict) -> Result:
+    """Create a directory, and the ones above it.
+
+    ``exist_ok`` defaults to true because the useful question is nearly always
+    "make sure this exists", and the caller who wants the other one is asking
+    about a race the filesystem answers better than a prior ``fs.stat`` would.
+    """
+    raw = args.get("path")
+    if not raw:
+        return Result.failure("fs.mkdir requires a path")
+    if (refused := _guard_write(raw)) is not None:
+        return refused
+    path = Path(raw)
+    # A file already sitting on the name gets its own message. ``mkdir``
+    # raises FileExistsError either way, and "it exists" is unhelpful when
+    # what exists is the wrong kind of thing.
+    if path.is_file():
+        return Result.failure(f"not a directory: {raw}")
+    try:
+        path.mkdir(parents=True, exist_ok=bool(args.get("exist_ok", True)))
+        return Result(data={"path": str(path)})
+    except FileExistsError:
+        return Result.failure(f"directory already exists: {raw}")
+    except OSError as exc:
+        return Result.failure(f"mkdir failed: {exc}", retryable=True)
+
+
 def _fs_move(ctx, args: dict) -> Result:
     """Copy or move one path to another."""
     src, dst = args.get("src"), args.get("dst")
@@ -1074,6 +1102,7 @@ HANDLERS = {
     FS_SEARCH: _fs_search,
     FS_DELETE: _fs_delete,
     FS_MOVE: _fs_move,
+    FS_MKDIR: _fs_mkdir,
     FS_TEMP: _fs_temp,
     NET_HTTP: _net_http,
     PROC_RUN: _proc_run,

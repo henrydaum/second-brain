@@ -76,7 +76,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        FILE_REGISTER, FRONTEND_ACT, FRONTEND_ATTEND,
                        FRONTEND_BIND, FRONTEND_CANCEL, FRONTEND_COLLECT,
                        FRONTEND_PENDING, FRONTEND_RESOLVE, FRONTEND_SUBMIT,
-                       FS_DELETE, FS_LIST, FS_MOVE, FS_READ, FS_READ_BYTES,
+                       FS_DELETE, FS_LIST, FS_MKDIR, FS_MOVE, FS_READ,
+                       FS_READ_BYTES,
                        FS_SEARCH, FS_STAT, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, NOTIFICATION_LIST,
@@ -154,7 +155,11 @@ class _FS(_Namespace):
         return self._ask(FS_READ, path=str(path))
 
     def write(self, path, data: str, mode: str = "overwrite"):
-        """Create, overwrite, or append. ``mode="append"`` to add."""
+        """Create, overwrite, or append. ``mode="append"`` to add.
+
+        Missing parent folders are created, so writing ``out/report.json``
+        into an empty workspace works without making ``out/`` first.
+        """
         return self._ask(FS_WRITE, path=str(path), data=data, mode=mode)
 
     def read_bytes(self, path, offset: int = 0, length: int = 0) -> bytes:
@@ -302,6 +307,18 @@ class _FS(_Namespace):
     def move(self, src, dst, copy: bool = False):
         """Move or copy one path to another."""
         return self._ask(FS_MOVE, src=str(src), dst=str(dst), copy=copy)
+
+    def mkdir(self, path, exist_ok: bool = True):
+        """Create a directory and any missing parents.
+
+        **You rarely need this.** :meth:`write` and :meth:`write_bytes` already
+        create the folders above the file, so ``write("out/report.json", ...)``
+        makes ``out/`` on its own. Reach for this only when a directory has to
+        exist while still empty.
+
+        ``exist_ok=False`` to fail when it is already there.
+        """
+        return self._ask(FS_MKDIR, path=str(path), exist_ok=bool(exist_ok))
 
     def temp(self, directory: bool = False, suffix: str = ""):
         """Scratch space you may always have."""

@@ -328,27 +328,26 @@ def test_a_string_shape_ignores_a_cue_it_declares(data_dir):
 
 
 def test_static_prompt_requires_finishing_accepted_work(data_dir):
-    """Finish the work, and know the two things that legitimately stop it.
+    """Finish the work rather than narrating an intention to.
 
-    The exit clause is the load-bearing half. Naming only *information* left
-    an agent in lockdown with no sanctioned way to stop: a refusal is not a
-    fact the user can supply, so the rule read as "keep going" over the one
-    thing the mode says never to retry. Permission is the second exit, and
-    the last sentence is what keeps it from becoming the first — one refused
-    step is not a refused task.
+    The rule carries **no exit clause on purpose.** An earlier draft enumerated
+    what may legitimately stop the work — a fact, a permission — and the list
+    was the problem: naming the exits invites the model to reach for one, and a
+    prompt that spends three sentences on how to stop reads as permission to.
+    Where a refusal genuinely ends a step, the mode's own note already governs
+    what happens next, so saying it twice only has the two halves of the prompt
+    arguing in front of the model.
 
-    It says *finish the parts it does not block* rather than anything about
-    routes, deliberately. Lockdown's own note forbids looking for another
-    route to the same effect, so a sentence inviting one would have the two
-    halves of the prompt arguing in front of the model.
+    What is pinned here is therefore just the demand, and specifically that it
+    still names all three ways of *not* doing the work — a plan, a promise, an
+    intention to retry — since dropping any one of them is how this line has
+    weakened before.
     """
     from agent.system_prompt import _static_prompt
 
     prompt = _static_prompt()
     assert "do not end on a plan, a promise, or an intention to retry" in prompt
-    assert "only the user can provide — a fact, or a permission" in prompt
-    assert "A refused step does not end the task" in prompt
-    assert "finish the parts it does not block" in prompt
+    assert "until the work is complete" in prompt
 
 
 def test_both_shapes_are_collected_when_both_are_present(data_dir):

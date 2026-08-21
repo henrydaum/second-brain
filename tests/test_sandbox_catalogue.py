@@ -225,6 +225,27 @@ def test_deleting_outside_scratch_is_unsafe():
                         Chain()).safe
 
 
+def test_mkdir_makes_parents_and_reports_a_file_in_the_way(tmp_path):
+    """The empty-directory case, which is the only one ``fs.write`` cannot
+    cover: writing a file already creates the folders above it."""
+    from sandbox.handlers.fs_net import _fs_mkdir
+
+    deep = tmp_path / "out" / "reports" / "2026"
+    assert _fs_mkdir(None, {"path": str(deep)}).data["path"] == str(deep)
+    assert deep.is_dir()
+    # Idempotent by default; the caller who wants the other answer asks for it.
+    assert _fs_mkdir(None, {"path": str(deep)}).ok
+    assert not _fs_mkdir(None, {"path": str(deep), "exist_ok": False}).ok
+
+    # A file on the name gets its own message rather than "already exists",
+    # which would send the caller looking for a directory that is not there.
+    occupied = tmp_path / "out" / "notes.md"
+    occupied.write_text("x", encoding="utf-8")
+    refused = _fs_mkdir(None, {"path": str(occupied)})
+    assert not refused.ok
+    assert "not a directory" in refused.error
+
+
 def test_widening_is_unsafe_and_narrowing_is_safe():
     """The rule that runs through the whole catalogue."""
     assert not classify(Request(R.SESSION_ADD_TOOL, {"tool": "t"}),

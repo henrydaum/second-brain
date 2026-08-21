@@ -31,6 +31,11 @@ FS_SEARCH = "fs.search"
 FS_DELETE = "fs.delete"
 FS_MOVE = "fs.move"
 FS_TEMP = "fs.temp"
+# Writing a file already creates the folders above it, so this covers the one
+# case with no other spelling: a directory that must exist while still empty.
+# Separate from ``fs.write`` because it is a different effect — it makes a
+# container, not content — though the write policy reads both the same way.
+FS_MKDIR = "fs.mkdir"
 
 # ── database ──────────────────────────────────────────────────────────
 DB_QUERY = "db.query"
@@ -303,7 +308,7 @@ APP_STOP = "app.stop"
 
 ALL_TYPES = {
     FS_READ, FS_WRITE, FS_READ_BYTES, FS_WRITE_BYTES, FS_STAT,
-    FS_LIST, FS_SEARCH, FS_DELETE, FS_MOVE, FS_TEMP,
+    FS_LIST, FS_SEARCH, FS_DELETE, FS_MOVE, FS_TEMP, FS_MKDIR,
     DB_QUERY, DB_WRITE, DB_DEFINE,
     CONV_CREATE, CONV_READ, CONV_LIST, CONV_APPEND, CONV_SET_TITLE,
     CONV_SET_CATEGORY, CONV_SET_NOTIFICATION_MODE, CONV_LOAD,

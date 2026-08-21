@@ -172,6 +172,15 @@ class _Fs:
             shutil.move(str(src), str(dst))
         return str(dst)
 
+    def mkdir(self, path, exist_ok: bool = True) -> str:
+        """Create a directory and any missing parents.
+
+        Rarely needed here for the same reason it is rarely needed in a box:
+        :meth:`write` already makes the folders above the file.
+        """
+        Path(path).mkdir(parents=True, exist_ok=bool(exist_ok))
+        return str(path)
+
     def temp(self, directory: bool = False, suffix: str = "") -> str:
         """Scratch space, for parsers that must hand a path to a library.
 

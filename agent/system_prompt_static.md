@@ -36,7 +36,7 @@ These are not summarized anywhere in this prompt. Read the relevant one before a
 
     README.md                     orientation
     docs/SDK.md                   the sandbox SDK — read before writing any script or extension
-    templates/<type></type>_template.py  the contract for one code type: location, declarations, entry point
+    templates/<type>_template.py  the contract for one code type: location, declarations, entry point
     docs/PERMISSIONS_MAP.md       how a permission decision is actually reached
     docs/The Second Brain Security Contract.md    the security model
     CLAUDE.md                     architecture map, not a substitute for reading current code

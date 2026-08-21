@@ -351,7 +351,8 @@ Each namespace is exactly one Request family, so `sdk.fs.read` *is* the
 
 ```python
 sdk.fs.read(path)                          # -> str
-sdk.fs.write(path, data, mode="overwrite") # mode="append" to add
+sdk.fs.write(path, data, mode="overwrite") # mode="append" to add;
+                                           # missing parent folders are created
 sdk.fs.read_bytes(path, offset=0, length=0)  # -> bytes; anything non-text
 sdk.fs.iter_bytes(path, chunk_size=4 * 1024 * 1024,
                   offset=0, limit=None)      # -> lazy byte chunks
@@ -371,8 +372,19 @@ sdk.fs.search(pattern, root=".", regex=True, mode="content",
               context_lines=0, limit=100)  # -> {root, mode, results, ...}
 sdk.fs.delete(path)
 sdk.fs.move(src, dst, copy=False)
+sdk.fs.mkdir(path, exist_ok=True)          # only for a folder that must exist
+                                           # while still empty — see below
 sdk.fs.temp(directory=False, suffix="")    # workspace/temp scratch; always allowed
 ```
+
+`sdk.fs.mkdir` is rarely what you want. `sdk.fs.write` and
+`sdk.fs.write_bytes` already create the folders above the file, so
+`sdk.fs.write("out/report.json", text)` makes `out/` on its own; reach for
+`mkdir` only when a directory has to exist while still empty. It creates
+parents, takes `exist_ok=False` to fail when the directory is already there,
+and answers with its own message when a *file* is sitting on the name. Its
+permission question is the one `fs.write` asks: no dialog inside the folders
+you may already write to, an approval anywhere else.
 
 `sdk.fs.stat` inspects exactly one file or directory and raises when it is
 missing. `sdk.fs.exists` uses the same `fs.stat` Request but turns that expected

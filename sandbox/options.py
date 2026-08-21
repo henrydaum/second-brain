@@ -133,7 +133,7 @@ def _always_allow_folder(chain, request, decision) -> list:
     from .guest import requests as R
 
     if request.type not in (R.FS_WRITE, R.FS_WRITE_BYTES, R.FS_MOVE,
-                            R.FS_DELETE):
+                            R.FS_DELETE, R.FS_MKDIR):
         return []
     args = request.args
     ends = ([args.get("src"), args.get("dst")] if request.type == R.FS_MOVE
