@@ -447,7 +447,15 @@ class HookRegistry:
         re-drives (``Redrive`` / ``session.restart_turn``) are the same
         logical turn and do NOT re-run starters. Starters run synchronously
         on the drive thread, so they set the latency floor for every reply —
-        keep them fast (one small-model call at most)."""
+        keep them fast (one small-model call at most).
+
+        The ``turn`` prompt cue is fired here, first and before the adjusters,
+        because the turn's first prompt is built downstream of them — a bump
+        after would mean the cue arrives one call late. It follows the same
+        "restart re-drives are the same logical turn" rule the starters do, and
+        gets it for free: the caller already guards on ``restart_drive``."""
+        import prompt_cues
+        prompt_cues.fire(prompt_cues.TURN)
         ctx = self._ctx(session, runtime, TURN_START)
         for starter in self._hooks[TURN_START]:
             try:

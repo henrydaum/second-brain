@@ -42,6 +42,11 @@ class PromptContext:
     Native plugins read whatever they need to build their contribution. For a
     sandboxed plugin, ``session_key`` lets the bridge lend its SDK the same
     session context without passing this kernel object across the boundary.
+
+    It is also what the ``session`` rung of ``prompt_cues`` is keyed on, which
+    is why the fields it names (``prompt_cues.SESSION_FACTS``) are exactly the
+    ones ``sdk.session.get()`` answers with. A fact a prompt can read and this
+    bag cannot see is one nothing would invalidate.
     """
     db: Any = None
     services: dict = field(default_factory=dict)
@@ -52,6 +57,8 @@ class PromptContext:
     frontend_name: str | None = None
     session_key: str | None = None
     security_mode: str = "ask"
+    conversation_id: int | None = None
+    user_id: int | None = None
 
 
 def _static_prompt() -> str:
@@ -78,6 +85,8 @@ def build_prompt_sections(
     active_llm=None,
     session_key: str | None = None,
     security_mode: str = "ask",
+    conversation_id: int | None = None,
+    user_id: int | None = None,
 ) -> list[dict[str, str]]:
     """Build ordered system prompt messages.
 
@@ -93,6 +102,8 @@ def build_prompt_sections(
         frontend_name=frontend_name,
         session_key=session_key,
         security_mode=normalize_security_mode(security_mode),
+        conversation_id=conversation_id,
+        user_id=user_id,
     )
     populations = _in_scope(r, services, orchestrator, commands,
                             command_filter, frontend)

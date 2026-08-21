@@ -207,3 +207,83 @@ def test_stamps_for_different_cues_never_collide():
     ctx = SimpleNamespace(session_key="chat")
     for a, b in itertools.combinations(CACHEABLE, 2):
         assert cues.stamp(a, ctx) != cues.stamp(b, ctx)
+
+
+# ────────────────────────────────────────────────────────────────────
+# The fire sites: a rung nobody bumps is a rung that does nothing
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_both_config_files_invalidate_a_config_cued_prompt():
+    """The funnel is the announcement, not either writer.
+
+    ``save`` writes the kernel's settings and ``save_plugin_config`` a plugin's
+    own; a plugin rendering the value it was configured with cares about the
+    second, and firing in the first would have missed it entirely.
+    """
+    from config.config_manager import _emit_config_changed
+
+    for scope in ("core", "plugin"):
+        before = cues.stamp(cues.CONFIG)
+        _emit_config_changed(scope, ["some_setting"])
+        assert cues.stamp(cues.CONFIG) != before, f"{scope} did not fire"
+
+
+def test_a_save_that_changed_nothing_does_not_invalidate():
+    """``save`` merges DEFAULTS and announces unconditionally.
+
+    Materializing a default is a change to a file and to nothing else, so a
+    boot would otherwise cost every config-cued prompt a recompute for a change
+    nobody made — the same rule ``_record_config_save`` already follows.
+    """
+    from config.config_manager import _emit_config_changed
+
+    before = cues.stamp(cues.CONFIG)
+    _emit_config_changed("core", [])
+    _emit_config_changed("core", None)
+    assert cues.stamp(cues.CONFIG) == before
+
+
+def test_starting_a_turn_fires_the_turn_rung():
+    from runtime.hooks import HookRegistry
+
+    before = cues.stamp(cues.TURN)
+    HookRegistry().start_turn(SimpleNamespace(history=[], key="chat"))
+    assert cues.stamp(cues.TURN) != before
+
+
+def test_a_turn_scoped_mode_is_a_session_fact_not_a_turn_one():
+    """Set for one turn and cleared at its end, with no counter involved.
+
+    ``HookRegistry.finish_turn`` clears ``turn_security_mode`` by writing the
+    field directly rather than through the runtime, which is exactly the kind
+    of site a fire-based design forgets. The mode reaches the stamp because
+    ``PromptContext.security_mode`` is read fresh from the runtime's own
+    precedence reader, so there is nothing to forget.
+    """
+    from runtime.hooks import HookRegistry
+
+    session = SimpleNamespace(history=[], key="chat", turn_security_mode="yolo",
+                              staged_attachments=None,
+                              pending_agent_actions=None)
+    during = cues.stamp(cues.SESSION,
+                        SimpleNamespace(session_key="chat",
+                                        security_mode=session.turn_security_mode))
+    HookRegistry().finish_turn(session)
+    assert session.turn_security_mode is None
+    after = cues.stamp(cues.SESSION,
+                       SimpleNamespace(session_key="chat", security_mode="ask"))
+    assert during != after
+
+
+def test_changing_the_plugin_population_fires_the_load_rung():
+    """A package install writes from kernel code and never reaches _settle.
+
+    So without this rung a prompt describing what is installed was invalidated
+    only by coincidence — whenever something unrelated happened to write.
+    """
+    from plugins.plugin_discovery import unload_plugin
+
+    before = cues.stamp(cues.LOAD)
+    unload_plugin("tool", "nothing-by-this-name")
+    assert cues.stamp(cues.LOAD) != before

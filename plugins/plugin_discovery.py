@@ -352,11 +352,11 @@ def load_single_plugin(plugin_type: str, file_path: Path,
     On success: (name, None). On failure: (None, error_string).
     """
     if plugin_type == "tool":
-        return _load_single_tool(file_path, tool_registry)
+        outcome = _load_single_tool(file_path, tool_registry)
     elif plugin_type == "task":
-        return _load_single_task(file_path, orchestrator)
+        outcome = _load_single_task(file_path, orchestrator)
     elif plugin_type == "service":
-        return _load_single_service(file_path, services, config, {
+        outcome = _load_single_service(file_path, services, config, {
             "tool_registry": tool_registry,
             "orchestrator": orchestrator,
             "command_registry": command_registry,
@@ -364,11 +364,14 @@ def load_single_plugin(plugin_type: str, file_path: Path,
             "runtime": runtime,
         })
     elif plugin_type == "command":
-        return _load_single_command(file_path, command_registry or getattr(tool_registry, "command_registry", None))
+        outcome = _load_single_command(file_path, command_registry or getattr(tool_registry, "command_registry", None))
     elif plugin_type == "frontend":
-        return _load_single_frontend(file_path, frontend_manager)
+        outcome = _load_single_frontend(file_path, frontend_manager)
     else:
         return None, f"Unknown plugin_type: {plugin_type}"
+    if not outcome[1]:
+        _population_changed()
+    return outcome
 
 
 def unload_plugin(plugin_type: str, plugin_name: str,
@@ -396,6 +399,29 @@ def unload_plugin(plugin_type: str, plugin_name: str,
         adapters = getattr(frontend_manager, "adapters", {})
         for name in _names_by_source({k: v.__class__ for k, v in adapters.items()}, plugin_name, source_path):
             frontend_manager.unregister(name)
+    _population_changed()
+
+
+def _population_changed() -> None:
+    """Fire the ``load`` prompt cue: which plugins exist just changed.
+
+    A plugin's *own* reload needs no announcement — discovery builds a fresh
+    adapter class and instantiates it, so the old object takes its cached
+    prompt with it. What this is for is the other reading, and the one an
+    author means by declaring ``load``: a prompt that describes the population
+    rather than itself. A package install writes its files from kernel code and
+    never passes ``Interpreter._settle``, so without this the write counter
+    would not see it either and such a prompt went stale until something
+    unrelated happened to move.
+
+    Guarded and best-effort, like the ledger and the bus: discovery must never
+    fail because of bookkeeping.
+    """
+    try:
+        import prompt_cues
+        prompt_cues.fire(prompt_cues.LOAD)
+    except Exception:
+        pass
 
 
 def _names_by_source(items: dict, plugin_name: str, source_path: str | None) -> list[str]:

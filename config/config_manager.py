@@ -137,12 +137,28 @@ def _emit_config_changed(scope: str, changed_keys=None) -> None:
     ledger's ``config_save`` row follows, and for the same reason: config holds
     tokens. It is what lets a subscriber tell the user what changed rather than
     only that something did.
+
+    It is also where the ``config`` rung of the prompt-cue ladder is fired, and
+    the reason it is *here* rather than in either writer: ``save`` writes the
+    kernel's settings and ``save_plugin_config`` a plugin's own, and a plugin
+    rendering the value it was configured with cares about the second. This is
+    the one funnel both pass through. Nothing fires on an empty list, matching
+    ``_record_config_save`` — ``save`` merges DEFAULTS and calls this
+    unconditionally, so a boot that materialized a default would otherwise cost
+    every config-cued prompt a recompute for a change nobody made.
     """
     try:
         from events.event_bus import bus
         from events.event_channels import CONFIG_CHANGED
         bus.emit(CONFIG_CHANGED, {"scope": scope,
                                   "keys": sorted(changed_keys or [])})
+    except Exception:
+        pass
+    if not changed_keys:
+        return
+    try:
+        import prompt_cues
+        prompt_cues.fire(prompt_cues.CONFIG)
     except Exception:
         pass
 

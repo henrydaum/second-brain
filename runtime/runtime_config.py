@@ -409,6 +409,12 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             active_llm=active_llm(runtime, session),
             session_key=session.key,
             security_mode=runtime.security_mode(session.key),
+            # Read inside the closure, not beside ``profile`` above: the
+            # conversation flips from None to an id when the first message
+            # lands, and a user rebind moves the second on a live session.
+            # Both are session facts the cue ladder keys on.
+            conversation_id=session.conversation_id,
+            user_id=runtime.session_user_id(session.key),
         )
         return _append_dynamic(sections, _account_suffix(), _mode_suffix())
     return _session_prompt
