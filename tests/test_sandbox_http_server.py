@@ -19,7 +19,7 @@ import time
 import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
-from sandbox.epoch import RENDERING, UNCOUNTED
+from prompt_cues import RENDERING, UNCOUNTED
 from sandbox.guest import requests as R
 from sandbox.handlers.kernel import HANDLERS
 from sandbox.http_server import MAX_PENDING, HttpServer
@@ -74,7 +74,7 @@ def test_every_http_request_is_registered_everywhere():
 
     Four sets have to agree, and three of the four go wrong without raising:
     an unregistered handler is a failed Request, but a missing policy entry
-    reads as UNSAFE and a missing epoch entry merely makes things slow.
+    reads as UNSAFE and a missing entry here merely makes things slow.
     """
     assert HTTP_TYPES <= R.ALL_TYPES
     assert HTTP_TYPES <= set(HANDLERS)
@@ -85,7 +85,7 @@ def test_push_is_uncounted_or_prompt_caching_quietly_dies():
     """The whole reason ``RENDERING`` is named and pinned rather than derived.
 
     An SSE frontend sends one ``http.push`` per token, right behind the
-    backend's ``llm.delta``. Counting it would tick the epoch thousands of
+    backend's ``llm.delta``. Counting it would tick the write counter thousands of
     times a reply, so every live ``agent_prompt`` would recompute on every
     model call and the caching would be undone — with no symptom but slowness,
     which is exactly the failure this set exists to make impossible.
@@ -106,7 +106,7 @@ def test_push_is_dropped_by_the_ledger_sink():
     ``llm.delta`` is excluded from the sink because a row per token serializes
     the database against the model. An SSE frame per token would restore that
     exactly, so the sink has to drop this too — and the sink builds its own
-    set, so agreeing with ``epoch`` is something a test has to state.
+    set, so agreeing with ``prompt_cues`` is something a test has to state.
     """
     from sandbox.guest.requests import HTTP_PUSH, LLM_DELTA, READ_ONLY
 

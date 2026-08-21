@@ -215,7 +215,7 @@ CONSOLE_WRITE = "console.write"
 HTTP_DRAIN = "http.drain"
 HTTP_RESPOND = "http.respond"
 # One frame. Sent per streamed token, which is what puts it in ``RENDERING``
-# rather than merely outside ``READ_ONLY`` — counting it would bump the epoch
+# rather than merely outside ``READ_ONLY`` — counting it would bump the write counter
 # per token and silently discard every cached ``agent_prompt``, and recording
 # it would write a ledger row per token. ``llm.delta`` has both exemptions for
 # exactly this reason; so does this.
@@ -363,7 +363,7 @@ READ_ONLY = {
     # Here for both of the reasons above at once, and it matters more than for
     # its neighbours. A fan-out polls ``collect(timeout=0)`` and a long loop
     # asks ``budget()`` every iteration, so leaving either out would write a
-    # ledger row per tick — and, worse, bump ``sandbox.epoch`` every tick,
+    # ledger row per tick — and, worse, bump the ``prompt_cues`` write counter every tick,
     # which invalidates every cached ``agent_prompt`` in the process. That is
     # the same trap ``llm.delta`` is excluded from the ledger sink for: a
     # Request issued per iteration must never be treated as a change.

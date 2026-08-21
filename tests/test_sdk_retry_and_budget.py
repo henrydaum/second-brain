@@ -314,7 +314,7 @@ def test_asking_costs_no_dialog_and_no_ledger_row(sb, budget_script):
     """It is read-only, and that is load-bearing rather than a nicety.
 
     A loop asks every iteration. Left out of ``READ_ONLY`` that would be a
-    ledger row per tick — and, worse, an ``epoch`` bump per tick, which
+    ledger row per tick — and, worse, a ``prompt_cues`` bump per tick, which
     invalidates every cached ``agent_prompt`` in the process. The same trap
     ``llm.delta`` is kept out of the ledger sink for.
     """

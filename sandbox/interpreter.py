@@ -30,7 +30,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from . import epoch, provenance
+import prompt_cues
+
+from . import provenance
 from .guest import protocol
 from .handlers import HANDLERS
 from .policy import Chain, Decision, classify
@@ -546,12 +548,12 @@ class Interpreter:
                 decision: Decision, result: Result):
         """Record the Request, note whether it changed anything, and resume.
 
-        The epoch bump sits here for the reason the ledger sink does: this is
-        the one funnel every serviced Request passes through, so a single
+        The ``write`` bump sits here for the reason the ledger sink does: this
+        is the one funnel every serviced Request passes through, so a single
         counter can speak for the whole sandbox. Its own guard, because an
-        observer must never break a Request — ``epoch.bump`` cannot realistically
-        raise, but neither could the ledger write, and the cost of being wrong
-        is a plugin's effect failing for a bookkeeping reason.
+        observer must never break a Request — ``prompt_cues.fire`` cannot
+        realistically raise, but neither could the ledger write, and the cost
+        of being wrong is a plugin's effect failing for a bookkeeping reason.
         """
         if self._record is not None:
             try:
@@ -566,10 +568,10 @@ class Interpreter:
             except Exception:
                 logger.exception("ledger write failed")
         try:
-            if epoch.counts(request, result):
-                epoch.bump()
+            if prompt_cues.counts(request, result):
+                prompt_cues.fire(prompt_cues.WRITE)
         except Exception:
-            logger.exception("epoch bump failed")
+            logger.exception("prompt cue bump failed")
         execution.inbox.put(_deliverable(request, result))
 
     # ──────────────────────────────────────────────────────────────

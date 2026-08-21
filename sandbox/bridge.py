@@ -43,7 +43,9 @@ import logging
 import types
 from pathlib import Path
 
-from . import epoch, provenance
+import prompt_cues
+
+from . import provenance
 from .approval import describe_grant
 from .facade import Sandbox
 from .policy import Chain
@@ -385,13 +387,21 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         Requests, so the guest can use ``sdk.session.get()`` just as it can in
         its normal entry point. Prompt collection remains rooted at ``kernel``
         and carries no approval grant.
+
+        Which session — if any — is the plugin's own cue talking. Below
+        ``session`` on the ladder there is nothing to lend, so the guest is
+        answered from the kernel context and ``sdk.session.get()`` tells it
+        nothing. That is the enforcement half of the tier: a contribution that
+        cannot see the session cannot quietly depend on one while riding in a
+        prefix shared by all of them.
         """
-        session_key, variant = _prompt_variant(ctx)
-        context = get_sandbox().interpreter.context_for_session(session_key)
+        cue = prompt_cues.of(self)
+        context = get_sandbox().interpreter.context_for_session(
+            prompt_cues.session_for(cue, ctx))
         return _cached_prompt(
             self,
             lambda: _forward(self, context, {}, method=_prompt_name),
-            variant=variant,
+            stamp=prompt_cues.stamp(cue, ctx),
         )
 
     run = {"tool": run_tool, "task": run_task,
@@ -563,21 +573,20 @@ def forget_prompt(plugin) -> None:
     """Drop a plugin's cached prompt contribution outright.
 
     For the *lifetime* resets in ``residency.py``, which are a different
-    question from the epoch's: a residency's prompt is only knowable while the
+    question from any cue's: a residency's prompt is only knowable while the
     box is open, so opening or closing one invalidates it however still the
     world has been.
 
-    One function because the cache attributes must move together — clearing
-    only ``_prompt_text`` leaves the epoch and context variant matching, and
-    ``_cached_prompt`` would answer "" from a residency that is now loaded.
+    One function because the two attributes must move together — clearing only
+    ``_prompt_text`` leaves the stamp matching, and ``_cached_prompt`` would
+    answer "" from a residency that is now loaded.
     """
     plugin._prompt_text = None
-    plugin._prompt_epoch = None
-    plugin._prompt_variant = None
+    plugin._prompt_stamp = None
 
 
-def _cached_prompt(plugin, produce, *, variant=None) -> str:
-    """A plugin's system-prompt contribution, recomputed when the world moves.
+def _cached_prompt(plugin, produce, *, stamp) -> str:
+    """A plugin's system-prompt contribution, recomputed when its cue fires.
 
     ``_collect`` in ``agent/system_prompt.py`` runs on every *LLM call*, not
     once per turn, and for an ephemeral family every call into the guest is a
@@ -587,17 +596,23 @@ def _cached_prompt(plugin, produce, *, variant=None) -> str:
     The cache used to be permanent, which made the other half wrong: a method
     shape exists precisely because its text reads live state, so a tool that
     lists the scripts directory went on describing the directory as it stood
-    when the adapter was built. ``epoch`` is what resolves the two — it ticks
-    only when sandboxed code *changed* something, so a read-only stretch reuses
-    the text for free and a single ``fs.write`` costs exactly one recompute.
+    when the adapter was built. ``prompt_cues`` resolves the two, and the
+    plugin says which rung it is on: a ``session``-cued prompt sits still
+    through a thousand writes, a ``write``-cued one costs exactly one recompute
+    per effect, and neither has to guess about the other.
+
+    One slot per adapter, and an adapter is shared by every session — so two
+    live sessions alternately evict each other for anything at rank
+    ``session`` or finer. That is unchanged from when the key was a variant
+    tuple, and it is a second, quieter reason to declare the rarest cue that is
+    still true: a contribution in the stable tier is not keyed on the session
+    at all and stops thrashing entirely.
 
     The lifetime resets in ``residency.py`` stay on top of this: a residency's
     prompt is only knowable while it is resident, which is a question about the
     box rather than about the world.
     """
-    now = epoch.value()
-    if (getattr(plugin, "_prompt_epoch", None) == now
-            and getattr(plugin, "_prompt_variant", None) == variant):
+    if getattr(plugin, "_prompt_stamp", None) == stamp:
         return getattr(plugin, "_prompt_text", "") or ""
     try:
         text = produce() or ""
@@ -606,11 +621,11 @@ def _cached_prompt(plugin, produce, *, variant=None) -> str:
                          getattr(plugin, "name", "?"))
         text = ""
     plugin._prompt_text = text
-    # Stamped with the epoch read *before* producing: anything that changed
-    # while we were asking has to be seen next time, and a prompt method that
-    # writes would otherwise cache a stamp its own effect already invalidated.
-    plugin._prompt_epoch = now
-    plugin._prompt_variant = variant
+    # The stamp was taken *before* producing, by the caller: anything that
+    # changed while we were asking has to be seen next time, and a prompt
+    # method that writes would otherwise cache a stamp its own effect already
+    # invalidated.
+    plugin._prompt_stamp = stamp
     return text
 
 
@@ -625,15 +640,6 @@ def _prompt_method(source: str, class_name: str) -> str:
     nothing needs forwarding.
     """
     return "agent_prompt" if _defines(source, class_name, "agent_prompt") else ""
-
-
-def _prompt_variant(ctx) -> tuple[str, tuple[str, str]]:
-    """Return the ambient SDK session and prompt-cache variant."""
-    session_key = str(getattr(ctx, "session_key", "") or "")
-    mode = str(getattr(ctx, "security_mode", "ask") or "ask").lower()
-    if mode not in {"lockdown", "ask", "yolo"}:
-        mode = "ask"
-    return session_key, (session_key, mode)
 
 
 #: The one-shot administrative moments a plugin may declare. Named here rather

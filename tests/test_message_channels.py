@@ -358,8 +358,8 @@ def test_progress_is_neither_counted_nor_recorded():
     reason: the volume is per-iteration, and what it produces is a line on a
     screen rather than state any prompt could read back.
     """
-    from sandbox import epoch
+    import prompt_cues
     from sandbox.guest.requests import UI_PROGRESS
 
-    assert UI_PROGRESS in epoch.RENDERING
-    assert UI_PROGRESS in epoch.UNCOUNTED
+    assert UI_PROGRESS in prompt_cues.RENDERING
+    assert UI_PROGRESS in prompt_cues.UNCOUNTED

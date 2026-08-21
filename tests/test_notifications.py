@@ -511,7 +511,7 @@ def test_reading_notifications_is_safe_and_read_only():
     assert R.NOTIFICATION_LIST in policy.ALWAYS_SAFE
     assert R.NOTIFICATION_MARK_READ in policy.ALWAYS_SAFE
     # LIST is in READ_ONLY so a polling panel neither writes a ledger row per
-    # tick nor bumps sandbox.epoch, which would invalidate every cached
+    # tick nor bumps the prompt_cues write counter, which would invalidate every cached
     # agent_prompt in the process.
     assert R.NOTIFICATION_LIST in R.READ_ONLY
     assert R.NOTIFICATION_MARK_READ not in R.READ_ONLY

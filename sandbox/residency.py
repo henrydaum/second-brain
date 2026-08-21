@@ -37,9 +37,10 @@ import threading
 import types
 from pathlib import Path
 
+import prompt_cues
+
 from .bridge import (NOT_CARRIED, _box_prompt, _build, _cached_prompt,
-                     _defines, _make_response, _prompt_method,
-                     _prompt_variant, forget_prompt,
+                     _defines, _make_response, _prompt_method, forget_prompt,
                      get_sandbox)
 from .policy import Chain
 
@@ -415,7 +416,7 @@ def _service_adapter(
         """Open the resident box. Its start() runs inside."""
         self._poll_stop.clear()
         # A residency's prompt text is only knowable while it is resident, so
-        # the cache is scoped to one lifetime as well as to the epoch. Asked
+        # the cache is scoped to one lifetime as well as to its cue. Asked
         # before load, the answer is "nothing" — and that must not be the answer
         # forever after, however still the world has been since.
         forget_prompt(self)
@@ -483,13 +484,17 @@ def _service_adapter(
         No spawn to pay for here, but still cached: a resident box serializes
         its calls and prompt collection runs on the turn thread, so queuing
         behind a long export every turn would be a stall for no gain.
+
+        Same tier rule as the ephemeral adapter: below ``session`` on the
+        ladder no session key is lent, and ``PersistentBox.call`` falls through
+        to the box's own kernel-rooted context.
         """
-        session_key, variant = _prompt_variant(ctx)
+        cue = prompt_cues.of(self)
         return _cached_prompt(
             self,
             lambda: _box_prompt(self, name, _prompt_name,
-                                for_session=session_key),
-            variant=variant,
+                                for_session=prompt_cues.session_for(cue, ctx)),
+            stamp=prompt_cues.stamp(cue, ctx),
         )
 
     def _export(method: str):
@@ -876,12 +881,12 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
     _prompt_name = _prompt_method(source, entry)
     if _prompt_name:
         def agent_prompt(self, ctx, _m=_prompt_name):
-            session_key, variant = _prompt_variant(ctx)
+            cue = prompt_cues.of(self)
             return _cached_prompt(
                 self,
                 lambda: _box_prompt(self, name, _m,
-                                    for_session=session_key),
-                variant=variant,
+                                    for_session=prompt_cues.session_for(cue, ctx)),
+                stamp=prompt_cues.stamp(cue, ctx),
             )
         attributes["agent_prompt"] = agent_prompt
 

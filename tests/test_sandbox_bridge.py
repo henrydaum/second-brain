@@ -19,7 +19,8 @@ import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
 from guest.loader import unload_box
-from sandbox import Sandbox, epoch
+import prompt_cues
+from sandbox import Sandbox
 from sandbox.bridge import adapt, configure, family_of
 from sandbox.validator import ERROR, validate_file
 
@@ -922,17 +923,25 @@ def test_a_prompt_contribution_is_bridged(tmp_path, box):
         text = instance.agent_prompt(SimpleNamespace(config={}, scope=None))
         assert text.startswith("## Scripts")
         assert "scripts" in text
-        # Cached against the epoch: ``_collect`` runs on every LLM call, and
-        # for an ephemeral family every call is a fresh box. The stamp is what
-        # the reuse turns on — ``_prompt_text`` alone no longer says anything.
+        # Cached against its cue: ``_collect`` runs on every LLM call, and for
+        # an ephemeral family every call is a fresh box. The stamp is what the
+        # reuse turns on — ``_prompt_text`` alone no longer says anything. This
+        # plugin declares nothing, so it is on the default rung.
         assert instance._prompt_text == text
-        assert instance._prompt_epoch == epoch.value()
+        assert prompt_cues.of(instance) == prompt_cues.WRITE
+        assert instance._prompt_stamp == prompt_cues.stamp(
+            prompt_cues.WRITE, SimpleNamespace(config={}, scope=None))
     finally:
         unload_box("tool_advisor")
 
 
 def test_a_prompt_sdk_is_scoped_to_the_session_and_follows_mode(tmp_path, box):
-    """The ordinary SDK exposes mode, while session and mode key the cache."""
+    """The ordinary SDK exposes mode, and the session facts key the cache.
+
+    The mode is one of :data:`prompt_cues.SESSION_FACTS`, so it refreshes the
+    text with no counter moving anywhere — which is the whole claim that rung
+    makes, and the reason the write counter is asserted *not* to have ticked.
+    """
     modes = {"chat": "lockdown"}
     runtime = SimpleNamespace(
         sessions={"chat": SimpleNamespace(
@@ -947,19 +956,24 @@ def test_a_prompt_sdk_is_scoped_to_the_session_and_follows_mode(tmp_path, box):
                           MODE_PROMPTING_TOOL))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
     try:
-        before = epoch.value()
-        lockdown = instance.agent_prompt(SimpleNamespace(
-            session_key="chat", security_mode="lockdown"))
-        assert lockdown == "lockdown"
-        assert epoch.value() == before
-        assert instance._prompt_variant == ("chat", "lockdown")
+        before = prompt_cues.value(prompt_cues.WRITE)
+        locked_ctx = SimpleNamespace(session_key="chat",
+                                     security_mode="lockdown")
+        assert instance.agent_prompt(locked_ctx) == "lockdown"
+        assert prompt_cues.value(prompt_cues.WRITE) == before
+        assert instance._prompt_stamp == prompt_cues.stamp(
+            prompt_cues.WRITE, locked_ctx)
 
         modes["chat"] = "yolo"
-        yolo = instance.agent_prompt(SimpleNamespace(
-            session_key="chat", security_mode="yolo"))
-        assert yolo == "yolo"
-        assert epoch.value() == before
-        assert instance._prompt_variant == ("chat", "yolo")
+        yolo_ctx = SimpleNamespace(session_key="chat", security_mode="yolo")
+        assert instance.agent_prompt(yolo_ctx) == "yolo"
+        assert prompt_cues.value(prompt_cues.WRITE) == before
+        assert instance._prompt_stamp == prompt_cues.stamp(
+            prompt_cues.WRITE, yolo_ctx)
+        # A different user on the same key is a different prompt, which is the
+        # fact the old (session_key, mode) variant could not see.
+        assert prompt_cues.stamp(prompt_cues.SESSION, yolo_ctx) !=             prompt_cues.stamp(prompt_cues.SESSION, SimpleNamespace(
+                session_key="chat", security_mode="yolo", user_id=7))
     finally:
         unload_box("tool_mode_advisor")
 
@@ -1039,8 +1053,7 @@ def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
     # No residency was opened, and no per-instance cache was written: the
     # forwarding path was never entered.
     assert getattr(instance, "_prompt_text", None) is None
-    assert getattr(instance, "_prompt_epoch", None) is None
-    assert getattr(instance, "_prompt_variant", None) is None
+    assert getattr(instance, "_prompt_stamp", None) is None
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -1061,6 +1074,11 @@ def _counting_plugin():
     return plugin, calls, produce
 
 
+def _write_stamp():
+    """The stamp a plugin on the default rung is keyed by right now."""
+    return prompt_cues.stamp(prompt_cues.WRITE, None)
+
+
 def test_a_live_prompt_is_not_recomputed_while_nothing_changes():
     """The read-only stretch is most of a turn, and it must be free.
 
@@ -1073,29 +1091,30 @@ def test_a_live_prompt_is_not_recomputed_while_nothing_changes():
 
     plugin, calls, produce = _counting_plugin()
     for _ in range(10):
-        assert _cached_prompt(plugin, produce) == "answer 1"
+        assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 1"
     assert len(calls) == 1
 
 
 def test_an_effect_makes_a_live_prompt_recompute_once():
     """And exactly once — the bump is a change signal, not a disable switch.
 
-    This is the bug the epoch exists for: the cache used to be permanent, so a
-    tool listing the scripts directory went on describing it as it stood when
-    the adapter was built, including for the file the agent had just written.
+    This is the bug the write rung exists for: the cache used to be permanent,
+    so a tool listing the scripts directory went on describing it as it stood
+    when the adapter was built, including for the file the agent had just
+    written.
     """
     from sandbox.bridge import _cached_prompt
 
     plugin, calls, produce = _counting_plugin()
-    assert _cached_prompt(plugin, produce) == "answer 1"
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 1"
 
-    epoch.bump()
-    assert _cached_prompt(plugin, produce) == "answer 2"
-    assert _cached_prompt(plugin, produce) == "answer 2"
+    prompt_cues.fire(prompt_cues.WRITE)
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 2"
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 2"
     assert len(calls) == 2
 
 
-def test_an_emptied_contribution_expires_with_the_epoch():
+def test_an_emptied_contribution_expires_with_its_cue():
     """"" is a real answer and was cached forever; now it expires like any other.
 
     Worth stating because the reuse test is ``is not None`` on the text: a
@@ -1105,13 +1124,14 @@ def test_an_emptied_contribution_expires_with_the_epoch():
     from sandbox.bridge import _cached_prompt
 
     plugin = SimpleNamespace(name="quiet")
-    assert _cached_prompt(plugin, lambda: "") == ""
-    epoch.bump()
-    assert _cached_prompt(plugin, lambda: "something to say") == "something to say"
+    assert _cached_prompt(plugin, lambda: "", stamp=_write_stamp()) == ""
+    prompt_cues.fire(prompt_cues.WRITE)
+    assert _cached_prompt(plugin, lambda: "something to say",
+                          stamp=_write_stamp()) == "something to say"
 
 
 def test_a_lifetime_reset_beats_a_still_world():
-    """``forget_prompt`` answers a question the epoch cannot.
+    """``forget_prompt`` answers a question no cue can.
 
     A residency's prompt is only knowable while its box is open, so loading one
     invalidates however still the world has been. The two attributes move
@@ -1121,10 +1141,10 @@ def test_a_lifetime_reset_beats_a_still_world():
     from sandbox.bridge import _cached_prompt, forget_prompt
 
     plugin, calls, produce = _counting_plugin()
-    assert _cached_prompt(plugin, produce) == "answer 1"
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 1"
 
     forget_prompt(plugin)
-    assert _cached_prompt(plugin, produce) == "answer 2"
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 2"
     assert len(calls) == 2
 
 
@@ -1133,9 +1153,9 @@ def test_reads_do_not_tick_the_counter_and_effects_do():
     from guest.requests import DB_QUERY, FS_READ, FS_WRITE, Request, Result
 
     ok = Result(ok=True)
-    assert not epoch.counts(Request(FS_READ, {}), ok)
-    assert not epoch.counts(Request(DB_QUERY, {}), ok)
-    assert epoch.counts(Request(FS_WRITE, {}), ok)
+    assert not prompt_cues.counts(Request(FS_READ, {}), ok)
+    assert not prompt_cues.counts(Request(DB_QUERY, {}), ok)
+    assert prompt_cues.counts(Request(FS_WRITE, {}), ok)
 
 
 def test_showing_output_to_a_person_does_not_tick_the_counter():
@@ -1155,10 +1175,10 @@ def test_showing_output_to_a_person_does_not_tick_the_counter():
     """
     from guest.requests import READ_ONLY, Request, Result
 
-    for kind in epoch.RENDERING:
+    for kind in prompt_cues.RENDERING:
         assert kind not in READ_ONLY, f"{kind} really is a write"
-        assert kind in epoch.UNCOUNTED, f"{kind} must not tick"
-        assert not epoch.counts(Request(kind, {}), Result(ok=True))
+        assert kind in prompt_cues.UNCOUNTED, f"{kind} must not tick"
+        assert not prompt_cues.counts(Request(kind, {}), Result(ok=True))
 
 
 def test_a_streamed_reply_does_not_invalidate_a_live_prompt():
@@ -1176,7 +1196,7 @@ def test_a_streamed_reply_does_not_invalidate_a_live_prompt():
     from guest.requests import CONSOLE_WRITE, LLM_DELTA, Request, Result
 
     plugin, calls, produce = _counting_plugin()
-    assert _cached_prompt(plugin, produce) == "answer 1"
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 1"
 
     interp = Interpreter()
     execution = Execution(name="t", chain=Chain(root="user"))
@@ -1186,14 +1206,14 @@ def test_a_streamed_reply_does_not_invalidate_a_live_prompt():
             interp._settle(execution, Request(kind, {"text": "x"}),
                            allowed, Result(ok=True))
 
-    assert _cached_prompt(plugin, produce) == "answer 1"
+    assert _cached_prompt(plugin, produce, stamp=_write_stamp()) == "answer 1"
     assert len(calls) == 1
 
 
 def test_settling_an_effect_ticks_the_counter():
     """The wiring, not the predicate.
 
-    ``epoch.counts`` agreeing about ``fs.write`` proves nothing if nobody calls
+    ``prompt_cues.counts`` agreeing about ``fs.write`` proves nothing if nobody calls
     it, and a missing bump has no symptom at all — every live prompt simply
     goes back to being permanent, which is the bug this replaced.
     """
@@ -1205,12 +1225,12 @@ def test_settling_an_effect_ticks_the_counter():
     execution = Execution(name="t", chain=Chain(root="user"))
     allowed = Decision(level=SAFE, reason="test")
 
-    before = epoch.value()
+    before = prompt_cues.value(prompt_cues.WRITE)
     interp._settle(execution, Request(FS_READ, {}), allowed, Result(ok=True))
-    assert epoch.value() == before, "a read changed nothing"
+    assert prompt_cues.value(prompt_cues.WRITE) == before, "a read changed nothing"
 
     interp._settle(execution, Request(FS_WRITE, {}), allowed, Result(ok=True))
-    assert epoch.value() == before + 1
+    assert prompt_cues.value(prompt_cues.WRITE) == before + 1
 
 
 def test_a_refused_effect_does_not_tick_the_counter():
@@ -1221,7 +1241,7 @@ def test_a_refused_effect_does_not_tick_the_counter():
     """
     from guest.requests import FS_WRITE, Request, Result
 
-    assert not epoch.counts(Request(FS_WRITE, {}), Result.refusal("not permitted"))
+    assert not prompt_cues.counts(Request(FS_WRITE, {}), Result.refusal("not permitted"))
 
 
 @pytest.mark.parametrize("filename, source, base_module, base_name", [
