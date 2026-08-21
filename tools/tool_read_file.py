@@ -144,6 +144,11 @@ class ReadFile(BaseTool):
     }
     requires_services = []
 
+    # This text reads the permission mode and nothing else, so it goes stale
+    # only when the session does — not on every file the agent writes, which is
+    # what the default rung would charge for it.
+    agent_prompt_refresh = "session"
+
     def agent_prompt(self, sdk):
         """Point lockdown toward the mediated file-content path."""
         if (sdk.session.get() or {}).get("mode") != "lockdown":

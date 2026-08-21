@@ -65,6 +65,13 @@ class LocationService(BaseService):
         self.manual = ""
         self.location = {}
 
+    # Resolved once in ``start`` and cleared in ``stop``, so this text is
+    # fixed for the residency's lifetime — which ``forget_prompt`` already
+    # covers at both ends. On the ``load`` rung it costs nothing per turn and
+    # rides in the cacheable part of the prompt, where a stable fact about the
+    # user belongs. It reads no session, which that rung requires.
+    agent_prompt_refresh = "load"
+
     def agent_prompt(self, sdk):
         """Return the stable location prompt block, if location is known."""
         if self.manual:

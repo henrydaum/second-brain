@@ -228,6 +228,11 @@ class RunCommand(BaseTool):
         "required": [],
     }
     requires_services = []
+    # This text reads the permission mode and nothing else, so it goes stale
+    # only when the session does — not on every file the agent writes, which is
+    # what the default rung would charge for it.
+    agent_prompt_refresh = "session"
+
     def agent_prompt(self, sdk):
         """Shell strategy at the permission mode currently in force."""
         mode = (sdk.session.get() or {}).get("mode", "ask")

@@ -82,6 +82,10 @@ class SQLQuery(BaseTool):
     }
     requires_services = []
 
+    # No cue declared, for the same reason as run_script: the table list is
+    # live, and a CREATE from anywhere has to appear. The default rung is the
+    # one that notices.
+
     def agent_prompt(self, sdk) -> str:
         """Point the agent at the live table list and the two scoping rules."""
         return (

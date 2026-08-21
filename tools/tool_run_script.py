@@ -87,6 +87,10 @@ class RunScript(BaseTool):
     }
     requires_services = []
 
+    # No cue declared, and deliberately: this lists the scripts directory, so
+    # a file the agent writes this turn has to show up on its next call. That
+    # is the default rung, and the case it exists for.
+
     def agent_prompt(self, sdk) -> str:
         """Where scripts go, why to reach for one, and what is already there."""
         scripts = sdk.paths.get("scripts")
