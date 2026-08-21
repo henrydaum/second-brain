@@ -284,10 +284,19 @@ class RunCommand(BaseTool):
         mode = (sdk.session.get() or {}).get("mode", "ask")
         if mode == "lockdown":
             strategy = (
-                "In lockdown, recognized read-only commands can run, but any "
-                "command that would ask for approval is refused. Use mediated "
-                "file and scripting capabilities for work they can express; do "
-                "not retry a refused command through a shell variation."
+                "In lockdown, what runs is one recognized read-only command "
+                "with literal path arguments — nothing else. A compound line "
+                "(`&&`, `||`, `;`, `|`) is refused whatever its parts do, "
+                "because the line as a whole cannot be recognized, so "
+                "`cd somewhere && ls` fails where a plain `ls` succeeds. Globs, "
+                "redirection, writes and `python -c` are refused too. Nobody is "
+                "being asked here: the refusal is a standing policy, so a "
+                "reworded shell command fails identically and costs a turn. "
+                "Reach for the mediated capability instead — pass `cwd` rather "
+                "than navigating with `cd`, let writing a file create the "
+                "folders above it rather than making them, use the scripting "
+                "tool for anything computational, and read and list through the "
+                "file and search tools, which are always available to you here."
             )
         elif mode == "yolo":
             strategy = (
@@ -485,7 +494,27 @@ class RunCommand(BaseTool):
                       llm_summary=summary)
 
     def _denied(self, sdk, refused):
-        """A refusal is an answer, and retrying a variant is not the reply."""
+        """A refusal is an answer, and retrying a variant is not the reply.
+
+        **Who refused decides what to say next.** In every other mode a person
+        declined, and asking them is the only honest move. In lockdown nobody
+        was asked — the mode is a standing answer — so telling the agent to go
+        back to the user points it at a conversation that is not happening, and
+        ending a turn on that question is the one thing the prompt asks it not
+        to do. It gets the route that works instead.
+        """
+        try:
+            mode = (sdk.session.get() or {}).get("mode", "ask")
+        except Exception:                    # noqa: BLE001 - advice, not effect
+            mode = "ask"
+        if mode == "lockdown":
+            return sdk.fail(
+                f"{refused}\nThis is the lockdown policy, not a person: the same "
+                "command reworded is refused the same way. Do the work through a "
+                "mediated capability — `cwd` instead of `cd`, the file tools for "
+                "reading, listing and writing, the scripting tool for anything "
+                "computational — or say plainly that this step cannot be done "
+                "here and finish the rest of the task.")
         return sdk.fail(
             f"{refused}\nThe user declined this command. Do not retry it or a "
             "variation of it — ask them what they would like you to do instead.")
