@@ -1,9 +1,10 @@
 """
 Run Command tool.
 
-Every command is asked about. That is a deliberate simplification of what
-this tool used to be: five hundred lines decomposing compound command lines at
-unquoted ``&&``, ``||``, ``;``, ``|`` and newlines, matching each segment
+Commands are classified by the kernel. A deliberately narrow recognizer lets
+known read-only invocations run directly; everything else follows the active
+security mode. This tool used to carry five hundred lines decomposing compound
+command lines at unquoted ``&&``, ``||``, ``;``, ``|`` and newlines, matching each segment
 against a read-only whitelist, and sending redirection, command substitution,
 backgrounding and unbalanced quotes down the approval path regardless. It
 worked, mostly, and "mostly" is the problem — deciding what an arbitrary
@@ -12,9 +13,10 @@ whitelist racing against quoting forever, and it loses silently: a wrong
 "safe" is invisible, only a wrong "unsafe" ever gets reported.
 
 The classifier is gone from here, and none of it is reimplemented. The kernel
-classifies ``proc.run`` and ``proc.start`` as unsafe, so the dialog is the
-policy's decision rather than this file's opinion about it. Making that less
-onerous is a *policy* change (``_SHELL_RECOGNIZERS`` in ``sandbox/policy.py``,
+classifies ``proc.run`` and ``proc.start`` as unsafe unless a narrow recognizer
+covers them, so approval remains the policy's decision rather than this file's
+opinion about it. Making that less onerous is a *policy* change
+(``_SHELL_RECOGNIZERS`` in ``sandbox/shell.py``,
 which is where a read-only recognizer or a remembered "yes" belongs) and not a
 change here — which is the point of moving it. Authorization does not live in
 the code being authorized.
@@ -28,7 +30,7 @@ dependencies_files = []
 dependencies_pip = []
 requests = ["proc.run", "proc.start", "proc.status", "proc.stop", "proc.list",
             "fs.temp", "fs.write", "fs.list", "paths.get",
-            "session.state_get", "session.state_set"]
+            "session.get", "session.state_get", "session.state_set"]
 
 import re
 
@@ -177,9 +179,9 @@ class RunCommand(BaseTool):
     description = (
         "Run a terminal command in the project. Prefer read_file, edit_file and the "
         "retrieval tools for ordinary file work — reach for this when you need a real "
-        "shell: builds, tests, git, package installs, servers. Every command is shown "
-        "to the user for approval before it runs, so propose what you actually need "
-        "and let them decide. Long-running things (servers, watchers) must use "
+        "shell: builds, tests, git, package installs, servers. Recognized read-only "
+        "commands run directly; other commands follow the active security mode. "
+        "Long-running things (servers, watchers) must use "
         "run_in_background=true; poll them with operation='check' and always "
         "operation='stop' when done."
     )
@@ -226,30 +228,49 @@ class RunCommand(BaseTool):
         "required": [],
     }
     requires_services = []
-    agent_prompt = (
-        "## Running shell commands\n"
-        "run_command runs a real shell, scoped to the project root and the "
-        "Second Brain data directory. **Every command pauses for the user's "
-        "approval**, so there is no list of blessed commands to memorise and no "
-        "reason to phrase a command defensively — ask for what you actually "
-        "need, including package installs, and the user decides. A denial is an "
-        "answer: stop and ask what they would prefer rather than retrying a "
-        "variant. Because each call costs the user a decision, prefer the file "
-        "and search tools for ordinary file work, and batch shell work into one "
-        "command line rather than three round trips.\n"
-        "`python` and `pip` are rewritten to the interpreter running Second "
-        "Brain, so `pip install x` always lands in the right environment. The "
-        "working directory persists for the conversation: a standalone `cd "
-        "<dir>` moves it for every later call and needs no approval, and bare "
-        "`cd` resets to the project root. Large output is trimmed inline and "
-        "written in full to a temp file whose path is returned.\n"
-        "For servers, watchers and anything that does not end on its own, pass "
-        "run_in_background=true and you get a process id back immediately. Poll "
-        "with operation='check', survey with operation='list', and ALWAYS "
-        "operation='stop' when the task is finished — stopping needs no "
-        "approval, and the registry is in memory, so anything still running "
-        "when Second Brain restarts is orphaned rather than killed."
-    )
+    def agent_prompt(self, sdk):
+        """Shell strategy at the permission mode currently in force."""
+        mode = (sdk.session.get() or {}).get("mode", "ask")
+        if mode == "lockdown":
+            strategy = (
+                "In lockdown, recognized read-only commands can run, but any "
+                "command that would ask for approval is refused. Use mediated "
+                "file and scripting capabilities for work they can express; do "
+                "not retry a refused command through a shell variation."
+            )
+        elif mode == "yolo":
+            strategy = (
+                "In YOLO mode, approval-requiring shell commands are "
+                "preapproved. For ad hoc or foreign-library Python, you may "
+                "write a raw `.py` file in a writable workspace and execute it "
+                "here. That code is the unrestricted counterpart to a contained "
+                "SDK script: its effects are not individually mediated."
+            )
+        else:
+            strategy = (
+                "In ask mode, recognized read-only commands run directly and "
+                "other commands may pause for approval. A denial is an answer: "
+                "ask what the user prefers rather than retrying a variation."
+            )
+        return (
+            "## Running shell commands\n"
+            "run_command runs a real shell, scoped to the project root and the "
+            "Second Brain data directory. Prefer file and search tools for ordinary "
+            "file work, and batch related shell work when that keeps the command "
+            "clear. " + strategy + "\n"
+            "`python` and `pip` are rewritten to the interpreter running Second "
+            "Brain, so `pip install x` always lands in the right environment. The "
+            "working directory persists for the conversation: a standalone `cd "
+            "<dir>` moves it for every later call and needs no approval, and bare "
+            "`cd` resets to the project root. Large output is trimmed inline and "
+            "written in full to a temp file whose path is returned.\n"
+            "For servers, watchers and anything that does not end on its own, pass "
+            "run_in_background=true and you get a process id back immediately. Poll "
+            "with operation='check', survey with operation='list', and ALWAYS "
+            "operation='stop' when the task is finished — stopping needs no "
+            "approval, and the registry is in memory, so anything still running "
+            "when Second Brain restarts is orphaned rather than killed."
+        )
 
     def run(self, sdk, **kwargs):
         """Run, or speak about, a command."""
@@ -291,10 +312,13 @@ class RunCommand(BaseTool):
             status = sdk.proc.status(process_id)
         except sdk.Failed as failed:
             return sdk.fail(str(failed.error))
-        return sdk.ok(status,
-                      llm_summary=(f"{_describe(status)}\n"
-                                   f"Recent output:\n{status.get('output', '')}\n"
-                                   f"(full log: {status.get('log')})"))
+        summary = (f"{_describe(status)}\n"
+                   f"Recent output:\n{status.get('output', '')}\n"
+                   f"(full log: {status.get('log')})")
+        if (not status.get("running")
+                and status.get("code") not in (None, 0)):
+            return sdk.fail(summary)
+        return sdk.ok(status, llm_summary=summary)
 
     # ── running one ───────────────────────────────────────────────
 
@@ -396,13 +420,17 @@ class RunCommand(BaseTool):
             parts.append(f"(exit code {done['code']})")
         if spilled:
             parts.append(f"(full output written to {spilled})")
-        if cwd != sdk.paths.get("project"):
+        failed = done.get("code") not in (None, 0)
+        if failed or cwd != sdk.paths.get("project"):
             parts.append(f"(cwd: {cwd})")
 
+        summary = "\n".join(parts) if parts else "(no output)"
+        if failed:
+            return sdk.fail(summary)
         return sdk.ok({"stdout": stdout, "stderr": stderr,
                        "code": done.get("code"), "spill_path": spilled,
                        "cwd": cwd, "shell": shell},
-                      llm_summary="\n".join(parts) if parts else "(no output)")
+                      llm_summary=summary)
 
     def _denied(self, sdk, refused):
         """A refusal is an answer, and retrying a variant is not the reply."""

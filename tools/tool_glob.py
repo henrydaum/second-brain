@@ -8,7 +8,7 @@ be done from inside a box anyway.
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["fs.list", "paths.get"]
+requests = ["fs.list", "paths.get", "session.get"]
 
 from guest.bases import BaseTool
 
@@ -36,6 +36,17 @@ class GlobFiles(BaseTool):
         "required": ["pattern"],
     }
     requires_services = []
+
+    def agent_prompt(self, sdk):
+        """Point lockdown toward the mediated directory-inspection path."""
+        if (sdk.session.get() or {}).get("mode") != "lockdown":
+            return ""
+        return (
+            "## Inspecting directories in lockdown\n"
+            "Use glob for directory discovery and filename inspection instead "
+            "of shell traversal. Narrow `path` and `pattern` as you learn the "
+            "tree."
+        )
 
     def run(self, sdk, **kwargs):
         """Run glob."""

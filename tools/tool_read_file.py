@@ -54,7 +54,7 @@ dependencies_files = ['tools/helpers/file_reads.py']
 dependencies_pip = []
 requests = ["fs.read", "fs.list", "paths.get",
             "parse.modality", "parse.file", "session.add_attachment",
-            "session.state_get", "session.state_set"]
+            "session.get", "session.state_get", "session.state_set"]
 
 from guest.bases import BaseTool
 
@@ -143,6 +143,16 @@ class ReadFile(BaseTool):
         "required": ["path"],
     }
     requires_services = []
+
+    def agent_prompt(self, sdk):
+        """Point lockdown toward the mediated file-content path."""
+        if (sdk.session.get() or {}).get("mode") != "lockdown":
+            return ""
+        return (
+            "## Reading files in lockdown\n"
+            "Once you know a path, use read_file for its contents instead of "
+            "shell reads. Page large text with offset and limit."
+        )
 
     def run(self, sdk, **kwargs):
         """Run read file."""

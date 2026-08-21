@@ -1,7 +1,8 @@
-"""Run a script the agent wrote — SDK code, contained, no dialog.
+"""Run a script the agent wrote — SDK code, contained by default.
 
 This exists because of what section 18 of the security contract concludes: a
-command line cannot be classified, so every shell command is asked about, and
+command line cannot be classified completely, so shell work defaults to
+approval, and
 that left the agent's *cheapest* capability also its most dangerous one. Under
 any pressure to get work done, everything routes through the one door meant to
 be hardest.
@@ -9,7 +10,8 @@ be hardest.
 A script is the door that should have been there instead. It is Python over the
 SDK, so there is nothing to interpret — every effect inside it arrives at the
 kernel's gate individually and is judged there, with the script still in the
-chain. Running one therefore widens nothing, and costs no interruption.
+chain. Running valid SDK-only code therefore widens nothing. Foreign imports
+require launch approval because their effects cannot be mediated.
 
 The tool itself is a translation layer over one Request, the same shape as
 ``validate``: ``script.run`` resolves the path, validates the bytes, opens a
@@ -20,7 +22,7 @@ authorization not living in the code being authorized.
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["script.run", "fs.list", "fs.delete", "paths.get"]
+requests = ["script.run", "fs.list", "fs.delete", "paths.get", "session.get"]
 
 from guest.bases import BaseTool
 
@@ -41,9 +43,9 @@ class RunScript(BaseTool):
     description = (
         "Run a script you wrote in the scripts/ directory. A script is a file of "
         "SDK code with a main(sdk) function — no base class, no declarations. "
-        "Prefer this over run_command for anything expressible in Python: a "
-        "script is contained and runs without interrupting the user, while every "
-        "shell command asks for permission. Validate the file first."
+        "Use it for structured or reusable Python whose effects should remain "
+        "mediated. Valid contained scripts run directly; foreign imports follow "
+        "the active approval mode. Validate the file first."
     )
     parameters = {
         "type": "object",
@@ -89,9 +91,32 @@ class RunScript(BaseTool):
         """Where scripts go, why to reach for one, and what is already there."""
         scripts = sdk.paths.get("scripts")
         sep = "\\" if "\\" in scripts else "/"
+        mode = (sdk.session.get() or {}).get("mode", "ask")
+        if mode == "lockdown":
+            mode_advice = (
+                "This conversation is in lockdown. A valid contained script "
+                "still runs: only foreign or otherwise unmediated imports make "
+                "launch require approval and therefore fail in this mode. Use "
+                "scripts for multi-step mediated work."
+            )
+        elif mode == "yolo":
+            mode_advice = (
+                "In YOLO mode, use a contained script when structure, reuse, or "
+                "per-effect SDK mediation helps. Raw Python through the shell is "
+                "also available when unrestricted foreign libraries are the "
+                "better fit."
+            )
+        else:
+            mode_advice = (
+                "In ask mode, contained scripts keep their SDK effects "
+                "individually classified and can avoid unnecessary shell "
+                "approval interruptions."
+            )
         return (
             f"""## Scripts — reach for these first
-A script is a file of `sdk` code you run with run_script. Prefer one over run_command whenever the work is expressible in Python: a shell command is a process the kernel cannot see into, so it interrupts the user for approval *every single time*, while a script is contained and each effect inside it is judged on its own. Keep to the standard library and `sdk` and nothing interrupts anyone.
+A script is a Python file run with run_script. It receives `sdk` as the `main(sdk)` argument — do not `import sdk`. Each SDK effect inside it is judged on its own. Keep to the standard library and the supplied `sdk` to remain contained.
+
+{mode_advice}
 
 **Write it to this exact directory, by absolute path:**
 
@@ -99,7 +124,7 @@ A script is a file of `sdk` code you run with run_script. Prefer one over run_co
 
 So `tidy.py` goes to `{scripts}{sep}tidy.py` — spell the whole path out when you create the file and again when you call run_script. The directory is the entire declaration: a script written anywhere else is *refused* rather than asked about, leaving a stray file behind. A relative filename lands wherever the process happens to be sitting, which is the project root, not here.
 
-Scripts take `sdk` and whatever keyword arguments you pass; whatever `main` returns comes back to you. Call validate(path=...) first — a script that does not conform is refused rather than run. Declare `timeout = 600` at module scope if the work needs longer than the default deadline. They persist, so improve one across conversations rather than rewriting it; pass delete_after=true only for genuinely single-use work.
+Scripts take `sdk` and whatever keyword arguments you pass; whatever `main` returns comes back to you. Call validate(path=...) first and use its findings to plan the script before launch. A script that does not conform returns a preflight failure rather than running. Declare `timeout = 600` at module scope if the work needs longer than the default deadline. They persist, so improve one across conversations rather than rewriting it; pass delete_after=true only for genuinely single-use work.
 
 ## Scripts you have
 These sit in the directory above — join it to the name to get the path run_script wants. Most recently changed first.
