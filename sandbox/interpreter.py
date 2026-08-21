@@ -398,7 +398,7 @@ class Interpreter:
         self._hand_to_pool(execution, request, decision)
 
     def _hand_to_pool(self, execution: Execution, request: Request,
-                      decision: Decision):
+                      decision: Decision, *, approved: bool = False):
         """Give a permitted Request to the execution pool.
 
         Guarded because shutdown closes that pool, and a Request that is never
@@ -407,7 +407,8 @@ class Interpreter:
         one thing better than hanging.
         """
         try:
-            self._pool.submit(self._execute, execution, request, decision)
+            self._pool.submit(self._execute, execution, request, decision,
+                              approved)
         except RuntimeError:
             self._settle(execution, request, decision,
                          _shutting_down())
@@ -455,10 +456,10 @@ class Interpreter:
             self._settle(execution, request, decision,
                          _shutting_down())
             return
-        self._hand_to_pool(execution, request, decision)
+        self._hand_to_pool(execution, request, decision, approved=True)
 
     def _execute(self, execution: Execution, request: Request,
-                 decision: Decision):
+                 decision: Decision, approved: bool = False):
         """Run the handler off the gate thread and return the result.
 
         The handler runs marked as *serving this execution*, so anything it
@@ -476,8 +477,9 @@ class Interpreter:
             else:
                 context = self._context_for(execution)
                 try:
-                    with provenance.serving(execution.chain, context,
-                                            execution):
+                    with provenance.serving(
+                            execution.chain, context, execution,
+                            approved_request=request.type if approved else ""):
                         result = handler(context, request.args)
                 except Exception as exc:
                     logger.exception("handler failed: %s", request.type)

@@ -130,16 +130,18 @@ def prompt_note(mode: Any) -> str:
             "This conversation is in lockdown. Anything that would need the "
             "user's approval is refused outright, and asking again will not "
             "change that — do not retry a refused action or look for another "
-            "route to the same effect. Reading, searching and asking the user "
-            "questions all still work. If you need something that is refused, "
-            "say so plainly and tell them `/mode ask` lifts it."
+            "route to the same effect. Capabilities the policy classifies as "
+            "safe, including internally mediated work, remain available. If "
+            "you need something that is refused, say so plainly and tell the "
+            "user that `/mode ask` lifts the standing refusal."
         )
     if mode == YOLO:
         return (
             "## YOLO mode\n"
             "This conversation is in YOLO mode: the user has pre-approved "
             "anything that would normally raise an approval dialog, so you "
-            "will not be interrupted. Nobody is checking each action — weigh "
+            "will not be interrupted. Structural refusals and capability "
+            "limits still apply. Nobody is checking each action — weigh "
             "consequential and irreversible steps yourself, and say what you "
             "are about to do before you do it."
         )

@@ -104,8 +104,8 @@ def test_the_human_half_of_a_refusal_is_not_agent_text(dump):
     a model, so the second belongs in the user-facing dump."""
     found = {text for _line, _fn, text in dump.kernel_strings("sandbox/policy.py")}
 
-    # A ``reason``: the model is told this when a script is refused.
-    assert any("is not in a scripts/ directory" in text for text in found)
+    # A ``reason``: the model is told why a foreign script needs approval.
+    assert any("own actions are not mediated" in text for text in found)
     # A ``say``: "Deleted rows are not recoverable." is dialog prose, and its
     # reason — "delete rows from {table}" — is what the model actually reads.
     assert not any("recoverable" in text for text in found)

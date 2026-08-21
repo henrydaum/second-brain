@@ -251,4 +251,4 @@ def test_a_grant_is_not_re_derived_by_a_callee():
     assert inner.approved == frozenset({"net.http"})
     assert classify(Request("net.http", {"url": "https://x"}), inner).level == SAFE
     # And nothing outside the grant rides in on it.
-    assert classify(Request("proc.run", {"argv": ["ls"]}), inner).level == UNSAFE
+    assert classify(Request("proc.run", {"argv": ["git", "push"]}), inner).level == UNSAFE

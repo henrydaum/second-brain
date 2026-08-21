@@ -179,23 +179,25 @@ def test_a_foreign_library_is_asked_about_and_named(tree):
 
 
 def test_a_script_that_will_not_load_is_not_offered_for_approval(tree):
-    """Approving something that cannot run is the worst thing to put in a dialog."""
+    """Authoring errors reach preflight instead of a permission dialog."""
     broken = write(tree, "heavy.py", extra="import os")
-    assert _ask(broken).level == UNSAFE
+    assert _ask(broken).level == SAFE
+    assert "preflight" in _ask(broken).reason
 
 
 def test_a_path_outside_a_scripts_directory_is_refused(tree):
-    """The containment story rests entirely on where the file lives."""
+    """A misplaced file reaches the handler that can name the right directory."""
     stray = tree / "tools" / "notascript.py"
     stray.parent.mkdir(parents=True)
     stray.write_text(SCRIPT.format(extra=""), encoding="utf-8")
-    assert _ask(stray).level == UNSAFE
+    assert _ask(stray).level == SAFE
+    assert "preflight" in _ask(stray).reason
 
 
 def test_naming_no_script_at_all_does_not_raise(tree):
     """``test_every_request_is_classified`` calls this with empty args."""
     decision = classify(Request(SCRIPT_RUN, {}), Chain())
-    assert decision.level == UNSAFE
+    assert decision.level == SAFE
     assert "unclassified" not in decision.reason
 
 
@@ -404,6 +406,28 @@ def test_a_tool_runs_a_script_through_the_sdk(sb, tree, monkeypatch):
     assert result.data == 30
 
 
+def test_lockdown_shape_runs_contained_code_but_refuses_foreign_launch(
+        sb, tree, monkeypatch):
+    """An approver that always says no still permits the contained path."""
+    tool = tree / "tools" / "tool_caller.py"
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    tool.write_text(CALLER, encoding="utf-8")
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
+                        (tree.parent.resolve(),))
+
+    contained = sb.run(
+        str(tool), "Caller", kwargs={"path": str(write(tree))},
+        chain=Chain(root="user"))
+    foreign = sb.run(
+        str(tool), "Caller",
+        kwargs={"path": str(write(tree, "heavy.py", extra="import sqlite3"))},
+        chain=Chain(root="user"))
+
+    assert contained.ok and contained.data == 30
+    assert not foreign.ok
+    assert "sqlite3" in foreign.error
+
+
 def test_a_handler_with_no_provenance_still_runs(sb, tree, monkeypatch):
     """``abandoned`` answers False when there is nothing to ask.
 
@@ -440,6 +464,25 @@ def test_a_bare_name_runs(sb, tree, monkeypatch):
     assert result.data == 6
 
 
+def test_invalid_and_misplaced_scripts_fail_in_preflight(sb, tree, monkeypatch):
+    """Neither authoring mistake is mislabeled as a permission refusal."""
+    from sandbox.handlers.kernel import _script_run
+
+    monkeypatch.setattr("plugins.plugin_paths.ALLOWED_ROOTS",
+                        (tree.parent.resolve(),))
+    broken = write(tree, extra="import os")
+    invalid = _script_run(None, {"path": str(broken)})
+    assert not invalid.ok and not invalid.denied
+    assert "imports 'os'" in invalid.error
+
+    stray = tree / "tools" / "notascript.py"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text(SCRIPT.format(extra=""), encoding="utf-8")
+    misplaced = _script_run(None, {"path": str(stray)})
+    assert not misplaced.ok and not misplaced.denied
+    assert "scripts" in misplaced.error
+
+
 # ── detaching one, and coming back for it ─────────────────────────────
 #
 # ``wait=False`` shipped answering ``{"started": True}`` and dropping the
@@ -469,6 +512,56 @@ def _as(chain, fn, args):
     execution = Execution(name="caller", chain=chain)
     with provenance.serving(chain, None, execution):
         return fn(None, args)
+
+
+def test_execution_rechecks_foreign_imports_after_classification(wired, tree):
+    """Changing safe source before launch cannot bypass the approval boundary."""
+    from sandbox.handlers.kernel import _script_run
+
+    path = write(tree)
+    assert _ask(path).level == SAFE
+    path.write_text(SCRIPT.format(extra="import sqlite3"), encoding="utf-8")
+
+    result = _as(Chain(root="user"), _script_run, {"path": str(path)})
+    assert result.denied
+    assert "sqlite3" in result.error
+
+
+def test_start_guards_the_exact_report_whose_digest_runs(
+        wired, tree, monkeypatch):
+    """A change between handler preflight and Sandbox.start is still refused."""
+    from sandbox.handlers.kernel import _script_run
+
+    path = write(tree)
+    original_start = wired.start
+
+    def change_then_start(source, entry="", **kwargs):
+        path.write_text(SCRIPT.format(extra="import sqlite3"),
+                        encoding="utf-8")
+        return original_start(source, entry, **kwargs)
+
+    monkeypatch.setattr(wired, "start", change_then_start)
+    result = _as(Chain(root="user"), _script_run, {"path": str(path)})
+
+    assert result.denied
+    assert "sqlite3" in result.error
+
+
+def test_an_approved_foreign_script_passes_execution_preflight(wired, tree):
+    """Ask/YOLO approval is visible only for the Request being serviced."""
+    from sandbox import provenance
+    from sandbox.handlers.kernel import _script_run
+    from sandbox.interpreter import Execution
+
+    path = write(tree, extra="import sqlite3")
+    chain = Chain(root="user").push("run_script")
+    execution = Execution(name="caller", chain=chain)
+    with provenance.serving(chain, None, execution,
+                            approved_request=SCRIPT_RUN):
+        result = _script_run(None, {"path": str(path),
+                                    "args": {"values": [2, 3]}})
+    assert result.ok, result.error
+    assert result.data == 5
 
 
 def test_a_detached_script_hands_back_an_id(wired, tree):

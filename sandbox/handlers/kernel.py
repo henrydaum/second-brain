@@ -3882,6 +3882,7 @@ def _script_run(ctx, args: dict) -> Result:
 
     from .. import provenance
     from ..isolation import is_script, resolve_script
+    from ..validator import validate_file
 
     raw = (args.get("path") or "").strip()
     # The script trees answer first, and only for the two shapes they recognise
@@ -3909,8 +3910,31 @@ def _script_run(ctx, args: dict) -> Result:
             f"{trees.tree("workspace").path / 'scripts'} and run it from there, so "
             f"that it is contained before it runs")
 
+    # Classification decides whether launch needs approval; this preflight
+    # decides whether the bytes in front of us may actually start. Keeping the
+    # two checks separate lets ordinary authoring mistakes reach the caller as
+    # useful failures while a foreign import remains an approval boundary.
+    try:
+        report = validate_file(path)
+    except OSError as exc:
+        return Result.failure(f"could not read {path}: {exc}", retryable=True)
+    if not report.ok:
+        return Result.failure(report.render(), code=ERROR_INVALID_ARGUMENT)
+
     caller = provenance.current()
     chain = caller.chain if caller is not None else None
+    request_approved = bool(
+        caller is not None and caller.approved_request == SCRIPT_RUN)
+    command_approved = bool(
+        chain is not None and chain.approved and SCRIPT_RUN in chain.approved)
+    launch_approved = request_approved or command_approved
+    if report.unmediated and not launch_approved:
+        libraries = ", ".join(sorted(report.unmediated))
+        return Result.refusal(
+            f"{path.name} imports {libraries}, whose own actions are not "
+            "mediated; script launch was not approved",
+            code=ERROR_NOT_PERMITTED,
+        )
     entry = (args.get("entry") or "main").strip()
     kwargs = dict(args.get("args") or {})
 
@@ -3918,14 +3942,30 @@ def _script_run(ctx, args: dict) -> Result:
     if refusal is not None:
         return refusal
 
+    class _ScriptApprovalRequired(Exception):
+        pass
+
+    def _guard_launch(current_report):
+        """Judge the report whose digest ``Sandbox.start`` will execute."""
+        if current_report.unmediated and not launch_approved:
+            libraries = ", ".join(sorted(current_report.unmediated))
+            raise _ScriptApprovalRequired(libraries)
+
     wait = args.get("wait", True)
     try:
         run = sandbox.start(str(path), entry, kwargs=kwargs, chain=chain,
                             context=getattr(caller, "context", None),
+                            report_guard=_guard_launch,
                             # Only a detached run is kept for collection. A
                             # waited one hands its Result back here and there is
                             # nothing left to come back for.
                             collect_owner=None if wait else _script_owner(chain))
+    except _ScriptApprovalRequired as exc:
+        return Result.refusal(
+            f"{path.name} imports {exc}, whose own actions are not mediated; "
+            "script launch was not approved",
+            code=ERROR_NOT_PERMITTED,
+        )
     except Exception as exc:
         # A BoxError here is the useful case: a script declaring a persistent
         # lifetime is told to be opened rather than run, which is a real

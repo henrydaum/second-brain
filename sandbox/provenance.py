@@ -54,6 +54,11 @@ class Caller:
     chain: object
     context: object = None
     execution: object = None
+    # The one unsafe Request the approver just permitted. Unlike
+    # ``chain.approved`` this is not a reusable grant: it exists only while
+    # that Request's handler is being serviced, so execution-time validation
+    # can prove a foreign script launch was actually allowed.
+    approved_request: str = ""
 
     @property
     def abandoned(self) -> bool:
@@ -95,14 +100,15 @@ class Caller:
 
 
 @contextmanager
-def serving(chain, context=None, execution=None):
+def serving(chain, context=None, execution=None, approved_request: str = ""):
     """Mark this thread as servicing one execution's Request.
 
     Reset in a ``finally`` without exception: a pool worker that kept the value
     would hand it to the next Request that happened to land on it.
     """
     token = _CURRENT.set(
-        Caller(chain=chain, context=context, execution=execution))
+        Caller(chain=chain, context=context, execution=execution,
+               approved_request=approved_request))
     try:
         yield
     finally:

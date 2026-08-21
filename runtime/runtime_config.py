@@ -407,6 +407,8 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             frontend=frontend,
             command_filter=command_filter,
             active_llm=active_llm(runtime, session),
+            session_key=session.key,
+            security_mode=runtime.security_mode(session.key),
         )
         return _append_dynamic(sections, _account_suffix(), _mode_suffix())
     return _session_prompt

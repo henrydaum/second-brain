@@ -32,11 +32,11 @@ from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               PROC_RUN,
                               PROC_START, PROC_STATUS, PROC_STOP,
                               SECRET_REVEAL, Result)
-from ..protected import is_protected, reason_for
+from ..protected import MAX_TEXT_READ_BYTES, is_protected, reason_for
 from ..credentials import lookup_from, redact, resolve
 from .args import float_arg, int_arg
 
-MAX_READ_BYTES = 8 * 1024 * 1024
+MAX_READ_BYTES = MAX_TEXT_READ_BYTES
 # Binary reads get their own cap: the things that need them are media files
 # headed for a model or a chat transport, and a 10 MB video is ordinary where a
 # 10 MB text file is a mistake.

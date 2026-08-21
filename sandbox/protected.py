@@ -40,6 +40,10 @@ CONFIG_REASON = ("it holds secret_* settings in plaintext; "
 DB_REASON = ("it is the database; query it with sdk.db.query, "
              "which scopes rows to the current user")
 
+# Shared by mediated text reads and the narrow ``cat`` shell recognizer. A
+# shell command that can return more than ``fs.read`` is not its safe alias.
+MAX_TEXT_READ_BYTES = 8 * 1024 * 1024
+
 
 def _resolve(path) -> Path | None:
     """Resolve without requiring existence, or None if it cannot be read."""

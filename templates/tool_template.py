@@ -159,6 +159,10 @@ class RecentNotes(BaseTool):
         is genuinely live — a conversation started this turn is reflected on
         the agent's next call, which is the only reason to prefer this shape.
 
+        The SDK belongs to the session whose prompt is being built. Read
+        ``(sdk.session.get() or {}).get("mode")`` when guidance depends on the
+        effective security mode.
+
         Keep it cheap: it runs on the turn thread. And never perform an effect
         here — you would invalidate your own cache and recompute forever.
         """

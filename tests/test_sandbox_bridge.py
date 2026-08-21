@@ -882,6 +882,29 @@ class Advisor(BaseTool):
         return "ok"
 '''
 
+MODE_PROMPTING_TOOL = '''
+"""A migrated tool whose prompt depends on its session-scoped SDK."""
+
+requests = ["session.get"]
+
+from guest.bases import BaseTool
+
+
+class ModeAdvisor(BaseTool):
+    """Advise for the current mode."""
+
+    name = "mode_advisor"
+    description = "x"
+
+    def agent_prompt(self, sdk):
+        """Echo the effective mode visible through the ordinary SDK."""
+        return (sdk.session.get() or {}).get("mode", "missing")
+
+    def run(self, sdk):
+        """Do nothing in particular."""
+        return "ok"
+'''
+
 
 def test_a_prompt_contribution_is_bridged(tmp_path, box):
     """The guidance a migrated plugin writes has to reach the system prompt.
@@ -906,6 +929,39 @@ def test_a_prompt_contribution_is_bridged(tmp_path, box):
         assert instance._prompt_epoch == epoch.value()
     finally:
         unload_box("tool_advisor")
+
+
+def test_a_prompt_sdk_is_scoped_to_the_session_and_follows_mode(tmp_path, box):
+    """The ordinary SDK exposes mode, while session and mode key the cache."""
+    modes = {"chat": "lockdown"}
+    runtime = SimpleNamespace(
+        sessions={"chat": SimpleNamespace(
+            conversation_id=1, cs=SimpleNamespace(phase="idle"), busy=False,
+            frontend_name="test", user_id=1)},
+        security_mode=lambda key: modes[key],
+        is_attended=lambda key: True,
+    )
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        runtime=runtime, session_key=session_key, config={}, services={}))
+    module = adapt(_write(tmp_path, "tool_mode_advisor.py",
+                          MODE_PROMPTING_TOOL))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    try:
+        before = epoch.value()
+        lockdown = instance.agent_prompt(SimpleNamespace(
+            session_key="chat", security_mode="lockdown"))
+        assert lockdown == "lockdown"
+        assert epoch.value() == before
+        assert instance._prompt_variant == ("chat", "lockdown")
+
+        modes["chat"] = "yolo"
+        yolo = instance.agent_prompt(SimpleNamespace(
+            session_key="chat", security_mode="yolo"))
+        assert yolo == "yolo"
+        assert epoch.value() == before
+        assert instance._prompt_variant == ("chat", "yolo")
+    finally:
+        unload_box("tool_mode_advisor")
 
 
 def test_a_plugin_that_contributes_nothing_keeps_the_base_default(tmp_path,
@@ -984,6 +1040,7 @@ def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
     # forwarding path was never entered.
     assert getattr(instance, "_prompt_text", None) is None
     assert getattr(instance, "_prompt_epoch", None) is None
+    assert getattr(instance, "_prompt_variant", None) is None
 
 
 # ────────────────────────────────────────────────────────────────────

@@ -162,6 +162,12 @@ def test_lockdown_prompt_tells_the_agent_not_to_retry():
     assert "/mode" in note
 
 
+def test_kernel_mode_guidance_names_no_optional_plugins():
+    text = (prompt_note(LOCKDOWN) + prompt_note(YOLO)).lower()
+    for optional_name in ("run_script", "run_command", "glob", "read_file"):
+        assert optional_name not in text
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The approver: where the mode is actually spent.
 # ──────────────────────────────────────────────────────────────────────

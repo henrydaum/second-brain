@@ -1718,8 +1718,15 @@ class Scripts(BaseTool):
     name = "scripts"
 
     def agent_prompt(self, sdk):
-        return f"## Scripts\nThey go in {sdk.paths.get('scripts')}."
+        mode = (sdk.session.get() or {}).get("mode", "ask")
+        return (f"## Scripts\nThey go in {sdk.paths.get('scripts')}. "
+                f"The active security mode is {mode}.")
 ```
+
+The SDK is scoped to the session whose prompt is being built. Session-specific
+guidance can therefore read `sdk.session.get()`, including its effective
+`mode` (`lockdown`, `ask`, or `yolo`). Kernel runtime objects never cross into
+the box.
 
 Prefer the string. It is read from your file without importing it, costs
 nothing, and lands in the cacheable block at the top of the prompt.
@@ -1727,7 +1734,9 @@ nothing, and lands in the cacheable block at the top of the prompt.
 The method is a real call into your box, so it is cached — but only until
 something changes. Any effect performed anywhere in the sandbox (a write, an
 install, a config change; reads do not count) invalidates it, and the next
-model call recomputes it. So a listing you build from `sdk.fs.list` is allowed
+model call recomputes it. A change to the session or its active security mode
+also refreshes the method immediately. So a
+listing you build from `sdk.fs.list` is allowed
 to be genuinely live: a file the agent writes this turn shows up on the next
 call, which is the point of the shape. A live contribution rides in the dynamic
 block at the tail of the prompt rather than in the cacheable prefix, so
@@ -1744,7 +1753,7 @@ prompt.
 
 > Older plugins spell the method `agent_prompt_for`. That name is gone — a
 > plugin still using it contributes nothing to the prompt, silently. Rename it
-> to `agent_prompt`; the signature is unchanged.
+> to `agent_prompt`. The original two-argument method signature remains valid.
 
 **Declaring a file makes it importable.** `dependencies_files` names files
 from other folders; they join your box's namespace, so you reach them as

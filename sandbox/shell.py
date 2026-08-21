@@ -40,6 +40,7 @@ from pathlib import Path
 
 from .guest import requests as R
 from .policy import SAFE, UNSAFE, Decision, kernel_list
+from .protected import MAX_TEXT_READ_BYTES, reason_for
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -324,13 +325,89 @@ def _read_only_command(shown: str, args: dict):
         return None
     named = []
     for argv in segments:
-        if not (name := _read_only_segment(argv)):
+        if not (name := _read_only_segment(argv, args)):
             return None
         named.append(name)
     return ", ".join(dict.fromkeys(named)) + " only reads"
 
 
-def _read_only_segment(argv):
+_LS_SHORT_FLAGS = frozenset("aACdFghHiklLmnopqQrRsStuUvwxXZ1")
+_LS_LONG_FLAGS = frozenset({
+    "--all", "--almost-all", "--author", "--classify", "--color",
+    "--directory", "--file-type", "--format", "--full-time",
+    "--group-directories-first", "--hide-control-chars", "--human-readable",
+    "--inode", "--literal", "--no-group", "--numeric-uid-gid",
+    "--quote-name", "--recursive", "--reverse", "--size", "--sort",
+    "--time", "--time-style", "--width", "--zero", "--help", "--version",
+})
+_CAT_SHORT_FLAGS = frozenset("AbeEnstTuv")
+_CAT_LONG_FLAGS = frozenset({
+    "--show-all", "--number-nonblank", "--show-ends", "--number",
+    "--squeeze-blank", "--show-tabs", "--show-nonprinting",
+})
+_PATH_EXPANSIONS = frozenset("*?[]~$`")
+
+
+def _direct_or_posix(args: dict) -> bool:
+    """Whether ``ls``/``cat`` name executables rather than shell aliases."""
+    return args.get("shell") is None or _posix_shell(args)
+
+
+def _display_flags(parts, short_flags, long_flags):
+    """Validate display-only flags and return path operands, or ``None``."""
+    operands = []
+    options = True
+    for part in parts:
+        if options and part == "--":
+            options = False
+        elif options and part.startswith("--"):
+            if part.split("=", 1)[0] not in long_flags:
+                return None
+        elif options and part.startswith("-") and part != "-":
+            if not set(part[1:]) <= short_flags:
+                return None
+        else:
+            operands.append(part)
+    return operands
+
+
+def _read_only_ls(argv, args: dict) -> str:
+    """Recognize a conservative, display-only ``ls`` invocation."""
+    if not _direct_or_posix(args):
+        return ""
+    operands = _display_flags(argv[1:], _LS_SHORT_FLAGS, _LS_LONG_FLAGS)
+    if operands is None or any(set(part) & _PATH_EXPANSIONS
+                               for part in operands):
+        return ""
+    return "ls"
+
+
+def _read_only_cat(argv, args: dict) -> str:
+    """Recognize only files the mediated text reader would expose."""
+    if not _direct_or_posix(args):
+        return ""
+    operands = _display_flags(argv[1:], _CAT_SHORT_FLAGS, _CAT_LONG_FLAGS)
+    if not operands or any(part == "-" or set(part) & _PATH_EXPANSIONS
+                           for part in operands):
+        return ""
+    cwd = Path(str(args.get("cwd") or os.getcwd()))
+    total = 0
+    try:
+        for operand in operands:
+            path = Path(operand)
+            if not path.is_absolute():
+                path = cwd / path
+            if reason_for(path) or not path.is_file():
+                return ""
+            total += path.stat().st_size
+            if total > MAX_TEXT_READ_BYTES:
+                return ""
+    except (OSError, ValueError):
+        return ""
+    return "cat"
+
+
+def _read_only_segment(argv, args=None):
     """One segment's name if it is a known read-only invocation, else ""."""
     if not argv:
         return ""
@@ -343,6 +420,12 @@ def _read_only_segment(argv):
     if "/" in program or "\\" in program:
         return ""
     program = program.lower().removesuffix(".exe")
+
+    args = args or {}
+    if program == "ls":
+        return _read_only_ls(argv, args)
+    if program == "cat":
+        return _read_only_cat(argv, args)
 
     rest = argv[1:]
     subcommand = ""
@@ -406,6 +489,9 @@ def command_prefix(argv) -> str:
     if not program:
         return ""
     rest = argv[1:]
+    if (program in {"cat", "ls"}
+            and any(set(part) & _PATH_EXPANSIONS for part in rest)):
+        return ""
     if rest and not rest[0].startswith("-"):
         word = rest[0]
         if "/" not in word and "\\" not in word and not Path(word).suffix:

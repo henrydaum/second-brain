@@ -238,6 +238,28 @@ def test_a_live_contribution_rides_in_the_dynamic_block(data_dir):
     assert "GUIDANCE-FROM-A-METHOD" not in system["content"]
 
 
+def test_live_native_prompt_context_includes_session_and_mode(data_dir):
+    from agent.system_prompt import build_prompt_sections
+
+    live = SimpleNamespace(
+        name="live", description="", parameters={},
+        agent_prompt=lambda ctx: f"SESSION={ctx.session_key} MODE={ctx.security_mode}",
+    )
+    registry = SimpleNamespace(_visible_tools=lambda: [live], tools={})
+    _, dynamic = build_prompt_sections(
+        None, None, registry, {}, session_key="chat", security_mode="lockdown")
+
+    assert "SESSION=chat MODE=lockdown" in dynamic["content"]
+
+
+def test_static_prompt_requires_finishing_accepted_work(data_dir):
+    from agent.system_prompt import _static_prompt
+
+    prompt = _static_prompt()
+    assert "do not end on a plan, promise, retry" in prompt
+    assert "blocked on information only the user can provide" in prompt
+
+
 def test_both_shapes_are_collected_when_both_are_present(data_dir):
     """The partition splits the populations; it must not drop half of them.
 

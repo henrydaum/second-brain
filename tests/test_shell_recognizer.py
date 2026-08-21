@@ -40,6 +40,64 @@ def test_the_high_frequency_read_only_verbs_are_allowed():
         assert _allowed(argv), argv
 
 
+def test_ls_display_invocations_are_allowed():
+    assert _allowed(["ls"])
+    assert _allowed(["ls", "-la"])
+    assert _allowed(["ls", "--human-readable", "some directory"])
+    assert not _allowed(["ls", "--context-command=touch"])
+    assert not _allowed(["ls", "*.py"])
+
+
+def test_cat_only_allows_read_file_equivalent_paths(tmp_path):
+    readable = tmp_path / "notes.txt"
+    readable.write_text("hello", encoding="utf-8")
+    spaced = tmp_path / "some notes.txt"
+    spaced.write_text("hello", encoding="utf-8")
+
+    assert _allowed(["cat", "notes.txt"], cwd=str(tmp_path))
+    assert _allowed(["cat", "-n", "some notes.txt"], cwd=str(tmp_path))
+    assert not _allowed(["cat"], cwd=str(tmp_path))
+    assert not _allowed(["cat", "-"], cwd=str(tmp_path))
+    assert not _allowed(["cat", "missing.txt"], cwd=str(tmp_path))
+    assert not _allowed(["cat", "."], cwd=str(tmp_path))
+    assert not _allowed(["cat", "*.txt"], cwd=str(tmp_path))
+
+
+def test_cat_refuses_protected_paths_and_symlinks(tmp_path, monkeypatch):
+    from sandbox import protected
+
+    secret = tmp_path / "config.json"
+    secret.write_text("secret", encoding="utf-8")
+    alias = tmp_path / "alias.txt"
+    try:
+        alias.symlink_to(secret)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    monkeypatch.setattr(
+        protected, "protected_paths",
+        lambda: {secret.resolve(): protected.CONFIG_REASON},
+    )
+    assert not _allowed(["cat", str(secret)])
+    assert not _allowed(["cat", str(alias)])
+
+
+def test_cat_uses_the_same_aggregate_cap_as_read_file(tmp_path, monkeypatch):
+    from sandbox import shell
+
+    (tmp_path / "a.txt").write_text("123", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("456", encoding="utf-8")
+    monkeypatch.setattr(shell, "MAX_TEXT_READ_BYTES", 5)
+    assert not _allowed(["cat", "a.txt", "b.txt"], cwd=str(tmp_path))
+
+
+def test_cat_and_ls_are_not_treated_as_powershell_aliases(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("hello", encoding="utf-8")
+    assert not _allowed("cat notes.txt", shell="powershell", cwd=str(tmp_path))
+    assert not _allowed("ls", shell="powershell", cwd=str(tmp_path))
+
+
 def test_the_reason_names_the_command_for_the_ledger():
     """A SAFE decision still records why, and the row is read by a person."""
     assert _run(["git", "status"]).reason == "git status only reads"
@@ -372,13 +430,24 @@ def test_a_glob_in_the_program_position_names_nothing_grantable(posix):
 
     assert command_prefix(["*", "--help"]) == ""
     assert command_prefix(["~/bin/tool"]) == ""
-    assert command_prefixes({"argv": "cat *.py", "shell": "default"}) == ["cat"]
+    assert command_prefixes({"argv": "cat *.py", "shell": "default"}) == []
 
 
 def test_read_only_holds_across_a_pipeline(posix):
     """Every segment, or it asks — same rule as the remembered half."""
     assert _allowed("git status && git diff --stat", shell="default")
     assert not _allowed("git status && git push", shell="default")
+
+
+def test_posix_quotes_make_a_spaced_cat_path_exact(monkeypatch, tmp_path):
+    from sandbox import shell
+
+    monkeypatch.setattr(shell, "_posix_shell", lambda args: True)
+    (tmp_path / "some notes.txt").write_text("hello", encoding="utf-8")
+    assert _allowed('cat "some notes.txt"', shell="default",
+                    cwd=str(tmp_path))
+    assert _allowed('ls -la && cat "some notes.txt"', shell="default",
+                    cwd=str(tmp_path))
 
 
 def test_proc_start_gets_the_same_recognizer_as_proc_run():

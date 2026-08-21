@@ -149,9 +149,11 @@ class BasePlugin:
     #
     # Declare a plain string when the text never changes — the kernel reads it
     # by AST at load and never calls into the box for it. Override with
-    # ``def agent_prompt(self, sdk)`` when it depends on live state; that costs
-    # a real box call, so the result is cached until the plugin reloads. Either
-    # way keep it cheap and stable: it lands in a cacheable prompt block.
+    # ``def agent_prompt(self, sdk)`` when it depends on live state. Its SDK is
+    # scoped to the session whose prompt is being built, so session facts such
+    # as the effective security mode come from ``sdk.session.get()``. A method
+    # costs a real box call, so the result is cached until the world or its
+    # session context changes. Either way keep it cheap and stable.
     agent_prompt: str = ""
 
     # ── introspection ──────────────────────────────────────────────

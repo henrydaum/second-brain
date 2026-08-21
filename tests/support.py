@@ -189,18 +189,21 @@ def make_runtime(tmp_path, responses=None, *, name="test.db", services=None,
 # while the work is broken.
 
 def store_worktree():
-    """A checkout of the store branch, if this clone has one."""
+    """A checkout of the store tree, including a feature branch on it."""
     proc = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "worktree", "list", "--porcelain"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         encoding="utf-8", check=False)
     root = None
+    conventional = None
     for line in proc.stdout.splitlines():
         if line.startswith("worktree "):
             root = Path(line.split(" ", 1)[1])
+            if root.name.casefold() == "secondbrain-store":
+                conventional = root
         elif line.strip() in {"branch refs/heads/store", "branch store"}:
             return root
-    return None
+    return conventional
 
 
 def store_source(relative: str):

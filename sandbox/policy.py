@@ -940,25 +940,23 @@ def _classify_script(args: dict) -> Decision:
 
     path = args.get("path")
     if not path:
-        return Decision(UNSAFE, "no script named")
+        return Decision(SAFE, "script launch preflight will require a path")
     path = resolve_script(path) or path
     if not is_script(path):
         # Not a refusal of *this* file so much as of the shape of the ask: the
         # containment story rests entirely on the file living somewhere the
         # kernel subprocesses unconditionally. Anywhere else and the honest
         # answer is that nobody knows what this is.
-        return Decision(UNSAFE, f"{path} is not in a scripts/ directory",
-                        say="Only files under scripts/ are contained before they run.")
+        return Decision(SAFE, f"script launch preflight will reject {path} "
+                             "outside scripts/")
 
     report = _script_report(path)
     if report is None:
-        return Decision(UNSAFE, f"could not read {path}")
+        return Decision(SAFE, f"script launch preflight will report that "
+                             f"{path} cannot be read")
     if not report.ok:
-        # It would be refused by the loader moments later anyway. Saying so
-        # here means the user is not asked to approve something that cannot
-        # run, which is the worst possible thing to put in a dialog.
-        return Decision(UNSAFE, f"{Path(path).name} does not pass validation",
-                        say="It will not load even if you allow it.")
+        return Decision(SAFE, f"script launch preflight will report validation "
+                             f"errors in {Path(path).name}")
     if report.unmediated:
         # The one case that is asked about. An installed package importing a
         # foreign library is subprocessed and *not* asked, because somebody

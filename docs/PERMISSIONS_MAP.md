@@ -162,6 +162,9 @@ once the shell family grew a lexer of its own) — a structural read-only check 
 *remembered* one reading `shell_allowed_prefixes`. `_NET_RECOGNIZERS` is still
 empty, because egress is served by its allowlist directly. Both remain the
 designed extension point, and a recognizer can only ever widen.
+The structural recognizer includes conservative `ls` display forms and `cat`
+only for regular, non-protected files that fit the mediated text-read cap;
+globs, redirects, substitutions, devices, stdin, and shell aliases abstain.
 
 ## 6. Layer 5 — The approver
 

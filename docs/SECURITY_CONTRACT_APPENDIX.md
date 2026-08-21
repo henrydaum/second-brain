@@ -978,13 +978,14 @@ has already decided.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `proc.run(argv, timeout, cwd, shell)` | Run to completion | the command line | **unsafe** |
-| `proc.start(argv, cwd, shell, label)` | Start something and keep it, return a handle | the command line | **unsafe** |
+| `proc.run(argv, timeout, cwd, shell)` | Run to completion | the command line | unsafe unless a recognizer covers it |
+| `proc.start(argv, cwd, shell, label)` | Start something and keep it, return a handle | the command line | unsafe unless a recognizer covers it |
 | `proc.status(id, tail)` | Ask after one, with the tail of its output | — | safe |
 | `proc.stop(id)` | End one and forget it | — | safe |
 | `proc.list()` | Everything still tracked | — | safe |
 
-**Everything that starts a process is asked about, and there is no classifier.**
+**Everything that starts a process is asked about unless a narrow recognizer
+vouches for the exact invocation.**
 The earlier plan here was to lift `tool_run_command`'s: decompose a compound
 command at unquoted `&&`, `||`, `;`, `|` and newlines, auto-run only when every
 segment matches a read-only whitelist, and send redirection, command
@@ -998,15 +999,14 @@ gets reported as a bug, a wrong "safe" gets reported as nothing. It also sat
 inside the plugin it authorized, which is the wrong place on principle —
 authorization does not live in the code being authorized.
 
-So the whole family is unsafe and the dialog is the control. That is annoying
-rather than wrong, and annoying is the failure mode to prefer. Where it gets
-better is `_SHELL_RECOGNIZERS` in `sandbox/shell.py`: a recognizer reads the rendered
-command line and returns a reason to allow it, or `None` to abstain. Two kinds
-are expected — *structural* ("every segment of this pipeline is a read-only
-command", the old classifier rebuilt where the policy can see it) and
-*remembered* ("the user already approved exactly this, at this scope"), the
-second being the more useful. The list is empty today, and adding to it is a
-deliberate widening.
+So the family defaults unsafe and the dialog is the fallback. Two recognizers
+ship in `_SHELL_RECOGNIZERS`: a deliberately incomplete structural recognizer
+for known read-only invocations, and remembered `(program, subcommand)` grants.
+The structural recognizer includes conservative `ls` display operations and
+`cat` only when every operand is an existing regular, non-protected file within
+the same aggregate size cap as `fs.read`. Globs, devices, directories, stdin,
+redirection, substitution, unsupported flags, and non-POSIX shell aliases
+abstain. Adding coverage remains a deliberate policy widening.
 
 The three read-and-narrow members are safe. `status` and `list` read a
 registry the kernel owns, which holds nothing that was not approved at
@@ -1040,7 +1040,7 @@ prompt is emphatic about stopping them.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `script.run(path, entry, args, wait)` | Run a file of SDK code that is not a plugin | the directory the file is in; what it imports | safe |
+| `script.run(path, entry, args, wait)` | Run a file of SDK code that is not a plugin | the directory the file is in; what it imports | safe when contained; unsafe for foreign imports |
 | `script.collect(ids, timeout)` | Take detached scripts' results | — | safe |
 | `script.stop(id)` | Cancel a detached script | — | safe |
 
@@ -1060,8 +1060,9 @@ what it contains.
 **Where the file is.** Only `<tree>/scripts/*.py`, top level, at any of the
 three tree roots. The directory is the whole declaration: a script has no
 family prefix, no base class and no entry point, so there is nothing else about
-the file that could say what it is. A path anywhere else is refused rather than
-asked about, because the containment story rests entirely on the answer.
+the file that could say what it is. A missing, unreadable, misplaced, or invalid
+file reaches launch preflight and returns an ordinary actionable failure; it is
+not presented as an approval question or a lockdown denial.
 
 **What it imports.** A script whose imports the validator cannot see inside is
 **unsafe**, and the dialog names the library. This is deliberately stricter
@@ -1080,6 +1081,10 @@ The verdict is re-derived by the kernel from the path, never supplied on the
 Request. A caller passing its own report — or a digest standing in for one —
 would be the code being contained acting as the authority on its own
 containment, which is the bug `sandbox/isolation.py` exists to prevent.
+The handler revalidates immediately before launch. If the current bytes gained
+a foreign import, execution proceeds only when this `script.run` Request was
+actually approved; lockdown therefore refuses it while ask/YOLO approval is
+honoured. Every SDK Request made after launch remains independently gated.
 
 Ephemeral only. A script that wants to stay resident is a service, and a
 script that wants to run for an hour is a pipeline task; both are families that

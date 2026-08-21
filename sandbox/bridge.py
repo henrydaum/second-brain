@@ -380,17 +380,19 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         failure had no symptom beyond an agent that no longer knew things it
         used to.
 
-        The ``PromptContext`` the kernel hands us is deliberately *not* what the
-        box answers from. It is a light read-only bag for building a prompt, not
-        a ``SecondBrainContext``, so passing it through would answer the guest's
-        Requests out of a half-built world. ``None`` lets the interpreter build
-        a kernel context instead, and roots the chain at ``kernel`` — the honest
-        reading, since collecting prompt text is the kernel's own act and no
-        session's. The chain therefore carries no grant, so an unsafe Request
-        from here is refused; the guest contract already says not to make one.
+        ``PromptContext`` never crosses into the box. Its session key selects
+        the ordinary host-side ``SecondBrainContext`` that answers SDK
+        Requests, so the guest can use ``sdk.session.get()`` just as it can in
+        its normal entry point. Prompt collection remains rooted at ``kernel``
+        and carries no approval grant.
         """
+        session_key, variant = _prompt_variant(ctx)
+        context = get_sandbox().interpreter.context_for_session(session_key)
         return _cached_prompt(
-            self, lambda: _forward(self, None, {}, method=_prompt_name))
+            self,
+            lambda: _forward(self, context, {}, method=_prompt_name),
+            variant=variant,
+        )
 
     run = {"tool": run_tool, "task": run_task,
            "command": run_command}.get(family)
@@ -538,7 +540,8 @@ def _entry_from(source: str) -> str:
     return ""
 
 
-def _box_prompt(plugin, name: str, method: str = "agent_prompt") -> str:
+def _box_prompt(plugin, name: str, method: str = "agent_prompt",
+                *, for_session: str = "") -> str:
     """Ask a resident box for its prompt contribution.
 
     A box that is not open contributes nothing rather than raising: a service
@@ -548,7 +551,7 @@ def _box_prompt(plugin, name: str, method: str = "agent_prompt") -> str:
     box = getattr(plugin, "_sandbox_box", None)
     if box is None or not box.alive:
         return ""
-    result = box.call(method)
+    result = box.call(method, for_session=for_session)
     if not result.ok:
         logger.warning("agent_prompt failed for '%s': %s",
                        name, result.error)
@@ -564,15 +567,16 @@ def forget_prompt(plugin) -> None:
     box is open, so opening or closing one invalidates it however still the
     world has been.
 
-    One function because the cache is two attributes that must move together —
-    clearing only ``_prompt_text`` leaves the stamp matching, and
+    One function because the cache attributes must move together — clearing
+    only ``_prompt_text`` leaves the epoch and context variant matching, and
     ``_cached_prompt`` would answer "" from a residency that is now loaded.
     """
     plugin._prompt_text = None
     plugin._prompt_epoch = None
+    plugin._prompt_variant = None
 
 
-def _cached_prompt(plugin, produce) -> str:
+def _cached_prompt(plugin, produce, *, variant=None) -> str:
     """A plugin's system-prompt contribution, recomputed when the world moves.
 
     ``_collect`` in ``agent/system_prompt.py`` runs on every *LLM call*, not
@@ -592,7 +596,8 @@ def _cached_prompt(plugin, produce) -> str:
     box rather than about the world.
     """
     now = epoch.value()
-    if getattr(plugin, "_prompt_epoch", None) == now:
+    if (getattr(plugin, "_prompt_epoch", None) == now
+            and getattr(plugin, "_prompt_variant", None) == variant):
         return getattr(plugin, "_prompt_text", "") or ""
     try:
         text = produce() or ""
@@ -605,6 +610,7 @@ def _cached_prompt(plugin, produce) -> str:
     # while we were asking has to be seen next time, and a prompt method that
     # writes would otherwise cache a stamp its own effect already invalidated.
     plugin._prompt_epoch = now
+    plugin._prompt_variant = variant
     return text
 
 
@@ -619,6 +625,15 @@ def _prompt_method(source: str, class_name: str) -> str:
     nothing needs forwarding.
     """
     return "agent_prompt" if _defines(source, class_name, "agent_prompt") else ""
+
+
+def _prompt_variant(ctx) -> tuple[str, tuple[str, str]]:
+    """Return the ambient SDK session and prompt-cache variant."""
+    session_key = str(getattr(ctx, "session_key", "") or "")
+    mode = str(getattr(ctx, "security_mode", "ask") or "ask").lower()
+    if mode not in {"lockdown", "ask", "yolo"}:
+        mode = "ask"
+    return session_key, (session_key, mode)
 
 
 #: The one-shot administrative moments a plugin may declare. Named here rather

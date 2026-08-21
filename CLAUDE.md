@@ -1773,7 +1773,7 @@ deciding whether a command was read-only: decompose at unquoted `&&`/`||`/
 substitution to approval. It is undecidable in principle and it fails in the
 invisible direction — a wrong "unsafe" gets reported, a wrong "safe" does not
 — and it lived inside the plugin it authorized. So the whole family is
-`UNSAFE` and every command is asked about; the migrated tool contains no
+`UNSAFE` by default; the migrated tool contains no
 classifier and must not regrow one. Where it gets less onerous is
 `sandbox/shell.py` — its own module, because working out *what commands a
 line runs* stopped being a branch and became a subject: a lexer, a
@@ -1797,6 +1797,10 @@ that knows the `&&` in `git commit -m "fix && ship"` is inside a quote — the
 thing the dead classifier's regex got wrong. Redirects, substitution and
 subshells are refused outright, because there the effect is not in any command
 name: granting `echo` must not license `echo x > ~/.bashrc`.
+The structural recognizer also admits conservative `ls` display forms and
+`cat` only for the same regular, non-protected, size-bounded files `fs.read`
+would expose. Globs, stdin, devices, unsupported flags and non-POSIX aliases
+abstain.
 `shell.render_command` is the one renderer the dialog and the ledger row
 share, so what a person approves is what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
 processes already approved at `start`, and stopping narrows — a dev server the
@@ -1814,8 +1818,9 @@ with the script still in the chain. Same argument as `tool.call`.
 The directory is the whole declaration (`isolation.is_script`), because a
 script has no prefix, no base class and no entry point to say what it is. Two
 things are then read off the destination, the same shape as the `fs.write`
-branch: **where** the file is (anywhere but `scripts/` is refused, not asked),
-and **what it imports** — a foreign library makes it `UNSAFE` and the dialog
+branch: **where** the file is (missing, misplaced and invalid source fails in
+launch preflight rather than becoming an approval denial), and **what it
+imports** — a foreign library makes it `UNSAFE` and the dialog
 names the library. That last rule is deliberately stricter than the plugin
 equivalent: an installed package importing one is subprocessed and not asked
 because somebody approved it at `plugin.install`, whereas a script was never
@@ -1823,6 +1828,9 @@ approved by anybody. Scripts are subprocessed in *every* tree, the one place
 `required_isolation` skips the per-tree answer. The verdict is re-derived by
 the kernel from the path and never supplied on the Request — a caller passing
 its own report would be the contained code judging its own containment.
+Launch revalidates the current bytes and requires proof that this Request was
+approved before starting newly foreign code, closing the classification/run
+race. Requests made inside the script are still judged one by one.
 
 Ephemeral only, on purpose. The resident half already works
 (`Sandbox.open` on a module, pinned by `test_a_bare_script_opens_as_a_resident_

@@ -38,7 +38,8 @@ import types
 from pathlib import Path
 
 from .bridge import (NOT_CARRIED, _box_prompt, _build, _cached_prompt,
-                     _defines, _make_response, _prompt_method, forget_prompt,
+                     _defines, _make_response, _prompt_method,
+                     _prompt_variant, forget_prompt,
                      get_sandbox)
 from .policy import Chain
 
@@ -483,7 +484,13 @@ def _service_adapter(
         its calls and prompt collection runs on the turn thread, so queuing
         behind a long export every turn would be a stall for no gain.
         """
-        return _cached_prompt(self, lambda: _box_prompt(self, name, _prompt_name))
+        session_key, variant = _prompt_variant(ctx)
+        return _cached_prompt(
+            self,
+            lambda: _box_prompt(self, name, _prompt_name,
+                                for_session=session_key),
+            variant=variant,
+        )
 
     def _export(method: str):
         """One forwarding method, so callers see an ordinary service."""
@@ -868,9 +875,15 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
 
     _prompt_name = _prompt_method(source, entry)
     if _prompt_name:
-        attributes["agent_prompt"] = (
-            lambda self, ctx, _m=_prompt_name: _cached_prompt(
-                self, lambda: _box_prompt(self, name, _m)))
+        def agent_prompt(self, ctx, _m=_prompt_name):
+            session_key, variant = _prompt_variant(ctx)
+            return _cached_prompt(
+                self,
+                lambda: _box_prompt(self, name, _m,
+                                    for_session=session_key),
+                variant=variant,
+            )
+        attributes["agent_prompt"] = agent_prompt
 
     adapter, module = _build(entry, base, attributes, path, source_path)
     return module

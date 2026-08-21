@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from runtime.agent_scope import AgentScope
+from runtime.security_modes import security_mode as normalize_security_mode
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
@@ -38,9 +39,9 @@ MEMORY_INDEX_CAP = 4000
 class PromptContext:
     """Read-only bag passed to each plugin's ``agent_prompt``.
 
-    Plugins read whatever they need (db/services/orchestrator/config/scope/
-    frontend_name) to build their system-prompt contribution. Kept distinct from
-    the heavier SecondBrainContext so the prompt builder stays a pure function.
+    Native plugins read whatever they need to build their contribution. For a
+    sandboxed plugin, ``session_key`` lets the bridge lend its SDK the same
+    session context without passing this kernel object across the boundary.
     """
     db: Any = None
     services: dict = field(default_factory=dict)
@@ -49,6 +50,8 @@ class PromptContext:
     scope: "AgentScope | None" = None
     profile_name: str = "default"
     frontend_name: str | None = None
+    session_key: str | None = None
+    security_mode: str = "ask"
 
 
 def _static_prompt() -> str:
@@ -73,6 +76,8 @@ def build_prompt_sections(
     frontend=None,
     command_filter: Callable[[str], bool] | None = None,
     active_llm=None,
+    session_key: str | None = None,
+    security_mode: str = "ask",
 ) -> list[dict[str, str]]:
     """Build ordered system prompt messages.
 
@@ -86,6 +91,8 @@ def build_prompt_sections(
         db=db, services=services or {}, orchestrator=orchestrator,
         config=config or {}, scope=scope, profile_name=profile_name,
         frontend_name=frontend_name,
+        session_key=session_key,
+        security_mode=normalize_security_mode(security_mode),
     )
     populations = _in_scope(r, services, orchestrator, commands,
                             command_filter, frontend)

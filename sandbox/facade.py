@@ -462,7 +462,8 @@ class Sandbox:
               chain: Chain | None = None, name: str | None = None,
               isolated: bool | None = None, timeout: float | None = None,
               on_done=None, context=None, method: str = "run",
-              once: bool = False, collect_owner: str | None = None) -> Run:
+              once: bool = False, collect_owner: str | None = None,
+              report_guard=None) -> Run:
         """Run without waiting. The ``wait=False`` shape.
 
         The work begins immediately on a background thread and the caller
@@ -481,6 +482,12 @@ class Sandbox:
         """
         report, spec, opts = self._prepare(source, isolated=isolated,
                                            timeout=timeout, name=name)
+        # A kernel caller may need to authorize a property of the exact bytes
+        # this start will execute. The digest in ``opts`` binds the loader to
+        # this report, so a guard here closes the path-validation race without
+        # exposing either the report or the callback to guest code.
+        if report_guard is not None:
+            report_guard(report)
         # A service or frontend adapted as a one-shot run would set up a
         # transport and never be called again, so the default is a refusal
         # rather than a surprise. ``once`` is the caller stating it wants one
