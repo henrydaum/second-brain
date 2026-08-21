@@ -20,7 +20,7 @@ routing through it launders nothing.
 dependencies_files = ['tools/tool_lexical_search.py',
                       'tools/tool_semantic_search.py']
 dependencies_pip = []
-requests = ["tool.call"]
+requests = ["tool.call", "tool.list", "db.query"]
 
 from guest.bases import BaseTool
 
@@ -74,15 +74,61 @@ class HybridSearch(BaseTool):
     }
     requires_services = []
     dependencies_tools = ["lexical_search", "semantic_search"]
-    agent_prompt = (
-        "## Searching indexed files\n"
-        "Three retrieval tools search the indexed corpus — your sync_directories plus dropped-in attachments. "
-        "Files outside the index are not searchable; use read_file for a path you already know.\n"
-        "- hybrid_search: fuses keyword + semantic ranking. Default choice for finding local files or excerpts.\n"
-        "- lexical_search: exact keyword/identifier/code matching. Use for error strings, function names, rare terms.\n"
-        "- semantic_search: meaning-based retrieval. Use for paraphrased or conceptual questions where exact wording won't match.\n"
-        "Results are excerpts (chunks) grouped by document; follow up with read_file for full context."
-    )
+    # No cue declared: the document count below is live, so an indexing run has
+    # to show up on the agent's next call. That is the default rung.
+
+    def agent_prompt(self, sdk):
+        """Name the retrieval tools in scope, and say when the corpus is empty.
+
+        The static version this replaces asserted that three tools search "the
+        indexed corpus" whether or not anything was in it, and whether or not
+        all three were installed. The empty case is the expensive one: the
+        tools return nothing, which reads exactly like the fact not existing,
+        so an agent searches three ways and concludes it does not.
+        """
+        scope = set(sdk.tools.list() or [])
+        indexed = self._indexed(sdk)
+        if indexed == 0:
+            return (
+                "## Searching indexed files\n"
+                "Nothing is indexed yet — the retrieval tools will return "
+                "nothing. An empty result here means an empty corpus, not a "
+                "missing fact. Use read_file for a path you already know."
+            )
+        held = (f"{indexed} documents indexed (sync_directories plus "
+                "dropped-in attachments)." if indexed
+                else "Search covers your sync_directories plus dropped-in "
+                     "attachments.")
+        lines = [
+            "## Searching indexed files",
+            f"{held} Files outside the index are not searchable; use "
+            "read_file for a path you already know.",
+        ]
+        lines += [text for name, text in (
+            ("hybrid_search",
+             "- hybrid_search: keyword + semantic, fused. Default choice."),
+            ("lexical_search",
+             "- lexical_search: exact keywords, identifiers, error strings."),
+            ("semantic_search",
+             "- semantic_search: meaning-based, for paraphrased questions."),
+        ) if name in scope]
+        lines.append("Results are excerpts grouped by document; follow up with "
+                     "read_file for full context.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _indexed(sdk):
+        """Distinct indexed documents, or None when the table is not there yet.
+
+        None rather than 0 deliberately: asserting an empty corpus we could not
+        verify would be the same wrong conclusion in the other direction.
+        """
+        try:
+            rows = sdk.db.query(
+                "SELECT COUNT(DISTINCT path) AS n FROM lexical_content")
+        except sdk.Failed:
+            return None
+        return int((rows or [{}])[0].get("n") or 0)
 
     def run(self, sdk, **kwargs):
         """Run hybrid search."""

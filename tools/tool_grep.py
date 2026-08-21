@@ -16,7 +16,7 @@ can read.
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["fs.search", "paths.get"]
+requests = ["fs.search", "paths.get", "session.get"]
 
 from guest.bases import BaseTool
 
@@ -56,6 +56,26 @@ class Grep(BaseTool):
         "required": ["pattern"],
     }
     requires_services = []
+
+    # Reads the permission mode and nothing else — the same rung, and the same
+    # reasoning, as glob and read_file next door.
+    agent_prompt_refresh = "session"
+
+    def agent_prompt(self, sdk):
+        """Point lockdown toward the mediated content-search path.
+
+        The third of the trio, and the one whose shell alternative is most
+        tempting: glob and read_file already say this for listing and reading,
+        so an agent in lockdown was steered off the shell for two of the three
+        and left to reach for grep or findstr for the third.
+        """
+        if (sdk.session.get() or {}).get("mode") != "lockdown":
+            return ""
+        return (
+            "## Searching file contents in lockdown\n"
+            "Use grep for content search instead of shell grep or findstr. "
+            "Narrow with `path` and `glob` as you learn the tree."
+        )
 
     def run(self, sdk, **kwargs):
         """Run grep."""
