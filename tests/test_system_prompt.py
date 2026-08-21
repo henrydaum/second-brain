@@ -350,6 +350,28 @@ def test_static_prompt_requires_finishing_accepted_work(data_dir):
     assert "until the work is complete" in prompt
 
 
+def test_static_prompt_permits_an_unsupported_conclusion_to_be_reported(data_dir):
+    """Saying "the evidence does not support this" has to be an available move.
+
+    The failure it answers is agreeableness, not laziness: an assistant that
+    treats every question as owed an answer invents one when the material will
+    not carry it. On the evidence corpus this was the worst-performing family
+    by a wide margin — abstention checks passed a quarter of the time.
+
+    The last clause is a guard rather than a flourish. Sat beside the rule
+    above, permission to report a gap reads as permission to *stop looking*,
+    which would trade a large thoroughness loss for a smaller honesty gain. It
+    is pinned so a later edit cannot quietly drop the half that separates what
+    is asserted from how hard the work was.
+    """
+    from agent.system_prompt import _static_prompt
+
+    prompt = _static_prompt()
+    assert "cannot be supported is a real answer" in prompt
+    assert "name what is missing or what would settle it" in prompt
+    assert "never how hard you look before asserting it" in prompt
+
+
 def test_both_shapes_are_collected_when_both_are_present(data_dir):
     """The partition splits the populations; it must not drop half of them.
 
