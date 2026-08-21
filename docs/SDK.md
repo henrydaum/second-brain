@@ -1711,11 +1711,12 @@ class Todo(BaseTool):
     agent_prompt = "## Todos\nKeep the list short. Close items as you finish."
 ```
 
-A method when it depends on something live:
+A method when it depends on something live, with a cue saying how often:
 
 ```python
 class Scripts(BaseTool):
     name = "scripts"
+    agent_prompt_refresh = "write"
 
     def agent_prompt(self, sdk):
         mode = (sdk.session.get() or {}).get("mode", "ask")
@@ -1723,29 +1724,43 @@ class Scripts(BaseTool):
                 f"The active security mode is {mode}.")
 ```
 
-The SDK is scoped to the session whose prompt is being built. Session-specific
-guidance can therefore read `sdk.session.get()`, including its effective
-`mode` (`lockdown`, `ask`, or `yolo`). Kernel runtime objects never cross into
-the box.
-
 Prefer the string. It is read from your file without importing it, costs
 nothing, and lands in the cacheable block at the top of the prompt.
 
-The method is a real call into your box, so it is cached — but only until
-something changes. Any effect performed anywhere in the sandbox (a write, an
-install, a config change; reads do not count) invalidates it, and the next
-model call recomputes it. A change to the session or its active security mode
-also refreshes the method immediately. So a
-listing you build from `sdk.fs.list` is allowed
-to be genuinely live: a file the agent writes this turn shows up on the next
-call, which is the point of the shape. A live contribution rides in the dynamic
-block at the tail of the prompt rather than in the cacheable prefix, so
-refreshing it costs nothing beyond your own call.
+The method is a real call into your box, and the prompt is rebuilt on every
+model call — not once per turn — so the answer is cached. `agent_prompt_refresh`
+is what says for how long. Least to most frequent:
 
-Keep it cheap anyway — it runs on the turn thread, and an agent that reads and
-thinks for ten iterations without changing anything should pay for it once.
-Never perform an *effect* from `agent_prompt`: you would invalidate your own
-cache and recompute on every call, forever.
+| cue | refreshes when |
+|---|---|
+| `load` | the set of installed plugins changed |
+| `config` | a setting was written |
+| `session` | this session's mode, conversation, user or profile moved |
+| `turn` | once per agent turn |
+| `write` | anything at all was written — **the default** |
+| `call` | never cached |
+
+Each rung includes the rarer ones, so `session` also refreshes on a config
+write. **Declare the rarest rung that is still true.** Saying nothing keeps
+`write`, which is never stale — but a prompt that reads only the security mode
+and declares `session` stops paying a box for every file the agent writes.
+
+Two things follow beyond speed. `load` and `config` cannot change within a
+conversation, so their text rides in the **cacheable prefix** of the prompt
+rather than the block re-read on every call. And for that to be true they are
+answered with **no session at all** — `sdk.session.get()` tells them nothing.
+Ask for `session` or finer if you need it. For those rungs the SDK is scoped to
+the session whose prompt is being built, including its effective `mode`
+(`lockdown`, `ask`, or `yolo`). Kernel runtime objects never cross into the box.
+
+Within each block, contributions are ordered rarest first, so what moves sits
+after what does not.
+
+Keep it cheap — it runs on the turn thread, and an agent that reads and thinks
+for ten iterations without changing anything should pay for it once. Never
+perform an *effect* from `agent_prompt`: on `write` you invalidate your own
+cache and recompute forever, and on anything rarer you do it without even that
+warning.
 
 Write markdown with an `##` heading, and write it for the weakest model you
 expect to run — it is competing for attention with everything else in the

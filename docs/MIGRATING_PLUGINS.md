@@ -52,6 +52,7 @@ Four mechanical changes, then the effects:
 | Returning with extras | `ToolResult(data=x, llm_summary=s)` | `sdk.ok(x, llm_summary=s)` |
 | Failing | `ToolResult.failed(msg)` | `sdk.fail(msg)`, or just let it raise |
 | Prompt method | `agent_prompt_for(self, ctx)` | `agent_prompt(self, sdk)` |
+| Prompt refresh | — | `agent_prompt_refresh = "session"` (see `prompt_cues.py`; the default is `write`) |
 
 The last one is silent if you miss it: the old name is not collected any more,
 so the plugin loads fine and contributes nothing to the system prompt.

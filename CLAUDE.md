@@ -516,39 +516,84 @@ all**.
 native bases declare `agent_prompt: str = ""`, so `callable()` is already an
 exact answer. Writing a method *is* the statement that the text moves.
 
-*Where it lands.* A string is settled at load, so it belongs in the semi-stable
-block inside the cacheable position-0 message. A method exists because its
-answer changes, so it goes in the dynamic `[SYSTEM CONTEXT UPDATE]` block with
-the kernel's own live state — exactly the argument `_mode_suffix` already makes
-for itself. Left in the prefix, every refresh would rewrite the one message
-providers cache across a conversation, so fixing staleness would have cost a
-cache miss on every later call of the turn. `_collect` takes a `live` flag and
-`_in_scope` enumerates the populations once for both passes.
+*Where it lands, and how often it is recomputed.* Both are answered by a
+**declared cue** — `agent_prompt_refresh`, an ordinary AST-read literal beside
+`agent_prompt` — and the table is `prompt_cues.py`, a top-level module beside
+`trees.py` in the same "one table everything reads" spirit. Seven rungs ordered
+least to most frequent (`never`, `load`, `config`, `session`, `turn`, `write`,
+`call`), each adding one component to the cache key, so a plugin at rank L is
+keyed on everything at or below L. That monotonicity is the whole point: a
+threshold can be ordered, a set of unrelated triggers cannot.
 
-*How often it is recomputed.* `_collect` runs on every **LLM call**, not once
-per turn, and for an ephemeral family every call into the guest is a fresh box —
-so `_cached_prompt` caches. It used to cache *forever*, which made the method
-shape a lie: a tool listing the scripts directory went on describing it as it
-stood when the adapter was built, including for the file the agent had just
-written. `sandbox/epoch.py` resolves both halves — one counter, bumped in
-`Interpreter._settle` when a Request that *changed* something succeeds, and the
-cache is stamped with it. A read-only stretch (read, search, think, call the
-model again — most of a turn) costs zero recomputes; one `fs.write` costs
-exactly one.
+`never` is the string shape and is **not declarable** — a method that never
+recomputes is precisely the permanent cache this replaced. `write` is the
+default, so an undeclared method is never stale.
 
-Two things about that counter are load-bearing. **`llm.delta` is excluded**: it
-is a write and is *not* in `READ_ONLY`, but a streaming backend sends one per
-token, so counting them would invalidate everything on every call and silently
-undo the caching — the ledger's sandbox sink excludes it from recording for the
-same shape of reason and draws the line the same way. And **refusals do not
-count**, or `lockdown` would recompute every live prompt on every denial. It is
-global rather than per-`Request.family` on purpose: nothing declares which
-family a prompt method reads, so scoping would mean inferring the dependency,
-and over-invalidating costs one box call while under-invalidating is silently
-wrong. The lifetime resets in `residency.py` sit on top (`forget_prompt`, which
-clears text and stamp together — clearing only the text leaves the stamp
-matching): a residency's prompt is only knowable while its box is open, which
-is a question about the box rather than about the world.
+Two rungs cost no call site, and for opposite reasons. `session` is not an event
+at all: it is a fact — session key, conversation, user, profile, security mode,
+exactly what `sdk.session.get()` answers — read off the `PromptContext` as it is
+built, so the turn-scoped `yolo` that `HookRegistry.finish_turn` clears by
+writing the session field directly is covered with nothing having to remember to
+fire. `load` needs no counter for a plugin's *own* reload, because discovery
+builds a fresh adapter and the cache goes with the old object; it has one anyway
+for the other reading, which is what an author means by declaring it — a package
+install writes its files from kernel code and never passes `Interpreter._settle`,
+so a prompt describing what is installed was previously invalidated only by
+coincidence. That leaves three fire sites: `_settle` (`write`),
+`HookRegistry.start_turn` (`turn`), and `config_manager._emit_config_changed`
+(`config`, the one funnel both `save` and `save_plugin_config` pass through, and
+skipped on an empty change list because `save` merges DEFAULTS and announces
+unconditionally).
+
+The rungs at or below `STABLE_THROUGH` (`config`) cannot move within a
+conversation, so their text rides in the semi-stable block of the cacheable
+position-0 message; everything finer goes in the dynamic `[SYSTEM CONTEXT
+UPDATE]` block with the kernel's own live state — exactly the argument
+`_mode_suffix` already makes for itself. Within each block, rarest first, with a
+**stable** sort so one rung keeps `_in_scope`'s reading order. That ordering
+pays in the prefix and is cosmetic in the dynamic block, which is rebuilt per
+call either way.
+
+**The tier is enforced, not promised.** A cue below `session` is answered with
+the plain kernel context, so `sdk.session.get()` tells it nothing. Note the
+narrower claim this makes: the position-0 message was *never* session
+independent — its tool catalog is profile-scoped and its command catalog is
+filtered by the session's frontend — it is stable for the life of one session,
+and the tier is what stops a plugin being the reason it stops being.
+
+`_collect` takes a `stable` flag now rather than `live`, and the shape is still
+its own question: `callable()` decides *how to ask*, because the
+string-shadows-a-method tolerance above is what depends on it, while the cue
+decides *where it lands*. `_in_scope` still enumerates the populations once for
+both passes.
+
+This replaced one global counter (`sandbox/epoch.py`, now folded in as the
+`write` rung) plus a `(session_key, security_mode)` variant bolted on beside it.
+The counter's own reasoning survives intact and still matters: **`llm.delta` is
+excluded** — it is a write and is *not* in `READ_ONLY`, but a streaming backend
+sends one per token, so counting them would invalidate everything on every call
+and silently undo the caching; the ledger's sandbox sink excludes it from
+recording for the same shape of reason and draws the line the same way. And
+**refusals do not count**, or `lockdown` would recompute every write-cued prompt
+on every denial. The rung stays global rather than per-`Request.family`, and
+the cue is why that is now right rather than merely safe: a plugin declares *how
+often* its text moves, never *which family* it reads, so scoping the counter
+would still mean inferring the dependency. What the declaration removes is the
+need to guess the frequency.
+
+One honest cost. Because a rung includes the rarer ones, the default gained a
+turn bump, a config bump and an install bump it did not have — a strict superset
+of the old invalidation, so nothing can go stale that did not before, but one
+extra recompute per turn for a plugin nothing wrote for. The answer is the
+declaration: the three store tools that read nothing but the security mode
+(`tool_glob`, `tool_read_file`, `tool_run_command`) declare `session` and stop
+paying for every `fs.write` the agent does, which is the trade the ladder exists
+to make.
+
+The lifetime resets in `residency.py` sit on top of all of it (`forget_prompt`,
+which clears text and stamp together — clearing only the text leaves the stamp
+matching): a residency's prompt is only knowable while its box is open, which is
+a question about the box rather than about the world, and no cue can answer it.
 
 `_collect` and `bridge._prompt_method` answered to the old `agent_prompt_for`
 for as long as any *loadable* plugin still wrote it. That is now nothing — the
@@ -1906,8 +1951,9 @@ copies of one deadline drift, and the drift is invisible until something dies
 early. `release` clears them only if the ticket matches, since two watches can
 overlap on one execution. Nothing in force answers `None` rather than a number,
 because a fabricated ceiling would be believed. And it is `READ_ONLY` — a loop
-asks every iteration, so counting it as a change would bump `sandbox.epoch` per
-tick and silently invalidate every cached `agent_prompt`, the same trap
+asks every iteration, so counting it as a change would bump the `prompt_cues`
+write rung per
+tick and silently invalidate every `write`-cued `agent_prompt`, the same trap
 `llm.delta` is kept out of the ledger sink for.
 
 **`sdk.retry` is the third, and it is pure guest-side sugar over a signal that
@@ -2736,6 +2782,9 @@ move between built-in, sandbox, and installed trees.
 - [pipeline/sql_functions.py](pipeline/sql_functions.py) — scalar functions
   every query gets, plugin queries included. `vec_cosine` is why a sandboxed
   semantic search can rank a corpus it is never allowed to hold.
+- [prompt_cues.py](prompt_cues.py) — when a plugin's `agent_prompt` goes
+  stale, and therefore which block of the prompt it rides in. The rung a
+  plugin declares is the whole of both answers; the fire sites are three.
 - [parsing/registry.py](parsing/registry.py) — the file-type authority:
   routing, discovery, and `parser_for` (the importable half). Not a service,
   on purpose.

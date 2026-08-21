@@ -376,7 +376,7 @@ resolves the *running command's* call id from the session and abstains when
 there is none, so an agent-invoked tool, a task or a service calling it emits
 nothing at all. A dialog would also be self-defeating — progress is emitted in a
 loop, so asking would cost more interruptions than the work being narrated. It
-is in `epoch.RENDERING` and the ledger's `unrecorded` set for the same pair of
+is in `prompt_cues.RENDERING` and the ledger's `unrecorded` set for the same pair of
 reasons `llm.delta` is: per-iteration volume, and text on a screen is not state
 a prompt can read back.
 
@@ -558,7 +558,7 @@ It scopes to `ctx.session_key` and takes no key argument, which is stronger
 than validating one: there is no argument to get wrong.
 
 It is also **not** in `READ_ONLY`. It changes what the next call sees, so it
-belongs in the ledger and it should bump `sandbox.epoch` — a cached
+belongs in the ledger and it should bump the `prompt_cues` write rung — a cached
 `agent_prompt` computed against the pre-compaction world is stale the moment
 this succeeds.
 
@@ -788,7 +788,7 @@ would mean a dialog per SSE frame. Note this is **not** an inbound `net.http` �
 that Request dials out and is classified on where it is dialling, and there is
 no destination to classify here because the client came to us.
 
-`http.push` is in `epoch.RENDERING` and dropped by the ledger's sandbox sink,
+`http.push` is in `prompt_cues.RENDERING` and dropped by the ledger's sandbox sink,
 both for the reason `llm.delta` is: an SSE frontend sends one per token, so
 counting it would undo every cached `agent_prompt` and recording it would write
 a row per token. `http.drain` is a read; the other two are per-request and stay
@@ -1130,8 +1130,9 @@ is one-shot, and a finished result nobody collects is swept after
 other execution is visible through it — and the answer only ever causes the
 guest to do less, so there is nothing here for a dialog to be about. It is
 `READ_ONLY` for the reason `script.collect` is, and more sharply: a long loop
-asks every iteration, so counting it as a change would bump `sandbox.epoch` per
-tick and silently invalidate every cached `agent_prompt` in the process.
+asks every iteration, so counting it as a change would bump the `prompt_cues`
+write rung per
+tick and silently invalidate every `write`-cued `agent_prompt` in the process.
 
 It exists because the kernel is the only party that can answer. The guest may
 read a clock, but a deadline measures *running* time — elapsed minus whatever

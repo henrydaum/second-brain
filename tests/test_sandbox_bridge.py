@@ -1630,3 +1630,99 @@ def test_a_service_with_no_way_in_at_all_is_still_warned_about(
         _adapt_service_source(tmp_path, "timeout = 5.0")
 
     assert "nothing can reach it after start" in caplog.text
+
+
+STABLE_PROMPTING_TOOL = '''
+"""A migrated tool declaring a cue below the session tier."""
+
+requests = ["session.get"]
+
+from guest.bases import BaseTool
+
+
+class StableAdvisor(BaseTool):
+    """Advise about something that does not move within a conversation."""
+
+    name = "stable_advisor"
+    description = "x"
+    agent_prompt_refresh = "config"
+
+    def agent_prompt(self, sdk):
+        """Ask for the session anyway, to prove it is not lent one."""
+        return str((sdk.session.get() or {}).get("mode", "no-session"))
+
+    def run(self, sdk):
+        """Do nothing in particular."""
+        return "ok"
+'''
+
+
+def _mode_runtime(box, modes):
+    """A runtime whose sessions answer with the modes given."""
+    runtime = SimpleNamespace(
+        sessions={key: SimpleNamespace(
+            conversation_id=1, cs=SimpleNamespace(phase="idle"), busy=False,
+            frontend_name="test", user_id=1) for key in modes},
+        security_mode=lambda key: modes[key],
+        is_attended=lambda key: True,
+    )
+    box.bind_context(lambda session_key=None: SimpleNamespace(
+        runtime=runtime, session_key=session_key, config={}, services={}))
+    return runtime
+
+
+def test_a_cue_below_session_is_answered_from_the_kernel_context(tmp_path, box):
+    """Tier enforcement, end to end, and the reason it is a rule.
+
+    This plugin's text rides in the position-0 message, which one session's
+    prompt shares with every other. So it is not lent a session at all — and
+    the proof has to be that ``sdk.session.get()`` comes back empty, not that
+    the kernel promises not to look. A regression in ``session_for`` would
+    otherwise show up only as one session reading another's mode.
+    """
+    _mode_runtime(box, {"chat": "lockdown"})
+    module = adapt(_write(tmp_path, "tool_stable_advisor.py",
+                          STABLE_PROMPTING_TOOL))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    try:
+        assert prompt_cues.of(instance) == "config"
+        assert prompt_cues.stable(prompt_cues.of(instance))
+        answer = instance.agent_prompt(SimpleNamespace(
+            session_key="chat", security_mode="lockdown"))
+        assert answer == "no-session"
+    finally:
+        unload_box("stable_advisor")
+
+
+def test_a_write_does_not_invalidate_a_session_cued_prompt(tmp_path, box):
+    """The caching win, through a real settle rather than a stamp comparison.
+
+    Three store tools read nothing but the mode, and until cues existed every
+    one of them paid a fresh box for every file the agent wrote.
+    """
+    from sandbox.interpreter import Execution, Interpreter
+    from sandbox.policy import SAFE, Chain, Decision
+    from guest.requests import FS_WRITE, Request, Result
+
+    _mode_runtime(box, {"chat": "lockdown"})
+    module = adapt(_write(tmp_path, "tool_mode_advisor.py",
+                          MODE_PROMPTING_TOOL.replace(
+                              '    description = "x"',
+                              '    description = "x"\n'
+                              '    agent_prompt_refresh = "session"')))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    try:
+        ctx = SimpleNamespace(session_key="chat", security_mode="lockdown")
+        assert instance.agent_prompt(ctx) == "lockdown"
+        stamped = instance._prompt_stamp
+
+        interp = Interpreter()
+        execution = Execution(name="t", chain=Chain(root="user"))
+        for _ in range(20):
+            interp._settle(execution, Request(FS_WRITE, {"path": "x"}),
+                           Decision(level=SAFE, reason="test"), Result(ok=True))
+
+        assert instance.agent_prompt(ctx) == "lockdown"
+        assert instance._prompt_stamp == stamped, "a write moved a session stamp"
+    finally:
+        unload_box("mode_advisor")
