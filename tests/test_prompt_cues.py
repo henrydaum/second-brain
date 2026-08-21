@@ -11,7 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
+import state_machine  # noqa: F401  (break the runtime import cycle)
+
 import prompt_cues as cues
+from pipeline.database import Database
+from runtime.hooks import HookRegistry
+from tests.support import plain_runtime
 
 CACHEABLE = [c for c in cues.LADDER if c != cues.CALL]
 
@@ -123,6 +128,20 @@ def test_the_session_tuple_names_every_fact_a_prompt_can_actually_see():
 def test_a_call_cued_prompt_is_never_cached():
     """Two stamps taken back to back, with nothing fired, must not match."""
     assert cues.stamp(cues.CALL) != cues.stamp(cues.CALL)
+
+def test_every_stamp_is_hashable():
+    """The obvious next use of a stamp is as a dict key.
+
+    A cache holding one entry per live session, instead of the single slot an
+    adapter has today, would key on exactly this. A rung whose stamp could not
+    be hashed would work in six cases and raise in the seventh — which is why
+    ``call`` is a counter rather than an object that compares unequal to
+    everything and has to refuse ``__hash__`` to do it.
+    """
+    ctx = SimpleNamespace(session_key="chat")
+    for cue in cues.LADDER:
+        assert isinstance(hash(cues.stamp(cue, ctx)), int), cue
+
 
 
 @pytest.mark.parametrize("cue", cues.LADDER)
@@ -245,35 +264,49 @@ def test_a_save_that_changed_nothing_does_not_invalidate():
 
 
 def test_starting_a_turn_fires_the_turn_rung():
-    from runtime.hooks import HookRegistry
-
     before = cues.stamp(cues.TURN)
     HookRegistry().start_turn(SimpleNamespace(history=[], key="chat"))
     assert cues.stamp(cues.TURN) != before
 
 
-def test_a_turn_scoped_mode_is_a_session_fact_not_a_turn_one():
-    """Set for one turn and cleared at its end, with no counter involved.
+def test_a_turn_scoped_mode_is_a_session_fact_not_a_turn_one(tmp_path):
+    """Driven through the real reader, because that is the whole claim.
 
-    ``HookRegistry.finish_turn`` clears ``turn_security_mode`` by writing the
-    field directly rather than through the runtime, which is exactly the kind
-    of site a fire-based design forgets. The mode reaches the stamp because
-    ``PromptContext.security_mode`` is read fresh from the runtime's own
-    precedence reader, so there is nothing to forget.
+    The ``session`` rung has no fire site: it is keyed on facts read off the
+    ``PromptContext``, and ``runtime_config`` fills ``security_mode`` from
+    ``ConversationRuntime.security_mode``. So a turn-scoped ``yolo`` — which
+    ``HookRegistry.finish_turn`` clears by writing the session field directly
+    rather than through the runtime, exactly the site a fire-based design would
+    forget — has to move the stamp with nothing announcing it.
+
+    Comparing two stamps built from mode strings picked by hand would prove
+    only that different strings differ. The mode here comes from the reader
+    both times, which is the part that could actually break.
     """
-    from runtime.hooks import HookRegistry
+    runtime = plain_runtime(Database(str(tmp_path / "t.db")))
+    session = runtime.get_session("repl")
+    session.frontend_name = "test"
+    runtime.set_security_mode("repl", "yolo", scope="turn")
 
-    session = SimpleNamespace(history=[], key="chat", turn_security_mode="yolo",
-                              staged_attachments=None,
-                              pending_agent_actions=None)
-    during = cues.stamp(cues.SESSION,
-                        SimpleNamespace(session_key="chat",
-                                        security_mode=session.turn_security_mode))
+    def _stamp():
+        """Key the session rung exactly as ``runtime_config`` does."""
+        return cues.stamp(cues.SESSION, SimpleNamespace(
+            session_key=session.key,
+            conversation_id=session.conversation_id,
+            user_id=runtime.session_user_id(session.key),
+            profile_name="default",
+            frontend_name=session.frontend_name,
+            security_mode=runtime.security_mode(session.key),
+        ))
+
+    assert runtime.security_mode("repl") == "yolo"
+    during = _stamp()
+
     HookRegistry().finish_turn(session)
+
     assert session.turn_security_mode is None
-    after = cues.stamp(cues.SESSION,
-                       SimpleNamespace(session_key="chat", security_mode="ask"))
-    assert during != after
+    assert runtime.security_mode("repl") == "ask"
+    assert _stamp() != during, "the cleared grant did not reach the stamp"
 
 
 def test_changing_the_plugin_population_fires_the_load_rung():

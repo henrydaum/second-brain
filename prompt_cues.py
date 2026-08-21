@@ -202,6 +202,7 @@ COUNTED = (LOAD, CONFIG, TURN, WRITE)
 
 _lock = threading.Lock()
 _counters = {cue: 0 for cue in COUNTED}
+_serial = 0
 
 
 def fire(cue: str) -> None:
@@ -278,23 +279,24 @@ def session_for(cue: str, ctx=None) -> str:
     return str(getattr(ctx, "session_key", "") or "")
 
 
-class _Recompute:
-    """A stamp component that never matches, so ``call`` is never cached.
+def _next_serial() -> int:
+    """A number nobody has seen before, so ``call`` is never cached.
 
     Expressing "always recompute" as a value rather than a branch keeps
     ``_cached_prompt`` to one comparison — the cue decides what a stamp holds,
     and nothing downstream has to know which cue it was handed.
+
+    A counter rather than a sentinel object that compares unequal to
+    everything, because such an object has to refuse ``__hash__`` to stay
+    honest, and that would make one rung's stamp the only unhashable one. The
+    obvious next use of a stamp is as a dict key — a cache holding an entry per
+    live session instead of a single slot — and it would work for six rungs and
+    raise ``TypeError`` on the seventh.
     """
-
-    __slots__ = ()
-
-    def __eq__(self, other):
-        return False
-
-    __hash__ = None
-
-    def __repr__(self):
-        return "<recompute>"
+    global _serial
+    with _lock:
+        _serial += 1
+        return _serial
 
 
 def stamp(cue: str, ctx=None) -> tuple:
@@ -311,7 +313,7 @@ def stamp(cue: str, ctx=None) -> tuple:
     """
     at = rank(cue)
     if at >= RANK[CALL]:
-        return (cue, _Recompute())
+        return (cue, _next_serial())
     parts = [cue]
     if at >= RANK[LOAD]:
         parts.append(value(LOAD))
