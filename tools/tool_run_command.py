@@ -55,6 +55,82 @@ def _unquote(text):
     return text
 
 
+def _quoted_spans(command):
+    """Index ranges of ``command`` that sit inside a quoted span.
+
+    An unterminated quote runs to the end of the line, which is what a shell
+    does with it too.
+    """
+    spans, quote, opened = [], "", 0
+    for index, char in enumerate(command):
+        if quote:
+            if char == quote:
+                spans.append((opened, index + 1))
+                quote = ""
+        elif char in "\"'":
+            quote, opened = char, index
+    if quote:
+        spans.append((opened, len(command)))
+    return spans
+
+
+def _quoted(spans, index):
+    """Whether ``index`` falls inside one of ``spans``."""
+    return any(start <= index < end for start, end in spans)
+
+
+#: What stays attached to a path once its spaces are dealt with: everything up
+#: to whitespace or a shell metacharacter.
+_PATH_TAIL = re.compile(r"[^\s\"';|&<>]*")
+
+
+def _quote_known_roots(sdk, command):
+    """Quote a root directory whose name contains a space, wherever it is bare.
+
+    The default data directory is ``/data/Second Brain``, so *most* absolute
+    paths this tool is handed contain a space and a shell splits every one of
+    them into two operands. Naming the mistake afterwards was not enough --
+    :func:`_unquoted_path_hint` needs the shell to have run and complained, so
+    it says nothing at all when the command was denied first, and a hint costs
+    a turn even when it lands. Quoting the path before the shell sees it costs
+    nothing and ends the failure instead of explaining it.
+
+    Only the roots this tool already knows are repaired, and only as literal
+    text. That is what makes it safe to do silently-but-disclosed rather than
+    guess: if ``/data/Second Brain`` appears outside quotes then the shell will
+    certainly split it, and wrapping it is certainly what was meant. A path
+    already quoted does not match because the span is skipped; one already
+    backslash-escaped does not match because the text differs. A directory
+    *below* the root with a space of its own is still guesswork, so that case
+    falls through to :func:`_unquoted_path_hint` as before.
+
+    Answers ``(command, repaired paths)``.
+    """
+    roots = {str(root) for root in _roots(sdk) if root and " " in str(root)}
+    if not roots:
+        return command, []
+    # Longest first: the data directory may sit inside the project root, and
+    # the outer match is the one worth quoting.
+    ordered = sorted(roots, key=len, reverse=True)
+    spans = _quoted_spans(command)
+    out, repaired, index = [], [], 0
+    while index < len(command):
+        matched = None
+        if not _quoted(spans, index):
+            for root in ordered:
+                if command.startswith(root, index):
+                    matched = root + _PATH_TAIL.match(command, index + len(root)).group(0)
+                    break
+        if matched is None:
+            out.append(command[index])
+            index += 1
+            continue
+        out.append(f'"{matched}"')
+        repaired.append(matched)
+        index += len(matched)
+    return "".join(out), repaired
+
+
 #: What a shell prints when it was handed the first word of a path it split.
 #: One per shell family; matching the *message* rather than the exit code is
 #: what keeps this from firing on an ordinary missing file.
@@ -413,10 +489,17 @@ class RunCommand(BaseTool):
         if explicit:
             _sticky(sdk, cwd)
 
-        resolved = _retarget_python(sdk, command)
+        # Before the shell, and before the approval dialog: a denied command
+        # should be shown to whoever decides on it the way it was meant.
+        resolved, requoted = _quote_known_roots(sdk, command)
+        resolved = _retarget_python(sdk, resolved)
+        note = ""
+        if requoted:
+            note = ("(quoted a path containing a space before running: "
+                    + ", ".join(sorted(set(requoted))) + ")")
         if kwargs.get("run_in_background"):
-            return self._background(sdk, resolved, cwd, shell)
-        return self._foreground(sdk, resolved, cwd, shell, timeout)
+            return self._background(sdk, resolved, cwd, shell, note=note)
+        return self._foreground(sdk, resolved, cwd, shell, timeout, note=note)
 
     def _cd(self, sdk, target, cwd):
         """Move the persistent working directory."""
@@ -433,7 +516,7 @@ class RunCommand(BaseTool):
                       llm_summary=f"Working directory is now {moved}. "
                                   "It persists for later run_command calls.")
 
-    def _background(self, sdk, command, cwd, shell):
+    def _background(self, sdk, command, cwd, shell, note=""):
         """Start something and leave it running.
 
         No ``label``: it used to carry the retired ``justification``, and the
@@ -453,9 +536,10 @@ class RunCommand(BaseTool):
                           f"{started['pid']}): {command}\n"
                           f"Output is being written to {started['log']}. Poll it "
                           f"with operation='check' and process_id="
-                          f"{started['id']}, and stop it when you are done."))
+                          f"{started['id']}, and stop it when you are done."
+                          + (f"\n{note}" if note else "")))
 
-    def _foreground(self, sdk, command, cwd, shell, timeout):
+    def _foreground(self, sdk, command, cwd, shell, timeout, note=""):
         """Run to completion and report what it printed."""
         try:
             done = sdk.proc.run(command, timeout=timeout, cwd=cwd, shell=shell)
@@ -472,6 +556,8 @@ class RunCommand(BaseTool):
             spilled = _spill(sdk, f"$ {command}\n# cwd: {cwd}", stdout, stderr)
 
         parts = []
+        if note:
+            parts.append(note)
         if shown_out:
             parts.append(shown_out)
         if shown_err:
