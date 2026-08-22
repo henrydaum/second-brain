@@ -122,7 +122,16 @@ def test_running_background_check_stays_successful():
 def test_shell_and_script_prompts_change_strategy_with_mode():
     shell = _tool("tools/tool_run_command.py", "RunCommand")
     script = _tool("tools/tool_run_script.py", "RunScript")
-    assert "approval is refused" in _prompt(shell, _SDK(mode="lockdown"))
+    lockdown = _prompt(shell, _SDK(mode="lockdown"))
+    # Naming a boundary is not the same as describing it. "Anything that would
+    # ask for approval is refused" is only knowable by trying, and the agent
+    # duly tried -- 160 shell calls in one lockdown benchmark round, half of
+    # them refused, against 66 on a build where shell was closed outright.
+    # What it needs is the rule that actually decides.
+    assert "one recognized read-only command" in lockdown
+    assert "cd somewhere && ls" in lockdown         # the compound-line trap
+    assert "`cwd`" in lockdown                      # and what to use instead
+    assert "standing policy" in lockdown            # nobody is being asked
     assert "raw `.py`" in _prompt(shell, _SDK(mode="yolo"))
     assert "valid contained script still runs" in _prompt(
         script, _SDK(mode="lockdown"))

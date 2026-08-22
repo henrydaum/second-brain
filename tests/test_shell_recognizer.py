@@ -526,3 +526,92 @@ def test_proc_start_gets_the_same_recognizer_as_proc_run():
         Request(type="proc.start", args={"argv": ["git", "status"]}),
         Chain(root="repl").push("tool_run_command"))
     assert started.level == SAFE
+
+
+# ── the widening for code-reading work ────────────────────────────────
+
+def test_git_read_verbs_needed_to_understand_a_repository_are_allowed():
+    """Inspecting a checkout is reading, and under a deny-by-default mode the
+    difference between reading and a dialog is the difference between the work
+    being possible and not."""
+    for argv in (["git", "blame", "-L", "10,20", "src/app.py"],
+                 ["git", "ls-files", "--modified"],
+                 ["git", "cat-file", "-p", "HEAD:README.md"],
+                 ["git", "describe", "--tags", "--always"],
+                 ["git", "rev-list", "--count", "HEAD"],
+                 ["git", "grep", "-n", "--untracked", "TODO"]):
+        assert _allowed(argv), argv
+
+
+def test_git_tag_may_list_but_never_create():
+    """The pair that shows why ``positionals_ok`` exists: to ``git tag`` a bare
+    word is a tag to *create*, not a ref to read."""
+    assert _allowed(["git", "tag", "--list"])
+    assert not _allowed(["git", "tag", "v1.0.0"])
+    # A listing pattern is a positional too, so it abstains -- a dialog, which
+    # creates nothing, rather than a grant this table cannot narrow.
+    assert not _allowed(["git", "tag", "-l", "v*"])
+
+
+def test_file_inspection_verbs_are_allowed():
+    for argv in (["wc", "-l", "src/app.py"],
+                 ["head", "-n", "20", "notes.md"],
+                 ["tail", "-n", "5", "log.txt"],
+                 ["diff", "-u", "a.py", "b.py"],
+                 ["stat", "-c", "%s", "data.csv"],
+                 ["sort", "-n", "values.txt"],
+                 ["uniq", "-c", "names.txt"],
+                 ["cut", "-d", ",", "-f", "1", "rows.csv"],
+                 ["sha256sum", "out/report.json"],
+                 ["which", "python3"]):
+        assert _allowed(argv), argv
+
+
+def test_the_flags_left_out_are_the_ones_that_would_write_or_block():
+    """An unknown flag abstains, which is what makes the omissions load-bearing
+    rather than decorative."""
+    # Writes its output to a file.
+    assert not _allowed(["sort", "-o", "sorted.txt", "values.txt"])
+    # Never returns, and a blocked box is worse than a dialog.
+    assert not _allowed(["tail", "-f", "log.txt"])
+    # Checks a recorded digest and exits non-zero, which is fine -- but the
+    # point is that anything unlisted lands here rather than running.
+    assert not _allowed(["wc", "--files0-from", "list.txt"])
+
+
+def test_the_deliberate_exclusions_stay_excluded():
+    """Each was left out for a reason written into the table, and a later
+    widening must not quietly take them in."""
+    # Collection imports every test module, so module-level code runs.
+    assert not _allowed(["pytest", "--collect-only"])
+    # Read-only until ``-exec``, and ``-exec`` is a flag.
+    assert not _allowed(["find", ".", "-name", "*.py"])
+    # Sets exactly as readily as it gets.
+    assert not _allowed(["git", "config", "--get", "user.email"])
+
+
+def test_a_bare_operand_is_not_read_as_a_subcommand():
+    """``wc file`` and ``wc -l file`` are the same read, and were not.
+
+    The pair lookup splits ``argv[1]`` off as a verb when it does not look
+    like a flag, so a leading operand turned into a subcommand nobody had
+    written an entry for. The fix is enumerated rather than inferred because
+    the same misparse is what stops ``python script.py``.
+    """
+    for argv in (["wc", "notes.md"], ["sha256sum", "out/report.json"],
+                 ["basename", "/a/b/c.py"], ["which", "python3"],
+                 ["file", "data.bin"], ["diff", "a.py", "b.py"]):
+        assert _allowed(argv), argv
+
+
+def test_running_a_file_is_still_not_a_version_query():
+    """The protection the subcommand split provides everywhere else.
+
+    ``python --version`` is inert and admitted. ``python script.py`` splits
+    its operand off as a subcommand, misses the table, and abstains -- which
+    is the only thing standing between this table and arbitrary execution.
+    """
+    assert _allowed(["python", "--version"])
+    for argv in (["python", "script.py"], ["python3", "-c", "print(1)"],
+                 ["node", "app.js"], ["npm", "install"], ["pip", "install", "x"]):
+        assert not _allowed(argv), argv
