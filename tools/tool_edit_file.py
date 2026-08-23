@@ -13,7 +13,8 @@ question of the native path and the sandboxed path disagreeing, because there
 is no native path.
 """
 
-dependencies_files = ['tools/helpers/file_reads.py']
+dependencies_files = ['tools/helpers/file_reads.py',
+                      'tools/helpers/path_repair.py']
 dependencies_pip = []
 requests = ["fs.read", "fs.write", "fs.delete", "fs.list", "paths.get",
             "session.state_get", "session.state_set"]
@@ -26,7 +27,7 @@ from guest.bases import BaseTool
 # Flat, not ``from .helpers import file_reads``: a box is one namespace, and
 # the kernel puts each declared dependency's *directory* on the box's import
 # path. The helper is a sibling here even though it ships in a subdirectory.
-from . import file_reads
+from . import file_reads, path_repair
 
 PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use validate(path=...) to make sure it is correct."
 READ_FIRST = "Read the file with read_file before editing it."
@@ -65,6 +66,10 @@ def _resolve(sdk, raw: str):
     raw = (raw or "").strip()
     if not raw:
         return None, "path is required."
+    # A shell escape that reached a tool which is not a shell. Repaired here
+    # for the same reason read_file repairs it: the backslash is never removed
+    # again, so the write lands somewhere nobody asked for or fails outright.
+    raw, _ = path_repair.unescape_known_roots(sdk, raw)
     return sdk.path.absolute(raw, base=sdk.paths.get("project")), None
 
 

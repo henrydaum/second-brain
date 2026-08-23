@@ -50,7 +50,8 @@ the file is — and a check in here could only get it wrong, since a box cannot
 see which brain the session resolved to.
 """
 
-dependencies_files = ['tools/helpers/file_reads.py']
+dependencies_files = ['tools/helpers/file_reads.py',
+                      'tools/helpers/path_repair.py']
 dependencies_pip = []
 requests = ["fs.read", "fs.list", "paths.get",
             "parse.modality", "parse.file", "session.add_attachment",
@@ -164,6 +165,7 @@ class ReadFile(BaseTool):
         raw_path = (kwargs.get("path") or "").strip()
         if not raw_path:
             return sdk.fail("No path provided.")
+        raw_path, repaired_root = path_repair.unescape_known_roots(sdk, raw_path)
 
         try:
             offset = int(kwargs.get("offset") or 1)
@@ -231,6 +233,10 @@ class ReadFile(BaseTool):
             notes.append(f"showing lines 1-{end} of {total_lines}")
         if char_truncated:
             notes.append(f"output capped at {MAX_CHARS} chars — pass offset/limit to page further")
+        if repaired_root:
+            # Said out loud, so the escaping habit does not survive the repair.
+            notes.append(f"read as {repaired_root!r} — a backslash before a "
+                         "space is shell quoting; file tools take the plain path")
         if notes:
             content += "\n\n... (" + "; ".join(notes) + ")"
 
