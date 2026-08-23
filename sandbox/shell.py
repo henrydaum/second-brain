@@ -137,6 +137,58 @@ _READ_ONLY_COMMANDS = {
     ("git", "rev-parse"): (frozenset({"--abbrev-ref", "--short",
                                       "--show-toplevel", "--git-dir",
                                       "--is-inside-work-tree"}), True),
+    ("git", "blame"): (frozenset({"-L", "--line-porcelain", "--porcelain",
+                                  "-s", "-e", "-w", "--show-name"}), True),
+    ("git", "ls-files"): (frozenset({"--cached", "--others", "--modified",
+                                     "--deleted", "--stage", "-s", "-m", "-d",
+                                     "-o", "-c", "--exclude-standard"}), True),
+    ("git", "cat-file"): (frozenset({"-p", "-t", "-s", "-e",
+                                     "--batch-check"}), True),
+    ("git", "describe"): (frozenset({"--tags", "--always", "--dirty",
+                                     "--abbrev", "--long"}), True),
+    ("git", "rev-list"): (frozenset({"--count", "--max-count", "-n", "--all",
+                                     "--oneline", "--no-merges",
+                                     "--reverse"}), True),
+    ("git", "grep"): (frozenset({"-n", "-i", "-l", "-w", "-E", "-F", "-c",
+                                 "--name-only", "--line-number",
+                                 "--untracked"}), True),
+    # ``git tag <name>`` *creates* one, so the read is reachable only through
+    # an explicit listing flag with no free positionals. A pattern argument
+    # abstains, which costs a dialog and cannot create anything.
+    ("git", "tag"): (frozenset({"-l", "--list", "-n"}), False),
+
+    # ── reading files, sizes and shapes ───────────────────────────────
+    #
+    # Each is the shell spelling of something ``fs.read`` or ``fs.list``
+    # already hands over, so these remove a dialog rather than a boundary --
+    # and ``_names_protected_path`` still withdraws the grant when the line
+    # names a file no read may return.
+    #
+    # The flags left out matter more than the ones admitted, because an
+    # unknown flag abstains and is therefore safe by construction:
+    #   - ``tail -f`` never returns, and a blocked box is worse than a dialog.
+    #   - ``sort -o`` writes its output to a file.
+    ("wc", ""): (frozenset({"-l", "-w", "-c", "-m", "-L"}), True),
+    ("head", ""): (frozenset({"-n", "-c", "-q", "-v"}), True),
+    ("tail", ""): (frozenset({"-n", "-c", "-q", "-v"}), True),
+    ("nl", ""): (frozenset({"-b", "-n", "-w", "-s"}), True),
+    ("cut", ""): (frozenset({"-d", "-f", "-c", "-b", "--delimiter",
+                             "--fields", "--characters"}), True),
+    ("sort", ""): (frozenset({"-n", "-r", "-u", "-k", "-t", "-f", "-h", "-b",
+                              "--numeric-sort", "--reverse", "--unique"}), True),
+    ("uniq", ""): (frozenset({"-c", "-d", "-u", "-i"}), True),
+    ("diff", ""): (frozenset({"-u", "-r", "-q", "-w", "-b", "-i", "-N", "-c",
+                              "--unified", "--brief", "--recursive"}), True),
+    ("file", ""): (frozenset({"-b", "-i", "--brief", "--mime",
+                              "--mime-type"}), True),
+    ("stat", ""): (frozenset({"-c", "-t", "-L", "--format"}), True),
+    ("du", ""): (frozenset({"-h", "-s", "-a", "-c", "-b",
+                            "--max-depth"}), True),
+    ("basename", ""): (frozenset({"-s", "-a"}), True),
+    ("dirname", ""): (frozenset(), True),
+    ("which", ""): (frozenset({"-a"}), True),
+    ("md5sum", ""): (frozenset({"-b", "-c"}), True),
+    ("sha256sum", ""): (frozenset({"-b", "-c"}), True),
     # Version and identity queries: nothing to configure, nothing to write.
     ("python", ""): (frozenset({"--version", "-V"}), False),
     ("python3", ""): (frozenset({"--version", "-V"}), False),
@@ -148,6 +200,23 @@ _READ_ONLY_COMMANDS = {
     ("hostname", ""): (frozenset(), False),
 }
 
+
+#: Programs whose first bare word is an operand, never a verb.
+#:
+#: The pair above splits ``argv[1]`` off as a subcommand when it does not look
+#: like a flag, which is right for ``git log`` and wrong for ``wc file.txt`` --
+#: that lookup becomes ``("wc", "file.txt")`` and misses, so the same read is
+#: allowed with a leading flag and refused without one.
+#:
+#: **Enumerated rather than inferred, because the misparse is load-bearing
+#: elsewhere.** ``python script.py`` also splits its operand off as a
+#: subcommand and misses, and there the miss is the entire protection: the
+#: table admits ``python --version`` and must never admit running a file. So
+#: this set holds only programs that take no verb at all.
+_NO_SUBCOMMAND = frozenset({
+    "wc", "head", "tail", "nl", "cut", "sort", "uniq", "diff", "file",
+    "stat", "du", "basename", "dirname", "which", "md5sum", "sha256sum",
+})
 
 #: Characters a shell has nothing to say about. A **whitelist**, because the
 #: interesting question is not "which characters are dangerous" — that list is
@@ -436,7 +505,7 @@ def _read_only_segment(argv, args=None):
 
     rest = argv[1:]
     subcommand = ""
-    if rest and not rest[0].startswith("-"):
+    if rest and not rest[0].startswith("-") and program not in _NO_SUBCOMMAND:
         subcommand, rest = rest[0].lower(), rest[1:]
 
     entry = _READ_ONLY_COMMANDS.get((program, subcommand))
