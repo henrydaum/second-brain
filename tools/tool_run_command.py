@@ -29,7 +29,8 @@ background processes for servers and watchers.
 dependencies_files = []
 dependencies_pip = []
 requests = ["proc.run", "proc.start", "proc.status", "proc.stop", "proc.list",
-            "fs.temp", "fs.write", "fs.list", "paths.get",
+            "fs.temp", "fs.write", "fs.read", "fs.list", "paths.get",
+            "config.read",
             "session.get", "session.state_get", "session.state_set"]
 
 import re
@@ -201,6 +202,48 @@ def _resolve(sdk, raw, base=None):
     return target, None
 
 
+#: Setting naming where a session starts before anything has pinned a
+#: directory. Empty — the default — leaves the project root as it always was.
+_INITIAL_KEY = "initial_working_directory"
+
+
+def _initial(sdk):
+    """The configured starting directory, or ``None``.
+
+    The project root is the right default only for a deployment whose work
+    happens there. Where it does not, the first command of every session runs
+    in the wrong place, fails with a message about a path nobody typed, and is
+    repaired on the next call by passing ``cwd`` — one wasted call and one
+    confusing error per session, forever. Saying so in the prompt does not fix
+    it; somewhere to *start* does.
+
+    Two shapes, because a directory is not always knowable in advance. A
+    value naming an existing directory is used as-is. A value naming a
+    **file** is read for one, which is the only workable form when the
+    directory is created after the app boots — a per-task sandbox, a checkout
+    made by whatever launched this. Config is bound to the request context at
+    start, so a late-created path cannot be written into config itself.
+
+    Every failure is silent and answers ``None``: a missing setting, an
+    unreadable pointer, or one gone stale must leave this tool behaving
+    exactly as it did before, which is the project root.
+    """
+    try:
+        raw = str(sdk.config.read(_INITIAL_KEY) or "").strip()
+    except Exception:                                    # noqa: BLE001
+        return None
+    if not raw:
+        return None
+    if _is_dir(sdk, raw):
+        return raw
+    try:
+        lines = (sdk.fs.read(raw) or "").strip().splitlines()
+    except sdk.Failed:
+        return None
+    first = _unquote(lines[0]).strip() if lines else ""
+    return first if first and _is_dir(sdk, first) else None
+
+
 def _is_dir(sdk, path):
     """Whether a path names a directory.
 
@@ -350,6 +393,17 @@ class RunCommand(BaseTool):
         "required": [],
     }
     requires_services = []
+
+    config_settings = [
+        ("Initial Working Directory", _INITIAL_KEY,
+         "Where a session's first command runs before anything has pinned a "
+         "directory. Empty keeps the project root. Give it a directory, or "
+         "the path of a file holding one — the file form is for a working "
+         "directory that does not exist until after startup, such as a "
+         "per-task sandbox. An unreadable or stale value is ignored.",
+         "", {"type": "text"}),
+    ]
+
     # This text reads the permission mode and nothing else, so it goes stale
     # only when the session does — not on every file the agent writes, which is
     # what the default rung would charge for it.
@@ -471,11 +525,14 @@ class RunCommand(BaseTool):
         except (TypeError, ValueError):
             timeout = 60
 
-        # Explicit cwd wins, then the sticky one, then the project root. An
-        # explicit cwd also re-pins the sticky directory, so "work over here
-        # now" only needs saying once.
+        # Explicit cwd wins, then the sticky one, then the configured starting
+        # directory, then the project root. An explicit cwd also re-pins the
+        # sticky directory, so "work over here now" only needs saying once.
         explicit = (kwargs.get("cwd") or "").strip()
-        cwd, why_not = _resolve(sdk, explicit or _sticky(sdk))
+        started = "" if explicit else (_sticky(sdk) or "")
+        if not explicit and not started:
+            started = _initial(sdk) or ""
+        cwd, why_not = _resolve(sdk, explicit or started)
         if why_not:
             return sdk.fail(why_not)
 
@@ -486,7 +543,11 @@ class RunCommand(BaseTool):
         if moved is not None:
             return self._cd(sdk, (moved.group("target") or "").strip(), cwd)
 
-        if explicit:
+        # Pin the starting directory too, not just an explicit one: it makes
+        # the config lookup happen once per session instead of on every call,
+        # and it means a later `cd` moves from where the session started
+        # rather than snapping back here.
+        if explicit or started:
             _sticky(sdk, cwd)
 
         # Before the shell, and before the approval dialog: a denied command
