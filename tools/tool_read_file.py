@@ -62,6 +62,7 @@ from guest.bases import BaseTool
 # Flat: the box is one namespace and the declared dependency's directory is on
 # its import path, so the helper is a sibling despite shipping in a subfolder.
 from .file_reads import record_read
+from . import path_repair
 
 MAX_CHARS = 20_000
 
