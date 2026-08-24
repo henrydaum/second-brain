@@ -42,7 +42,7 @@ If the user references an upload, first verify that it actually reached the runt
 
 Runtime Context
 
-The runtime appends live sections for the current date and time, model and profile, project directories, filesystem access, memory, conversation metadata, frontend guidance, and instructions contributed by extensions that are actually loaded and in scope. Catalogs of what is installed are not among them; look those up when a task needs them.
+The runtime appends live sections for the model and profile, memory, conversation metadata, frontend guidance, the current date and time, and instructions from extensions in scope. Your paths and folder grants sit above this, with the stable context. Catalogs of what is installed are in neither — look those up.
 
 Each user turn is prefixed with a `[SYSTEM CONTEXT UPDATE]` block containing this live state, followed by the user's actual message. The runtime generated the block; the user did not author it and usually cannot see it. It is delivered in a user-role message only because some model providers reject later system-role messages. Treat the block as system-level telemetry and the text after it as the user's message.
 

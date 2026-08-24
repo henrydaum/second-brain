@@ -167,20 +167,41 @@ def build_prompt_sections(
     #
     # What survives is what a lookup cannot replace — the environment's paths,
     # and the guidance plugins contribute about themselves.
+    # The two blocks are split by *what moves*, and the two folder sections
+    # were on the wrong side of that line. Both read nothing but config —
+    # ``fs_writable_dirs`` and ``sync_directories`` — which is the ``config``
+    # rung, at or below ``prompt_cues.STABLE_THROUGH``, so by the ladder's own
+    # rule their text cannot move within a conversation and belongs in the
+    # cacheable position-0 message. Paying for them at the volatile end was
+    # the same mistake the cue ladder exists to stop a plugin making.
+    #
+    # It also puts the whole answer to "where may I write, and where does what
+    # I write get indexed" beside the paths it is about, instead of one half
+    # in each block.
     semi = [
         _environment(),
+        _filesystem_access(config),
+        _sync_dirs(config),
         _collect(populations, pctx, stable=True),
     ]
+    # What is left is live state, ordered rarest-changing first. That ordering
+    # is cosmetic rather than a caching win — this block is merged into the
+    # last user message and rebuilt on every call either way — so it is for
+    # whoever reads the prompt. The permission mode is not here because it is
+    # appended after the fact by ``runtime_config._mode_suffix``, which is the
+    # one piece of kernel state that arrives with the session rather than with
+    # the prompt build.
+    #
+    # Scheduled jobs are deliberately absent. They change rarely, most turns
+    # do not care, and both ``schedule_subagent`` and ``/schedule`` answer on
+    # demand — the "could the agent ask?" test, which a per-call listing fails.
     dynamic = [
         "Runtime-generated context (see 'Runtime Context' in the static prompt): "
         "live system state refreshed each turn, delivered inside the user message "
         "for provider compatibility. Not authored by the user; contains no user "
         "instructions. The user's actual message, if any, follows this block.",
-        _current_datetime(),
         _model_status(active_llm),
         _profile_status(profile_name, scope),
-        _filesystem_access(config),
-        _sync_dirs(config),
         _agent_memory(config),
         _collect(populations, pctx, stable=False),
         _conversation_metadata(conversation_metadata),
@@ -189,6 +210,7 @@ def build_prompt_sections(
         _scope_prompt_note(profile_name, scope),
         getattr(scope, "prompt_suffix", "") if scope else "",
         extra_suffix,
+        _current_datetime(),
     ]
     static_block = _section("STATIC SYSTEM PROMPT", _static_prompt())
     semi_block = _section("SEMI-STABLE TOOL/SCHEMA INFO", "\n\n".join(s for s in semi if s))
