@@ -17,6 +17,13 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 *For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
 
+# Head-to-Head Evaluation
+
+Second Brain performs higher than OpenClaw and Hermes on [harness-bench](https://www.harness-bench.ai/), which measures "model-harness configuration effects across 106 sandboxed offline agent tasks". Here are the results:
+<img width="1024" height="490" alt="Captura de pantalla 2026-08-23 213236" src="https://github.com/user-attachments/assets/0eee51f5-fccc-4d43-acc5-fd709bf50499" />
+
+The full evaluation framework I used is [available on GitHub](https://github.com/henrydaum/second-brain-evals), and the full results are available [here](https://github.com/henrydaum/second-brain-eval-results). I did this testing because I was curious how Second Brain would stack up against other agents. This provides the real results, but with a few small caveats, which you can read in the links provided.
+
 # How Second Brain works, in infographic form
 
 ## 1. Attachment Parsing
