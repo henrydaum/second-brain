@@ -1334,3 +1334,146 @@ def test_the_wire_and_the_transcript_cap_a_long_result_identically():
 
     assert _finished_payload(tool_result)["summary"] == stored
     assert len(stored) < oversized
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Where the dynamic context block lands
+#
+# ``_messages`` is the single place history becomes a provider message array,
+# and until these tests nothing asserted anything about its ordering. That gap
+# hid a real cost: the ``[SYSTEM CONTEXT UPDATE]`` block is merged into the
+# *latest user-led turn*, which in a chat is near the end — but an agentic run
+# has exactly one user message, so "latest" is also "first" and the block sits
+# ahead of the whole tool-call transcript. Anything volatile in it therefore
+# invalidates the cached prefix for every row behind it.
+#
+# These pin the shape as it stands so a later change to placement has to say
+# out loud what it is changing.
+# ──────────────────────────────────────────────────────────────────────────
+
+from runtime.conversation_loop import SYSTEM_CONTEXT_MARKER as _MARKER
+
+
+def _sectioned(context_text="Current date and time: whenever"):
+    """A prompt callable shaped the way ``build_prompt_sections`` returns."""
+    return lambda: [
+        {"role": "system", "content": "STATIC + SEMI-STABLE"},
+        {"role": "user", "content": f"{_MARKER}\n{context_text}"},
+    ]
+
+
+def _tool_turn_history():
+    return [
+        {"role": "user", "content": "do the thing"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "file contents"},
+        {"role": "assistant", "content": "done."},
+    ]
+
+
+def test_the_context_block_rides_on_the_latest_user_turn():
+    """In an agentic run the only user row is the first, so the block lands at
+    index 1 — ahead of every tool result. This is the placement that makes any
+    volatility in the block expensive."""
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
+    history = _tool_turn_history()
+
+    out = loop._messages(history)
+
+    assert out[0]["role"] == "system"
+    assert out[0]["content"] == "STATIC + SEMI-STABLE"
+    carriers = [m for m in out if _MARKER in str(m.get("content") or "")]
+    assert len(carriers) == 1
+    assert carriers[0] is out[1]
+    assert out[1]["role"] == "user"
+    assert str(out[1]["content"]).lstrip().startswith(_MARKER)
+    # The user's own words survive, after the block.
+    assert str(out[1]["content"]).rstrip().endswith("do the thing")
+    # Everything behind it is the history, verbatim and in order.
+    assert [m["role"] for m in out[2:]] == ["assistant", "tool", "assistant"]
+    assert out[3]["content"] == "file contents"
+
+
+def test_messages_never_inserts_a_row_into_the_history():
+    """``_prepend_to_user`` merges rather than inserts, which is *why* the
+    current design cannot emit an illegal message sequence. Any future move of
+    the block to the true tail forfeits that guarantee, and has to confront
+    this assertion to do it."""
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
+    history = _tool_turn_history()
+
+    out = loop._messages(history)
+
+    # one system message + the history; the context block added no row
+    assert len(out) == 1 + len(history)
+
+
+def test_no_row_is_placed_between_a_tool_call_and_its_results():
+    """Providers reject a message sitting between an assistant's tool_calls and
+    the tool rows answering them. Stated as the rule rather than left as a
+    consequence of how the merge happens to work."""
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
+    history = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [
+             {"id": "a", "type": "function", "function": {"name": "x", "arguments": "{}"}},
+             {"id": "b", "type": "function", "function": {"name": "y", "arguments": "{}"}},
+         ]},
+        {"role": "tool", "tool_call_id": "a", "content": "1"},
+        {"role": "tool", "tool_call_id": "b", "content": "2"},
+    ]
+
+    out = loop._messages(history)
+
+    for i, msg in enumerate(out):
+        wanted = [c["id"] for c in (msg.get("tool_calls") or [])]
+        if not wanted:
+            continue
+        answers = out[i + 1:i + 1 + len(wanted)]
+        assert [m.get("role") for m in answers] == ["tool"] * len(wanted)
+        assert [m.get("tool_call_id") for m in answers] == wanted
+
+
+def test_a_turn_with_no_user_row_appends_the_block_last():
+    """A re-drive can hand the loop history with no user row at all. The block
+    then has nothing to merge into and goes at the end."""
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
+    history = [
+        {"role": "assistant", "content": "picking up where I left off"},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ]
+
+    out = loop._messages(history)
+
+    assert out[0]["role"] == "system"
+    assert out[-1]["role"] == "user"
+    assert str(out[-1]["content"]).lstrip().startswith(_MARKER)
+
+
+def test_a_legacy_string_prompt_becomes_one_system_message():
+    """The no-session fallback still hands the loop a bare string."""
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, "just a string")
+
+    out = loop._messages([{"role": "user", "content": "hi"}])
+
+    assert out[0] == {"role": "system", "content": "just a string"}
+    assert out[1]["content"] == "hi"
+    assert not any(_MARKER in str(m.get("content") or "") for m in out)
+
+
+def test_a_system_row_in_the_history_never_reaches_the_provider_twice():
+    """History rows carrying ``system`` are dropped; the prompt is the only
+    source of one."""
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
+    history = [
+        {"role": "system", "content": "a stale prompt from the transcript"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    out = loop._messages(history)
+
+    assert [m["role"] for m in out].count("system") == 1
+    assert "stale prompt" not in str(out)

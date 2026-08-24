@@ -9,15 +9,28 @@ Returns two messages:
   context block followed by the user's actual content.
 
 The user-role wrapper exists because some providers (MiniMax) reject
-``system`` messages anywhere except position 0. Keeping the dynamic block
-at the tail of the prompt also preserves the cacheable prefix.
+``system`` messages anywhere except position 0.
+
+A caution about where the dynamic block actually ends up, because this used
+to claim it rides "at the tail of the prompt" and that is only half true.
+``ConversationLoop._messages`` merges it into whatever
+``_split_current_turn`` finds, which is the *last* row with ``role ==
+"user"``. In a conversation that is near the end, and the cacheable prefix
+is everything before it. In an agentic run there is exactly one user message
+— the task — followed by dozens of assistant and tool rows, so "last" is
+also "first" and the block sits at index 1, ahead of the whole transcript.
+Every byte that moves in it therefore re-bills every row behind it. Treat
+anything in the ``dynamic`` list as costing the entire conversation, not a
+suffix of it, and see ``_current_datetime`` for what that cost measured.
 """
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any, Callable
 
 import prompt_cues
@@ -28,6 +41,20 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
 
 SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
+
+#: How long the turn-stable clock may go without re-rendering, regardless of
+#: whether a turn ended. See :func:`_current_datetime` — a turn is normally
+#: seconds, but one blocked on a person is unbounded, and telling an agent the
+#: wrong time for an unbounded stretch is worse than one cache miss per
+#: quarter hour.
+_CLOCK_CEILING_SECONDS = 900
+
+#: ``(turn_counter, rendered_at_monotonic, text)`` for the clock below.
+_clock_memo: tuple[int, float, str] | None = None
+_clock_lock = threading.Lock()
+
+#: ``((mtime_ns, size), text)`` for :func:`_static_prompt`.
+_static_memo: tuple[tuple[int, int], str] | None = None
 
 #: Fallback for ``memory_index_cap`` when there is no config to read — the
 #: setting is the source of truth (``config/config_data.py``), because anything
@@ -63,7 +90,30 @@ class PromptContext:
 
 
 def _static_prompt() -> str:
-    return _STATIC_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    """The static block, re-read only when the file behind it has moved.
+
+    This is ~7 KB decoded on every LLM call, and the bytes are the same every
+    time — it changes no prefix and re-bills nothing, so this is a latency fix
+    and not a caching one. It is memoized behind a ``stat`` rather than read
+    once at import because that costs a syscall instead of a read-and-decode
+    while still picking up an edit: the project's own contract is that source
+    changes need ``/restart`` (a process restart, so a plain module-level cache
+    would be correct too), but a guard that does not depend on that promise is
+    cheaper to be sure about than an argument that it holds.
+    """
+    global _static_memo
+    try:
+        info = _STATIC_PROMPT_PATH.stat()
+        key = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        key = None
+    memo = _static_memo
+    if memo is not None and key is not None and memo[0] == key:
+        return memo[1]
+    text = _STATIC_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    if key is not None:
+        _static_memo = (key, text)
+    return text
 
 
 def build_prompt_sections(
@@ -255,12 +305,65 @@ def _environment() -> str:
     ])
 
 
-def _current_datetime() -> str:
+def _render_datetime() -> str:
     now = datetime.now().astimezone()
     return (
         f"Current date and time: {now.strftime('%A, %B %d, %Y %I:%M %p')} "
         f"(local time, UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
     )
+
+
+def _current_datetime() -> str:
+    """The clock, rendered once per turn rather than once per call.
+
+    This line is the most expensive string in the prompt, for a reason that has
+    nothing to do with its length. The dynamic block is merged into the latest
+    user-led turn, and an agentic run has exactly one user message — so the
+    block sits ahead of the entire tool-call transcript, and any byte that
+    moves in it invalidates the cached prefix for every row behind it.
+    ``%I:%M %p`` is *fixed width*, so a minute rollover changes the prefix and
+    changes nothing about the length: measured across 636 benchmark trials,
+    calls built inside one minute collapsed the prefix 1.4% of the time and
+    calls that crossed a minute boundary collapsed it 33.3% of the time,
+    together carrying 27–45% of all billed-uncached input.
+
+    Rendering once per turn costs the agent nothing it was promised. The block
+    announces itself as state "refreshed each turn", and
+    ``system_prompt_static.md`` tells the reader to expect it to change
+    *between* turns. Minute precision is kept, because relative-date reasoning
+    is what the line is for.
+
+    Keyed on the raw ``prompt_cues`` turn counter and **not** on
+    ``prompt_cues.stamp``: a stamp at rank ``session`` or finer folds the
+    session's own facts into the key, so one global slot keyed that way would
+    thrash between concurrent sessions — session A caches, session B evicts, A
+    re-renders and picks up the rollover. The wall clock is not a per-session
+    fact and must not be keyed as one. Sharing one string across sessions is
+    correct; the worst a race can do here is render twice.
+
+    The ceiling exists because a turn is not time-bounded. ``turn`` fires once
+    per driven turn, but a tool that asks the user a question blocks on a
+    person, and approval dialogs hold for minutes at a time. Without it, a turn
+    parked on a dialog would report the wrong time for as long as it waited.
+    """
+    global _clock_memo
+    turn = prompt_cues.value(prompt_cues.TURN)
+    now = _monotonic()
+    with _clock_lock:
+        memo = _clock_memo
+        if (memo is not None and memo[0] == turn
+                and now - memo[1] < _CLOCK_CEILING_SECONDS):
+            return memo[2]
+        text = _render_datetime()
+        _clock_memo = (turn, now, text)
+        return text
+
+
+def _reset_turn_clock() -> None:
+    """Drop the memoized clock. For tests; nothing in the kernel calls it."""
+    global _clock_memo
+    with _clock_lock:
+        _clock_memo = None
 
 
 def _model_status(llm=None) -> str:

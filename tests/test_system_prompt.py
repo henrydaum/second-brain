@@ -410,3 +410,158 @@ def test_the_static_prompt_stays_within_its_budget():
         f"agent/system_prompt_static.md is {size} chars. Anything long-form "
         "belongs in docs/ with a pointer here, not inlined into every turn."
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# The turn-stable clock
+#
+# The dynamic block is merged into the latest user-led turn, which in an
+# agentic run is the *first* message — so it sits ahead of the whole tool-call
+# transcript and anything volatile in it re-bills every row behind it. The
+# clock was the one contributor moving on a schedule unrelated to anything the
+# agent did, and ``%I:%M %p`` is fixed width, so a rollover changed the prefix
+# and not the length. These pin that it is now rendered once per turn, and —
+# more importantly — that freezing it did not freeze anything else.
+# ──────────────────────────────────────────────────────────────────────────
+
+class _FakeClock:
+    """Stands in for ``datetime`` with a hand-advanced wall clock."""
+
+    def __init__(self, start):
+        self._now = start
+
+    def advance(self, **kwargs):
+        from datetime import timedelta
+        self._now = self._now + timedelta(**kwargs)
+
+    def now(self):
+        return self._now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """A fake wall clock and monotonic, with the memo reset around the test."""
+    from datetime import datetime as real_datetime
+
+    import agent.system_prompt as sp
+
+    sp._reset_turn_clock()
+    fake = _FakeClock(real_datetime(2026, 4, 20, 9, 59, 30))
+    elapsed = {"seconds": 0.0}
+    monkeypatch.setattr(sp, "datetime", fake)
+    monkeypatch.setattr(sp, "_monotonic", lambda: elapsed["seconds"])
+    fake.elapsed = elapsed
+    yield fake
+    sp._reset_turn_clock()
+
+
+def test_the_clock_is_byte_identical_across_two_calls_inside_one_turn(clock, data_dir):
+    """The whole point. The fake guarantees the rollover rather than waiting
+    for one, so this fails deterministically on the old code."""
+    _, first = _sections_with([])
+    clock.advance(minutes=1)
+    _, second = _sections_with([])
+
+    assert "09:59 AM" in first["content"]
+    assert first["content"] == second["content"]
+
+
+def test_a_new_turn_moves_the_clock(clock, data_dir):
+    """Turn-stable, not permanently frozen."""
+    import prompt_cues
+
+    _, first = _sections_with([])
+    clock.advance(minutes=1)
+    prompt_cues.fire(prompt_cues.TURN)
+    _, second = _sections_with([])
+
+    assert "09:59 AM" in first["content"]
+    assert "10:00 AM" in second["content"]
+
+
+def test_the_clock_cannot_go_stale_past_the_ceiling(clock, data_dir):
+    """A turn blocked on a person is unbounded. The ceiling converts that into
+    bounded staleness at the cost of one prefix reset per quarter hour."""
+    from agent.system_prompt import _CLOCK_CEILING_SECONDS
+
+    _, first = _sections_with([])
+    clock.advance(minutes=20)
+    clock.elapsed["seconds"] = _CLOCK_CEILING_SECONDS + 1
+    _, second = _sections_with([])
+
+    assert "09:59 AM" in first["content"]
+    assert "10:19 AM" in second["content"]
+
+
+def test_freezing_the_clock_did_not_freeze_the_block(clock, data_dir):
+    """The guard on the cue ladder, and the test that matters most here.
+
+    ``call`` never caches by construction. A tool declaring it must still see
+    its text rebuilt on every call — that is the ladder's contract, and a memo
+    that reached past its one line would silently override a plugin's own
+    declaration.
+    """
+    counter = {"n": 0}
+
+    def counting(ctx):
+        counter["n"] += 1
+        return f"LIVE-{counter['n']}"
+
+    tool = SimpleNamespace(name="live", description="", parameters={},
+                           agent_prompt=counting, agent_prompt_refresh="call")
+
+    _, first = _sections_with([tool])
+    _, second = _sections_with([tool])
+
+    assert "LIVE-1" in first["content"]
+    assert "LIVE-2" in second["content"]
+    assert first["content"] != second["content"]
+
+
+def test_only_the_clock_is_frozen_within_a_turn(clock, data_dir):
+    """Bounds the change. The agent must still see its own memory write inside
+    the turn that made it."""
+    memory = data_dir / "workspace" / "memory"
+    memory.mkdir(parents=True, exist_ok=True)
+    (memory / "MEMORY.md").write_text("- [Before](before.md)", encoding="utf-8")
+    _, first = _sections_with([])
+
+    clock.advance(minutes=1)
+    (memory / "MEMORY.md").write_text("- [After](after.md)", encoding="utf-8")
+    _, second = _sections_with([])
+
+    assert "Before" in first["content"]
+    assert "After" in second["content"]
+    assert "09:59 AM" in first["content"]
+    assert "09:59 AM" in second["content"]
+
+
+def test_the_static_prompt_is_re_read_when_the_file_moves(tmp_path, monkeypatch):
+    """The memo is behind a stat, so an edit is still picked up."""
+    import agent.system_prompt as sp
+
+    path = tmp_path / "system_prompt_static.md"
+    path.write_text("FIRST", encoding="utf-8")
+    monkeypatch.setattr(sp, "_STATIC_PROMPT_PATH", path)
+    monkeypatch.setattr(sp, "_static_memo", None)
+
+    assert sp._static_prompt() == "FIRST"
+    path.write_text("SECOND EDITION", encoding="utf-8")
+    assert sp._static_prompt() == "SECOND EDITION"
+
+
+def test_a_missing_static_prompt_still_raises_rather_than_serving_a_stale_one(
+        tmp_path, monkeypatch):
+    """Failing to stat must not quietly hand back the last good copy — a
+    missing prompt is a broken install and should say so."""
+    import agent.system_prompt as sp
+
+    path = tmp_path / "system_prompt_static.md"
+    path.write_text("PRESENT", encoding="utf-8")
+    monkeypatch.setattr(sp, "_STATIC_PROMPT_PATH", path)
+    monkeypatch.setattr(sp, "_static_memo", None)
+
+    assert sp._static_prompt() == "PRESENT"
+    path.unlink()
+    with pytest.raises(OSError):
+        sp._static_prompt()
