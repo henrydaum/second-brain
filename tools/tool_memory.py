@@ -226,8 +226,17 @@ class Memory(BaseTool):
         "Read, list and write your memory — notes (one situation and what to "
         "do about it) and skills (repeatable procedures). Names come from the "
         "memory block in your prompt, which gives descriptions only; read an "
-        "entry before acting on it. Entries outlive the conversation and are "
-        "searched at the start of every future turn."
+        "entry before acting on it, and 'list' when something feels familiar "
+        "and was not named there. Write when you learn something that changes "
+        "what you would do next time — a trap, a correction, the words this "
+        "user uses for things. If you cannot name what it would change, "
+        # Kept on one line: tests/test_store_memory_bundle.py matches this
+        # fragment, and wrapping it mid-phrase hides it from the check that
+        # the agent and the curator are told the same rule.
+        "there is nothing to write. "
+        "Update an entry that already covers the situation rather than adding "
+        "a second. Entries outlive the conversation and are searched at the "
+        "start of every future turn."
     )
     parameters = {
         "type": "object",
@@ -294,26 +303,6 @@ class Memory(BaseTool):
         "required": ["action"],
     }
     requires_services = []
-
-    agent_prompt = (
-        "## The memory tool\n"
-        "`memory` reads and writes the folder: `read` one entry by name, "
-        "`list` everything, `create`, `update`, `delete`. The block above gives "
-        "descriptions only, and a description is a map — `memory read` an entry "
-        "before acting on it. When something feels familiar mid-turn and was "
-        "not listed, `memory list` is cheap.\n"
-        "Write when you learn something that will change what you do next "
-        "time: a trap, a correction the user made, something that broke, or "
-        "the words this user uses for things — their own vocabulary, "
-        "preferences and recurring phrasings are worth recording, so they do "
-        "not have to keep explaining them. If you cannot name what it would "
-        "change, there is nothing to write. `list` first and `update` an entry "
-        "that already covers the situation rather than adding a second.\n"
-        "A **note** is one situation and its lesson. A **skill** is a "
-        "repeatable procedure worth its own folder, for `references/` and "
-        "`scripts/` you add with your file tools afterwards. Nothing here "
-        "needs approval, and nothing here can touch MEMORY.md."
-    )
 
     def run(self, sdk, **kwargs):
         """Read, list, create, update or delete one memory entry."""

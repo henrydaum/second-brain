@@ -23,6 +23,13 @@ class SpawnSubagent(BaseTool):
     name = "spawn_subagent"
     description = (
         "Spawn an agent to work on a prompt in its own conversation, right now. "
+        "Delegate work that is genuinely independent and heavy, or "
+        "context-polluting — noisy exploration whose full output you do not need "
+        "back; quick lookups are cheaper inline. Three cases are easy to miss "
+        "because carrying on inline feels nearly done: a subtask you can already "
+        "see will take many calls, a subproblem you have retried several times "
+        "without progress, and a detour that is no longer the task. Delegation "
+        "grants no rights you lack, so it is not a way around a refusal. "
         "The prompt must be complete and self-contained — the agent cannot ask you "
         "follow-up questions, and it cannot use tools that require user approval. "
         "wait=true (default) blocks and returns the agent's result; wait=false runs "
@@ -44,37 +51,6 @@ class SpawnSubagent(BaseTool):
         "required": ["prompt"],
     }
     requires_services = []
-    agent_prompt = (
-        "## Spawning agents\n"
-        "Delegate work that is genuinely independent and heavy, or "
-        "context-polluting — noisy exploration whose full output you do not "
-        "need back. Quick lookups are cheaper inline. The child cannot ask "
-        "follow-ups, so the prompt must be bounded up front: objective, scope, "
-        "output format, success criteria.\n"
-        "Three cases are worth delegating that are easy to miss, because in "
-        "each one carrying on inline feels like it is nearly done:\n"
-        "- You can already see the subtask will take many calls — a directory "
-        "to walk file by file, a batch to process one item at a time, a build "
-        "to iterate on. Hand it over before you start, not after.\n"
-        "- You have made several attempts at one subproblem without progress. "
-        "Re-running a call with a small edit is the signal; a child with a "
-        "clean context and a precise brief usually gets further than the next "
-        "identical retry.\n"
-        "- You are deep in a detour that is no longer the task — chasing why "
-        "something is unreadable, or how the environment is put together. "
-        "Delegate the detour, or drop it and deliver what the task asked for "
-        "with the evidence you already have.\n"
-        "Delegation does not grant rights you lack, so it is not a way around "
-        "a refusal or a permission error; a child hits the same wall.\n"
-        "With wait=false you keep calling tools while children run and their "
-        "results are delivered to you automatically — never poll for them. The "
-        "timeout is a hard cutoff: a child that exceeds it is cancelled and "
-        "reported as failed, so report only results you actually received. "
-        "Passing a profile names one of the user's configured agent profiles "
-        "and narrows the child to that profile's tools; naming none gives it "
-        "yours."
-    )
-
     def run(self, sdk, **kwargs):
         """Run spawn subagent."""
         prompt = (kwargs.get("prompt") or "").strip()

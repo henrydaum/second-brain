@@ -33,8 +33,15 @@ class ScheduleSubagent(BaseTool):
     """Schedule subagent."""
     name = "schedule_subagent"
     description = (
-        "List, add, edit, or remove Timekeeper-backed background subagent jobs. Use this for "
-        "reminders, recurring briefs, check-ins, and other proactive subagent jobs."
+        "List, add, edit, or remove Timekeeper-backed background subagent jobs. "
+        "This is the user's calendar and background task system: reminders, "
+        "recurring briefs, check-ins, follow-ups and delayed autonomous work. "
+        "Inspect it with 'list' before answering anything about their schedule, "
+        "reminders or planned tasks. Schedule a reminder for an hour before the "
+        "event unless told otherwise, and ask whether a job recurs or fires once "
+        "when the request does not say. The scheduled agent runs with nobody "
+        "watching and cannot ask you anything, so its prompt has to carry "
+        "unambiguous step-by-step instructions."
     )
     parameters = {
         "type": "object",
@@ -49,19 +56,6 @@ class ScheduleSubagent(BaseTool):
         "required": ["operation"],
     }
     requires_services = []
-    agent_prompt = (
-        "## Scheduling and cron jobs\n"
-        "schedule_subagent is the user's calendar and background task system: "
-        "reminders, recurring checks, follow-ups and delayed autonomous work. "
-        "When the user asks about their schedule, reminders, upcoming events or "
-        "planned tasks, inspect it with schedule_subagent before answering.\n"
-        "Schedule reminders for an hour before the event unless told "
-        "otherwise, and ask which it is when the request does not say whether "
-        "a job recurs or fires once. The scheduled agent runs with nobody "
-        "watching and cannot ask you anything, so its prompt has to carry "
-        "unambiguous step-by-step instructions."
-    )
-
     def run(self, sdk, **kwargs):
         """Run schedule subagent."""
         action = (kwargs.get("operation") or "").strip().lower()

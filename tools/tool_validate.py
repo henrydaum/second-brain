@@ -71,7 +71,12 @@ class Validate(BaseTool):
     description = (
         "Check a sandbox source file — a script, a plugin, or a helper — against "
         "the sandbox contract and report every problem with its line number and "
-        "how to fix it. Run this after every edit, and before running a script. It "
+        "how to fix it. Run this after every edit to a plugin: a plugin that will "
+        "not load fails silently — the kernel logs it and tells the user, and you "
+        "are never told at all — so this is the only way to find out, and a "
+        "conforming plugin loads as soon as it is saved. A script needs it less: "
+        "run_script runs this same check in its own preflight and hands you the "
+        "same errors, so write the script and run it. It "
         "reads the file only — nothing is imported, executed, registered or "
         "unregistered — so it is safe to run on code that would fail on import."
     )
@@ -83,29 +88,6 @@ class Validate(BaseTool):
         "required": ["path"],
     }
     requires_services = []
-
-    agent_prompt = (
-        "## Writing your own code\n"
-        "You can write code into your workspace tree and run it without asking "
-        "permission for either. That is not a loophole: it runs in a subprocess "
-        "and cannot act, only ask — every effect it performs is a separate "
-        "Request the kernel judges on its own.\n"
-        "Read docs/SDK.md before writing any of it, then the matching "
-        "templates/ file for that family. The SDK guide's examples are executed "
-        "by the test suite, so they are correct; code written from memory "
-        "instead will not load.\n"
-        "A **script** is run once by path and is what to reach for first. A "
-        "**plugin** is a capability the kernel registers and calls by name; it "
-        "goes in workspace/<family>/ under that family's filename prefix.\n"
-        "Which of the two it is decides whether you need this tool. A plugin "
-        "that will not load fails **silently** — the kernel logs it and tells "
-        "the user, and you are never told at all — so validate(path=...) after "
-        "every edit is the only way to find out, and a conforming plugin loads "
-        "as soon as it is saved. A script is the opposite: run_script runs this "
-        "same check in its own preflight and hands you the same errors with the "
-        "same line numbers, so validating a script first only costs you a turn. "
-        "Write the script and run it."
-    )
 
     def run(self, sdk, **kwargs):
         """Run validate."""

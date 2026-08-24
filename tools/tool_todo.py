@@ -19,10 +19,11 @@ class Todo(BaseTool):
 
     name = "todo"
     description = (
-        "Manage this conversation's todo checklist. Use it as your working plan on "
-        "multi-step tasks: add the steps up front and complete each item as soon as "
-        "it is done. 'clear' drops the whole checklist when the plan is finished or "
-        "abandoned. Every call returns the full current checklist."
+        "Manage this conversation's todo checklist. Use it as your working plan "
+        "on any task with three or more distinct steps: add the steps up front "
+        "and complete each item as soon as it is done. 'clear' drops the whole "
+        "checklist when the plan is finished or abandoned. Every call returns "
+        "the full current checklist."
     )
     parameters = {
         "type": "object",
@@ -54,12 +55,6 @@ class Todo(BaseTool):
         "required": ["operation"],
     }
     requires_services = []
-    agent_prompt = (
-        "## Todos\n"
-        "For any task with 3+ distinct steps, plan with the todo tool: add the steps, "
-        "and mark items completed immediately when done."
-    )
-
     def run(self, sdk, **kwargs):
         op = str(kwargs.get("operation") or "").strip().lower()
         if op not in {"add", "update", "complete", "remove", "clear", "list"}:

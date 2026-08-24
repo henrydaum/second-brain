@@ -53,6 +53,10 @@ class SQLQuery(BaseTool):
         "this tool at all. Use the dedicated tool or command for that change. "
         "INSERT / UPDATE / DELETE / DDL against a table your own plugin created "
         "works normally.\n\n"
+        "'role' does not say who wrote a conversation_messages row: the kernel "
+        "writes 'role=user' rows the person never typed, and every one carries a "
+        "non-empty 'author'. For what the user actually said, add "
+        "\"AND COALESCE(author, '') = ''\".\n\n"
         "Useful queries:\n"
         "- SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\n"
         "- PRAGMA table_info(table_name)\n"
@@ -85,24 +89,6 @@ class SQLQuery(BaseTool):
     # No cue declared, for the same reason as run_script: the table list is
     # live, and a CREATE from anywhere has to appear. The default rung is the
     # one that notices.
-
-    def agent_prompt(self, sdk) -> str:
-        """Point the agent at the live table list and the two scoping rules."""
-        return (
-            f"""## Querying the database
-sql_query reads the local SQLite database. Two rules are enforced by the kernel rather than by convention, so writing SQL that ignores them produces a refusal, not a result:
-
-1. **Rows you own are read through a 'my_' name.** `SELECT * FROM my_conversations` returns the current user's conversations; `SELECT * FROM conversations` is refused, because that table holds every user's rows. The same applies to `my_action_ledger`.
-2. **Kernel tables are not writable through SQL.** users, conversations, conversation_messages, action_ledger, files, registered_tasks, task_queue and task_runs each have a dedicated tool or command that carries the right access checks. A table your own plugin created with a CREATE statement stays freely writable.
-
-## Conversation history
-Past conversations live in `my_conversations` and `conversation_messages`. Compacted history is no longer in your context but remains queryable there.
-
-`role` does not tell you who wrote a row. The kernel writes `role='user'` rows the person never typed — a cancel notice, a doorman's note, the summary bridge left by compaction, a note that a slash command ran — and every one of them carries a non-empty `author`. When you want what the *user* actually said, add `AND COALESCE(author, '') = ''`; without it you will read the kernel's own bookkeeping back as their words. (`role='system'` is separate again: those are state markers, not messages.)
-
-## Database tables (inspect with sql_query)
-{_table_list(sdk)}"""
-        )
 
     def run(self, sdk, **kwargs):
         """Run sqlquery."""
