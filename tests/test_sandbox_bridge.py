@@ -997,8 +997,11 @@ def test_a_plugin_that_contributes_nothing_keeps_the_base_default(tmp_path,
     assert instance.agent_prompt == ""
     assert not callable(instance.agent_prompt)
     ctx = SimpleNamespace(config={})
-    assert _collect([instance], ctx, stable=True) == ""
-    assert _collect([instance], ctx, stable=False) == ""
+    # A list of contributions now, so "nothing" is an empty one. Stated more
+    # directly than the joined "" it used to be: no entry, rather than entries
+    # that happened to join to nothing.
+    assert _collect([instance], ctx, stable=True) == []
+    assert _collect([instance], ctx, stable=False) == []
 
 
 def test_the_old_prompt_spelling_contributes_nothing(tmp_path, box):
@@ -1021,8 +1024,8 @@ def test_the_old_prompt_spelling_contributes_nothing(tmp_path, box):
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
     ctx = SimpleNamespace(config={}, scope=None)
     try:
-        assert _collect([instance], ctx, stable=True) == ""
-        assert _collect([instance], ctx, stable=False) == ""
+        assert _collect([instance], ctx, stable=True) == []
+        assert _collect([instance], ctx, stable=False) == []
     finally:
         unload_box("tool_advisor")
 
@@ -1046,10 +1049,10 @@ def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
 
     ctx = SimpleNamespace(config={})
     assert instance.agent_prompt == "## Words\nCount them."
-    assert _collect([instance], ctx, stable=True) == "## Words\nCount them."
+    assert _collect([instance], ctx, stable=True) == ["## Words\nCount them."]
     # And it stays in the cacheable prefix: a fixed string has no reason to
     # ride in the dynamic block, which is where the *live* shape goes.
-    assert _collect([instance], ctx, stable=False) == ""
+    assert _collect([instance], ctx, stable=False) == []
     # No residency was opened, and no per-instance cache was written: the
     # forwarding path was never entered.
     assert getattr(instance, "_prompt_text", None) is None

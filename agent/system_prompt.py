@@ -138,8 +138,20 @@ def build_prompt_sections(
     security_mode: str = "ask",
     conversation_id: int | None = None,
     user_id: int | None = None,
+    sections_out: list | None = None,
 ) -> list[dict[str, str]]:
     """Build ordered system prompt messages.
+
+    ``sections_out``, when given, is filled with ``(block, text)`` for every
+    section that made it in, in order. It exists for ``dev/dump_agent_text.py``
+    and costs every other caller nothing. The alternative was for the dump to
+    recover the boundaries by parsing the rendered blocks, which cannot be done
+    correctly: sections are joined with a blank line, so an *unheaded* one
+    following a headed one — the clock, the model line — is indistinguishable
+    from a continuation of the section above it, and gets silently attributed
+    to whatever came before. A map that quietly credits the wrong author is
+    worse than no map, since the whole reason to read one is to find out whose
+    line it is.
 
     Optional per-plugin guidance is collected from whatever tools/services/tasks/
     commands/frontend are currently in scope (each plugin's ``agent_prompt``),
@@ -182,7 +194,7 @@ def build_prompt_sections(
         _environment(),
         _filesystem_access(config),
         _sync_dirs(config),
-        _collect(populations, pctx, stable=True),
+        *_collect(populations, pctx, stable=True),
     ]
     # What is left is live state, ordered rarest-changing first. That ordering
     # is cosmetic rather than a caching win — this block is merged into the
@@ -203,7 +215,7 @@ def build_prompt_sections(
         _model_status(active_llm),
         _profile_status(profile_name, scope),
         _agent_memory(config),
-        _collect(populations, pctx, stable=False),
+        *_collect(populations, pctx, stable=False),
         _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
         notification_suffix,
@@ -212,8 +224,19 @@ def build_prompt_sections(
         extra_suffix,
         _current_datetime(),
     ]
+    if sections_out is not None:
+        sections_out.append(("STATIC SYSTEM PROMPT", _static_prompt()))
+        sections_out += [("SEMI-STABLE CONTEXT", s) for s in semi if s]
+        sections_out += [(SYSTEM_CONTEXT_MARKER.strip("[]"), s)
+                         for s in dynamic if s]
     static_block = _section("STATIC SYSTEM PROMPT", _static_prompt())
-    semi_block = _section("SEMI-STABLE TOOL/SCHEMA INFO", "\n\n".join(s for s in semi if s))
+    # Named for what it holds rather than for what it used to. The label said
+    # TOOL/SCHEMA INFO back when the tool roster and the command catalog rode
+    # here; both are gone, and a header the model reads should not describe a
+    # block that no longer exists. "Semi-stable" is the codebase's own word for
+    # this tier (prompt_cues, and the docstrings either side of it), so the
+    # accurate half is the half that stays.
+    semi_block = _section("SEMI-STABLE CONTEXT", "\n\n".join(s for s in semi if s))
     dynamic_block = _section(SYSTEM_CONTEXT_MARKER.strip("[]"), "\n\n".join(s for s in dynamic if s))
     return [
         {"role": "system", "content": f"{static_block}\n\n{semi_block}"},
@@ -242,7 +265,7 @@ def _in_scope(registry, services, orchestrator, commands, command_filter,
     ]
 
 
-def _collect(plugins, ctx: PromptContext, *, stable: bool) -> str:
+def _collect(plugins, ctx: PromptContext, *, stable: bool) -> list[str]:
     """Join the ``agent_prompt`` contributions belonging in one block.
 
     One name, two shapes. A plugin with nothing conditional to say declares a
@@ -274,6 +297,14 @@ def _collect(plugins, ctx: PromptContext, *, stable: bool) -> str:
     is cosmetic, since the whole message is rebuilt per call either way. The
     sort is **stable**, so contributions on one rung keep ``_in_scope``'s
     reading order — tools, then services, tasks, commands and the frontend.
+
+    Answers with the contributions as a *list*, one per plugin, which the
+    caller splats into its block list and joins there. Joining here instead
+    produced identical bytes — ``"\n\n".join`` is associative over the same
+    separator — but it meant one opaque blob where the prompt actually has
+    several sections, so nothing downstream could say which plugin wrote
+    which. ``dev/dump_agent_text.py`` needs exactly that, and inferring it
+    from the rendered text cannot be done correctly (see ``sections_out``).
     """
     entries = []
     for plugin in plugins:
@@ -288,7 +319,7 @@ def _collect(plugins, ctx: PromptContext, *, stable: bool) -> str:
         if text:
             entries.append((prompt_cues.rank(cue), text))
     entries.sort(key=lambda entry: entry[0])
-    return "\n\n".join(text for _, text in entries)
+    return [text for _, text in entries]
 
 
 def _visible_tools_for_prompt(registry):

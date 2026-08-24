@@ -10,19 +10,21 @@ editing the agent's voice meant grepping for a half-remembered sentence.
 Two sources, and both are needed for different reasons.
 
 **Live** answers what the model is being told *right now* on this machine —
-the three assembled blocks, verbatim, plus the schema of every registered
-tool. It is the ground truth and it is also incomplete by construction: it can
-only show what is installed here.
+the three blocks verbatim, a map saying which part of them came from where,
+and the schema of every registered tool. It is the ground truth and it is also
+incomplete by construction: it can only show what is installed here.
 
 **AST** answers what could be said at all. It reads the store branch without
 installing anything and never imports what it reads, so a tool nobody has
-installed still shows up. It is the only view that covers the ~34 KB of tool
-descriptions, which is where most agent-facing text actually lives.
+installed still shows up. It is the only view that covers the ~43 KB of store
+declarations, which is where most agent-facing text actually lives.
 
-Neither can render a *dynamic* ``agent_prompt``: those are methods whose text
-depends on live state, and producing it means calling into a box. The live
-half shows the result for installed plugins (it is already inside the
-assembled prompt); the AST half marks the declaration and says so.
+The two halves differ on a *dynamic* ``agent_prompt`` — a method whose text
+depends on live state. The live half renders it for real, by calling into the
+plugin's box exactly as the prompt builder does; that is why this script wires
+a runtime (see ``live_view``), and without one every such contribution comes
+back empty and vanishes from the dump with nothing said. The AST half cannot,
+so it marks the declaration and names the refresh cue instead.
 
 A dev script rather than a command or an SDK script, for two reasons that are
 not preference. A sandboxed script runs with ``sandbox/`` as its cwd and
@@ -46,6 +48,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+import prompt_cues  # noqa: E402 — needs the path above
 
 #: Kernel modules that put words in front of the agent. Curated rather than
 #: globbed: "does this string reach a model" is not decidable from the source,
@@ -435,18 +439,99 @@ def live_view() -> dict:
     scope = load_scope(profile, config)
     scope = scope if (scope.has_tool_filter or scope.prompt_suffix) else None
     for_prompt = scoped_registry(tools, scope, db=db) if scope else tools
+    sections: list = []
     messages = build_prompt_sections(
         db, orchestrator, for_prompt, services, scope=scope,
         profile_name=profile, commands=commands, config=config,
-        active_llm=resolve_agent_llm(profile, config, services))
+        active_llm=resolve_agent_llm(profile, config, services),
+        sections_out=sections)
     return {
         "profile": profile,
         "messages": messages,
+        "sections": sections,
         "schemas": (for_prompt.get_all_schemas()
                     if hasattr(for_prompt, "get_all_schemas") else []),
         "tools": sorted(getattr(for_prompt, "tools", {})),
         "commands": sorted(c.name for c in commands.visible_commands()),
+        "authored_by": _authored_by(for_prompt, services, orchestrator,
+                                    commands, config, profile, scope),
     }
+
+
+def _authored_by(registry, services, orchestrator, commands, config,
+                 profile, scope) -> dict:
+    """``heading -> (plugin, cue)`` for every contribution in the prompt.
+
+    The dump could always show the text and never say whose it was, which is
+    the one question worth asking before editing a line of it: a section the
+    kernel writes is yours to rewrite, and a section a plugin contributes is
+    not — it moves when that package is updated, and editing the prompt to
+    match it is editing the wrong file.
+
+    Each plugin is asked the same way ``_collect`` asks, so a heading here is
+    a heading that really lands. Anything the map does not claim is kernel.
+    """
+    from agent.system_prompt import PromptContext, _in_scope
+
+    context = PromptContext(
+        db=None, services=services or {}, orchestrator=orchestrator,
+        config=config or {}, scope=scope, profile_name=profile)
+    found = {}
+    for plugin in _in_scope(registry, services, orchestrator, commands,
+                            None, None):
+        raw = getattr(plugin, "agent_prompt", "")
+        try:
+            text = ((raw(context) if callable(raw) else raw) or "").strip()
+        except Exception:
+            text = ""
+        if not text:
+            continue
+        # *Every* heading, not just the first. A contribution may carry
+        # several — run_script writes "## Scripts — reach for these first"
+        # and "## Scripts you have" — and recording only the first attributed
+        # the rest to the kernel, which is the one thing this map exists to
+        # get right. An unheaded contribution is claimed by its first line.
+        headings = [line[3:].strip() for line in text.splitlines()
+                    if line.startswith("## ")]
+        for heading in headings or [text.splitlines()[0].strip()]:
+            found[heading] = (getattr(plugin, "name", "?"),
+                              prompt_cues.of(plugin))
+    return found
+
+
+#: The one block that is a file rather than an assembly. Reported whole,
+#: because it is edited whole — splitting it into paragraphs would list
+#: twenty rows nobody addresses individually.
+FILE_BLOCK = "STATIC SYSTEM PROMPT"
+
+
+def section_map(sections, authored_by) -> list:
+    """``(block, heading, chars, source)`` for the assembled prompt.
+
+    Reads the section list ``build_prompt_sections`` filled in rather than
+    re-deriving it from the rendered text — see ``sections_out`` there for why
+    parsing cannot get this right.
+
+    A section is named by its ``##`` heading when it has one and by its first
+    line when it does not, because the unheaded ones are real sections: the
+    model line, the profile line and the clock. Those are exactly the parts
+    with no name to write prose against, which is worth being able to see.
+    """
+    rows = []
+    for block, text in sections:
+        body = text.strip()
+        if not body:
+            continue
+        if block == FILE_BLOCK:
+            rows.append((block, "(the whole file)", len(body),
+                         "kernel — system_prompt_static.md"))
+            continue
+        first = body.splitlines()[0].strip()
+        heading = first[3:].strip() if first.startswith("## ") else first
+        who = authored_by.get(heading)
+        rows.append((block, heading, len(body),
+                     f"{who[0]} ({who[1]})" if who else "kernel"))
+    return rows
 
 
 # ── Rendering ─────────────────────────────────────────────────────────
@@ -489,14 +574,50 @@ def render(live: dict | None, store: list[tuple[str, str]]) -> str:
         add(_block("1. THE ASSEMBLED PROMPT (live)",
                    "Verbatim, as the model receives it. Built by "
                    "agent/system_prompt.py:build_prompt_sections."))
+
+        # The map first, because the question worth asking before editing any
+        # of this is whose line it is. A kernel section is yours to rewrite; a
+        # plugin's moves when that package is updated, and matching the prompt
+        # to it edits the wrong file.
+        rows = section_map(live["sections"], live["authored_by"])
+        add(f"\n{THIN}\nSECTION MAP — where each part comes from\n{THIN}\n")
+        head, sect = "block", "section"
+        add(f"  {head:<21} {sect:<38} {'chars':>6}  authored by")
+        add(f"  {'-' * 21} {'-' * 38} {'-' * 6}  {'-' * 26}")
+        seen_block = None
+        for block, heading, size, source in rows:
+            shown = "" if block == seen_block else block
+            seen_block = block
+            add(f"  {shown:<21} {heading[:38]:<38} {size:>6}  {source}")
+        kernel = sum(n for _, _, n, s in rows if s.startswith("kernel"))
+        plugin = sum(n for _, _, n, s in rows if not s.startswith("kernel"))
+        add(f"\n  kernel-authored: {kernel:,} chars    "
+            f"plugin-contributed: {plugin:,} chars")
+        add("  A cue in brackets is the plugin's declared agent_prompt_refresh"
+            " — see prompt_cues.py.")
+
         for message in live["messages"]:
             add(f"\n{THIN}\nrole: {message['role']}  "
                 f"({len(message['content'])} chars)\n{THIN}")
             add(message["content"])
         add("")
-        add("Note: the static block is agent/system_prompt_static.md verbatim; "
-            "the semi-stable\nand dynamic blocks are assembled from the "
-            "sections listed in build_prompt_sections.")
+        add("Three blocks, and only the first is a file you edit directly:\n"
+            "\n"
+            "  [STATIC SYSTEM PROMPT]   agent/system_prompt_static.md, verbatim.\n"
+            "  [SEMI-STABLE CONTEXT]    Assembled. Everything here is fixed for\n"
+            "                           the life of a conversation, so it rides in\n"
+            "                           the cacheable position-0 message with the\n"
+            "                           static block.\n"
+            "  [SYSTEM CONTEXT UPDATE]  Assembled. Live state, rebuilt every call,\n"
+            "                           delivered inside the last user message\n"
+            "                           because some providers reject a later\n"
+            "                           system role.\n"
+            "\n"
+            "Which of the two assembled blocks a plugin lands in is decided by its\n"
+            "declared cue, not by where it is written: prompt_cues.STABLE_THROUGH\n"
+            "is the line. Kernel sections are the two lists in\n"
+            "build_prompt_sections. The permission mode is appended after both,\n"
+            "by runtime_config._mode_suffix.")
 
         # ── 2. Tool schemas ──
         add(_block("2. TOOL SCHEMAS (live)",
