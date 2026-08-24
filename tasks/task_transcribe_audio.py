@@ -23,6 +23,9 @@ class TranscribeAudio(BaseTask):
     """Turn speech into text, one file at a time."""
 
     name = "transcribe_audio"
+    description = (
+
+        "Transcribe an audio file to text with the Whisper service.")
     modalities = ["audio"]
     reads = []
     writes = ["audio_transcripts"]

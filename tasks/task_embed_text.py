@@ -27,6 +27,9 @@ class EmbedText(BaseTask):
     """One vector per text chunk."""
 
     name = "embed_text"
+    description = (
+        "Embed a file's text chunks into vectors for semantic search, a "
+        "batch of files per model call.")
     modalities = ["text"]
     reads = ["text_chunks"]
     writes = ["text_embeddings"]

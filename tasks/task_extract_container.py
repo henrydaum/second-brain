@@ -30,6 +30,9 @@ class ExtractContainer(BaseTask):
     """Extract container files and discover their contents."""
 
     name = "extract_container"
+    description = (
+        "Unpack an archive and feed the files inside back into the "
+        "pipeline as if they had arrived on their own.")
     modalities = ["container"]
     reads = []
     writes = ["extracted_containers"]

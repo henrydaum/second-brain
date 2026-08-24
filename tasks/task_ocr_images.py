@@ -43,6 +43,9 @@ class OCRImages(BaseTask):
     """Extract text from every image in a file."""
 
     name = "ocr_images"
+    description = (
+        "Read text out of a file's images with the platform's OCR "
+        "engine.")
     modalities = ["image"]
     reads = []
     writes = ["ocr_text"]

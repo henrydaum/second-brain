@@ -31,6 +31,9 @@ class EmbedImages(BaseTask):
     """One vector per image found in a file."""
 
     name = "embed_images"
+    description = (
+        "Embed every image in a file into a vector, so pictures can be "
+        "found by describing them.")
     modalities = ["image"]
     reads = []
     writes = ["image_embeddings"]

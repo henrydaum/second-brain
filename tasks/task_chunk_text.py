@@ -140,6 +140,9 @@ class ChunkText(BaseTask):
     """Turn one file's extracted text into indexable chunks."""
 
     name = "chunk_text"
+    description = (
+        "Split a file's extracted text into overlapping chunks, the "
+        "unit both semantic and keyword search are built on.")
     modalities = ["text"]
     reads = ["extracted_text"]
     writes = ["text_chunks"]

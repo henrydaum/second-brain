@@ -32,6 +32,9 @@ class TextualizeTabular(BaseTask):
     """Render a file's sheets as markdown."""
 
     name = "textualize_tabular"
+    description = (
+        "Render a spreadsheet's sheets as markdown tables the model can "
+        "read.")
     modalities = ["tabular"]
     reads = []
     writes = ["tabular_text"]

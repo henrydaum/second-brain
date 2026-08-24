@@ -26,6 +26,10 @@ class ExtractText(BaseTask):
     """Parse a file to text and record it."""
 
     name = "extract_text"
+    description = (
+        "Parse a file to plain text using the installed parser for its "
+        "type. The first step of the path pipeline; everything else "
+        "reads what it writes.")
     modalities = ["text"]
     reads = []
     writes = ["extracted_text"]

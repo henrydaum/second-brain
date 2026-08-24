@@ -39,6 +39,9 @@ class IndexLexical(BaseTask):
     """Collect a path's text into the searchable table."""
 
     name = "index_lexical"
+    description = (
+        "Collect every text a file produced — chunks, OCR, "
+        "spreadsheets, transcripts — into the FTS5 keyword index.")
     modalities = []
     reads = ["text_chunks", "ocr_text", "tabular_text", "audio_transcripts"]
     writes = ["lexical_content"]
