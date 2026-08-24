@@ -28,6 +28,7 @@ from tests.support import store_source
 READ_FILE = "tools/tool_read_file.py"
 SHOW_FILES = "tools/tool_show_files.py"
 FILE_READS = "tools/helpers/file_reads.py"
+PATH_REPAIR = "tools/helpers/path_repair.py"
 
 
 def _source_or_skip(relative: str) -> str:
@@ -80,7 +81,11 @@ def test_read_file_declares_the_staging_request_it_needs():
     assert "session.add_attachment" in declared["requests"]
     # The other half of one door for every file type.
     assert {"parse.modality", "parse.file"} <= set(declared["requests"])
-    assert declared["dependencies_files"] == [FILE_READS]
+    # Membership rather than an exact list. Pinning the whole list made
+    # every new shared helper a test failure in a file about *staging*,
+    # which says nothing about whether the helper belongs there.
+    assert FILE_READS in declared["dependencies_files"]
+    assert PATH_REPAIR in declared["dependencies_files"]
 
 
 def test_show_files_needs_no_request_to_hand_a_file_back():
