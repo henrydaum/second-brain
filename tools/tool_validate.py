@@ -31,7 +31,7 @@ the file will load at all, and whether it will be put in a subprocess.
 
 dependencies_files = []
 dependencies_pip = []
-requests = ["plugin.validate"]
+requests = ["plugin.validate", "session.get"]
 
 from guest.bases import BaseTool
 
@@ -93,11 +93,18 @@ class Validate(BaseTool):
         "Read docs/SDK.md before writing any of it, then the matching "
         "templates/ file for that family. The SDK guide's examples are executed "
         "by the test suite, so they are correct; code written from memory "
-        "instead will not load. Call validate(path=...) after every edit until "
-        "the file conforms — a conforming plugin loads as soon as it is saved.\n"
+        "instead will not load.\n"
         "A **script** is run once by path and is what to reach for first. A "
         "**plugin** is a capability the kernel registers and calls by name; it "
-        "goes in workspace/<family>/ under that family's filename prefix."
+        "goes in workspace/<family>/ under that family's filename prefix.\n"
+        "Which of the two it is decides whether you need this tool. A plugin "
+        "that will not load fails **silently** — the kernel logs it and tells "
+        "the user, and you are never told at all — so validate(path=...) after "
+        "every edit is the only way to find out, and a conforming plugin loads "
+        "as soon as it is saved. A script is the opposite: run_script runs this "
+        "same check in its own preflight and hands you the same errors with the "
+        "same line numbers, so validating a script first only costs you a turn. "
+        "Write the script and run it."
     )
 
     def run(self, sdk, **kwargs):
@@ -117,7 +124,7 @@ class Validate(BaseTool):
         except sdk.Failed as failed:
             return sdk.fail(failed.error)
 
-        summary = _render(report)
+        summary = _render(report, _mode(sdk))
         # The verdict is the tool's result: a file that will not load is a
         # failed check, so the model retries instead of moving on.
         if report.get("ok"):
@@ -125,10 +132,22 @@ class Validate(BaseTool):
         return sdk.fail(summary)
 
 
-def _render(report: dict) -> str:
+def _mode(sdk) -> str:
+    """The conversation's security mode, or ``ask`` if it cannot be read.
+
+    Falling back to ``ask`` rather than ``lockdown`` keeps a failure here from
+    inventing a refusal that is not going to happen.
+    """
+    try:
+        return (sdk.session.get() or {}).get("mode") or "ask"
+    except Exception:
+        return "ask"
+
+
+def _render(report: dict, mode: str = "ask") -> str:
     """The whole answer: verdict, findings, isolation, next step."""
     findings = report.get("findings") or []
-    lines = [f"Checked {report.get('path')}", "", _verdict(report), ""]
+    lines = [f"Checked {report.get('path')}", "", _verdict(report, mode), ""]
 
     errors = [f for f in findings if f.get("level") == "error"]
     warnings = [f for f in findings if f.get("level") == "warning"]
@@ -171,11 +190,33 @@ def _render(report: dict) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _verdict(report: dict) -> str:
-    """One line that answers the question actually being asked."""
+def _verdict(report: dict, mode: str = "ask") -> str:
+    """One line that answers the question actually being asked.
+
+    The disclaimer branch has to know the mode, because otherwise it says
+    something false. An unmediated import makes the kernel classify a script
+    launch as unsafe, and under ``lockdown`` everything that would have been
+    asked about is refused without asking — so "nothing blocks it" is exactly
+    wrong there, and it is wrong in the direction that wastes a run. An agent
+    reading it goes on to ``run_script``, is refused, and has to work out from
+    the refusal that the file it was just told was fine was never going to
+    launch.
+
+    Nothing about the policy changes here. This is the same verdict, told to
+    someone who is in a mode where the disclaimer is a refusal.
+    """
     if not report.get("ok"):
         return "**Will not load.** The errors below have to be fixed first."
     if report.get("disclaimed"):
+        if mode == "lockdown":
+            libraries = ", ".join(report.get("unmediated") or []) or "a library"
+            return (
+                f"**Loads, but will not run in lockdown.** It imports "
+                f"{libraries}, whose actions the kernel cannot mediate, so "
+                "launching it needs approval — and lockdown refuses that "
+                "without asking. Rewrite it using only the standard library "
+                "and sdk.*, or say plainly that this step cannot be done in "
+                "this mode.")
         return "**Loads, with a disclaimer.** Nothing blocks it; read the warnings."
     return "**Conforms.** This file will load."
 

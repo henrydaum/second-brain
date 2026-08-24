@@ -30,6 +30,14 @@ from guest.bases import BaseTool
 from . import file_reads, path_repair
 
 PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use validate(path=...) to make sure it is correct."
+SCRIPT_EDIT_HINT = (" This is a script, not a plugin: run_script checks it the "
+                    "same way validate does and reports the same errors, so "
+                    "run it rather than validating it first.")
+
+#: The filename prefixes that make the validator apply the plugin contract,
+#: wherever the file sits. Mirrors the roots table in the kernel's ``trees``.
+FAMILY_PREFIXES = ("tool_", "task_", "service_", "command_", "frontend_",
+                   "parse_", "llm_")
 READ_FIRST = "Read the file with read_file before editing it."
 STALE_READ = "File changed on disk since it was last read — re-read it with read_file."
 DENIED_STOP = (" STOP — do not retry this edit. Ask the user what they would "
@@ -99,20 +107,22 @@ class EditFile(BaseTool):
         "conversation (create is exempt). For replace, old_text must match the raw "
         "file exactly — read with line_numbers=false when copying text to replace. "
         "Paths may be absolute or relative to the project root; edits are limited "
-        "to the project root and Second Brain data directory."
+        "to the project root and Second Brain data directory. Missing parent "
+        "folders are created for you, so writing out/report.json into an empty "
+        "workspace works without making out/ first."
     )
     parameters = {
         "type": "object",
         "properties": {
             "operation": {"type": "string", "enum": ["create", "overwrite", "replace", "append", "delete"], "description": "File operation to perform."},
-            "path": {"type": "string", "description": "Target file path."},
+            "path": {"type": "string", "description": "Target file path. Parent folders are created as needed — you never need to make a directory first."},
             "content": {"type": "string", "description": "Text for create, overwrite, or append."},
             "old_text": {"type": "string", "description": "Exact text to replace."},
             "new_text": {"type": "string", "description": "Replacement text."},
             "replace_all": {"type": "boolean", "description": "Replace every occurrence instead of requiring exactly one match."},
             "narration": {"type": "string", "description": "A few words on what you are changing and why, shown to the user beside the call. E.g. 'adding the missing null check'."},
         },
-        "required": ["operation", "path"],
+        "required": ["path"],
     }
     requires_services = []
 
@@ -125,8 +135,10 @@ class EditFile(BaseTool):
         back as ``sdk.Denied``, which is the one case worth translating —
         the model needs to be told to stop rather than retry.
         """
-        op = (kwargs.get("operation") or "").strip().lower()
         path, err = _resolve(sdk, kwargs.get("path", ""))
+        if err:
+            return sdk.fail(err)
+        op, err = _operation(sdk, path, kwargs)
         if err:
             return sdk.fail(err)
 
@@ -278,17 +290,110 @@ def _occurrence_lines(text: str, old: str, cap: int = 10) -> str:
     return ", ".join(out)
 
 
+def _operation(sdk, path, kwargs):
+    """The declared operation, or the one the other arguments already imply.
+
+    ``operation`` used to be required, and omitting it was the single largest
+    source of failed edits — 102 of them across a 636-trial benchmark, two
+    thirds of every ``edit_file`` failure. Each one costs a full model
+    round-trip to say something the arguments had already said.
+
+    Inference is deliberately partial, because two of the five verbs are not
+    recoverable from the arguments and guessing them destroys work:
+
+    - ``append`` is distinguishable from ``overwrite`` by *nothing* in the
+      argument set. Both carry ``content`` and nothing else. Inferring
+      ``overwrite`` for an append would silently drop the file's contents, so
+      a ``content`` write to a file that already exists still has to ask.
+    - ``delete`` has no positive signal at all. It is never inferred; a
+      destructive operation should be something the caller said out loud.
+
+    What is left is unambiguous. ``old_text`` means ``replace`` — there is no
+    other operation that reads it, and replace still demands an exact match and
+    still runs the staleness guard, so a wrong guess here cannot write
+    anything. ``content`` aimed at a path that does not exist means ``create``
+    — overwrite and append of a missing file both reduce to exactly that.
+
+    An explicit operation is always honoured, including an explicit ``create``
+    over an existing file: that is a caller telling us it believes the file is
+    new, and disagreeing with it is worth a failure.
+    """
+    declared = (kwargs.get("operation") or "").strip().lower()
+    if declared:
+        return declared, None
+
+    if kwargs.get("old_text") not in (None, ""):
+        return "replace", None
+
+    if kwargs.get("content") is not None:
+        if _stat(sdk, path) is None:
+            return "create", None
+        return "", (
+            f"operation is required when the file already exists: pass "
+            f"overwrite to replace all of {path}, or append to add to the "
+            "end of it.")
+
+    return "", ("operation is required: pass create, overwrite, replace, "
+                "append, or delete. (replace is assumed when you pass "
+                "old_text, and create when you pass content for a file that "
+                "does not exist yet.)")
+
+
+def _is_script(sdk, path) -> bool:
+    """Whether the kernel will treat this file as a script rather than a plugin.
+
+    Mirrors ``sandbox.isolation.is_script``, which asks two questions: is the
+    file in a ``scripts/`` root, and is it *directly* in one. Nesting does not
+    count — ``scripts/sub/x.py`` is not a script and ``run_script`` refuses it —
+    so comparing the parent directory rather than testing containment is the
+    whole point of doing it this way.
+
+    The second half is the validator's rule, not isolation's. A file whose name
+    carries a family prefix is checked against the plugin contract wherever it
+    sits (``sandbox/validator.py``, ``_check_contract``), so ``scripts/tool_x.py``
+    is a plugin as far as the checker is concerned and its author does want the
+    nudge — run_script's preflight would reject it for declaring no tool class.
+    """
+    scripts = sdk.paths.get("scripts")
+    if not scripts:
+        return False
+    if sdk.path.normalize(sdk.path.parent(path)) != sdk.path.normalize(scripts):
+        return False
+    stem = str(path).replace("\\", "/").rsplit("/", 1)[-1][:-3]
+    return not any(stem.startswith(p) for p in FAMILY_PREFIXES)
+
+
 def _plugin_edit_reminder(sdk, path) -> str:
-    """Nudge the author to validate a plugin file they just wrote.
+    """Nudge the author toward the check that actually applies to this file.
+
+    Two different files get two different answers, and conflating them was
+    expensive. A **plugin** that fails to load does so silently from here: the
+    kernel's adapter returns ``None`` and the reason reaches the app log or a
+    notification aimed at the user, never the model. ``validate`` is the only
+    in-band way to find out, so the nudge stays.
+
+    A **script** is the opposite case. ``run_script`` runs the identical
+    ``validate_file`` in its own preflight and hands back the same findings,
+    the same line numbers and the same fix strings — so validating first buys
+    nothing that running it would not have told you, and it costs a model
+    round-trip to learn it. Measured across a 636-trial benchmark this fired on
+    1,291 of 2,608 successful writes and pulled 790 validate calls after it,
+    1,100 of them on files in ``scripts/``.
 
     Checks the tree roots rather than enumerating every family directory: the
-    old version imported ``iter_plugin_dirs`` from the kernel, which is the
-    one import a sandboxed file may never make.
+    old version imported ``iter_plugin_dirs`` from the kernel, which is the one
+    import a sandboxed file may never make. ``scripts`` is exempt from that
+    because the kernel states it as a first-class path — where a script goes is
+    what decides how it runs, so it is a fact rather than a convention.
+
+    Anything not provably a script keeps the plugin nudge; the failure
+    direction is the one that costs a round-trip rather than the one that lets
+    a broken plugin through silently.
     """
     if sdk.path.suffix(path) != ".py":
         return ""
-    for name in ("workspace", "installed"):
-        if sdk.path.within(path, sdk.paths.get(name)):
-            return PLUGIN_EDIT_REMINDER
-    bundled = sdk.paths.get("bundled")
-    return PLUGIN_EDIT_REMINDER if sdk.path.within(path, bundled) else ""
+    in_a_tree = any(sdk.path.within(path, sdk.paths.get(name))
+                    for name in ("workspace", "installed", "bundled"))
+    if not in_a_tree:
+        return ""
+    return SCRIPT_EDIT_HINT if _is_script(sdk, path) else PLUGIN_EDIT_REMINDER

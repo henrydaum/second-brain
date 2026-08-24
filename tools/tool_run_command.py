@@ -661,7 +661,8 @@ class RunCommand(BaseTool):
                 "mediated capability — `cwd` instead of `cd`, the file tools for "
                 "reading, listing and writing, the scripting tool for anything "
                 "computational — or say plainly that this step cannot be done "
-                "here and finish the rest of the task.")
+                "here and finish the rest of the task.\nYou do not need `mkdir`: "
+                "writing a file creates the folders above it.")
         return sdk.fail(
             f"{refused}\nThe user declined this command. Do not retry it or a "
             "variation of it — ask them what they would like you to do instead.")
