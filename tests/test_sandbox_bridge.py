@@ -1726,3 +1726,64 @@ def test_a_write_does_not_invalidate_a_session_cued_prompt(tmp_path, box):
         assert instance._prompt_stamp == stamped, "a write moved a session stamp"
     finally:
         unload_box("mode_advisor")
+
+
+FAILING_PROMPT_TOOL = '''
+"""A migrated tool whose prompt contribution cannot be produced."""
+
+requests = ["session.get"]
+
+from guest.bases import BaseTool
+
+
+class BrokenAdvisor(BaseTool):
+    """Its guidance depends on something that is not there."""
+
+    name = "broken_advisor"
+    description = "x"
+
+    def agent_prompt(self, sdk):
+        """Fail the way a real one did: reach for a runtime that is absent."""
+        raise RuntimeError("the runtime is not available in this kernel")
+
+    def run(self, sdk):
+        """Do nothing in particular."""
+        return "ok"
+'''
+
+
+def test_a_prompt_that_cannot_be_produced_says_so(tmp_path, box, caplog):
+    """A bridged doorway that fails must not fail *quietly*.
+
+    This is the one that got away. ``_forward`` ended with ``result.data if
+    result.ok else None``, so a prompt method that blew up was indistinguishable
+    from a plugin with nothing to say: the kernel dropped it, logged nothing,
+    and ``_collect`` turned the ``None`` into "". Four store plugins therefore
+    contributed 862 tokens to the real prompt and *zero* to the dump, because
+    ``dev/dump_agent_text.py`` had never wired a runtime and every
+    session-reading method was failing exactly like this.
+
+    Pinned as a claim about the log rather than about the return value, because
+    the return value was already right — abstaining is correct, and staying
+    silent about it is what was not. The resident half (``_box_prompt``) has
+    warned since it was written; this is the ephemeral half catching up.
+    """
+    import logging
+
+    module = adapt(_write(tmp_path, "tool_broken_advisor.py",
+                          FAILING_PROMPT_TOOL))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    try:
+        with caplog.at_level(logging.WARNING, logger="Sandbox"):
+            answer = instance.agent_prompt(SimpleNamespace(
+                session_key="chat", security_mode="ask"))
+
+        assert answer == "", "a failed contribution must still abstain"
+        warned = [r.getMessage() for r in caplog.records
+                  if r.levelno >= logging.WARNING]
+        assert any("agent_prompt" in m and "broken_advisor" in m
+                   for m in warned), (
+            "a prompt that could not be produced was dropped silently; "
+            f"warnings seen: {warned}")
+    finally:
+        unload_box("broken_advisor")

@@ -307,6 +307,18 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # orchestrator reads a ``TaskResult``, and handing it raw data means a
         # successful sweep is indistinguishable from a crashed one.
         if method not in ("run", "run_event"):
+            if not result.ok:
+                # Said out loud, because every one of these doorways fails
+                # *invisibly*. A failed ``agent_prompt`` is guidance that never
+                # arrives, which looks exactly like a plugin with nothing to
+                # say; a failed ``form`` is a command that asks nothing. The
+                # resident half has warned here since it was written
+                # (``_box_prompt``), and the ephemeral half returning a bare
+                # ``None`` is why a prompt method broken by a missing runtime
+                # went unnoticed — the kernel dropped it, logged nothing, and
+                # the agent simply knew less.
+                logger.warning("%s failed for '%s': %s", method,
+                               self.name or path.stem, result.error)
             return result.data if result.ok else None
         # A path task is the one entry point whose caller wants a *list*: the
         # orchestrator zips one outcome per path. ``run_event`` reads a single

@@ -376,7 +376,23 @@ def live_view() -> dict:
     lands in the file is the prompt this machine actually sends — profile
     scope, active model and all. Nothing is written: no frontend starts, no
     conversation opens, and services are adapted rather than loaded.
+
+    **Mirroring it includes the context factory**, and for a long time this did
+    not. A sandboxed plugin whose ``agent_prompt`` is a *method* is answered
+    inside its box, and the SDK it gets there is built by
+    ``runtime.context.kernel_context`` — which ``main.pyw`` installs via
+    ``Sandbox.bind_context`` and which needs a runtime for ``sdk.session.get``
+    to answer at all. Without it every session-reading prompt method failed
+    with ``the runtime is not available in this kernel``, the bridge dropped
+    the result, and the dump showed those plugins contributing *nothing*.
+
+    That is the exact failure this file exists to make visible, arrived at from
+    the other side: text you cannot find in the dump because the dump could not
+    produce it. The runtime is constructed and never driven — no conversation
+    is opened and nothing is written — which is enough for the SDK to answer.
     """
+    import state_machine  # noqa: F401 — settles a circular import before use
+
     from config import config_manager
     from pipeline.database import Database
     from pipeline.orchestrator import Orchestrator
@@ -386,6 +402,9 @@ def live_view() -> dict:
                                           discover_tasks, discover_tools)
     from plugins.command_registry import CommandRegistry
     from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_registry
+    from runtime.context import kernel_context, set_kernel_parts
+    from runtime.conversation_runtime import ConversationRuntime
+    from sandbox.bridge import get_sandbox
 
     config = config_manager.load()
     db = Database(config["db_path"])
@@ -397,6 +416,16 @@ def live_view() -> dict:
     discover_tools(tools)
     commands = CommandRegistry()
     discover_commands(commands)
+
+    # The wiring main.pyw and runtime.bootstrap do, in the same order: the
+    # parts first, then the factory. A method-shaped agent_prompt is answered
+    # inside a box, and this is what gives that box an SDK that can answer.
+    set_kernel_parts(db=db, config=config, root_dir=ROOT,
+                     services=services, orchestrator=orchestrator,
+                     tool_registry=tools, command_registry=commands,
+                     runtime=ConversationRuntime(db=db, services=services,
+                                                 config=config))
+    get_sandbox().bind_context(kernel_context)
 
     # The same two steps bootstrap takes, in the same order: a scope with
     # nothing in it is passed as None, and a scope with a tool filter narrows
