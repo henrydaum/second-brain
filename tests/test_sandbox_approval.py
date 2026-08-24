@@ -973,6 +973,44 @@ def request_update():
     return Request(PLUGIN_UPDATE, {"name": "tool_edit_file"})
 
 
+@pytest.fixture()
+def update_does_nothing():
+    """Answer ``plugin.update`` without letting the package manager run.
+
+    These tests are about the **gate**, and the gate has finished by the time a
+    handler is reached: the dialog was rendered, the answer was read, and the
+    Request was permitted or refused. Everything after that is the package
+    manager's business — which the two approving tests already say in their
+    docstrings, and neither asserts ``result.ok``.
+
+    Letting it run anyway made them *flaky*, and the reason is worth stating
+    because it is invisible from the assertions. ``plugin.update`` shells out
+    to ``git`` against ``origin/store``, so a passing run depended on a network
+    fetch finishing inside ``_gate``'s five-second read. Under the suite's
+    parallel workers that lost often enough to fail a run every so often, and
+    it failed as a bare ``_queue.Empty`` — a timeout naming nothing, on a test
+    whose subject is permission and whose failure looked like a permission bug.
+    A unit test of the approval order has no business reaching the network at
+    all; the stub is what makes that true rather than usually true.
+
+    ``HANDLERS`` is mutated rather than rebound, because ``interpreter.py`` did
+    ``from .handlers import HANDLERS`` and holds the same dict object.
+    """
+    from sandbox.guest.requests import Result
+    from sandbox.handlers import HANDLERS
+
+    missing = object()
+    original = HANDLERS.get(PLUGIN_UPDATE, missing)
+    HANDLERS[PLUGIN_UPDATE] = lambda ctx, args: Result(data={"updated": []})
+    try:
+        yield
+    finally:
+        if original is missing:
+            HANDLERS.pop(PLUGIN_UPDATE, None)
+        else:
+            HANDLERS[PLUGIN_UPDATE] = original
+
+
 def test_an_unwired_sandbox_refuses_without_asking(request_update):
     """The bug, stated: this is what /packages update hit."""
     sandbox = Sandbox()
@@ -983,15 +1021,16 @@ def test_an_unwired_sandbox_refuses_without_asking(request_update):
     assert "changes what the system can do" in result.error
 
 
-def test_binding_a_runtime_puts_the_question_to_the_user(request_update):
+def test_binding_a_runtime_puts_the_question_to_the_user(request_update,
+                                                         update_does_nothing):
     """The dialog is rendered and the Request is *permitted*.
 
-    Deliberately not ``result.ok``. What happens after the yes is the
-    package manager's business, and it shells out to ``git`` against a real
-    store — so in a checkout without one (a source tarball, a clone that has
-    never fetched ``origin/store``, an image built without ``.git``) this
-    failed on the work rather than on the permission, which is the one thing
-    it is not about.
+    Deliberately not ``result.ok``. What happens after the yes is the package
+    manager's business, and this test is about the permission — so the handler
+    is stubbed out (see ``update_does_nothing``) rather than shelling out to
+    ``git``. That also removes what used to make this fail on the *work*: a
+    checkout with no store to fetch from, and a network round trip racing
+    ``_gate``'s five-second read.
     A refusal is what the sibling test above pins; the absence of one is what
     this pins.
     """
@@ -1017,11 +1056,14 @@ def test_a_user_saying_no_is_still_a_refusal(request_update):
     assert asked and not result.ok
 
 
-def test_binding_does_not_clobber_an_explicit_approver(request_update):
+def test_binding_does_not_clobber_an_explicit_approver(request_update,
+                                                       update_does_nothing):
     """A caller that supplied its own decision keeps it.
 
     Tests and the stress harness wire an approver directly; bootstrap calling
-    ``bind_runtime`` afterwards must not silently replace it.
+    ``bind_runtime`` afterwards must not silently replace it. The handler is
+    stubbed for the same reason as the test two up — this approves, and an
+    approved ``plugin.update`` otherwise runs ``git`` over the network.
     """
     calls: list = []
     sandbox = Sandbox(approve=lambda chain, req, dec: calls.append(req) or True)
