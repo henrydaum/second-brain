@@ -19,14 +19,6 @@ class AgentCommand(BaseCommand):
     description = "Select an agent profile, then switch, edit, or remove it"
     category = "System"
     requests = ["config.read", "config.write", "tool.list"]
-    agent_prompt = (
-        "## Agent profiles\n"
-        "Agent profiles can be switched mid-conversation with /agent, changing "
-        "the LLM, tool access, and extra instructions from that point on. The "
-        "[SYSTEM CONTEXT UPDATE] block names the profile active for the "
-        "current turn."
-    )
-
     def form(self, sdk, args):
         profiles = sdk.config.read("agent_profiles") or {}
         active = sdk.config.read("active_agent_profile") or "default"

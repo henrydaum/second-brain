@@ -158,10 +158,17 @@ def build_prompt_sections(
     )
     populations = _in_scope(r, services, orchestrator, commands,
                             command_filter, frontend)
+    # Four catalogs used to ride here and in the dynamic block — the tool
+    # roster, the slash-command list, the service line and the pipeline graph.
+    # All four are answerable on demand through the store's ``info`` tool, and
+    # a catalog nobody consulted this turn is the clearest case of text every
+    # call pays for and almost no call reads. The tool roster was the starkest:
+    # it listed names the injected schemas already carry in full.
+    #
+    # What survives is what a lookup cannot replace — the environment's paths,
+    # and the guidance plugins contribute about themselves.
     semi = [
         _environment(),
-        _tool_catalog(r),
-        _command_catalog(commands, command_filter),
         _collect(populations, pctx, stable=True),
     ]
     dynamic = [
@@ -172,8 +179,6 @@ def build_prompt_sections(
         _current_datetime(),
         _model_status(active_llm),
         _profile_status(profile_name, scope),
-        _services_status(services),
-        _pipeline_status(db, orchestrator),
         _filesystem_access(config),
         _sync_dirs(config),
         _agent_memory(config),
@@ -397,90 +402,9 @@ def _profile_status(profile_name: str, scope: AgentScope | None) -> str:
     return f"Active agent profile: {profile_name or 'default'}.{suffix}"
 
 
-def _tool_catalog(tool_registry) -> str:
-    """The names of every tool in scope — names only, on purpose.
-
-    This list used to carry each tool's description, which is the *same string*
-    the registry already sends as the tool's schema on every call. Measured on
-    a nineteen-tool install that was 7.4 KB of prompt repeating 7.1 KB of
-    schema, for no reader: a model deciding which tool to use reads the schema,
-    which is richer and includes the arguments.
-
-    The list still earns its place, because the schemas answer "how do I call
-    this" and nothing else answers "what exists" — the static prompt tells the
-    agent to check the catalog before saying it cannot do something, and a
-    name is all that question needs.
-    """
-    lines = ["## Available tool catalog"]
-    if not tool_registry:
-        return "\n".join([*lines, "No tool registry is currently available."])
-    schemas = tool_registry.get_all_schemas() if hasattr(tool_registry, "get_all_schemas") else []
-    if not schemas:
-        return "\n".join([*lines, "No tools are currently registered."])
-    names = [str(schema.get("function", schema).get("name") or "").strip()
-             for schema in schemas]
-    lines.append("Each tool's description and arguments arrive with its "
-                 "schema; this is the roster.")
-    lines.append(", ".join(name for name in names if name))
-    return "\n".join(lines)
 
 
-def _command_catalog(commands, command_filter=None) -> str:
-    lines = [
-        "## Available slash commands",
-        "These are user-invoked. Emitting '/name' in a reply only sends the "
-        "user text — it executes nothing. Refer the user to a command, or use "
-        "an installed command-running tool if one is in the catalog.",
-    ]
-    entries = []
-    try:
-        entries = commands.visible_commands(command_filter) if hasattr(commands, "visible_commands") else []
-    except Exception:
-        entries = []
-    if entries:
-        for cmd in entries:
-            desc = (getattr(cmd, "description", "") or "").strip()
-            hint = _form_hint(getattr(cmd, "form", None), commands)
-            lines.append(f"- /{cmd.name}{(' ' + hint) if hint else ''}: {desc}" if desc else f"- /{cmd.name}{(' ' + hint) if hint else ''}")
-        return "\n".join(lines)
-    if isinstance(commands, dict) and commands:
-        for name, spec in sorted(commands.items()):
-            hint = _form_hint(getattr(spec, "form", None), None)
-            lines.append(f"- /{name}{(' ' + hint) if hint else ''}")
-        return "\n".join(lines)
-    return "\n".join([lines[0], "No slash-command catalog is available in this prompt."])
 
-
-def _form_hint(form, commands=None) -> str:
-    try:
-        steps = form({}, commands.context(None) if commands and hasattr(commands, "context") else None) if callable(form) else (form or [])
-    except Exception:
-        steps = []
-    return " ".join(f"<{s.name}>" if getattr(s, "required", True) else f"[{s.name}]" for s in steps)
-
-
-def _pipeline_status(db, orchestrator) -> str:
-    lines = ["## Task pipeline"]
-    try:
-        dag = orchestrator.dependency_pipeline_graph() if orchestrator else None
-        stats = db.get_system_stats().get("tasks", {}) if db else {}
-    except Exception:
-        dag, stats = None, {}
-    if dag:
-        lines.append(dag)
-    if stats:
-        lines += ["", "Status (P=pending, D=done, F=failed):"]
-        paused = getattr(orchestrator, "paused", set()) if orchestrator else set()
-        lines += [f"  {n}: P:{c['PENDING']} D:{c['DONE']} F:{c['FAILED']}{' [PAUSED]' if n in paused else ''}" for n, c in sorted(stats.items())]
-    if len(lines) == 1:
-        lines.append("No task status is currently available.")
-    return "\n".join(lines)
-
-
-def _services_status(services: dict) -> str:
-    if not services:
-        return "## Services\nNo services are currently registered."
-    return "## Services\n" + ", ".join(f"{name} ({'loaded' if getattr(svc, 'loaded', False) else 'unloaded'})" for name, svc in sorted(services.items()))
 
 
 def _sync_dirs(config: dict | None) -> str:

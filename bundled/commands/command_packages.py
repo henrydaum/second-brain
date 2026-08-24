@@ -49,16 +49,6 @@ class PackagesCommand(BaseCommand):
     name = "packages"
     description = "Install, uninstall, or update store files by category"
     category = "Capabilities"
-    agent_prompt = (
-        "## Package changes\n"
-        "Installing or uninstalling a package changes the live catalogs: new "
-        "tools and commands appear on the next turn, not instantly. After an "
-        "install, re-check the tool catalog before concluding a capability is "
-        "missing or broken.\n"
-        "Name the package in one argument — `/packages install <stem>` — "
-        "rather than browsing: the category and package menus are a human "
-        "picker, and a form step is not something you can answer."
-    )
     # Every action here changes what this system can do. The
     # declaration is what keeps them on the *up-front* approval path, where
     # the state machine asks before the body runs and the answer becomes a

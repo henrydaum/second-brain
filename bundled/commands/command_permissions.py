@@ -46,14 +46,6 @@ class PermissionsCommand(BaseCommand):
     approval_actor_id = "user"
     requests = ["config.read", "config.write"]
 
-    agent_prompt = (
-        "## Standing permissions\n"
-        "The user can review and withdraw standing permissions with "
-        "/permissions. If a request of yours is refused and they ask why, "
-        "that is where the answer lives — do not offer to edit the settings "
-        "yourself."
-    )
-
     def form(self, sdk, args):
         """Pick a list, then an entry, then confirm."""
         granted = {label: _entries(sdk, key) for label, key in SETTINGS.items()}
