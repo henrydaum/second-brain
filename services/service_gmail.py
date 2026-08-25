@@ -128,9 +128,10 @@ def _save_token(sdk, path, creds) -> None:
     agree about this or one repairs what the other destroys.
 
     Scopes are deliberately **not** merged with what is on disk: the file is a
-    record of what Google granted, ``include_granted_scopes`` asks Google for
-    the union, and widening the record here would keep asserting a scope after
-    the user revoked it.
+    record of what Google granted, and widening it here would keep asserting a
+    scope after the user revoked it. This service's SCOPES are the superset
+    that satisfies Drive too, so its own writes are what restore a shared
+    record that a Drive consent narrowed.
     """
     payload = json.loads(creds.to_json())
     if not payload.get("refresh_token"):
@@ -333,10 +334,14 @@ class GmailService(BaseService):
         # prompt="consent" makes Google return a refresh token rather than
         # omitting it because this account has authorized the client before;
         # without it a re-consent writes a file that cannot be read back.
-        # include_granted_scopes asks for the union of what this account has
-        # already granted, so the shared token keeps Drive's scope too.
-        creds = flow.run_local_server(
-            port=0, prompt="consent", include_granted_scopes="true")
+        #
+        # include_granted_scopes is deliberately not set — see the longer note
+        # in service_drive._authenticate. It asks for every scope the account
+        # has granted this client, and oauthlib then rejects the token for
+        # having a different scope than was requested. SCOPES here is already
+        # the superset that satisfies both services, so this consent is the
+        # one that restores a shared token Drive narrowed.
+        creds = flow.run_local_server(port=0, prompt="consent")
 
         _save_token(sdk, self.token_path, creds)
         self._adopt(sdk, creds)

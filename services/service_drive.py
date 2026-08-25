@@ -141,10 +141,13 @@ def _save_token(sdk, path, creds) -> None:
     replace a usable file with one nothing can read.
 
     Scopes are deliberately **not** merged with what is on disk. The file is a
-    record of what Google granted, and the union is Google's own answer to give
-    — ``include_granted_scopes`` asks for it. Widening the record here would
-    keep asserting a scope after the user revoked it, turning a re-consent into
-    a 403 from inside a tool call.
+    record of what Google granted, and widening it here would keep asserting a
+    scope after the user revoked it — turning a re-consent into a 403 from
+    inside a tool call. A Drive consent therefore does narrow the shared record
+    to Drive's own scope; ``service_gmail`` notices its scope missing and asks
+    once for the superset that satisfies both. That costs one extra window and
+    settles, which is the cheap failure — the expensive one was this file
+    becoming unreadable.
     """
     payload = json.loads(creds.to_json())
     if not payload.get("refresh_token"):
@@ -372,16 +375,30 @@ class GoogleDriveService(BaseService):
         sdk.log("opening a browser to authenticate with Google Drive")
         flow = InstalledAppFlow.from_client_config(
             json.loads(sdk.fs.read(secret_path)), SCOPES)
-        # Both arguments exist to stop this consent damaging the shared token.
         # prompt="consent" makes Google return a refresh token rather than
         # omitting it because this account has authorized the client before —
         # without it a re-consent writes a file that cannot be read back, and
-        # every load signs in again. include_granted_scopes asks for the union
-        # of what this account has already granted, so a Drive consent no
-        # longer narrows the file to Drive's own scope and send service_gmail
-        # off to re-consent for the access it had.
-        creds = flow.run_local_server(
-            port=0, prompt="consent", include_granted_scopes="true")
+        # every load signs in again.
+        #
+        # Asking is deliberately limited to SCOPES, and include_granted_scopes
+        # is deliberately *not* set. It was, briefly, to stop this consent
+        # narrowing the shared token to Drive's own scope — but it asks Google
+        # for every scope the account has ever granted this client, and this
+        # client is shared: the union came back carrying calendar, contacts,
+        # directory and gmail.settings. oauthlib then refuses a token whose
+        # scope differs from what was requested ("Scope has changed from ...")
+        # and the sign-in fails outright, which is worse than the narrowing it
+        # was meant to prevent. Relaxing that check needs
+        # OAUTHLIB_RELAX_TOKEN_SCOPE in the environment, and guest code cannot
+        # set one — ``os`` is refused and ``sdk.env`` only reads. Requesting
+        # the least this service needs is also the only honest ask.
+        #
+        # So the narrowing stays, and is bounded rather than fixed: a Drive
+        # consent writes a drive-only record, service_gmail sees its scope
+        # missing and asks once more for the superset that satisfies both.
+        # One extra window, self-healing, and no longer a loop now that every
+        # consent returns a refresh token.
+        creds = flow.run_local_server(port=0, prompt="consent")
 
         _save_token(sdk, self._token_path(sdk), creds)
         self._creds = creds
