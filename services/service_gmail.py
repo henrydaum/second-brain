@@ -107,6 +107,49 @@ def _stored_credentials(sdk, Credentials, path):
         return None
 
 
+def _save_token(sdk, path, creds) -> None:
+    """Write credentials out without ever dropping the refresh token.
+
+    ``to_json`` omits ``None`` entries, and a refresh token is the one field
+    the OAuth flow does not always supply: Google returns it on a user's
+    *first* authorization for a client and, unless ``prompt="consent"`` is
+    asked for, leaves it out of every consent after that. So a re-consent
+    produced ``refresh_token=None``, ``to_json`` dropped the key, and the file
+    that came back had no refresh token in it at all.
+
+    That file is not merely degraded, it is unreadable:
+    ``from_authorized_user_info`` requires ``refresh_token`` and raises
+    ``ValueError`` without one, which :func:`_stored_credentials` catches and
+    reports as "unusable". Every load then signed in again, and every sign-in
+    wrote the same unreadable file back — a silent loop whose only symptom is
+    a browser window.
+
+    This file shares ``token.json`` with ``service_drive``, so the two must
+    agree about this or one repairs what the other destroys.
+
+    Scopes are deliberately **not** merged with what is on disk: the file is a
+    record of what Google granted, ``include_granted_scopes`` asks Google for
+    the union, and widening the record here would keep asserting a scope after
+    the user revoked it.
+    """
+    payload = json.loads(creds.to_json())
+    if not payload.get("refresh_token"):
+        try:
+            stored = json.loads(sdk.fs.read(path))
+        except (sdk.Failed, TypeError, ValueError):
+            stored = {}
+        carried = stored.get("refresh_token")
+        if not carried:
+            sdk.log("not writing a token with no refresh token: it could not "
+                    "be read back, and would cost a sign-in on every load",
+                    level="error")
+            return
+        sdk.log("the consent returned no refresh token; keeping the stored one",
+                level="debug")
+        payload["refresh_token"] = carried
+    sdk.fs.write(path, json.dumps(payload))
+
+
 class GmailService(BaseService):
     """Authenticate once and expose bounded Gmail operations."""
 
@@ -208,7 +251,7 @@ class GmailService(BaseService):
             # Valid, but at the old address. Copy it across now rather than
             # waiting for expiry, so the move happens once instead of falling
             # through this branch on every boot.
-            sdk.fs.write(self.token_path, creds.to_json())
+            _save_token(sdk, self.token_path, creds)
         self._adopt(sdk, creds)
         return True
 
@@ -287,9 +330,15 @@ class GmailService(BaseService):
         sdk.log("opening a browser to authenticate with Gmail")
         flow = InstalledAppFlow.from_client_config(
             json.loads(sdk.fs.read(self.credentials_path)), SCOPES)
-        creds = flow.run_local_server(port=0)
+        # prompt="consent" makes Google return a refresh token rather than
+        # omitting it because this account has authorized the client before;
+        # without it a re-consent writes a file that cannot be read back.
+        # include_granted_scopes asks for the union of what this account has
+        # already granted, so the shared token keeps Drive's scope too.
+        creds = flow.run_local_server(
+            port=0, prompt="consent", include_granted_scopes="true")
 
-        sdk.fs.write(self.token_path, creds.to_json())
+        _save_token(sdk, self.token_path, creds)
         self._adopt(sdk, creds)
         sdk.log("gmail authenticated")
         self._notify(sdk, "Gmail is connected",
@@ -314,7 +363,7 @@ class GmailService(BaseService):
             sdk.log(f"stored token could not be refreshed, signing in on the "
                     f"first poll: {error}", level="warning")
             return False
-        sdk.fs.write(self.token_path, creds.to_json())
+        _save_token(sdk, self.token_path, creds)
         sdk.log("gmail token refreshed")
         return True
 
