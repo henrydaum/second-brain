@@ -1049,7 +1049,11 @@ def test_a_static_declaration_contributes_without_entering_the_box(tmp_path,
 
     ctx = SimpleNamespace(config={})
     assert instance.agent_prompt == "## Words\nCount them."
-    assert _collect([instance], ctx, stable=True) == ["## Words\nCount them."]
+    # The declared text, plus the stamp naming the file it came from. A
+    # plugin's paragraph reads exactly like the kernel's own, so the prompt
+    # says which installed thing is talking — see ``_sourced``.
+    assert _collect([instance], ctx, stable=True) == [
+        "## Words\nCount them.\n(source: tool_word_count)"]
     # And it stays in the cacheable prefix: a fixed string has no reason to
     # ride in the dynamic block, which is where the *live* shape goes.
     assert _collect([instance], ctx, stable=False) == []

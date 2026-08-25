@@ -317,9 +317,16 @@ def _collect(plugins, ctx: PromptContext, *, stable: bool) -> list[str]:
         except Exception:
             text = ""
         if text:
-            entries.append((prompt_cues.rank(cue), text))
+            entries.append((prompt_cues.rank(cue), _sourced(plugin, text)))
     entries.sort(key=lambda entry: entry[0])
     return [text for _, text in entries]
+
+
+def _sourced(plugin, text: str) -> str:
+    """Stamp a contribution with the file it came from."""
+    path = str(getattr(plugin, "_source_path", "") or "")
+    stem = Path(path).stem if path else (getattr(plugin, "name", "") or "?")
+    return f"{text}\n(source: {stem})"
 
 
 def _visible_tools_for_prompt(registry):
@@ -498,8 +505,7 @@ def _filesystem_access(config: dict | None) -> str:
     if not writable:
         lines.append("- None configured.")
     lines.append(
-        "Second Brain source and installed-package paths remain protected "
-        "from this standing folder grant.")
+        "The Second Brain ROOT_DIR and installed_plugins folder in the DATA_DIR are read-only.")
     return "\n".join(lines)
 
 
