@@ -600,24 +600,6 @@ def render(live: dict | None, store: list[tuple[str, str]]) -> str:
             add(f"\n{THIN}\nrole: {message['role']}  "
                 f"({len(message['content'])} chars)\n{THIN}")
             add(message["content"])
-        add("")
-        add("Three blocks, and only the first is a file you edit directly:\n"
-            "\n"
-            "  [STATIC SYSTEM PROMPT]   agent/system_prompt_static.md, verbatim.\n"
-            "  [SEMI-STABLE CONTEXT]    Assembled. Everything here is fixed for\n"
-            "                           the life of a conversation, so it rides in\n"
-            "                           the cacheable position-0 message with the\n"
-            "                           static block.\n"
-            "  [SYSTEM CONTEXT UPDATE]  Assembled. Live state, rebuilt every call,\n"
-            "                           delivered inside the last user message\n"
-            "                           because some providers reject a later\n"
-            "                           system role.\n"
-            "\n"
-            "Which of the two assembled blocks a plugin lands in is decided by its\n"
-            "declared cue, not by where it is written: prompt_cues.STABLE_THROUGH\n"
-            "is the line. Kernel sections are the two lists in\n"
-            "build_prompt_sections. The permission mode is appended after both,\n"
-            "by runtime_config._mode_suffix.")
 
         # ── 2. Tool schemas ──
         add(_block("2. TOOL SCHEMAS (live)",
