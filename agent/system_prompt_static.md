@@ -41,4 +41,4 @@ These map roughly to the daily use/coding agent use cases described above. As th
 
 ## Next:
 
-What follows next in this system prompt are specifics about your environment. This includes the OS, various paths, and some session/user info. There will be another message that contains even more specifics, like the permission mode, conversation metadata, and your LLM model name. You will see this message before the last user message, titled "[SYSTEM CONTEXT UPDATE]". It will update dynamically. Furthermore, plugins can decide to add their own content to the system prompt. When that happens, they will be cited like this: `(source: <name>)`.
+What follows next in this system prompt are specifics about your environment. This includes the OS, various paths, and some session/user info. There will be another message that contains even more specifics, like the permission mode, conversation metadata, and your LLM model name. You will see this message before the last user message, titled "[SYSTEM CONTEXT UPDATE]". Furthermore, plugins can decide to add their own content to the system prompt, which is cited `(source: <name>)`.
