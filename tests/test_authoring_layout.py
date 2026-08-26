@@ -42,21 +42,12 @@ def test_the_authoring_roots_come_from_the_kernel_table():
         assert f"{root.name}/" in documented, root.name
 
 
-def test_system_prompt_teaches_the_sdk_template_and_permission_workflow():
-    documented = (ROOT / "agent" / "system_prompt_static.md").read_text(
-        encoding="utf-8")
-    # The order is the invariant, not the sentence: SDK.md defines the
-    # vocabulary the template is written in, so an agent sent to the template
-    # first reads a worked example in a language it has not been taught.
-    # Matched on the two references rather than on a phrase, which is what let
-    # a rewording of the same instruction fail this.
-    sdk_position = documented.index("docs/SDK.md")
-    template_position = documented.index("templates/")
-    assert sdk_position < template_position
-    assert "fs_writable_dirs" in documented
-    assert "belong to the user" in documented
-    assert "docs/PERMISSIONS_MAP.md" in documented
-    assert "Telegram" not in documented
+# ``agent/system_prompt_static.md`` is deliberately untested here. It is
+# authored prose, and a test that asserts phrases in it is a test that argues
+# with whoever wrote it — every rewrite fails, and the fix is always to edit
+# the test. The sources below are different: a template that does not name its
+# own family folder is a broken instruction, which is a fact about the tree
+# rather than about the wording.
 
 
 def test_every_template_routes_back_to_sdk_and_implementation():

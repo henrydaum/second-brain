@@ -1341,14 +1341,15 @@ def test_the_wire_and_the_transcript_cap_a_long_result_identically():
 #
 # ``_messages`` is the single place history becomes a provider message array,
 # and until these tests nothing asserted anything about its ordering. That gap
-# hid a real cost: the ``[SYSTEM CONTEXT UPDATE]`` block is merged into the
+# hid a real cost: the ``[SYSTEM CONTEXT UPDATE]`` block sits ahead of the
 # *latest user-led turn*, which in a chat is near the end — but an agentic run
 # has exactly one user message, so "latest" is also "first" and the block sits
 # ahead of the whole tool-call transcript. Anything volatile in it therefore
 # invalidates the cached prefix for every row behind it.
 #
-# These pin the shape as it stands so a later change to placement has to say
-# out loud what it is changing.
+# It used to be prepended *into* that user row. Its own row is what these were
+# written to make a deliberate change rather than a quiet one, and they still
+# pin what did not move: the position, and the tool-call adjacency rule.
 # ──────────────────────────────────────────────────────────────────────────
 
 from runtime.conversation_loop import SYSTEM_CONTEXT_MARKER as _MARKER
@@ -1373,10 +1374,11 @@ def _tool_turn_history():
     ]
 
 
-def test_the_context_block_rides_on_the_latest_user_turn():
+def test_the_context_block_sits_ahead_of_the_latest_user_turn():
     """In an agentic run the only user row is the first, so the block lands at
     index 1 — ahead of every tool result. This is the placement that makes any
-    volatility in the block expensive."""
+    volatility in the block expensive, and it did not change when the block
+    stopped being welded into the user's message."""
     loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
     history = _tool_turn_history()
 
@@ -1389,25 +1391,42 @@ def test_the_context_block_rides_on_the_latest_user_turn():
     assert carriers[0] is out[1]
     assert out[1]["role"] == "user"
     assert str(out[1]["content"]).lstrip().startswith(_MARKER)
-    # The user's own words survive, after the block.
-    assert str(out[1]["content"]).rstrip().endswith("do the thing")
-    # Everything behind it is the history, verbatim and in order.
-    assert [m["role"] for m in out[2:]] == ["assistant", "tool", "assistant"]
-    assert out[3]["content"] == "file contents"
+    # The user's own words are their own row, immediately after.
+    assert out[2] == {"role": "user", "content": "do the thing"}
+    # Everything behind that is the history, verbatim and in order.
+    assert [m["role"] for m in out[3:]] == ["assistant", "tool", "assistant"]
+    assert out[4]["content"] == "file contents"
 
 
-def test_messages_never_inserts_a_row_into_the_history():
-    """``_prepend_to_user`` merges rather than inserts, which is *why* the
-    current design cannot emit an illegal message sequence. Any future move of
-    the block to the true tail forfeits that guarantee, and has to confront
-    this assertion to do it."""
+def test_the_users_own_message_is_never_rewritten():
+    """The block is a row of its own, so nothing the person typed is edited.
+
+    Welding kernel text onto somebody's own words is what made the block read
+    as something the user said, and it also meant the row sent to the provider
+    was not the row in the transcript. Both stop being true here.
+    """
     loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
     history = _tool_turn_history()
 
     out = loop._messages(history)
 
-    # one system message + the history; the context block added no row
-    assert len(out) == 1 + len(history)
+    # one system message + one context row + the history, unmodified
+    assert len(out) == 2 + len(history)
+    assert [m for m in out[2:]] == history
+
+
+def test_the_block_and_the_user_are_two_consecutive_user_rows():
+    """The cost of the change, stated rather than discovered.
+
+    Strict alternation is forfeited: OpenAI-shaped APIs accept consecutive
+    user rows, an API that requires alternation does not. Pinned so that a
+    backend hitting it finds the reason here instead of a provider error.
+    """
+    loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, _sectioned())
+
+    out = loop._messages(_tool_turn_history())
+
+    assert [m["role"] for m in out[1:3]] == ["user", "user"]
 
 
 def test_no_row_is_placed_between_a_tool_call_and_its_results():

@@ -125,6 +125,268 @@ def test_filesystem_access_names_an_empty_grant(monkeypatch, tmp_path):
     assert "- None configured." in _filesystem_access({})
 
 
+# ────────────────────────────────────────────────────────────────────
+# The kernel's own live readouts, and which block each lands in
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_every_mode_is_named_including_the_default(data_dir):
+    """An agent told about three modes and never which one it is in has been
+    given half of something.
+
+    ``prompt_note`` is still empty for ``ask`` — the default needs no
+    *explaining*. Naming it is this section's job, and the two must not be
+    confused: the failure they prevent is different in each direction. An
+    unnamed default leaves the agent guessing; an explained one is tokens
+    spent restating the obvious on every turn.
+    """
+    from agent.system_prompt import _permission_mode
+
+    assert "Mode: `ask`." in _permission_mode("ask")
+    assert "Mode: `lockdown`." in _permission_mode("lockdown")
+    assert "Mode: `yolo`." in _permission_mode("yolo")
+    # The extra guidance rides inside the section, not as a heading of its own.
+    assert _permission_mode("lockdown").count("## ") == 1
+
+
+def test_the_profile_speaks_under_one_heading(data_dir):
+    """The name, the tool limit and the profile's own instructions together.
+
+    These were three items in two halves of the block, and the ``prompt_suffix``
+    was last of all with nothing above it — so the model read the profile's
+    instructions as an unattributed paragraph and could not tell whose they
+    were. That is exactly the kind of line nobody can explain the presence of.
+    """
+    from agent.system_prompt import _agent_profile
+    from runtime.agent_scope import AgentScope
+
+    scope = AgentScope(profile_name="research",
+                       prompt_suffix="Cite every claim.",
+                       tools_allow={"read_file"})
+    text = _agent_profile("research", scope)
+
+    assert text.count("## ") == 1
+    assert "Active profile: research." in text
+    assert "Specific instructions from this profile:" in text
+    assert "Cite every claim." in text
+    assert "limited to the tools exposed in this prompt" in text
+
+
+def test_an_unscoped_profile_says_only_its_name(data_dir):
+    from agent.system_prompt import _agent_profile
+
+    text = _agent_profile("default", None)
+    assert text == "## Agent profile\nActive profile: default."
+
+
+def test_the_context_line_needs_both_halves_measured(data_dir):
+    """Neither number may be guessed.
+
+    ``None`` tokens means *the provider did not say*, and a ``context_size`` of
+    0 means the profile never declared one. Rendering either as zero would put
+    a figure in front of the model that nobody measured, and a wrong context
+    reading is worse than none: it is the number an agent would decide to
+    compact on.
+    """
+    from agent.system_prompt import _context_usage
+
+    assert _context_usage(None, 200000) == ""
+    assert _context_usage(71204, 0) == ""
+    assert _context_usage(0, 200000) == ""
+    assert "71,204 of 200,000 tokens (36%)" in _context_usage(71204, 200000)
+
+
+def test_the_context_line_says_when_it_was_measured(data_dir):
+    """It is the *previous* call's count, frozen at the turn's start.
+
+    An agent reading a number that lags the transcript it can see will distrust
+    the block it came in. Saying so costs six words.
+    """
+    from agent.system_prompt import _context_usage
+
+    assert "at the start of this turn" in _context_usage(10, 100)
+
+
+def test_the_session_section_names_the_frontend(data_dir):
+    from agent.system_prompt import PromptContext, _session_facts
+
+    text = _session_facts(PromptContext(frontend_name="telegram"))
+
+    assert "## This session" in text
+    assert "Frontend: telegram" in text
+
+
+def test_a_session_with_no_frontend_says_so(data_dir):
+    """A drive with no surface is a background or subagent conversation, and
+    that is worth stating rather than leaving as a missing line — a section
+    that silently omits its first fact reads as a section with nothing to
+    say."""
+    from agent.system_prompt import PromptContext, _session_facts
+
+    text = _session_facts(PromptContext(frontend_name=None))
+
+    assert "Frontend: none" in text
+    assert "background or subagent" in text
+
+
+def test_the_session_section_reports_what_the_surface_can_show(data_dir):
+    """Only the capabilities with an agent-side decision behind them.
+
+    Whether a file it produces can be displayed changes what the agent should
+    *do*; whether the transport streams does not.
+    """
+    from agent.system_prompt import PromptContext, _session_facts
+
+    frontend = SimpleNamespace(
+        user_binding="per_user",
+        capabilities=SimpleNamespace(
+            supports_attachments_in=True, supports_attachments_out=False,
+            supports_rich_text=True, supports_buttons=False,
+            supports_inline_forms=True, supports_streaming=True))
+
+    text = _session_facts(PromptContext(frontend_name="web"), frontend)
+
+    assert "Can send you files: yes." in text
+    assert "Can display files you produce: no." in text
+    assert "Renders markdown: yes." in text
+    # Either half of the pair is enough to answer the question.
+    assert "Buttons and inline forms: yes." in text
+    assert "each identity its own account" in text
+    assert "streaming" not in text.lower()
+
+
+def test_first_met_is_scoped_to_this_user(tmp_path):
+    """The fact is about the relationship, not about the disk.
+
+    A global minimum would frequently be somebody else's first conversation on
+    a ``per_user`` frontend, which is the same words measuring a different
+    thing — the worst kind of wrong line, because nothing about it looks wrong.
+    """
+    import agent.system_prompt as sp
+    from pipeline.database import Database
+
+    db = Database(str(tmp_path / "met.db"))
+    older = db.create_conversation("theirs")
+    db.conn.execute("UPDATE conversations SET user_id = 2, created_at = ? "
+                    "WHERE id = ?", (1_600_000_000.0, older))
+    mine = db.create_conversation("mine")
+    db.conn.execute("UPDATE conversations SET user_id = 1, created_at = ? "
+                    "WHERE id = ?", (1_700_000_000.0, mine))
+    db.conn.commit()
+    sp._first_met_memo.clear()
+
+    assert "2023" in sp._first_met(db, 1)
+    assert "2020" in sp._first_met(db, 2)
+
+
+def test_first_met_is_absent_rather_than_guessed(tmp_path):
+    """No user and no conversations are both "" — never a fallback figure.
+
+    The bootstrap prompt and ``dev/dump_agent_text.py`` both build without a
+    session, and a line that quietly widened its scope to cover that case would
+    be measuring the installation while claiming to measure the user.
+    """
+    import agent.system_prompt as sp
+    from pipeline.database import Database
+
+    db = Database(str(tmp_path / "empty.db"))
+    sp._first_met_memo.clear()
+
+    assert sp._first_met(db, None) == ""
+    assert sp._first_met(None, 1) == ""
+    assert sp._first_met(db, 1) == ""
+
+
+def test_an_empty_first_met_is_not_memoized(tmp_path):
+    """A brand new user must not be silent for the life of the process.
+
+    Caching the real answer is free — it moves only when retention prunes that
+    user's oldest conversation. Caching the *absence* means the first
+    conversation somebody ever has is the one the prompt never mentions.
+    """
+    import agent.system_prompt as sp
+    from pipeline.database import Database
+
+    db = Database(str(tmp_path / "late.db"))
+    sp._first_met_memo.clear()
+    assert sp._first_met(db, 1) == ""
+
+    first = db.create_conversation("first")
+    db.conn.execute("UPDATE conversations SET user_id = 1, created_at = ? "
+                    "WHERE id = ?", (1_700_000_000.0, first))
+    db.conn.commit()
+
+    assert "2023" in sp._first_met(db, 1)
+
+
+def test_the_kernel_readouts_land_in_the_block_that_matches_them(data_dir):
+    """The split is by what moves, and every kernel section has to obey it too.
+
+    The machine and the session are settled before the conversation starts, so
+    they ride in the cacheable position-0 message. The mode, the model, the
+    profile and the conversation move within one, so they ride in the block
+    that is rebuilt each turn. This is the same rule ``prompt_cues`` enforces
+    for plugins, applied to the sections the kernel writes itself.
+    """
+    system, dynamic = _sections_with([])
+    prefix, volatile = system["content"], dynamic["content"]
+
+    for heading in ("## Where you are running", "## Filesystem access",
+                    "## Sync directories", "## This session"):
+        assert heading in prefix, heading
+        assert heading not in volatile, heading
+
+    for heading in ("## Permission mode", "## Model", "## Agent profile",
+                    "## Memory", "## Right now"):
+        assert heading in volatile, heading
+        assert heading not in prefix, heading
+
+
+def test_the_context_figure_is_frozen_for_the_turn(tmp_path):
+    """The same fix the clock got, for the same cost.
+
+    The dynamic block is merged into the latest user message, which in an
+    agentic run is the *first* one — so it sits ahead of the whole tool-call
+    transcript and a figure that climbed with each model call would re-bill
+    every row behind it. ``last_prompt_tokens`` therefore moves on every call
+    and the prompt reads ``turn_prompt_tokens``, which only
+    ``HookRegistry.start_turn`` writes.
+
+    Driven through a real session rather than by calling the renderer, because
+    the freeze is a property of *where the copy happens* and a unit test of
+    ``_context_usage`` cannot see it.
+    """
+    import state_machine  # noqa: F401 — break the runtime<->state_machine cycle
+    from runtime.hooks import HookRegistry
+    from runtime.runtime_config import session_system_prompt
+    from tests.support import make_runtime
+
+    runtime, session, llm = make_runtime(
+        tmp_path, config={"llm_profiles": {}, "default_llm_profile": ""})
+    llm.context_size = 200_000
+    runtime.services["llm"] = llm
+
+    def context_line():
+        sections = session_system_prompt(runtime, session)()
+        body = "\n".join(m.get("content") or "" for m in sections)
+        return next((line for line in body.splitlines()
+                     if line.startswith("Context: ")), "")
+
+    hooks = HookRegistry()
+    session.last_prompt_tokens = 20_000
+    hooks.start_turn(session, runtime)
+    first = context_line()
+
+    # Mid-turn growth: what the last call billed moves, what the prompt shows
+    # does not.
+    session.last_prompt_tokens = 90_000
+    assert context_line() == first
+    assert "20,000" in first
+
+    hooks.start_turn(session, runtime)
+    assert "90,000" in context_line()
+
+
 def test_model_status_reports_effective_native_attachment_capabilities():
     # A modality counts only when both halves agree: the model ingests it
     # (capabilities) and the backend can put it on the wire (native_modalities).
@@ -143,7 +405,7 @@ def test_model_status_reports_effective_native_attachment_capabilities():
 
 
 def test_model_status_reports_unavailable_without_llm():
-    assert _model_status(None) == "Current model: unavailable."
+    assert _model_status(None) == "## Model\nCurrent model: unavailable."
 
 
 def test_model_status_reads_the_attributes_brain_actually_publishes():
@@ -327,48 +589,10 @@ def test_a_string_shape_ignores_a_cue_it_declares(data_dir):
     assert "GUIDANCE-FROM-A-CONFUSED-PLUGIN" not in dynamic["content"]
 
 
-def test_static_prompt_requires_finishing_accepted_work(data_dir):
-    """Finish the work rather than narrating an intention to.
-
-    The rule carries **no exit clause on purpose.** An earlier draft enumerated
-    what may legitimately stop the work — a fact, a permission — and the list
-    was the problem: naming the exits invites the model to reach for one, and a
-    prompt that spends three sentences on how to stop reads as permission to.
-    Where a refusal genuinely ends a step, the mode's own note already governs
-    what happens next, so saying it twice only has the two halves of the prompt
-    arguing in front of the model.
-
-    What is pinned here is therefore just the demand, and specifically that it
-    still names all three ways of *not* doing the work — a plan, a promise, an
-    intention to retry — since dropping any one of them is how this line has
-    weakened before.
-    """
-    from agent.system_prompt import _static_prompt
-
-    prompt = _static_prompt()
-    assert "do not end on a plan, a promise, or an intention to retry" in prompt
-    assert "until the work is complete" in prompt
-
-
-def test_static_prompt_permits_an_unsupported_conclusion_to_be_reported(data_dir):
-    """Saying "the evidence does not support this" has to be an available move.
-
-    The failure it answers is agreeableness, not laziness: an assistant that
-    treats every question as owed an answer invents one when the material will
-    not carry it. On the evidence corpus this was the worst-performing family
-    by a wide margin — abstention checks passed a quarter of the time.
-
-    It sits directly below the rule against ending on a plan or a promise, and
-    the two pull opposite ways, so the pairing is worth watching in the data
-    rather than in the wording: coverage of expected items is the larger loss
-    of the two, and a drop there alongside a rise in abstention would mean this
-    line is being read as permission to stop early.
-    """
-    from agent.system_prompt import _static_prompt
-
-    prompt = _static_prompt()
-    assert "cannot be supported is a real answer" in prompt
-    assert "name what is missing or what would settle it" in prompt
+# The static prompt's wording is deliberately unpinned: it is authored prose,
+# and a test asserting phrases in it argues with whoever wrote it. What is
+# pinned is everything around it — which block each section lands in, what the
+# kernel contributes, and that the file is read at all.
 
 
 def test_both_shapes_are_collected_when_both_are_present(data_dir):
@@ -383,33 +607,6 @@ def test_both_shapes_are_collected_when_both_are_present(data_dir):
 
     assert "GUIDANCE-FROM-A-STRING" in system["content"]
     assert "GUIDANCE-FROM-A-METHOD" in dynamic["content"]
-
-
-def test_the_static_prompt_stays_within_its_budget():
-    """The static prompt is paid on every turn, including the ones that have
-    nothing to do with this codebase.
-
-    It had grown to 10 KB, most of it a plugin-authoring tutorial duplicating
-    ``docs/SDK.md`` and a research procedure the model already knows — enough
-    preamble that the agent remarked on it while answering a mundane question.
-    The rule that keeps it down is *keep what is Second-Brain-specific and
-    could not be inferred*: paths, grants, catalogs, kernel behaviour, the
-    ``[SYSTEM CONTEXT UPDATE]`` structure. Long-form guidance belongs in
-    ``docs/``, which the file itself points at and the agent can read on
-    demand.
-
-    A cap rather than a golden file: the wording should stay free to change,
-    and only the budget is worth defending. Raise it deliberately, or not at
-    all.
-    """
-    from agent.system_prompt import _STATIC_PROMPT_PATH
-
-    size = len(_STATIC_PROMPT_PATH.read_text(encoding="utf-8"))
-
-    assert size <= 7000, (
-        f"agent/system_prompt_static.md is {size} chars. Anything long-form "
-        "belongs in docs/ with a pointer here, not inlined into every turn."
-    )
 
 
 # ──────────────────────────────────────────────────────────────────────────

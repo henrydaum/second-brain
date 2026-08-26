@@ -208,21 +208,6 @@ def _split_current_turn(history: list[dict[str, Any]]) -> tuple[list[dict[str, A
     return (history, []) if idx is None else (history[:idx], history[idx:])
 
 
-def _prepend_to_user(user_msg: dict[str, Any], context_text: str) -> dict[str, Any]:
-    """Return a copy of ``user_msg`` with ``context_text`` prepended to its content.
-
-    Handles both string content and OpenAI content-block list shapes.
-    """
-    out = dict(user_msg)
-    content = out.get("content")
-    if isinstance(content, list):
-        out["content"] = [{"type": "text", "text": context_text}, *content]
-    else:
-        text = str(content or "").strip()
-        out["content"] = f"{context_text}\n\n{text}" if text else context_text
-    return out
-
-
 class ConversationLoop:
     """Drive a participant's turn until they end it.
 
@@ -830,13 +815,33 @@ class ConversationLoop:
     # ──────────────────────────────────────────────────────────────────────
 
     def _messages(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Build provider messages with the dynamic context attached to the turn.
+        """Build provider messages with the dynamic context ahead of the turn.
 
         Sectioned prompts come in as ``[system_combined, user_context_update]``.
-        The system message stays at position 0 (cacheable). The user-role
-        context-update message is merged into the latest real user turn so
-        the request keeps strict role alternation and stays valid for
-        providers that only accept ``system`` at position 0 (e.g. MiniMax).
+        The system message stays at position 0 (cacheable). The context-update
+        message is placed as **its own row immediately before** the latest real
+        user turn.
+
+        It used to be prepended into that user row instead, welded onto the
+        person's own words. That kept strict role alternation, and it is what
+        made the block hardest for a model to read as anything other than
+        something the user said — no amount of "not authored by the user" text
+        inside a user message undoes the role it arrives in. Its own row at
+        least makes the seam visible.
+
+        Two properties survive the change and one does not. The **placement**
+        is identical: ``_split_current_turn`` finds the same row, and in an
+        agentic run — one user message followed by dozens of assistant and tool
+        rows — the block still lands at index 1, ahead of the whole transcript,
+        so everything the turn-stable clock and ``turn_prompt_tokens`` exist
+        for still holds. **Tool-call adjacency** survives too: the insertion
+        point is immediately before a ``user`` row, and no user row ever sits
+        between an assistant's ``tool_calls`` and the ``tool`` rows answering
+        them. What is forfeited is **strict alternation** — the block and the
+        user's message are now two consecutive ``user`` rows. OpenAI-shaped
+        APIs accept that; an API that requires alternation does not, and for
+        one that also refuses a ``system`` row outside position 0 there is no
+        arrangement that satisfies both.
         """
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         sections = _prompt_sections(prompt)
@@ -854,11 +859,12 @@ class ConversationLoop:
 
         ctx_msg = sections[ctx_idx]
         prefix = sections[:ctx_idx] + sections[ctx_idx + 1:]
+        # One expression for both cases: a history with no user row at all — a
+        # re-drive picking up mid-turn — splits as all-prior and empty tail, so
+        # the block lands last, which is where it belongs when there is no turn
+        # to precede.
         prior, tail = _split_current_turn(clean_history)
-        if not tail:
-            return [*prefix, *prior, ctx_msg]
-        merged = _prepend_to_user(tail[0], ctx_msg["content"])
-        return [*prefix, *prior, merged, *tail[1:]]
+        return [*prefix, *prior, ctx_msg, *tail]
 
     def _tool_budget_error(self, content: Any) -> str | None:
         """Internal helper to handle tool budget error."""
@@ -1081,7 +1087,18 @@ class ConversationLoop:
         provider that ignores ``stream_options={"include_usage": True}``
         reports nothing, and a consumer that averages a missing count as zero
         would understate cost without ever looking wrong.
+
+        ``prompt_tokens`` is also recorded on the session, because it is the
+        only measurement of how full the context window is that anybody in the
+        process has — no tokenizer here could match the provider's own count of
+        a chat template it serialised itself. The prompt does not read this
+        field directly; ``HookRegistry.start_turn`` freezes it per turn first.
+        See ``RuntimeSession.last_prompt_tokens``.
         """
+        session = self._session()
+        tokens = getattr(response, "prompt_tokens", None)
+        if session is not None and tokens is not None:
+            session.last_prompt_tokens = tokens
         bus.emit(AGENT_LLM_CALL_FINISHED, {
             "session_key": self.session_key,
             "model": getattr(llm, "model_name", None),

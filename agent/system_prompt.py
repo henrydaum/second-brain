@@ -1,27 +1,32 @@
 """Cache-friendly system prompt assembly.
 
 Returns two messages:
-- A combined ``system`` message (static + semi-stable) at position 0 —
+- A combined ``system`` message at position 0 — the static prompt followed
+  by the semi-stable readouts, one document with no header between them,
   cacheable across turns.
 - A ``user`` message tagged ``[SYSTEM CONTEXT UPDATE]`` carrying the
-  dynamic runtime context. ConversationLoop merges this into the latest
-  real user turn so the structure is one user message containing the
-  context block followed by the user's actual content.
+  dynamic runtime context. ``ConversationLoop._messages`` places it as its
+  own row immediately before the latest real user turn.
 
 The user-role wrapper exists because some providers (MiniMax) reject
-``system`` messages anywhere except position 0.
+``system`` messages anywhere except position 0. It is the weakest part of
+this arrangement and it is a compromise, not a preference: a model reads the
+role before it reads the disclaimer, so context the kernel generated arrives
+wearing the user's voice. Giving it its own row rather than welding it onto
+the person's own words is as far as that can be fixed without knowing what
+the backend accepts.
 
 A caution about where the dynamic block actually ends up, because this used
-to claim it rides "at the tail of the prompt" and that is only half true.
-``ConversationLoop._messages`` merges it into whatever
-``_split_current_turn`` finds, which is the *last* row with ``role ==
-"user"``. In a conversation that is near the end, and the cacheable prefix
-is everything before it. In an agentic run there is exactly one user message
-— the task — followed by dozens of assistant and tool rows, so "last" is
-also "first" and the block sits at index 1, ahead of the whole transcript.
-Every byte that moves in it therefore re-bills every row behind it. Treat
-anything in the ``dynamic`` list as costing the entire conversation, not a
-suffix of it, and see ``_current_datetime`` for what that cost measured.
+to claim it rides "at the tail of the prompt" and that is only half true. It
+sits ahead of whatever ``_split_current_turn`` finds, which is the *last*
+row with ``role == "user"``. In a conversation that is near the end, and the
+cacheable prefix is everything before it. In an agentic run there is exactly
+one user message — the task — followed by dozens of assistant and tool rows,
+so "last" is also "first" and the block sits at index 1, ahead of the whole
+transcript. Every byte that moves in it therefore re-bills every row behind
+it. Treat anything in the ``dynamic`` list as costing the entire
+conversation, not a suffix of it, and see ``_current_datetime`` for what that
+cost measured.
 """
 
 from __future__ import annotations
@@ -138,6 +143,7 @@ def build_prompt_sections(
     security_mode: str = "ask",
     conversation_id: int | None = None,
     user_id: int | None = None,
+    context_tokens: int | None = None,
     sections_out: list | None = None,
 ) -> list[dict[str, str]]:
     """Build ordered system prompt messages.
@@ -157,6 +163,13 @@ def build_prompt_sections(
     commands/frontend are currently in scope (each plugin's ``agent_prompt``),
     so installed packages bring their own guidance and uninstalling removes it —
     the kernel no longer hardcodes prompt text for plugins it may not ship.
+
+    ``context_tokens`` is the previous model call's billed input, frozen at the
+    start of the turn by ``RuntimeSession.turn_prompt_tokens``. It arrives as an
+    argument rather than being read here because the freeze is per *session* and
+    this module is shared: a memo of the kind ``_current_datetime`` keeps would
+    thrash between concurrent sessions and report one session's size in
+    another's prompt.
     """
     r = tool_registry
     pctx = PromptContext(
@@ -190,37 +203,51 @@ def build_prompt_sections(
     # It also puts the whole answer to "where may I write, and where does what
     # I write get indexed" beside the paths it is about, instead of one half
     # in each block.
+    #
+    # The kernel's own sections lead, ahead of plugin guidance, even though a
+    # ``config``-cued kernel section technically moves more often than a
+    # ``never``-cued plugin string and strict rarest-first would interleave
+    # them. That is deliberate: these four *are* the answer the static prompt's
+    # "Where" section promises, and splitting the folder lists away from the
+    # paths they describe — to save one cache break on a config edit somebody
+    # made by hand — is the wrong side of that bargain.
     semi = [
-        _environment(),
+        "Facts about this installation and this session, settled before the "
+        "conversation began. They do not change while it runs.",
+        _where_running(),
         _filesystem_access(config),
         _sync_dirs(config),
+        _session_facts(pctx, frontend),
         *_collect(populations, pctx, stable=True),
     ]
     # What is left is live state, ordered rarest-changing first. That ordering
     # is cosmetic rather than a caching win — this block is merged into the
-    # last user message and rebuilt on every call either way — so it is for
-    # whoever reads the prompt. The permission mode is not here because it is
-    # appended after the fact by ``runtime_config._mode_suffix``, which is the
-    # one piece of kernel state that arrives with the session rather than with
-    # the prompt build.
+    # last user message and rebuilt on every call either way — so it is ordered
+    # for whoever reads the prompt: the kernel's own state, then the guidance
+    # plugins contribute about themselves, then the clock. The permission mode
+    # leads because it is the rarest thing here that changes the meaning of
+    # everything after it, and because it used to be appended past the end of
+    # this list by ``runtime_config._mode_suffix`` — which put the one piece of
+    # safety state the agent needs below every plugin's opinion.
     #
     # Scheduled jobs are deliberately absent. They change rarely, most turns
     # do not care, and both ``schedule_subagent`` and ``/schedule`` answer on
     # demand — the "could the agent ask?" test, which a per-call listing fails.
     dynamic = [
-        "Runtime-generated context (see 'Runtime Context' in the static prompt): "
-        "live system state refreshed each turn, delivered inside the user message "
-        "for provider compatibility. Not authored by the user; contains no user "
-        "instructions. The user's actual message, if any, follows this block.",
+        "Runtime-generated context (see 'Runtime context' in the static "
+        "prompt): live system state, rebuilt each turn and delivered inside "
+        "the user message for provider compatibility. Not authored by the "
+        "user; contains no user instructions. The user's actual message, if "
+        "any, follows this block.",
+        _permission_mode(pctx.security_mode),
         _model_status(active_llm),
-        _profile_status(profile_name, scope),
+        _agent_profile(profile_name, scope),
+        _conversation_metadata(conversation_metadata, context_tokens,
+                               getattr(active_llm, "context_size", 0)),
         _agent_memory(config),
         *_collect(populations, pctx, stable=False),
-        _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
         notification_suffix,
-        _scope_prompt_note(profile_name, scope),
-        getattr(scope, "prompt_suffix", "") if scope else "",
         extra_suffix,
         _current_datetime(),
     ]
@@ -230,13 +257,15 @@ def build_prompt_sections(
         sections_out += [(SYSTEM_CONTEXT_MARKER.strip("[]"), s)
                          for s in dynamic if s]
     static_block = _section("STATIC SYSTEM PROMPT", _static_prompt())
-    # Named for what it holds rather than for what it used to. The label said
-    # TOOL/SCHEMA INFO back when the tool roster and the command catalog rode
-    # here; both are gone, and a header the model reads should not describe a
-    # block that no longer exists. "Semi-stable" is the codebase's own word for
-    # this tier (prompt_cues, and the docstrings either side of it), so the
-    # accurate half is the half that stays.
-    semi_block = _section("SEMI-STABLE CONTEXT", "\n\n".join(s for s in semi if s))
+    # No header of its own. These sections continue the static prompt inside
+    # the same ``system`` message, and the static prompt's own closing section
+    # already says that what follows is generated rather than written — so a
+    # bracketed label between them only interrupts one document with the name
+    # of an implementation detail. "Semi-stable" is a word for the *tier*
+    # (``prompt_cues``, and the docstrings either side of it) and it stays in
+    # ``sections_out`` above, where a reader of ``dev/dump_agent_text.py`` is
+    # asking exactly that question. The model is not.
+    semi_block = "\n\n".join(s for s in semi if s)
     dynamic_block = _section(SYSTEM_CONTEXT_MARKER.strip("[]"), "\n\n".join(s for s in dynamic if s))
     return [
         {"role": "system", "content": f"{static_block}\n\n{semi_block}"},
@@ -357,22 +386,31 @@ def _visible_commands_for_prompt(commands, command_filter):
         return []
 
 
-def _environment() -> str:
+def _where_running() -> str:
+    """The three paths the static prompt's "Where" section talks about.
+
+    Named for the question rather than for a category. The static prompt tells
+    the agent to work out where it is in relation to the kernel, the DATA_DIR
+    and the user's folders; this is the first part of that answer, and the two
+    sections below it finish it.
+    """
     import platform
 
     from paths import DATA_DIR
 
     return "\n".join([
-        "## Environment",
-        f"- Platform: {platform.system()} {platform.release()}",
-        f"- Project root (kernel source, ROOT_DIR): {_PROJECT_ROOT}",
-        f"- Data directory (database, config, plugins, DATA_DIR): {DATA_DIR}",
+        "## Where you are running",
+        f"- Host operating system: {platform.system()} {platform.release()}",
+        f"- Kernel source, the protected half (ROOT_DIR): {_PROJECT_ROOT}",
+        "- Mutable data — database, config, installed plugins, workspace "
+        f"(DATA_DIR): {DATA_DIR}",
     ])
 
 
 def _render_datetime() -> str:
     now = datetime.now().astimezone()
     return (
+        "## Right now\n"
         f"Current date and time: {now.strftime('%A, %B %d, %Y %I:%M %p')} "
         f"(local time, UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
     )
@@ -443,7 +481,7 @@ def _model_status(llm=None) -> str:
     routing worked perfectly.
     """
     if not llm:
-        return "Current model: unavailable."
+        return "## Model\nCurrent model: unavailable."
     model = getattr(llm, "model_name", None)
     caps = getattr(llm, "capabilities", {}) or {}
     native = set(getattr(llm, "native_modalities", set()) or set())
@@ -451,15 +489,171 @@ def _model_status(llm=None) -> str:
     for modality, label in (("image", "images"), ("audio", "audio"), ("video", "video")):
         parts.append(f"{label}: {'yes' if caps.get(modality) and modality in native else 'no'}")
     return (
+        "## Model\n"
         f"Current model: {model or 'unknown'}.\n"
         f"Native attachment processing: {'; '.join(parts)}. "
         "For unsupported modalities, rely only on parsed text or file pointers."
     )
 
 
-def _profile_status(profile_name: str, scope: AgentScope | None) -> str:
-    suffix = " Tool access is profile-limited." if scope and scope.has_tool_filter else ""
-    return f"Active agent profile: {profile_name or 'default'}.{suffix}"
+def _agent_profile(profile_name: str, scope: AgentScope | None) -> str:
+    """The profile, its tool limits and its own instructions, under one heading.
+
+    These were three items scattered across the block: the name near the top,
+    the limits note near the bottom, and the profile's ``prompt_suffix`` last
+    of all as a bare paragraph with nothing above it. The suffix is the part
+    that matters — it is what the static prompt calls the agent's "specific
+    instructions" — and a model reading it unattributed cannot tell whose
+    instructions it has been handed, which is exactly the kind of line nobody
+    can explain the presence of.
+    """
+    lines = ["## Agent profile", f"Active profile: {profile_name or 'default'}."]
+    if scope and scope.has_tool_filter:
+        lines.append(
+            "Tool access is limited to the tools exposed in this prompt. If a "
+            "task needs a tool outside this profile, say so and name the tool "
+            "rather than improvising around the restriction.")
+    suffix = ((getattr(scope, "prompt_suffix", "") or "").strip()
+              if scope else "")
+    if suffix:
+        lines.append(f"Specific instructions from this profile:\n{suffix}")
+    return "\n".join(lines)
+
+
+def _permission_mode(mode: str) -> str:
+    """Name the standing answer this conversation gives to approval dialogs.
+
+    The static prompt names all three modes; a reader told about the mechanism
+    and never told its current state has been given half of something.
+    ``security_modes.prompt_note`` keeps its own contract — it carries only the
+    guidance a *non-default* mode needs — and this names the mode in every
+    case, including ``ask``.
+
+    ``MODE_BLURBS`` is deliberately not reused even though it is the single
+    source for the ``/mode`` table and the ``session.set_mode`` dialog. Those
+    lines are addressed to the **user** ("Ask you about anything that needs
+    your approval"), and in this prompt "you" is the agent, so borrowing them
+    would invert every one of the three.
+    """
+    from runtime.security_modes import ASK, prompt_note
+    from runtime.security_modes import security_mode as _normalize
+
+    mode = _normalize(mode)
+    lines = ["## Permission mode", f"Mode: `{mode}`."]
+    if mode == ASK:
+        lines.append(
+            "The default. Anything the policy classes as consequential is put "
+            "to the user before it runs, so you are interrupted rather than "
+            "refused.")
+    note = prompt_note(mode)
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
+def _session_facts(ctx: PromptContext, frontend=None) -> str:
+    """Which surface the user is on, what it can show, and who they are.
+
+    The static prompt tells the agent that "one of your goals should be to
+    find out where you are in relation to these" — this is that answer for the
+    frontend half of it. The capabilities named are the ones with an agent-side
+    decision behind them: whether a file can be sent in, whether a file it
+    produces can be displayed at all, and whether markdown or buttons render.
+    Streaming and notification support are transport details the agent cannot
+    act on, so they are left out rather than listed for completeness.
+    """
+    lines = ["## This session"]
+    name = (ctx.frontend_name or "").strip()
+    if name:
+        lines.append(f"- Frontend: {name} — the surface the user is talking "
+                     "to you through.")
+    else:
+        lines.append("- Frontend: none — this drive has no surface attached "
+                     "(a background or subagent conversation).")
+    caps = getattr(frontend, "capabilities", None)
+    if caps is not None:
+        def yes_no(*attrs) -> str:
+            return "yes" if any(getattr(caps, a, False) for a in attrs) else "no"
+        lines.append(
+            f"- Can send you files: {yes_no('supports_attachments_in')}. "
+            f"Can display files you produce: {yes_no('supports_attachments_out')}. "
+            f"Renders markdown: {yes_no('supports_rich_text')}. "
+            "Buttons and inline forms: "
+            f"{yes_no('supports_buttons', 'supports_inline_forms')}.")
+    binding = getattr(frontend, "user_binding", "")
+    if binding == "per_user":
+        lines.append("- This frontend gives each identity its own account.")
+    elif binding:
+        lines.append("- This frontend maps every session to one account.")
+    account = _account_name(ctx.db, ctx.user_id)
+    if account:
+        lines.append(f'- You are assisting the user "{account}".')
+    met = _first_met(ctx.db, ctx.user_id)
+    if met:
+        lines.append(f"- First met this user: {met}.")
+    return "\n".join(lines)
+
+
+def _account_name(db, user_id) -> str:
+    """The account's login name, when the session belongs to a real account.
+
+    Anonymous, base and guest sessions carry no username and the line would add
+    nothing, so it never becomes noise on a single-operator frontend. Absorbed
+    from ``runtime_config._account_suffix``, which appended the same fact to
+    the tail of the dynamic block: it belongs beside the frontend that
+    established the identity, and it is stable for the life of a session.
+    """
+    if db is None or not user_id:
+        return ""
+    try:
+        return str((db.get_user(user_id) or {}).get("username") or "")
+    except Exception:
+        return ""
+
+
+#: ``user_id -> rendered date``, and only ever a *non-empty* one. See
+#: :func:`_first_met`.
+_first_met_memo: dict = {}
+
+
+def _first_met(db, user_id) -> str:
+    """When this user's oldest surviving conversation was created.
+
+    Scoped to the user rather than to the installation, because what is worth
+    saying is how long the agent and this person have been talking. A figure
+    read off the disk would be a different fact wearing the same words, and on
+    a ``per_user`` frontend it would frequently be somebody else's.
+
+    Answers "" for a user with no conversations and for a build with no session
+    at all — the bootstrap prompt and ``dev/dump_agent_text.py`` both pass no
+    ``user_id`` — rather than falling back to a global minimum. One meaning per
+    line: a sentence that silently changes what it is measuring is worse than a
+    missing one.
+
+    Only a real answer is memoized. The value moves only when that user's
+    oldest conversation is pruned by ``data_retention_days``, so caching it for
+    the process is free; caching the *empty* answer is not, because a brand new
+    user would then be told nothing for the life of the process even after the
+    conversation they are in is written.
+    """
+    if db is None or not user_id:
+        return ""
+    cached = _first_met_memo.get(user_id)
+    if cached:
+        return cached
+    from datetime import datetime as _datetime
+    try:
+        rows = db.query_rows(
+            "SELECT MIN(created_at) AS first FROM conversations "
+            "WHERE user_id = ?", (user_id,), max_rows=1)
+        stamp = rows[0]["first"] if rows else None
+        text = (_datetime.fromtimestamp(float(stamp)).strftime("%B %d, %Y")
+                if stamp else "")
+    except Exception:
+        return ""
+    if text:
+        _first_met_memo[user_id] = text
+    return text
 
 
 
@@ -504,6 +698,15 @@ def _filesystem_access(config: dict | None) -> str:
     lines.extend(f"- {path}" for path in writable)
     if not writable:
         lines.append("- None configured.")
+    # Name the complement, or the grant reads as a description of the disk. A
+    # model told only where it *may* write has been told nothing about what
+    # happens elsewhere, and the honest answer — it still works, it just costs
+    # the user a dialog — is the difference between an agent that asks and one
+    # that reads the omission as a wall and improvises around it.
+    lines.append(
+        "Folders outside these lists remain protected: work there is "
+        "classified one action at a time, and anything consequential raises "
+        "an approval dialog rather than failing.")
     return "\n".join(lines)
 
 
@@ -551,26 +754,56 @@ def _agent_memory(config: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _conversation_metadata(meta: dict[str, Any] | None) -> str:
+def _conversation_metadata(meta: dict[str, Any] | None, tokens=None,
+                           context_size=0) -> str:
     if not meta:
         return ""
-    lines = "\n".join(["## Current conversation", f"Number: {meta.get('id')}", f"Category: {(meta.get('category') or '').strip() or 'Main'}", f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"])
-    lines += "\nWhen a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."
-    return lines
+    lines = ["## Current conversation",
+             f"Number: {meta.get('id')}",
+             f"Category: {(meta.get('category') or '').strip() or 'Main'}",
+             f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"]
+    # Directly above the compaction sentence, which is what makes the number
+    # actionable: it is the one fact that says how close that sentence is to
+    # describing what is about to happen.
+    usage = _context_usage(tokens, context_size)
+    if usage:
+        lines.append(usage)
+    lines.append(
+        "When a conversation gets too long, it will be compacted to save "
+        "space. History prior to the compaction will still be available in "
+        "the database, but won't be visible in the conversation context for "
+        "new messages.")
+    return "\n".join(lines)
+
+
+def _context_usage(tokens, context_size) -> str:
+    """How full the context window was at the start of this turn.
+
+    Both halves can be unknown and neither may be guessed. ``tokens`` is the
+    provider's own count for the previous model call, and ``None`` there means
+    *the provider did not say*, which is not zero (see
+    ``ConversationLoop._emit_llm_finished``); ``context_size`` is 0 whenever
+    the profile has not declared ``llm_context_size``. Either one missing and
+    the line is omitted rather than rendered around a number nobody measured.
+
+    The figure is frozen for the turn by ``RuntimeSession.turn_prompt_tokens``,
+    for the reason ``_current_datetime`` sets out at length: this block sits
+    ahead of the whole transcript in an agentic run, so a count that climbed
+    with every tool call would re-bill every row behind it on every call. It
+    says "at the start of this turn" because that is exactly what it is — and
+    an agent that reads a stale-looking number without being told its vintage
+    will distrust the whole block.
+    """
+    try:
+        used, window = int(tokens or 0), int(context_size or 0)
+    except (TypeError, ValueError):
+        return ""
+    if used <= 0 or window <= 0:
+        return ""
+    return (f"Context: about {used:,} of {window:,} tokens "
+            f"({round(100 * used / window)}%) at the start of this turn.")
 
 
 def _prompt_extras(extras: dict[str, Any] | None) -> str:
     values = [v for v in (extras or {}).values() if isinstance(v, str) and v]
     return "\n\n".join(values)
-
-
-def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
-    if profile_name == "default" or not scope or not scope.has_tool_filter:
-        return ""
-    return (
-        f"## Agent profile limits\n"
-        f"You are running under the '{profile_name}' agent profile. Tool access "
-        "is limited to the tools exposed in this prompt. If a task needs a tool "
-        "outside this profile, say so and name the tool rather than improvising "
-        "around the restriction."
-    )

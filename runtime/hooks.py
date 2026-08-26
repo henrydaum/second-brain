@@ -453,9 +453,21 @@ class HookRegistry:
         because the turn's first prompt is built downstream of them — a bump
         after would mean the cue arrives one call late. It follows the same
         "restart re-drives are the same logical turn" rule the starters do, and
-        gets it for free: the caller already guards on ``restart_drive``."""
+        gets it for free: the caller already guards on ``restart_drive``.
+
+        The context-window figure the prompt shows is frozen here for the same
+        reason and by the same rule. It is the previous call's billed input,
+        and it climbs with every model call of an agentic turn — but the
+        ``[SYSTEM CONTEXT UPDATE]`` block sits ahead of the whole transcript,
+        so a number that moved mid-turn would re-bill every row behind it.
+        Freezing it beside the cue means the prompt's clock and its context
+        figure move together, on the same definition of a turn: a restart
+        re-drive is the same logical turn and changes neither."""
         import prompt_cues
         prompt_cues.fire(prompt_cues.TURN)
+        if session is not None:
+            session.turn_prompt_tokens = getattr(
+                session, "last_prompt_tokens", None)
         ctx = self._ctx(session, runtime, TURN_START)
         for starter in self._hooks[TURN_START]:
             try:

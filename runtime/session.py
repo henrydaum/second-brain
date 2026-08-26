@@ -277,6 +277,27 @@ class RuntimeSession:
     # without any restart at all — prefer that when a re-drive was only ever
     # a vehicle for swapping the LLM.
     restart_turn: bool = False
+    # How full the model's context window is, in two fields because the answer
+    # a prompt may show is not the answer the last call produced.
+    #
+    # ``last_prompt_tokens`` is the provider's own billed-input count for the
+    # most recent call in this session, written by
+    # ``ConversationLoop._emit_llm_finished``. ``None`` means the provider did
+    # not say, which is not zero.
+    #
+    # ``turn_prompt_tokens`` is that figure copied once per *logical* turn by
+    # ``HookRegistry.start_turn``, and it is the only one the prompt reads. The
+    # split exists because the ``[SYSTEM CONTEXT UPDATE]`` block is merged into
+    # the latest user message — which in an agentic run is the *first* message
+    # — so a count that climbed with every tool call would re-bill the entire
+    # transcript behind it on every call. Same argument, and the same fix, as
+    # the turn-stable clock in ``agent/system_prompt.py``.
+    #
+    # Ephemeral: both are deliberately absent from to_marker(). A restart has
+    # no prior call to describe, and a resurrected count would be a number
+    # about a conversation that is no longer the one being sent.
+    last_prompt_tokens: int | None = None
+    turn_prompt_tokens: int | None = None
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)

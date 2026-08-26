@@ -79,12 +79,20 @@ def notification_mode(value: Any, default: str = DEFAULT_NOTIFICATION_MODE) -> s
 
 
 def notify_block(mode: str) -> str:
-    """System-prompt suffix describing this conversation's notify behavior."""
+    """One section of the dynamic prompt, describing this conversation's
+    notify behavior.
+
+    No leading blank line: this is a section in ``build_prompt_sections``'
+    ``dynamic`` list like any other, and that list is joined on ``"\\n\\n"``.
+    Carrying its own separator dates from when the text was appended to the end
+    of an already-assembled prompt, and left a three-line gap above the heading
+    once it became an ordinary section.
+    """
     mode = notification_mode(mode)
     if mode == "off":
         return ""
     return (
-        "\n\n## Notifications\n"
+        "## Notifications\n"
         "Notifications are on for this background conversation. The final answer you give for this run will be sent "
         "to the user, so make your last message the concise update they should see."
     )

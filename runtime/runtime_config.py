@@ -26,7 +26,7 @@ from runtime.conversation_loop import ConversationLoop, tool_summary
 from runtime.hooks import SHAPE_SCOPE
 from state_machine.conversation_phases import BASE_PHASE
 from state_machine.forms import schema_to_form_steps
-from runtime.security_modes import YOLO, prompt_note
+from runtime.security_modes import YOLO
 from runtime.session import RuntimeSession
 from events.event_bus import bus
 from events.event_channels import (
@@ -325,61 +325,20 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             return ""
         return notify_block(session.notification_mode)
 
-    def _account_suffix() -> str:
-        """Tell the agent which account it is assisting — but only when the
-        session's user is a real account (has a username). Anonymous / base /
-        guest sessions add nothing, so the line never becomes noise on
-        single-operator frontends. Lazy + in the dynamic section so it never
-        touches the cacheable static prefix."""
-        if runtime.db is None:
-            return ""
-        user = runtime.db.get_user(runtime.session_user_id(session.key))
-        username = (user or {}).get("username")
-        return f'You are assisting the user "{username}".' if username else ""
-
-    def _mode_suffix() -> str:
-        """Tell the agent how this conversation answers approval dialogs.
-
-        Empty in ``ask``, which is the default and needs no saying. Lazy and
-        in the dynamic section for the same reason as the two above — but here
-        it is load-bearing rather than merely tidy: the mode changes *within* a
-        conversation, so text baked into the cacheable prefix would go stale the
-        moment somebody typed ``/mode``. A plugin's live ``agent_prompt`` now
-        lands in this same section and refreshes on the same cadence, but the
-        mode still does not belong to one: it is kernel state, and a safety
-        surface that stops working when a package is uninstalled is worse than
-        none.
-
-        Worth telling it at all because a refusal it cannot explain is a
-        refusal it retries. An agent that knows it is in lockdown reports the
-        wall; one that does not looks for a way around it.
-        """
-        return prompt_note(runtime.security_mode(session.key))
+    # ``_account_suffix`` and ``_mode_suffix`` used to live here and append
+    # themselves past the end of the dynamic block. Both are now sections of
+    # the prompt proper — the account beside the frontend that established it
+    # in ``## This session``, the mode at the head of the dynamic block as
+    # ``## Permission mode`` — because appending meant the two facts landed
+    # below every installed plugin's guidance, in the order they were bolted on
+    # rather than the order a reader wants them. ``build_prompt_sections``
+    # already receives ``security_mode`` and ``user_id``, so neither needed
+    # anything the builder could not see; only the position was wrong.
+    # ``_append_dynamic`` went with them, having lost both of its callers.
 
     def _conversation_meta() -> dict[str, Any] | None:
         """Return current conversation metadata for the dynamic prompt."""
         return runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
-
-    def _append_dynamic(prompt, *parts: str):
-        """Append session-only text to the context-update section when present."""
-        from agent.system_prompt import SYSTEM_CONTEXT_MARKER
-
-        extra = "\n\n".join(p for p in parts if p)
-        if not extra:
-            return prompt
-        if isinstance(prompt, list):
-            out = [dict(m) for m in prompt]
-            target = next(
-                (m for m in reversed(out)
-                 if (m.get("content") or "").lstrip().startswith(SYSTEM_CONTEXT_MARKER)),
-                None,
-            )
-            if target is None:
-                target = {"role": "user", "content": SYSTEM_CONTEXT_MARKER}
-                out.append(target)
-            target["content"] = (target.get("content") or "").rstrip() + "\n\n" + extra
-            return out
-        return (prompt or "") + "\n\n" + extra
 
     # A live session always builds a frontend- and profile-aware prompt: the
     # effective profile/scope shape the tool view, and the session's frontend
@@ -415,8 +374,13 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             # Both are session facts the cue ladder keys on.
             conversation_id=session.conversation_id,
             user_id=runtime.session_user_id(session.key),
+            # The previous call's billed input, frozen at the turn's start by
+            # ``HookRegistry.start_turn``. Read here rather than memoized in
+            # the prompt module because the figure is per-session and that
+            # module is shared by all of them.
+            context_tokens=session.turn_prompt_tokens,
         )
-        return _append_dynamic(sections, _account_suffix(), _mode_suffix())
+        return sections
     return _session_prompt
 
 

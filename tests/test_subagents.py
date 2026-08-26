@@ -295,7 +295,14 @@ def test_a_reporting_child_is_told_its_final_message_is_the_deliverable():
 
     registry, _ = registry_for(turn=turn)
     settle(registry, registry.spawn("find the bug", owner="repl"))
-    assert "background agent" in seen["prompt"]
+    # Asserted against what the note *promises*, not against a phrase from the
+    # docstring above it: the note says "background conversation", the sentence
+    # explaining why says "background agent", and matching the explanation
+    # rather than the text is how this came to fail on a note that was working
+    # perfectly. The two halves that matter are that nobody will reply and that
+    # the last message is the whole delivery.
+    assert "nobody will reply" in seen["prompt"]
+    assert "final message" in seen["prompt"]
 
 
 def test_a_child_with_nobody_waiting_is_not_given_the_framing():

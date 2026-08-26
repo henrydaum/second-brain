@@ -115,18 +115,22 @@ def tightens(mode: Any) -> bool:
 
 
 def prompt_note(mode: Any) -> str:
-    """The line the agent is shown about the mode it is working under.
+    """The *extra* guidance a non-default mode needs, with no heading.
 
-    Empty for ``ask``, because that is the default and a prompt that restates
-    the default on every turn is tokens spent saying nothing. Told to the
-    model rather than left implicit so that a refusal is *legible*: an agent
-    that does not know it is in lockdown reads a denial as a transient failure
-    and retries it, which is the worst available reading.
+    Empty for ``ask``, which is what this function is for: the default needs
+    no explaining, only naming. Naming is somebody else's job —
+    ``agent.system_prompt._permission_mode`` writes the ``## Permission mode``
+    heading and states the active mode in every case, including ``ask``, then
+    appends whatever this returns. That split is why there is no heading here
+    any more: a second ``##`` inside the section would read as a new section.
+
+    Told to the model at all so that a refusal is *legible*: an agent that does
+    not know it is in lockdown reads a denial as a transient failure and
+    retries it, which is the worst available reading.
     """
     mode = security_mode(mode)
     if mode == LOCKDOWN:
         return (
-            "## Lockdown\n"
             "This conversation is in lockdown. Anything that would need the "
             "user's approval is refused outright, and asking again will not "
             "change that — do not retry a refused action or look for another "
@@ -137,7 +141,6 @@ def prompt_note(mode: Any) -> str:
         )
     if mode == YOLO:
         return (
-            "## YOLO mode\n"
             "This conversation is in YOLO mode: the user has pre-approved "
             "anything that would normally raise an approval dialog, so you "
             "will not be interrupted. Structural refusals and capability "

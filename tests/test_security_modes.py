@@ -145,11 +145,30 @@ def test_only_lockdown_tightens():
     assert tightens(YOLO) is False
 
 
-def test_the_default_mode_contributes_no_prompt_text():
-    """A prompt that restates the default on every turn is tokens for nothing."""
+def test_only_a_non_default_mode_needs_explaining():
+    """This function carries the *guidance*, never the naming.
+
+    ``agent.system_prompt._permission_mode`` writes the heading and states the
+    active mode in every case, ``ask`` included — an agent told about three
+    modes and never told which one it is in has been given half of something.
+    What is left for this function is the part a default needs none of, which
+    is why the ``ask`` branch is still empty.
+    """
     assert prompt_note(ASK) == ""
     assert "lockdown" in prompt_note(LOCKDOWN).lower()
     assert prompt_note(YOLO)
+
+
+def test_the_notes_carry_no_heading_of_their_own():
+    """The caller owns the section, so a note must not open a second one.
+
+    Both notes used to begin ``## Lockdown`` / ``## YOLO mode``, which was
+    right while they were appended to the prompt as standalone blocks. They are
+    now the body of ``## Permission mode``, and a ``##`` inside a section reads
+    to the model as the section ending and another beginning.
+    """
+    for mode in (LOCKDOWN, YOLO):
+        assert not prompt_note(mode).lstrip().startswith("#")
 
 
 def test_lockdown_prompt_tells_the_agent_not_to_retry():
@@ -543,18 +562,29 @@ def test_the_agent_is_told_the_mode_through_the_dynamic_prompt(tmp_path):
     from runtime.runtime_config import session_system_prompt
     from tests.support import make_runtime
 
+    from agent.system_prompt import SYSTEM_CONTEXT_MARKER
+
     runtime, session, _ = make_runtime(tmp_path)
 
-    def rendered():
+    def dynamic():
+        """The volatile block alone.
+
+        The static prompt describes the security system and names all three
+        modes in doing so, so a substring search over the whole prompt cannot
+        tell *being* in lockdown from being told lockdown exists — which is
+        what this test is about.
+        """
         prompt = session_system_prompt(runtime, session)
         sections = prompt() if callable(prompt) else prompt
-        if isinstance(sections, list):
-            return "\n".join(m.get("content") or "" for m in sections)
-        return sections or ""
+        blocks = ([m.get("content") or "" for m in sections]
+                  if isinstance(sections, list) else [sections or ""])
+        return next(b for b in blocks
+                    if b.lstrip().startswith(SYSTEM_CONTEXT_MARKER))
 
-    assert "lockdown" not in rendered().lower()
+    assert "Mode: `ask`" in dynamic()
+    assert "lockdown" not in dynamic().lower()
     runtime.set_security_mode(session.key, LOCKDOWN)
-    assert "lockdown" in rendered().lower()
+    assert "Mode: `lockdown`" in dynamic()
 
 
 # ──────────────────────────────────────────────────────────────────────
