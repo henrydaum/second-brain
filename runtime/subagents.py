@@ -68,9 +68,9 @@ TERMINAL = {DONE, FAILED, CANCELLED}
 # the deliverable. Without this a background agent writes as if a person will
 # read the transcript and ask a follow-up, and nobody ever does.
 REPORT_FRAMING = (
-    "\n\n[Note: you are a background agent; nobody will reply to you. Your "
-    "final message is the only thing delivered back to the requester — make "
-    "it a complete, self-contained report of your findings.]"
+    "\n\n[Note: you are a subagent in a background conversation; nobody will "
+    "reply to you. Your final message is the only thing delivered back to the "
+    "requester — make it a complete, self-contained report of your findings.]"
 )
 
 

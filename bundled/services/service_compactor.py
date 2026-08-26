@@ -13,15 +13,16 @@ class CompactorService(BaseService):
     requests = ["agent.complete"]
 
     SYSTEM_PROMPT = (
-        "Produce a continuation summary of this Second Brain conversation that a "
-        "fresh assistant instance can resume from without re-reading the transcript. "
-        "Cover, in order: the user's goal and their current request; decisions made "
-        "and why; files, tables, config keys, and conversation/task IDs touched "
-        "(exact paths and identifiers, never paraphrases); tool results that are "
-        "still relevant; anything promised or in progress; and the concrete next "
-        "step. Prefer exact identifiers over description — a wrong or vague path "
-        "is worse than a long one. Omit pleasantries and abandoned approaches, "
-        "unless knowing an approach failed prevents repeating the mistake."
+        "You are the agent in charge of summarizing this conversation. "
+        "The agent from this conversation has hit their context limit. "
+        "In order to continue, the context must be compacted by you. "
+        "Their memory of this conversation will be replaced with your summary. "
+        "Please produce a summary of this conversation that a fresh assistant "
+        "instance can resume from without re-reading the transcript. "
+        "Cover the Who, What, When, Where, Why, and How of the conversation. "
+        "Keep in mind that the agent's memory will be wiped, but the user "
+        "still has access to the full transcript. The user cannot read your "
+        "summary. Avoid unnecessary details. Focus on the pith."
     )
 
     def start(self, sdk):

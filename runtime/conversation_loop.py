@@ -233,7 +233,7 @@ class ConversationLoop:
     directly — it only orchestrates.
     """
 
-    OVER_BUDGET_MESSAGE = "I've made too many tool calls. Could you try a more specific question?"
+    OVER_BUDGET_MESSAGE = "[WARNING: Second Brain has hit the tool-call limit.]"
     OVER_BUDGET_NUDGE = "You've hit the tool-call limit. Summarize what you have and stop calling tools."
     # This is a backstop against a *runaway* tool, not a second opinion on a
     # tool that already bounded its own output — and at 12000 it was the

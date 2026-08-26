@@ -504,8 +504,6 @@ def _filesystem_access(config: dict | None) -> str:
     lines.extend(f"- {path}" for path in writable)
     if not writable:
         lines.append("- None configured.")
-    lines.append(
-        "The Second Brain ROOT_DIR and installed_plugins folder in the DATA_DIR are read-only.")
     return "\n".join(lines)
 
 
