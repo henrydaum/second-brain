@@ -117,8 +117,8 @@ class ReadFile(BaseTool):
     description = (
         "Read any file by path. Use this when you need the exact contents of "
         "source code, templates, docs, or sandbox plugins. Paths may be absolute "
-        "or relative to the project root. Images, audio and video are attached "
-        "to your next message so you can look at them directly; documents such "
+        "or relative to the project root. Allows you to view images, audio and video "
+        "directly, if you have the LLM capabilities to do so; documents such "
         "as PDFs and spreadsheets come back as extracted text. The "
         "offset/limit/line_numbers options apply to text files."
     )

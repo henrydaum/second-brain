@@ -33,14 +33,7 @@ class LexicalSearch(BaseTool):
     """Lexical search."""
     name = "lexical_search"
     description = (
-        "Search for files by keyword using BM25-ranked full-text search. "
-        "Searches across all indexed text content including text chunks, "
-        "OCR results, and any other indexed sources.\n\n"
-        "Supports FTS5 query syntax:\n"
-        '- Phrases: "exact phrase"\n'
-        "- Boolean: term1 AND term2, term1 OR term2, NOT term\n"
-        "- Prefix: term*\n"
-        "- Plain keywords: just type words and they are ANDed together"
+        "Search for synced files by keyword using BM25-ranked full-text search."
     )
     parameters = {
         "type": "object",

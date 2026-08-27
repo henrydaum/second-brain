@@ -9,9 +9,8 @@ from guest.bases import BaseTool
 class SlashCommand(BaseTool):
     name = "slash_command"
     description = (
-        "Invoke a registered slash command in one shot. This uses the user's "
-        "command surface and therefore requires kernel approval. Commands with "
-        "gated actions receive that approval through the same guarded call."
+        "Invoke a registered slash command in one shot. Requires kernel approval. "
+        "Use this to call commands on the user's behalf."
     )
     parameters = {
         "type": "object",

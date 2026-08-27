@@ -45,7 +45,7 @@ class RunScript(BaseTool):
         "SDK code with a main(sdk) function — no base class, no declarations. "
         "Use it for structured or reusable Python whose effects should remain "
         "mediated. Valid contained scripts run directly; foreign imports follow "
-        "the active approval mode. Validate the file first."
+        "the active approval mode."
     )
     parameters = {
         "type": "object",
@@ -123,12 +123,11 @@ A script is a Python file run with run_script. It receives `sdk` as the `main(sd
 {mode_advice}
 
 **Write it to this exact directory, by absolute path:**
-
     {scripts}
 
-So `tidy.py` goes to `{scripts}{sep}tidy.py` — spell the whole path out when you create the file and again when you call run_script. The directory is the entire declaration: a script written anywhere else is *refused* rather than asked about, leaving a stray file behind. A relative filename lands wherever the process happens to be sitting, which is the project root, not here.
+So `tidy.py` goes to `{scripts}{sep}tidy.py` — spell the whole path out when you create the file and again when you call run_script.
 
-Scripts take `sdk` and whatever keyword arguments you pass; whatever `main` returns comes back to you. Call validate(path=...) first and use its findings to plan the script before launch. A script that does not conform returns a preflight failure rather than running. Declare `timeout = 600` at module scope if the work needs longer than the default deadline. They persist, so improve one across conversations rather than rewriting it; pass delete_after=true only for genuinely single-use work.
+Scripts take `sdk` and whatever keyword arguments you pass; whatever `main` returns comes back to you. Before execution, scripts are automatically validated. A script that does not conform returns a preflight failure rather than running. Declare `timeout = 600` at module scope if the work needs longer than the default deadline. They persist, so improve one across conversations rather than rewriting it; pass delete_after=true only for genuinely single-use work.
 
 ## Scripts you have
 These sit in the directory above — join it to the name to get the path run_script wants. Most recently changed first.

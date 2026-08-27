@@ -101,9 +101,7 @@ class SemanticSearch(BaseTool):
     description = (
         "Search for files by meaning using vector similarity. Embeds your "
         "query and compares it against stored embeddings (text, image, and "
-        "any future modalities). Returns the most semantically similar results.\n\n"
-        "Each embedding stream (text, image) is searched independently with "
-        "its own model."
+        "any future modalities). Returns the most semantically similar results."
     )
     parameters = {
         "type": "object",

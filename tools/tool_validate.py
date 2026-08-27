@@ -73,12 +73,10 @@ class Validate(BaseTool):
         "the sandbox contract and report every problem with its line number and "
         "how to fix it. Run this after every edit to a plugin: a plugin that will "
         "not load fails silently — the kernel logs it and tells the user, and you "
-        "are never told at all — so this is the only way to find out, and a "
-        "conforming plugin loads as soon as it is saved. A script needs it less: "
+        "are never told at all — so this is the only way to find out. A script needs it less: "
         "run_script runs this same check in its own preflight and hands you the "
-        "same errors, so write the script and run it. It "
-        "reads the file only — nothing is imported, executed, registered or "
-        "unregistered — so it is safe to run on code that would fail on import."
+        "same errors, so write the script and run it, rather than use this tool. "
+        "This tool is safe to call and never requires user permission."
     )
     parameters = {
         "type": "object",

@@ -19,8 +19,8 @@ class ManagePackages(BaseTool):
 
     name = "manage_packages"
     description = (
-        "Browse and manage the Second Brain package store. Search/info/list are "
-        "read-only. Install, uninstall, and update require kernel approval."
+        "Browse, update, install, and uninstall packages from the Second Brain store. "
+        "Use this when the user wants you to install/uninstall plugins on their behalf."
     )
     parameters = {
         "type": "object",

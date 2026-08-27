@@ -224,16 +224,7 @@ class Memory(BaseTool):
     ]
     description = (
         "Read, list and write your memory — notes (one situation and what to "
-        "do about it) and skills (repeatable procedures). Names come from the "
-        "memory block in your prompt, which gives descriptions only; read an "
-        "entry before acting on it, and 'list' when something feels familiar "
-        "and was not named there. Write when you learn something that changes "
-        "what you would do next time — a trap, a correction, the words this "
-        "user uses for things. If you cannot name what it would change, "
-        # Kept on one line: tests/test_store_memory_bundle.py matches this
-        # fragment, and wrapping it mid-phrase hides it from the check that
-        # the agent and the curator are told the same rule.
-        "there is nothing to write. "
+        "do about it) and skills (repeatable procedures). "
         "Update an entry that already covers the situation rather than adding "
         "a second. Entries outlive the conversation and are searched at the "
         "start of every future turn."

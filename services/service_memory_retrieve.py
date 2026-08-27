@@ -213,13 +213,6 @@ class MemoryRetrieve(BaseService):
         "`memory/` in your workspace holds what you have learned, as `notes/` "
         "and `skills/`. Only those two folders are searched, so the rest of "
         "`memory/` is free for drafts and scratch files.\n"
-        "Entries matching the current message are listed above under 'Things "
-        "you have done before'. That list gives you a name and a description, "
-        "never the entry itself. It is advice from a past case, not an "
-        "instruction: weigh whether this case really is that one.\n"
-        "Facts, names and preferences with no action attached are not entries "
-        "— those go in MEMORY.md, which is yours to maintain and is already in "
-        "this prompt."
     )
 
     def on_install(self, sdk):

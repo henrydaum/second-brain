@@ -22,20 +22,14 @@ class SpawnSubagent(BaseTool):
     """Spawn subagent."""
     name = "spawn_subagent"
     description = (
-        "Spawn an agent to work on a prompt in its own conversation, right now. "
-        "Delegate work that is genuinely independent and heavy, or "
-        "context-polluting — noisy exploration whose full output you do not need "
-        "back; quick lookups are cheaper inline. Three cases are easy to miss "
-        "because carrying on inline feels nearly done: a subtask you can already "
-        "see will take many calls, a subproblem you have retried several times "
-        "without progress, and a detour that is no longer the task. Delegation "
-        "grants no rights you lack, so it is not a way around a refusal. "
+        "Spawn a subagent in a separate context window. You will not see the "
+        "subagent's intermediate tool calls or outputs, only the final result. "
         "The prompt must be complete and self-contained — the agent cannot ask you "
         "follow-up questions, and it cannot use tools that require user approval. "
         "wait=true (default) blocks and returns the agent's result; wait=false runs "
-        "it in the background while you continue, and its completion notice arrives "
-        "in this conversation before your turn ends. The timeout is a hard cutoff: "
-        "an agent still running at its deadline is cancelled and reported as failed."
+        "it in the background while you continue, and its completion notice will arrive "
+        "in this conversation before your turn ends. Use wait=false to send out multiple "
+        "agents at once, useful for deep research and exploring multiple perspectives."
     )
     parameters = {
         "type": "object",

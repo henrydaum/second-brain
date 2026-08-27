@@ -236,8 +236,7 @@ class MemoryCurate(BaseTask):
 
     agent_prompt = (
         "When a conversation goes quiet, a background agent reviews it and "
-        "writes anything durable into your memory folder. You do not need to "
-        "record things as you go for that reason alone."
+        "writes anything durable into your memory folder."
     )
 
     def run_event(self, sdk, payload):

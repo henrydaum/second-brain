@@ -27,7 +27,8 @@ class WebSearch(BaseTool):
         "Search the public web for information that is not already available in the "
         "local file system, especially current facts, external references, or verification. "
         "Uses Brave search by default and can use Brave Answers when mode='answers' or mode='auto'. "
-        "If 'query' is a URL (http://, https://, or www.), the page is fetched and its cleaned text is returned."
+        "DuckDuckGo is used as a fallback. If 'query' is a URL (http://, https://, or www.), "
+        "the page is fetched and its cleaned text is returned."
     )
     parameters = {
         "type": "object",

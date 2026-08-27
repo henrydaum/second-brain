@@ -38,8 +38,7 @@ class Grep(BaseTool):
         "not PCRE — escape literal braces etc.). Searches the project root by default; "
         "paths may be absolute or relative to it. Filter files with 'glob' "
         "('*.py' = top level only, '**/*.py' = any depth). Skips binary and very large "
-        "files and well-known junk directories (.git, node_modules, __pycache__, ...). "
-        "Use lexical_search instead when you want ranked search over indexed content."
+        "files and well-known junk directories (.git, node_modules, __pycache__, ...)."
     )
     parameters = {
         "type": "object",

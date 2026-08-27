@@ -342,8 +342,8 @@ class RunCommand(BaseTool):
         "retrieval tools for ordinary file work — reach for this when you need a real "
         "shell: builds, tests, git, package installs, servers. Recognized read-only "
         "commands run directly; other commands follow the active security mode. "
-        "Long-running things (servers, watchers) must use "
-        "run_in_background=true; poll them with operation='check' and always "
+        "For long-running commands and servers, use "
+        "run_in_background=true; poll them with operation='check' and call "
         "operation='stop' when done."
     )
     parameters = {
@@ -419,14 +419,8 @@ class RunCommand(BaseTool):
                 "(`&&`, `||`, `;`, `|`) is refused whatever its parts do, "
                 "because the line as a whole cannot be recognized, so "
                 "`cd somewhere && ls` fails where a plain `ls` succeeds. Globs, "
-                "redirection, writes and `python -c` are refused too. Nobody is "
-                "being asked here: the refusal is a standing policy, so a "
-                "reworded shell command fails identically and costs a turn. "
-                "Reach for the mediated capability instead — pass `cwd` rather "
-                "than navigating with `cd`, let writing a file create the "
-                "folders above it rather than making them, use the scripting "
-                "tool for anything computational, and read and list through the "
-                "file and search tools, which are always available to you here."
+                "redirection, writes and `python -c` are refused too. In lockdown, "
+                "avoid commands where possible by using other tools and SDK scripts."
             )
         elif mode == "yolo":
             strategy = (
@@ -434,19 +428,17 @@ class RunCommand(BaseTool):
                 "preapproved. For ad hoc or foreign-library Python, you may "
                 "write a raw `.py` file in a writable workspace and execute it "
                 "here. That code is the unrestricted counterpart to a contained "
-                "SDK script: its effects are not individually mediated."
+                "SDK script."
             )
         else:
             strategy = (
                 "In ask mode, recognized read-only commands run directly and "
-                "other commands may pause for approval. A denial is an answer: "
-                "ask what the user prefers rather than retrying a variation."
+                "other commands may pause for approval."
             )
         return (
             "## Running shell commands\n"
-            "run_command runs a real shell, scoped to the project root and the "
-            "Second Brain data directory. Prefer file and search tools for ordinary "
-            "file work, and batch related shell work when that keeps the command "
+            "run_command runs scoped to the project root and the "
+            "Second Brain DATA_DIR. Batch related shell work when that keeps the command "
             "clear. " + strategy + "\n"
             "`python` and `pip` are rewritten to the interpreter running Second "
             "Brain, so `pip install x` always lands in the right environment. The "
@@ -454,12 +446,8 @@ class RunCommand(BaseTool):
             "<dir>` moves it for every later call and needs no approval, and bare "
             "`cd` resets to the project root. Large output is trimmed inline and "
             "written in full to a temp file whose path is returned.\n"
-            "For servers, watchers and anything that does not end on its own, pass "
-            "run_in_background=true and you get a process id back immediately. Poll "
-            "with operation='check', survey with operation='list', and ALWAYS "
-            "operation='stop' when the task is finished — stopping needs no "
-            "approval, and the registry is in memory, so anything still running "
-            "when Second Brain restarts is orphaned rather than killed."
+            "Any servers and commands still running "
+            "when Second Brain restarts are orphaned rather than killed. Use operation='list' to see them."
         )
 
     def run(self, sdk, **kwargs):

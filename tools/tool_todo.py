@@ -21,9 +21,7 @@ class Todo(BaseTool):
     description = (
         "Manage this conversation's todo checklist. Use it as your working plan "
         "on any task with three or more distinct steps: add the steps up front "
-        "and complete each item as soon as it is done. 'clear' drops the whole "
-        "checklist when the plan is finished or abandoned. Every call returns "
-        "the full current checklist."
+        "and complete each item as soon as it is done."
     )
     parameters = {
         "type": "object",
