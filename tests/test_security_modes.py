@@ -581,10 +581,10 @@ def test_the_agent_is_told_the_mode_through_the_dynamic_prompt(tmp_path):
         return next(b for b in blocks
                     if b.lstrip().startswith(SYSTEM_CONTEXT_MARKER))
 
-    assert "Mode: `ask`" in dynamic()
+    assert "Mode for this conversation: `ask`" in dynamic()
     assert "lockdown" not in dynamic().lower()
     runtime.set_security_mode(session.key, LOCKDOWN)
-    assert "Mode: `lockdown`" in dynamic()
+    assert "Mode for this conversation: `lockdown`" in dynamic()
 
 
 # ──────────────────────────────────────────────────────────────────────

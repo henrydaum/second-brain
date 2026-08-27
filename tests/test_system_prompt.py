@@ -17,7 +17,7 @@ def data_dir(tmp_path, monkeypatch):
 
 def test_empty_install_shows_empty_index(data_dir):
     text = _agent_memory()
-    assert "## Memory" in text
+    assert "## Your memory" in text
     assert "(empty)" in text
 
 
@@ -103,7 +103,13 @@ from types import SimpleNamespace
 from agent.system_prompt import _model_status
 
 
-def test_filesystem_access_distinguishes_agent_and_user_owned_paths(monkeypatch, tmp_path):
+def test_filesystem_access_distinguishes_the_two_write_grants(monkeypatch, tmp_path):
+    """Both are grants, and neither is stated as a restriction.
+
+    The workspace is the agent's own and the configured folders are shared —
+    the user opened them, which *is* the permission. Only what is outside both
+    is described as costing anything.
+    """
     from agent.system_prompt import _filesystem_access
     import paths
 
@@ -111,8 +117,9 @@ def test_filesystem_access_distinguishes_agent_and_user_owned_paths(monkeypatch,
     user_project = tmp_path / "user-project"
     text = _filesystem_access({"fs_writable_dirs": [str(user_project)]})
 
-    assert f"Agent-owned workspace (free write): {tmp_path / 'data' / 'workspace'}" in text
-    assert "User-owned writable folders" in text
+    assert f"Your workspace, written freely and without asking: {tmp_path / 'data' / 'workspace'}" in text
+    assert "Shared folders the user has opened to you" in text
+    assert "You may write in these too" in text
     assert str(user_project) in text
     assert "remain protected" in text
 
@@ -142,9 +149,11 @@ def test_every_mode_is_named_including_the_default(data_dir):
     """
     from agent.system_prompt import _permission_mode
 
-    assert "Mode: `ask`." in _permission_mode("ask")
-    assert "Mode: `lockdown`." in _permission_mode("lockdown")
-    assert "Mode: `yolo`." in _permission_mode("yolo")
+    # Neutral wording on purpose — the mode belongs to the conversation, not
+    # to the agent, so this is the one readout that is not "Your ...".
+    assert "Mode for this conversation: `ask`." in _permission_mode("ask")
+    assert "Mode for this conversation: `lockdown`." in _permission_mode("lockdown")
+    assert "Mode for this conversation: `yolo`." in _permission_mode("yolo")
     # The extra guidance rides inside the section, not as a heading of its own.
     assert _permission_mode("lockdown").count("## ") == 1
 
@@ -166,7 +175,7 @@ def test_the_profile_speaks_under_one_heading(data_dir):
     text = _agent_profile("research", scope)
 
     assert text.count("## ") == 1
-    assert "Active profile: research." in text
+    assert "Profile name: research." in text
     assert "Specific instructions from this profile:" in text
     assert "Cite every claim." in text
     assert "limited to the tools exposed in this prompt" in text
@@ -176,23 +185,42 @@ def test_an_unscoped_profile_says_only_its_name(data_dir):
     from agent.system_prompt import _agent_profile
 
     text = _agent_profile("default", None)
-    assert text == "## Agent profile\nActive profile: default."
+    assert text == "## Your agent profile\nProfile name: default."
 
 
-def test_the_context_line_needs_both_halves_measured(data_dir):
-    """Neither number may be guessed.
+def test_no_count_means_no_line(data_dir):
+    """``None`` means *the provider did not say*, which is not zero.
 
-    ``None`` tokens means *the provider did not say*, and a ``context_size`` of
-    0 means the profile never declared one. Rendering either as zero would put
-    a figure in front of the model that nobody measured, and a wrong context
-    reading is worse than none: it is the number an agent would decide to
-    compact on.
+    With no count there is nothing measured, so there is nothing to report —
+    and a fabricated zero is worse than silence, because it is the number an
+    agent would decide it had room on.
     """
     from agent.system_prompt import _context_usage
 
     assert _context_usage(None, 200000) == ""
-    assert _context_usage(71204, 0) == ""
     assert _context_usage(0, 200000) == ""
+
+
+def test_an_unknown_window_drops_the_comparison_not_the_count(data_dir):
+    """A missing denominator is not a missing measurement.
+
+    ``llm_context_size`` is 0 on any profile nobody set it on, which is the
+    common case — ``/setup`` defaults it to 0. The count is still true, so the
+    line renders without the fraction rather than being thrown away for the
+    sake of the half that is absent. "of 0 tokens" would be a window nobody
+    has.
+    """
+    from agent.system_prompt import _context_usage
+
+    text = _context_usage(312, 0)
+
+    assert text == "Context: about 312 tokens at the start of this turn."
+    assert "0" not in text.replace("312", "")
+
+
+def test_a_known_window_is_reported_as_a_fraction(data_dir):
+    from agent.system_prompt import _context_usage
+
     assert "71,204 of 200,000 tokens (36%)" in _context_usage(71204, 200000)
 
 
@@ -331,13 +359,14 @@ def test_the_kernel_readouts_land_in_the_block_that_matches_them(data_dir):
     system, dynamic = _sections_with([])
     prefix, volatile = system["content"], dynamic["content"]
 
-    for heading in ("## Where you are running", "## Filesystem access",
-                    "## Sync directories", "## This session"):
+    for heading in ("## This computer", "## Where you can write",
+                    "## The user's sync directories", "## This session"):
         assert heading in prefix, heading
         assert heading not in volatile, heading
 
-    for heading in ("## Permission mode", "## Model", "## Agent profile",
-                    "## Memory", "## Right now"):
+    for heading in ("## Permission mode", "## Your LLM model",
+                    "## Your agent profile", "## Your memory",
+                    "## Right now"):
         assert heading in volatile, heading
         assert heading not in prefix, heading
 
@@ -398,14 +427,14 @@ def test_model_status_reports_effective_native_attachment_capabilities():
 
     status = _model_status(brain)
 
-    assert "Current model: MiniMax-M3." in status
+    assert "Model name: MiniMax-M3." in status
     assert "images: yes" in status
     assert "audio: no" in status      # model reads it, backend cannot send it
     assert "video: no" in status      # backend sends it, model cannot read it
 
 
 def test_model_status_reports_unavailable_without_llm():
-    assert _model_status(None) == "## Model\nCurrent model: unavailable."
+    assert _model_status(None) == "## Your LLM model\nModel name: unavailable."
 
 
 def test_model_status_reads_the_attributes_brain_actually_publishes():
@@ -447,7 +476,7 @@ def test_session_prompt_names_the_profile_pinned_llm(tmp_path):
     session.profile_override = "research"
     prompt = session_system_prompt(rt, session)()
     dynamic = prompt[1]["content"]
-    assert "minimax/MiniMax-M3" in dynamic.split("Current model:")[1].splitlines()[0]
+    assert "minimax/MiniMax-M3" in dynamic.split("Model name:")[1].splitlines()[0]
 
 
 # ────────────────────────────────────────────────────────────────────

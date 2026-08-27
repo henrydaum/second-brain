@@ -211,9 +211,10 @@ def build_prompt_sections(
     # "Where" section promises, and splitting the folder lists away from the
     # paths they describe — to save one cache break on a config edit somebody
     # made by hand — is the wrong side of that bargain.
+    # No preamble of its own: the static prompt's own closing section hands off
+    # to these, so a sentence here would introduce a document that has already
+    # been introduced.
     semi = [
-        "Facts about this installation and this session, settled before the "
-        "conversation began. They do not change while it runs.",
         _where_running(),
         _filesystem_access(config),
         _sync_dirs(config),
@@ -234,11 +235,7 @@ def build_prompt_sections(
     # do not care, and both ``schedule_subagent`` and ``/schedule`` answer on
     # demand — the "could the agent ask?" test, which a per-call listing fails.
     dynamic = [
-        "Runtime-generated context (see 'Runtime context' in the static "
-        "prompt): live system state, rebuilt each turn and delivered inside "
-        "the user message for provider compatibility. Not authored by the "
-        "user; contains no user instructions. The user's actual message, if "
-        "any, follows this block.",
+        "The user's actual message, if any, follows this message.",
         _permission_mode(pctx.security_mode),
         _model_status(active_llm),
         _agent_profile(profile_name, scope),
@@ -256,19 +253,22 @@ def build_prompt_sections(
         sections_out += [("SEMI-STABLE CONTEXT", s) for s in semi if s]
         sections_out += [(SYSTEM_CONTEXT_MARKER.strip("[]"), s)
                          for s in dynamic if s]
-    static_block = _section("STATIC SYSTEM PROMPT", _static_prompt())
-    # No header of its own. These sections continue the static prompt inside
-    # the same ``system`` message, and the static prompt's own closing section
-    # already says that what follows is generated rather than written — so a
-    # bracketed label between them only interrupts one document with the name
-    # of an implementation detail. "Semi-stable" is a word for the *tier*
-    # (``prompt_cues``, and the docstrings either side of it) and it stays in
-    # ``sections_out`` above, where a reader of ``dev/dump_agent_text.py`` is
-    # asking exactly that question. The model is not.
-    semi_block = "\n\n".join(s for s in semi if s)
+    # Neither half of the system message carries a bracketed label. The static
+    # prompt introduces itself and hands off to the readouts in its own words,
+    # so a label between them — or above them — only interrupts one document
+    # with the name of an implementation detail. "Static" and "semi-stable" are
+    # words for the *tiers*, and they survive in ``sections_out`` above, where a
+    # reader of ``dev/dump_agent_text.py`` is asking exactly which tier a line
+    # belongs to. The model is not.
+    #
+    # The dynamic block keeps its marker, and that is not an inconsistency: it
+    # is load-bearing. ``_prompt_sections`` and ``ConversationLoop._messages``
+    # locate the block by that string, and the static prompt names it so the
+    # agent can tell a generated message from one the user sent.
+    system_block = "\n\n".join([_static_prompt(), *(s for s in semi if s)])
     dynamic_block = _section(SYSTEM_CONTEXT_MARKER.strip("[]"), "\n\n".join(s for s in dynamic if s))
     return [
-        {"role": "system", "content": f"{static_block}\n\n{semi_block}"},
+        {"role": "system", "content": system_block},
         {"role": "user", "content": dynamic_block},
     ]
 
@@ -399,10 +399,10 @@ def _where_running() -> str:
     from paths import DATA_DIR
 
     return "\n".join([
-        "## Where you are running",
-        f"- Host operating system: {platform.system()} {platform.release()}",
+        "## This computer",
+        f"- Operating system: {platform.system()} {platform.release()}",
         f"- Kernel source, the protected half (ROOT_DIR): {_PROJECT_ROOT}",
-        "- Mutable data — database, config, installed plugins, workspace "
+        "- Data directory — database, config, installed plugins, workspace "
         f"(DATA_DIR): {DATA_DIR}",
     ])
 
@@ -481,7 +481,7 @@ def _model_status(llm=None) -> str:
     routing worked perfectly.
     """
     if not llm:
-        return "## Model\nCurrent model: unavailable."
+        return "## Your LLM model\nModel name: unavailable."
     model = getattr(llm, "model_name", None)
     caps = getattr(llm, "capabilities", {}) or {}
     native = set(getattr(llm, "native_modalities", set()) or set())
@@ -489,10 +489,10 @@ def _model_status(llm=None) -> str:
     for modality, label in (("image", "images"), ("audio", "audio"), ("video", "video")):
         parts.append(f"{label}: {'yes' if caps.get(modality) and modality in native else 'no'}")
     return (
-        "## Model\n"
-        f"Current model: {model or 'unknown'}.\n"
-        f"Native attachment processing: {'; '.join(parts)}. "
-        "For unsupported modalities, rely only on parsed text or file pointers."
+        "## Your LLM model\n"
+        f"Model name: {model or 'unknown'}.\n"
+        f"Attachments you can read natively: {'; '.join(parts)}. "
+        "For anything else you get parsed text or a file pointer, nothing more."
     )
 
 
@@ -507,7 +507,8 @@ def _agent_profile(profile_name: str, scope: AgentScope | None) -> str:
     instructions it has been handed, which is exactly the kind of line nobody
     can explain the presence of.
     """
-    lines = ["## Agent profile", f"Active profile: {profile_name or 'default'}."]
+    lines = ["## Your agent profile",
+             f"Profile name: {profile_name or 'default'}."]
     if scope and scope.has_tool_filter:
         lines.append(
             "Tool access is limited to the tools exposed in this prompt. If a "
@@ -539,7 +540,14 @@ def _permission_mode(mode: str) -> str:
     from runtime.security_modes import security_mode as _normalize
 
     mode = _normalize(mode)
-    lines = ["## Permission mode", f"Mode: `{mode}`."]
+    # Neutral, unlike its neighbours, because the mode belongs to neither
+    # party: it is the *conversation's*. The user sets it, the agent lives
+    # under it, and ``RuntimeSession`` scopes it to the conversation it was set
+    # against — ``security_modes`` answers ``ask`` again the moment the two
+    # disagree. "Your permission mode" would tell the agent it owns a setting
+    # it cannot widen and does not outlive.
+    lines = ["## Permission mode",
+             f"Mode for this conversation: `{mode}`."]
     if mode == ASK:
         lines.append(
             "The default. Anything the policy classes as consequential is put "
@@ -562,6 +570,9 @@ def _session_facts(ctx: PromptContext, frontend=None) -> str:
     Streaming and notification support are transport details the agent cannot
     act on, so they are left out rather than listed for completeness.
     """
+    # "This", not "Your". A frontend is the surface the two of them meet on and
+    # the computer belongs to the user — the possessive is reserved for what is
+    # the agent's alone: its workspace, its memory, its model, its profile.
     lines = ["## This session"]
     name = (ctx.frontend_name or "").strip()
     if name:
@@ -590,7 +601,7 @@ def _session_facts(ctx: PromptContext, frontend=None) -> str:
         lines.append(f'- You are assisting the user "{account}".')
     met = _first_met(ctx.db, ctx.user_id)
     if met:
-        lines.append(f"- First met this user: {met}.")
+        lines.append(f"- You first met this user: {met}.")
     return "\n".join(lines)
 
 
@@ -663,7 +674,7 @@ def _first_met(db, user_id) -> str:
 
 def _sync_dirs(config: dict | None) -> str:
     dirs = (config or {}).get("sync_directories") or []
-    return "## Sync directories\n" + ("\n".join(f"- {d}" for d in dirs) if dirs else "None configured.")
+    return "## The user's sync directories\n" + ("\n".join(f"- {d}" for d in dirs) if dirs else "None configured.")
 
 
 def _filesystem_access(config: dict | None) -> str:
@@ -688,12 +699,18 @@ def _filesystem_access(config: dict | None) -> str:
     writable = [str(item).strip() for item in raw if str(item).strip()]
 
     lines = [
-        "## Filesystem access",
-        f"Agent-owned workspace (free write): {DATA_DIR / 'workspace'}",
-        f"Incoming attachments land in {trees.attachment_cache()} — inside "
-        f"the workspace, so they carry the same free-write grant.",
-        "User-owned writable folders (free write only when the user's task "
-        "calls for it):",
+        "## Where you can write",
+        f"Your workspace, written freely and without asking: "
+        f"{DATA_DIR / 'workspace'}",
+        f"Attachments the user sends you land in {trees.attachment_cache()} — "
+        "inside your workspace, so the same grant covers them.",
+        # Shared, not lent. The user configured these deliberately, which *is*
+        # the permission — so the line must not read as a warning. An agent
+        # that treats a granted folder as off limits asks for something it was
+        # already given, or works around it, and the user's own act of opening
+        # the folder is what gets ignored.
+        "Shared folders the user has opened to you. You may write in these "
+        "too:",
     ]
     lines.extend(f"- {path}" for path in writable)
     if not writable:
@@ -744,11 +761,9 @@ def _agent_memory(config: dict | None = None) -> str:
                  + f"\n... (index truncated at {cap} characters "
                    "— prune MEMORY.md)")
     lines = [
-        "## Memory",
-        f"Index path: {index_path}",
-        "Durable notes that persist across sessions.",
-        "",
-        "Index (MEMORY.md):",
+        "## Your memory",
+        f"Source: {index_path}",
+        "Your MEMORY.md file says:",
         index or "(empty)",
     ]
     return "\n".join(lines)
@@ -758,8 +773,8 @@ def _conversation_metadata(meta: dict[str, Any] | None, tokens=None,
                            context_size=0) -> str:
     if not meta:
         return ""
-    lines = ["## Current conversation",
-             f"Number: {meta.get('id')}",
+    lines = ["## This conversation",
+             f"ID: {meta.get('id')}",
              f"Category: {(meta.get('category') or '').strip() or 'Main'}",
              f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"]
     # Directly above the compaction sentence, which is what makes the number
@@ -779,12 +794,25 @@ def _conversation_metadata(meta: dict[str, Any] | None, tokens=None,
 def _context_usage(tokens, context_size) -> str:
     """How full the context window was at the start of this turn.
 
-    Both halves can be unknown and neither may be guessed. ``tokens`` is the
-    provider's own count for the previous model call, and ``None`` there means
-    *the provider did not say*, which is not zero (see
-    ``ConversationLoop._emit_llm_finished``); ``context_size`` is 0 whenever
-    the profile has not declared ``llm_context_size``. Either one missing and
-    the line is omitted rather than rendered around a number nobody measured.
+    Both halves can be unknown, neither may be guessed, and they fail
+    *differently* — which is the whole of this function.
+
+    ``tokens`` is the provider's own count for the previous model call, and
+    ``None`` there means *the provider did not say*, which is not zero (see
+    ``ConversationLoop._emit_llm_finished``). With no count there is no
+    measurement, so there is no line.
+
+    ``context_size`` is 0 whenever the profile has not declared
+    ``llm_context_size``, which is the common case — ``/setup`` defaults it to
+    0 and ``/llm`` says "use 0 if unknown". That is a missing *denominator*,
+    not a missing measurement: the count is still true and still worth having,
+    so the line renders without the comparison. Rendering "of 0 tokens" would
+    have been a window nobody has, and dropping the line entirely would have
+    thrown away the half that was measured because the half that was not is
+    absent. Note the same 0 also disables proactive compaction
+    (``ConversationLoop._compact_if_needed``), so an agent on such a profile
+    only ever meets the reactive path — one more reason for it to be able to
+    see the number climbing.
 
     The figure is frozen for the turn by ``RuntimeSession.turn_prompt_tokens``,
     for the reason ``_current_datetime`` sets out at length: this block sits
@@ -798,8 +826,10 @@ def _context_usage(tokens, context_size) -> str:
         used, window = int(tokens or 0), int(context_size or 0)
     except (TypeError, ValueError):
         return ""
-    if used <= 0 or window <= 0:
+    if used <= 0:
         return ""
+    if window <= 0:
+        return f"Context: about {used:,} tokens at the start of this turn."
     return (f"Context: about {used:,} of {window:,} tokens "
             f"({round(100 * used / window)}%) at the start of this turn.")
 
