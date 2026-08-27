@@ -10,6 +10,149 @@ What changed, beyond the imports: everything about *which* model is on the
 request rather than on the instance, so the kernel can run a pool of these
 boxes and serve concurrent calls in parallel. The instance holds only what is
 genuinely per-process: the imported library.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT ``llm_extra_params`` ACCEPTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+An LLM profile may carry an ``llm_extra_params`` object. The kernel resolves
+it into ``LLMRequest.params`` and ``_provider_kwargs`` hands it to
+``litellm.completion`` as keyword arguments. **So the vocabulary is LiteLLM's,
+not Second Brain's** — which is the point. Conforming to one normalized
+spelling is what lets a profile move between providers without the kernel
+learning any of them, and it makes "which providers support this" LiteLLM's
+problem to track rather than ours.
+
+Written in ``plugin_config.json`` like this::
+
+    "llm_profiles": {
+        "gpt-5.1": {
+            "llm_endpoint": "",
+            "secret_llm_api_key": "OPENAI_API_KEY",
+            "llm_context_size": 400000,
+            "llm_service_class": "LiteLLMService",
+            "llm_extra_params": {
+                "reasoning_effort": "high",
+                "temperature": 0.2
+            }
+        }
+    }
+
+``/llm`` -> Edit -> Extra parameters edits that object; ``/llm`` -> Edit ->
+Reasoning effort edits the one member with a picker.
+
+TWO RULES BEFORE THE LIST
+-------------------------
+
+**A null means "do not send this".** ``{"reasoning_effort": null}`` omits the
+param entirely. This is a kernel convention rather than a LiteLLM one, and it
+exists because the kernel supplies ``reasoning_effort`` for a profile that
+says nothing (``llm.DEFAULT_REASONING_EFFORT``) — without a way to decline, it
+would be the one param a profile could not refuse. Note ``null`` and
+``"none"`` are different things: null sends nothing and the model does
+whatever it natively does, ``"none"`` actively asks the provider not to think.
+The literal string ``"off"`` is accepted as an alias for null, because that is
+the word ``/llm``'s picker shows and therefore the word people hand-edit into
+the file; it is safe to alias because ``off`` is a level at no provider.
+
+**Five keys belong to the profile's own fields, not here.** ``api_key`` and
+``api_base`` come from ``secret_llm_api_key`` / ``llm_endpoint``; ``model``,
+``messages`` and ``tools`` are the call itself. ``_provider_kwargs`` merges
+with ``setdefault``, so a value here *wins* over the profile's — silently, and
+in the case of a credential it also lands in plaintext config instead of
+behind the ``secret_`` prefix. ``/llm`` refuses all six and names the field
+that really sets each; hand-editing the config bypasses that check, so do not
+put them here.
+
+WHAT ``drop_params`` COVERS, AND WHAT IT DOES NOT
+-------------------------------------------------
+
+``start`` sets ``litellm.drop_params = True``, which means:
+
+* an **unsupported param** for the resolved model is removed before the call.
+  Sending ``reasoning_effort`` to a model that has no such setting is free.
+* an **unsupported value** for a supported param is *not* touched. It goes to
+  the provider, which decides — usually a 400. ``"reasoning_effort": "off"``
+  is not a level anywhere; the spelling for that is ``null``.
+
+So the safety net catches the wrong *key*, never the wrong *word*.
+
+THE PARAMS WORTH KNOWING
+------------------------
+
+Coverage below is measured with ``get_supported_openai_params`` across six
+representative providers (OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Groq)
+and is a rough guide, not a contract — ask LiteLLM about the model in hand
+rather than trusting this list to stay current.
+
+*Reasoning*
+
+``reasoning_effort``  (4/6 — OpenAI, Anthropic, Gemini, DeepSeek)
+    ``"none" | "minimal" | "low" | "medium" | "high" | "xhigh"``, which is
+    LiteLLM's own literal in ``main.completion``. ``"max"`` appears only on
+    the Responses-API path for Claude 4.6+, so do not rely on it here.
+    The cross-provider standard, and the one to reach for first.
+
+``thinking``  (4/6 — Anthropic, Gemini, DeepSeek, MiniMax)
+    Provider-shaped: ``{"type": "enabled", "budget_tokens": 2048}`` for
+    Anthropic and Bedrock. Reach for it only when a model takes no
+    ``reasoning_effort`` — MiniMax is the example, it accepts ``thinking``
+    and ``reasoning_split`` and no effort level at all.
+
+On Anthropic the two are the same dial: LiteLLM turns an effort into a
+token budget — minimal 128, low 1024, medium 2048, high 4096, xhigh 8192,
+max 16384 — each overridable through a matching
+``DEFAULT_REASONING_EFFORT_*_THINKING_BUDGET`` environment variable.
+
+    **The Anthropic caveat, which is this backend's one real gap.** A Claude
+    turn with thinking enabled must hand its cryptographically signed
+    ``thinking_blocks`` back on the next tool-result turn, or the API refuses
+    the call with *"Expected `thinking` or `redacted_thinking`, but found
+    `tool_use`"*. LiteLLM does its half in both directions — it puts the
+    blocks on the response and reads them straight back off the assistant
+    message it is given — but ``LLMResponse`` has no field to carry one and
+    the kernel rebuilds assistant messages from ``{role, content,
+    tool_calls}``, so they are discarded and cannot be returned. Until that
+    round trip exists, a Claude profile that uses tools wants
+    ``"reasoning_effort": "none"`` or ``null``.
+
+*Sampling* — all 6/6, the safest things to set
+
+``temperature``   float, usually 0.0-2.0. Lower is more deterministic.
+``top_p``         float 0.0-1.0. Nucleus sampling; prefer one or the other.
+
+*Output shape* — all 6/6
+
+``max_tokens`` / ``max_completion_tokens``
+    int. Caps the reply, not the context. Note the kernel does its own
+    context accounting from ``llm_context_size`` and knows nothing about
+    this, so a cap low enough to truncate answers looks like a bad model.
+``response_format``   e.g. ``{"type": "json_object"}``. Second Brain drives
+    tool calls, so this is rarely what you want.
+``parallel_tool_calls``  bool. Whether the model may request several tools in
+    one turn.
+
+*Widely but not universally supported*
+
+``seed``               4/6 (not Anthropic, not Gemini). Reproducibility.
+``stop``               5/6 (not OpenAI here). Array of stop sequences.
+``n``                  5/6. Leave at 1; the loop reads one choice.
+``frequency_penalty`` / ``presence_penalty``   4/6.
+``logit_bias``         3/6.
+``verbosity``          1/6, OpenAI only.
+
+CHECKING A MODEL RATHER THAN GUESSING
+--------------------------------------
+
+::
+
+    import litellm
+    litellm.get_supported_openai_params(model="gpt-5.1",
+                                        custom_llm_provider="openai")
+    litellm.supports_reasoning(model="gpt-5.1")
+
+Both are cheap, offline lookups against LiteLLM's model map. When this file's
+list and that answer disagree, that answer is right.
 """
 
 dependencies_pip = ["litellm", "Pillow"]
@@ -256,7 +399,16 @@ class LiteLLMBackend(BaseLLMBackend):
     # ── shaping the request ───────────────────────────────────────────
 
     def _provider_kwargs(self, request):
-        """Connection settings plus whatever the caller forwarded."""
+        """Connection settings plus whatever the caller forwarded.
+
+        ``request.params`` is where an LLM profile's reasoning effort and its
+        extra provider parameters arrive — the kernel merges them in as the
+        call is placed, in the OpenAI-compatible spelling, and knows nothing
+        about which of them this provider takes. It does not have to:
+        ``drop_params`` is set in ``start``, so a model with no
+        ``reasoning_effort`` sees the param removed rather than the call
+        refused. Nothing here needs to grow a table of what supports what.
+        """
         kwargs = dict(request.params or {})
         if request.api_key:
             kwargs.setdefault("api_key", request.api_key)
