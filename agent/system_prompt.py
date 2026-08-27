@@ -492,7 +492,7 @@ def _model_status(llm=None) -> str:
         "## Your LLM model\n"
         f"Model name: {model or 'unknown'}.\n"
         f"Attachments you can read natively: {'; '.join(parts)}. "
-        "For anything else you get parsed text or a file pointer, nothing more."
+        "For anything else you get parsed text or a file pointer, nothing more. If the user sends you a file you cannot read, say so and do not hallucinate its contents."
     )
 
 
