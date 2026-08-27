@@ -816,3 +816,62 @@ def test_turn_completed_carries_user_id(tmp_path):
     assert len(seen) == 1
     assert seen[0]["user_id"] == rt.session_user_id("s")
     assert seen[0]["ok"] is True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A profile's own params, and who outranks them.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_profiles_params_ride_along_without_an_escort():
+    """Reasoning effort is configured per profile, so the common case has no
+    hook in it at all: nothing registered, and the dial still reaches the
+    backend."""
+    llm = _FakeLLM([_response(content="thought about it.")])
+    llm.params = {"reasoning_effort": "high"}
+    loop, cs, session, hooks, _, _ = _rig(llm=llm)
+
+    loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert llm.records[0]["kwargs"] == {"reasoning_effort": "high"}
+
+
+def test_an_escort_outranks_the_profile():
+    """The profile is the standing answer; an escort is a decision about this
+    one call, so it goes on top."""
+    llm = _FakeLLM([_response(content="quick.")])
+    llm.params = {"reasoning_effort": "high", "temperature": 0.2}
+    loop, cs, session, hooks, _, _ = _rig(llm=llm)
+
+    def escort(ctx, request, proceed):
+        request.params["reasoning_effort"] = "none"
+        return proceed(request)
+
+    hooks.add(LLM_CALL, escort)
+    loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    # Only the key it named: an escort tuning one thing must not silently
+    # drop the rest of the profile's configuration.
+    assert llm.records[0]["kwargs"] == {"reasoning_effort": "none",
+                                        "temperature": 0.2}
+
+
+def test_swapping_the_brain_swaps_the_params_with_it():
+    """Why the merge happens at the call and not where ``ModelRequest`` is
+    built. Params belong to the profile that ends up taking the call — an
+    escort promoting a turn to a stronger model must not carry the cheap
+    model's ``reasoning_effort: none`` along with it."""
+    weak = _FakeLLM()
+    weak.params = {"reasoning_effort": "none"}
+    strong = _FakeLLM([_response(content="from the strong brain")])
+    strong.params = {"reasoning_effort": "high"}
+    loop, cs, session, hooks, _, _ = _rig(llm=weak)
+
+    def escort(ctx, request, proceed):
+        request.llm = strong
+        return proceed(request)
+
+    hooks.add(LLM_CALL, escort)
+    loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert weak.records == []
+    assert strong.records[0]["kwargs"] == {"reasoning_effort": "high"}

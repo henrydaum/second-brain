@@ -361,6 +361,83 @@ brains by naming one; the kernel resolves it when the call is placed. Same
 handle-not-the-thing move as `<secret:…>`, and it makes native and sandboxed
 hooks identical — a sandboxed one could never hold a live model anyway.
 
+**How hard the model thinks is a profile setting, and the kernel names
+exactly one param.** `Brain.params` builds the extra provider kwargs a profile
+sends on every call. They live in one optional key inside the free-form
+`llm_profiles` dict — `llm_extra_params`, forwarded verbatim — with reasoning
+effort as an ordinary member under its OpenAI-compatible wire name
+`reasoning_effort`, not a field of its own. `/llm` offers it a picker the way
+it offers a capability a checkbox: the same relationship
+`llm_capability_image` has with `llm_capabilities`, because the value belongs
+in the dict beside its neighbours and a picker beats remembering a vocabulary
+and JSON syntax to set one member of it. No schema change and no migration —
+an old profile simply has no such key.
+
+That is the whole of what keeps it **backend-agnostic**: one standard name, an
+opaque dict, and no declaration for a backend to get wrong. A backend that
+cannot carry a param degrades it (LiteLLM sets `drop_params`) or reports the
+provider's own refusal, which is a sentence the person who typed the value can
+act on — and the alternative, a `supported_params` declaration the kernel
+filtered against, would make a backend written before this existed silently
+drop a setting the user could see in `/llm`. Nothing in `llm/`, `runtime/` or
+`/llm` learns a provider's name.
+
+**A profile that says nothing gets `DEFAULT_REASONING_EFFORT`, and a `null`
+means send nothing.** Absent is not a decision, so the kernel makes one:
+"whatever the provider felt like" differs per model, which left one profile
+silently thinking hard and its neighbour not at all — the comparison `/llm`
+exists to make readable. That default is what forces the second half: without
+a way to decline, `reasoning_effort` would be the one param a profile could
+not refuse. It is written as JSON `null` rather than a magic word so it cannot
+be confused with `none`, a real level several providers accept meaning "think
+as little as possible", and the rule is stated generally — *any* null-valued
+extra is dropped — so the next param the kernel defaults needs no second
+mechanism. Note the order inside `params`: the default is applied *before* the
+nulls are dropped, or clearing the effort would hand it straight back.
+
+Two concessions to the fact that config gets hand-edited. `"off"` is accepted
+as an alias for that null, because it is the word `/llm`'s picker *shows* and
+therefore the word people type into the file — free to alias, since `off` is a
+level at no provider. And an `llm_extra_params` that is not an object is
+ignored with a **logged warning**, once per profile version rather than per
+call: staying reachable is right, staying silent about it is how somebody
+spends an afternoon on a setting they can see in a file and that does nothing.
+`/llm` also refuses `api_key`, `api_base`, `model`, `messages`, `tools` and
+`stream` as extras and names the field that really sets each — the backend
+merges with `setdefault`, so one of those would win over the profile silently,
+and a credential there sits in plaintext instead of behind the `secret_`
+prefix that declares it one.
+
+**There is one provider this default can break, and it is a known cost.**
+LiteLLM translates effort into thinking *token budgets* for Anthropic, and a
+Claude turn with thinking on must hand its cryptographically signed
+`thinking_blocks` back on the next tool-result turn or the API refuses the
+call — *"Expected `thinking` or `redacted_thinking`, but found `tool_use`"*.
+LiteLLM does its half in both directions (`anthropic_messages_pt` reads
+`thinking_blocks` straight off the assistant message it is given); what breaks
+the chain is us. `LLMResponse` has no field for one and `_for_provider`
+rebuilds assistant messages from `{role, content, tool_calls}`, so the blocks
+are discarded and cannot be handed back. A translation layer can normalize a
+*shape*; it cannot normalize *statefulness*. Carrying them would mean the same
+five threading points `attachments` and `author` already have — response
+field, wire `to_dict`/`from_dict`, history row, `conversation_messages`
+column, `_for_provider`. Until then, a Claude profile needs an explicit
+`none` or a `null`. The failure is loud, which is what makes the default worth
+taking now.
+
+**The merge happens where the brain is resolved, not where `ModelRequest` is
+built** (`_invoke_inner`): the profile's params go *underneath* the request's,
+so an escort that set one overrides the profile and one that set none inherits
+it. Ordering it this way is what makes the paragraph above true — an escort
+promoting a turn to a stronger model by naming it must pick up *that* profile's
+effort, not carry the cheap model's along.
+
+**It is per LLM profile rather than per agent profile**, which is the same
+handle-not-the-thing argument one paragraph up read from the other end: an
+agent profile *names* an LLM, so a subagent scoped to a cheap model inherits
+that model's dial with nothing to wire, while putting the dial on the agent
+profile would mean two places to look for one answer.
+
 **Streaming inverted, and lost a feature on purpose.** `on_delta` was a live
 callback whose *return value* aborted the stream; neither half crosses a
 boundary. Text now goes out through `sdk.llm.delta` — token-scoped like

@@ -1126,11 +1126,19 @@ class ConversationLoop:
         cancel path learns which box is serving this call, and a brain that
         does not offer one simply cannot be interrupted mid-call.
         Failures — including error-shaped responses — are raised; the
-        compaction layer above catches context-limit ones and retries."""
+        compaction layer above catches context-limit ones and retries.
+
+        The resolved profile's own params (reasoning effort and anything it
+        declares as extras) go *underneath* the request's, so an escort that
+        set one overrides the profile and one that set none inherits it. This
+        happens here rather than where ``ModelRequest`` is built because an
+        escort may swap ``request.llm``: params belong to the profile that
+        ends up taking the call, not to the one the turn started with."""
         from llm import LLMRequest
 
         llm = self._brain(request.llm)
-        kwargs = dict(request.params or {})
+        kwargs = dict(getattr(llm, "params", None) or {})
+        kwargs.update(request.params or {})
         if request.tool_choice is not None and getattr(llm, "supports_tool_choice", False):
             kwargs["tool_choice"] = request.tool_choice
         # Attachment routing is the kernel's, not the backend's: split against

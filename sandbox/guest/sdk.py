@@ -975,8 +975,13 @@ class _LLM(_Namespace):
 
         Answers ``{"profiles": [...], "backends": [...], "aliases": {...},
         "default": str}``. A profile row carries ``model_name``, ``class``,
-        ``endpoint``, ``context_size``, ``loaded`` and ``sandboxed``; a backend
-        row carries ``name`` and ``display_name``. ``aliases`` maps a retired
+        ``endpoint``, ``context_size``, ``params``, ``loaded`` and
+        ``sandboxed``; a backend row carries ``name`` and ``display_name``.
+        ``params`` is the extra provider kwargs that profile sends on every
+        call — reasoning effort and whatever else it configures — already
+        resolved: the kernel's default effort is filled in, declined params
+        (a ``null`` in the profile) are gone, and the names are the ones that
+        go on the wire. ``aliases`` maps a retired
         backend name to the one that replaced it, which is what a stored
         ``llm_service_class`` may still be.
         """

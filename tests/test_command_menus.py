@@ -367,3 +367,212 @@ def test_a_bulk_retry_with_nothing_failed_does_nothing():
 
     assert "Nothing has failed" in module._run_bulk(
         sdk, [_task("extract", counts={"DONE": 3})], "retry_all")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /llm's tuning fields: editable, never asked for, and unset by absence.
+# ──────────────────────────────────────────────────────────────────────
+
+class _LlmSdk:
+    """Enough of an SDK for ``/llm`` to read and write config."""
+
+    class Failed(Exception):
+        """The base the command catches."""
+
+    def __init__(self, profiles, default=""):
+        self._config = {"llm_profiles": profiles, "default_llm_profile": default}
+        self.md = type("Md", (), {
+            "card": staticmethod(lambda title, pairs: pairs),
+            "table": staticmethod(lambda *a, **k: ""),
+        })()
+        self.llm = type("Llm", (), {
+            "list": staticmethod(lambda: {"profiles": [], "backends": []}),
+            "load": staticmethod(lambda name: True),
+        })()
+
+    @property
+    def config(self):
+        """``read``/``write`` over the dict this fake holds."""
+        outer = self
+
+        class Config:
+            @staticmethod
+            def read(key):
+                return outer._config.get(key)
+
+            @staticmethod
+            def write(key, value, scope=None):
+                outer._config[key] = value
+
+        return Config
+
+
+def test_adding_a_profile_never_writes_the_tuning_keys():
+    """They are edit-only, and that is structural rather than a filter:
+    ``PROFILE_FIELDS`` is what ``_profile`` builds a new profile *from*, so a
+    name in it is a key written to every profile whether asked for or not."""
+    module = _load("command_llm")
+
+    profile = module._profile({"llm_endpoint": "http://x", "llm_context_size": 8})
+
+    assert not set(module.TUNING_FIELDS) & set(profile)
+    assert "llm_extra_params" not in profile
+    assert set(module.TUNING_FIELDS) <= set(module.FIELDS)  # still editable
+
+
+def test_the_edit_menu_labels_line_up_with_its_fields():
+    """Two parallel lists, and a mismatch renames every field after the gap."""
+    module = _load("command_llm")
+
+    assert len(module.FIELDS) == len(module.FIELD_LABELS)
+    assert len(module.REASONING_LEVELS) == len(module.REASONING_LABELS)
+    assert module.REASONING_LEVELS[0] == module.OFF
+
+
+def test_effort_is_a_menu_entry_over_the_extras_dict():
+    """The same relationship ``llm_capability_image`` has with
+    ``llm_capabilities``: a picker beats remembering a vocabulary and JSON
+    syntax to set one member, and the value still belongs with its
+    neighbours rather than in a key of its own."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {}}, default="m")
+
+    module.LlmCommand().run(sdk, {
+        "model_name": "m", "action": "edit",
+        "field": "llm_reasoning_effort", "value": "High"})
+
+    assert sdk._config["llm_profiles"]["m"] == {
+        "llm_extra_params": {"reasoning_effort": "high"}}
+    assert "llm_reasoning_effort" not in sdk._config["llm_profiles"]["m"]
+
+
+def test_off_is_stored_as_a_null_not_as_the_word():
+    """``none`` is a real level several providers accept, meaning "think as
+    little as possible". Storing "off" beside it would be two spellings
+    nobody could tell apart in a config file."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {}}, default="m")
+
+    module.LlmCommand().run(sdk, {
+        "model_name": "m", "action": "edit",
+        "field": "llm_reasoning_effort", "value": module.OFF})
+
+    assert sdk._config["llm_profiles"]["m"] == {
+        "llm_extra_params": {"reasoning_effort": None}}
+
+
+def test_clearing_the_extras_dict_removes_the_key():
+    """An empty dict reads as configured to anything scanning config by hand,
+    and every profile written before this existed carries nothing."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {"llm_extra_params": {"temperature": 0.2}}}, default="m")
+
+    module.LlmCommand().run(sdk, {
+        "model_name": "m", "action": "edit",
+        "field": "llm_extra_params", "value": {}})
+
+    assert sdk._config["llm_profiles"]["m"] == {}
+
+
+def test_extra_params_are_parsed_by_the_form_not_the_handler():
+    """Declaring the step ``object`` is what makes bad JSON re-ask at the
+    step. Returning a sentence from ``run`` would mean re-running the whole
+    command to fix a typo."""
+    module = _load("command_llm")
+
+    assert module._value_type("llm_extra_params") == "object"
+    assert module._coerce("llm_extra_params", {"temperature": 0.2}) == {"temperature": 0.2}
+    assert module._coerce("llm_extra_params", "not a dict") == {}
+
+
+def test_the_card_says_what_the_model_will_actually_do():
+    """Reasoning is always on the card now, because there is always an answer:
+    a profile that says nothing still thinks at whatever the kernel supplies,
+    and a card that stayed silent would be the only place you could not find
+    that out."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({})
+
+    def card(profile):
+        return module._describe(sdk, {}, {"m": {"llm_service_class": "X",
+                                                **profile}}, "m", "m")
+
+    assert ("Reasoning", "default") in card({})
+    assert ("Reasoning", "high") in card(
+        {"llm_extra_params": {"reasoning_effort": "high"}})
+    assert ("Reasoning", "off (nothing sent)") in card(
+        {"llm_extra_params": {"reasoning_effort": None}})
+    # The effort has its own row, so it is not repeated in the raw dump.
+    tuned = card({"llm_extra_params": {"reasoning_effort": "low",
+                                       "temperature": 0.2}})
+    assert ("Extra params", '{"temperature": 0.2}') in tuned
+
+
+def test_the_kernel_coerces_what_the_two_tuning_steps_declare():
+    """The seam between what ``/llm`` declares and what the form does with it.
+
+    Both fields lean on kernel behaviour rather than parsing anything
+    themselves — the enum resolves a label or a differently-cased word, and
+    ``object`` parses the JSON and rejects a typo at the step. Neither is
+    visible from the command's own helpers, and a wrong ``type`` string would
+    fail by quietly storing the raw text.
+    """
+    from state_machine.conversation import FormStep as KernelStep
+
+    from guest.forms import FormStep
+
+    module = _load("command_llm")
+
+    def rebuilt(field):
+        return KernelStep.from_dict(dict(FormStep(
+            "value", "p", True, module._value_type(field),
+            enum=module._value_enum(field),
+            enum_labels=module._value_enum_labels(field))))
+
+    effort = rebuilt("llm_reasoning_effort")
+    assert effort.coerce("High") == "high"
+    assert effort.coerce("Off — send nothing") == module.OFF
+    assert effort.validate("turbo")[0] is False
+
+    extras = rebuilt("llm_extra_params")
+    assert extras.coerce('{"temperature": 0.2}') == {"temperature": 0.2}
+    assert extras.validate('{"temperature":')[0] is False
+
+
+
+
+def test_reserved_params_are_refused_where_somebody_typed_them():
+    """The backend merges extras with ``setdefault``, so one of these wins
+    over the profile *silently* — and an ``api_key`` here also lands in
+    plaintext config instead of behind the ``secret_`` prefix that declares it
+    a credential."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {}}, default="m")
+
+    answer = module.LlmCommand().run(sdk, {
+        "model_name": "m", "action": "edit", "field": "llm_extra_params",
+        "value": {"api_key": "sk-oops", "temperature": 0.2}})
+
+    assert "api_key" in answer and "API key field" in answer
+    assert "temperature" not in answer          # only the offenders are named
+    assert sdk._config["llm_profiles"]["m"] == {}   # nothing was written
+
+
+def test_the_reserved_list_covers_what_the_backend_merges():
+    """Two connection settings and the three parts of the call itself."""
+    module = _load("command_llm")
+
+    assert set(module.RESERVED_PARAMS) == {
+        "api_key", "api_base", "model", "messages", "tools", "stream"}
+
+
+def test_the_command_and_the_kernel_agree_on_the_off_spelling():
+    """A command is guest code and cannot import ``llm``, so the coupling is a
+    literal on each side. A mismatch would store a word the kernel reads as a
+    level and send it to a provider as one."""
+    import llm
+
+    module = _load("command_llm")
+
+    assert module.OFF == llm.OFF_EFFORT
+    assert module._coerce("llm_reasoning_effort", module.OFF) is None

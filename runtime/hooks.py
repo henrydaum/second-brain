@@ -129,6 +129,12 @@ class ModelRequest:
     extra provider kwargs forwarded only when non-empty; ``attachments`` is
     the media bundle riding along, routed against the resolved model's
     capabilities as the call is placed.
+
+    ``params`` starts empty even for a profile that configures some. The
+    resolved profile's own params are merged *underneath* these as the call
+    is placed, so writing one here overrides the profile and writing none
+    inherits it — and swapping ``llm`` picks up the new profile's params
+    rather than carrying the old profile's along.
     """
 
     llm: Any

@@ -536,6 +536,12 @@ class ConversationRuntime:
             # is where the flag gets cleared.
             interrupted = session.cancel_event.is_set()
             if not interrupted:
+                # The only place a failed turn is written down. The error
+                # reaches a *person* on the error channel, and reaches the bus
+                # as ``ok: False``, but neither is a record: a scheduled
+                # subagent's turn dies with nobody watching either one, and
+                # the traceback is the half that says which line did it.
+                logger.exception("agent turn for %s failed", session.key)
                 err = ActionError("agent_failed", str(e))
                 session.cs.last_error = err
                 out.ok = False

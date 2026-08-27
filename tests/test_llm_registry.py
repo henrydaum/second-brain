@@ -489,3 +489,134 @@ def test_loading_an_uninstallable_profile_names_the_missing_backend(tree):
 
     assert not result.ok
     assert "NoSuchBackend" in result.error
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Per-profile provider params.
+#
+# One key holds them (``llm_extra_params``) and the kernel supplies a
+# reasoning effort for a profile that says nothing. What is worth pinning is
+# therefore not "reasoning works" — the provider decides that — but the four
+# states a profile can be in, and that a malformed blob cannot take a model
+# off the air.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_profile_that_says_nothing_gets_the_kernels_effort():
+    """Absent is not a decision, so the kernel makes one. The alternative was
+    "whatever the provider felt like", which differs per model and left one
+    profile silently thinking hard and its neighbour not at all."""
+    assert Brain("gpt-test", {}).params == {
+        "reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+
+
+def test_a_declared_effort_wins_over_the_kernels():
+    """It lives in the extras dict like any other provider param — ``/llm``
+    gives it a picker, not a key of its own."""
+    target = Brain("gpt-test", {"llm_extra_params": {"reasoning_effort": "high"}})
+
+    assert target.params == {"reasoning_effort": "high"}
+
+
+def test_a_null_means_send_nothing():
+    """The one convention this adds, and the reason it is needed: without it
+    ``reasoning_effort`` would be the single param a profile could not decline,
+    since the kernel now supplies one for anybody who stays quiet."""
+    target = Brain("gpt-test", {"llm_extra_params": {"reasoning_effort": None}})
+
+    assert target.params == {}
+
+
+def test_a_null_declines_any_param_not_just_reasoning():
+    """Stated as a general rule rather than a special case, so the next param
+    the kernel decides to default needs no second mechanism."""
+    target = Brain("gpt-test", {"llm_extra_params": {"temperature": None,
+                                                     "seed": 7}})
+
+    assert target.params == {"seed": 7,
+                             "reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+
+
+def test_extra_params_are_forwarded_verbatim():
+    """The escape hatch: anything a provider takes, without a kernel edit."""
+    target = Brain("gpt-test", {"llm_extra_params": {"temperature": 0.2,
+                                                     "seed": 7}})
+
+    assert target.params == {"temperature": 0.2, "seed": 7,
+                             "reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+
+
+@pytest.mark.parametrize("junk", ["high", ["a"], 3, None])
+def test_malformed_extras_cannot_make_a_model_unreachable(junk):
+    """This is hand-edited config, and talking to a model is the one
+    capability the kernel cannot degrade without. A blob somebody typed
+    wrongly must cost them the params, never the profile."""
+    target = Brain("gpt-test", {"llm_extra_params": junk})
+
+    assert target.params == {"reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+
+
+def test_params_are_detached_so_a_caller_may_mutate_them():
+    """``_invoke_inner`` layers ``tool_choice`` on top of this dict."""
+    profile = {"llm_extra_params": {"temperature": 0.2}}
+    target = Brain("gpt-test", profile)
+
+    target.params["tool_choice"] = "auto"
+
+    assert "tool_choice" not in target.params
+    assert profile["llm_extra_params"] == {"temperature": 0.2}
+
+
+def test_llm_list_carries_what_a_profile_will_send(tree):
+    """``/llm`` renders the resolved dict, so what it shows is what goes on
+    the wire rather than what config happens to spell."""
+    from sandbox.handlers.kernel import _llm_list
+
+    _write(tree, BACKEND)
+    config = _config(tree, llm_extra_params={"reasoning_effort": "high"})
+    llm.refresh(config)
+
+    class Ctx:
+        """Minimal context."""
+        services = {}
+        config = None
+
+    ctx = Ctx()
+    ctx.config = config
+    row = _llm_list(ctx, {}).data["profiles"][0]
+
+    assert row["params"] == {"reasoning_effort": "high"}
+
+
+def test_the_word_off_is_accepted_where_the_picker_writes_a_null():
+    """Config is hand-edited in practice, and the label a person reads in
+    ``/llm`` is the word they type. Aliasing costs nothing because ``off`` is
+    a level at no provider — ``none`` is the real one and keeps its meaning."""
+    assert Brain("gpt-test", {"llm_extra_params": {"reasoning_effort": "off"}}).params == {}
+    assert Brain("gpt-test", {"llm_extra_params": {"reasoning_effort": "OFF "}}).params == {}
+    assert Brain("gpt-test", {"llm_extra_params": {"reasoning_effort": "none"}}).params == {
+        "reasoning_effort": "none"}
+
+
+def test_unusable_extras_say_so_once(caplog):
+    """Ignored in silence is how somebody spends an afternoon wondering why a
+    setting they can see in a file does nothing. Once, because ``params`` is
+    read on every model call and a per-call warning is a log nobody reads."""
+    target = Brain("gpt-test", {"llm_extra_params": "reasoning_effort=high"})
+
+    with caplog.at_level("WARNING", logger="LLMClass"):
+        assert target.params == {"reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+        assert target.params == {"reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+
+    warnings = [r for r in caplog.records if "llm_extra_params" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "gpt-test" in warnings[0].getMessage()
+
+
+def test_a_well_formed_profile_says_nothing(caplog):
+    """The complaint must not fire for the ordinary cases, or it is noise."""
+    with caplog.at_level("WARNING", logger="LLMClass"):
+        Brain("a", {}).params
+        Brain("b", {"llm_extra_params": {}}).params
+        Brain("c", {"llm_extra_params": {"temperature": 0.2}}).params
+
+    assert not [r for r in caplog.records if "llm_extra_params" in r.getMessage()]

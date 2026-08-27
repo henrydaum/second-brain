@@ -208,7 +208,8 @@ SETTINGS_DATA = [
     # user's model configuration silently vanished. See ``_rehome_kernel_keys``.
     ("LLM Profiles", "llm_profiles",
      "Named model profiles. Each carries an endpoint, a secret_llm_api_key, "
-     "a context size and the modalities the model accepts natively. "
+     "a context size, the modalities the model accepts natively, and "
+     "optionally extra provider parameters such as a reasoning effort. "
      "Managed via /llm.",
      {},
      {"type": "json_dict", "hidden": True}),

@@ -54,6 +54,31 @@ BACKEND_BASE = "BaseLLMBackend"
 # shim — a stored value nobody rewrites, and the alias is how it stays valid.
 DEFAULT_BACKEND = "LiteLLMService"
 
+# How hard a model thinks when its profile says nothing. A kernel default
+# rather than an absent param, because "whatever the provider felt like" is
+# not a decision anybody made and it differs per model — one profile silently
+# thinking hard and its neighbour not at all is the comparison ``/llm`` exists
+# to make readable.
+#
+# Note this is a real behaviour change for a profile nobody has touched, and
+# there is one provider it can break: LiteLLM translates effort into thinking
+# *token budgets* for Anthropic, and a Claude turn with thinking on must hand
+# its signed ``thinking_blocks`` back on the next tool-result turn or the API
+# refuses the call. Nothing here carries them (``LLMResponse`` has no field
+# for one), so a Claude profile on any level but ``none`` will fail its second
+# tool call until that round trip exists. The failure is loud — a 400 naming
+# the missing block — which is what makes this default worth taking now and
+# revisiting if a Claude profile ever appears.
+DEFAULT_REASONING_EFFORT = "medium"
+
+# The word ``/llm``'s picker shows for "send nothing", accepted here as an
+# alias for the ``null`` it writes. Config is hand-edited in practice, and the
+# label a person reads is the word they type — so the two spellings existing
+# is a fact about how this gets used rather than a design choice. Aliasing is
+# free precisely because ``off`` is a level at no provider: ``none`` is the
+# real one, and it keeps its own meaning ("think as little as possible").
+OFF_EFFORT = "off"
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Discovery — by declaration, never by import.
@@ -226,6 +251,9 @@ class Brain:
         # block on a subprocess start.
         self._growing = threading.Lock()
         self._sandbox = None
+        # Last malformed ``llm_extra_params`` complained about, so the warning
+        # is one line per profile version rather than one per model call.
+        self._extras_complaint = None
         # The sandbox keys resident boxes by name and hands back an existing
         # one under the same name, so the name has to identify *this* brain,
         # not just its profile. Two brains for one profile exist routinely —
@@ -270,6 +298,70 @@ class Brain:
             return int(self.profile.get("llm_context_size", 0) or 0)
         except (TypeError, ValueError):
             return 0
+
+    @property
+    def params(self) -> dict:
+        """Extra provider kwargs this profile sends on every call.
+
+        The kernel names exactly one of them — ``reasoning_effort``, in the
+        OpenAI-compatible spelling every backend adapter already speaks — and
+        forwards ``llm_extra_params`` verbatim for everything else. That is
+        the whole of what keeps this backend-agnostic: no provider matrix, no
+        declaration for a backend to get wrong, and nothing in ``llm/`` that
+        knows which library is on the other side. A backend that cannot carry
+        a param degrades it (the store's LiteLLM sets ``drop_params``) or
+        reports the provider's own refusal, which is a sentence the person who
+        typed the value can act on.
+
+        One key holds all of them — ``llm_extra_params`` — with reasoning
+        effort as an ordinary member rather than a field of its own. ``/llm``
+        offers it a picker the way it offers a capability a checkbox, and
+        stores it here, the same shape ``llm_capabilities`` already has.
+
+        **A null means omit.** It is the one convention this adds, and it
+        exists because the kernel now supplies a value nobody asked for:
+        without a way to say "send nothing", ``reasoning_effort`` would become
+        the one param a profile could not decline. Writing it as JSON ``null``
+        rather than a magic word keeps "the user cleared this" and "the user
+        picked a level called off" from being the same string, and generalises
+        to any param the kernel defaults later.
+
+        Tolerant like ``context_size``, and for the same reason: this is
+        user-entered config, and a malformed extras blob must not be able to
+        stop the model being reachable. It says so out loud, though — being
+        ignored in silence is how a person spends an afternoon wondering why
+        a setting they can see in a file does nothing.
+        """
+        extra = self.profile.get("llm_extra_params")
+        if extra is not None and not isinstance(extra, dict):
+            self._complain_about_extras(extra)
+        declared = dict(extra) if isinstance(extra, dict) else {}
+        effort = declared.get("reasoning_effort")
+        if isinstance(effort, str) and effort.strip().lower() == OFF_EFFORT:
+            declared["reasoning_effort"] = None
+        # Named-but-null is a decision; absent is not. So the default is
+        # applied before the nulls are dropped, or clearing the effort would
+        # simply hand it straight back.
+        declared.setdefault("reasoning_effort", DEFAULT_REASONING_EFFORT)
+        return {key: value for key, value in declared.items()
+                if value is not None}
+
+    def _complain_about_extras(self, extra) -> None:
+        """Say once that a profile's extra params are unusable.
+
+        Once, because ``params`` is read on every model call and a per-call
+        warning is a log nobody reads. A ``Brain`` is rebuilt whenever its
+        profile changes (``refresh``), so "once per brain" is really "once per
+        version of this profile" — it speaks up again after an edit that
+        failed to fix it, which is exactly when it is wanted.
+        """
+        if getattr(self, "_extras_complaint", None) == repr(extra):
+            return
+        self._extras_complaint = repr(extra)
+        logger.warning(
+            "LLM profile %r: llm_extra_params must be a JSON object like "
+            "{\"temperature\": 0.2}, got %s. Ignoring it and sending only "
+            "the defaults.", self.name, type(extra).__name__)
 
     @property
     def api_key(self) -> str:
@@ -649,12 +741,17 @@ def describe() -> list[dict]:
     such thing now, every backend runs in a box. The key stays because it is
     part of what the ``llm.list`` Request answers with, and a plugin reading a
     field that quietly disappears is worse than one reading a true constant.
+
+    ``params`` is the *resolved* dict rather than either profile key, so a
+    caller showing what a profile will send never has to know that reasoning
+    effort is spelled one way in config and another on the wire.
     """
     return [{
         "model_name": name,
         "class": target.backend_name,
         "endpoint": target.base_url,
         "context_size": target.context_size,
+        "params": target.params,
         "loaded": target.loaded,
         "sandboxed": True,
     } for name, target in sorted(brains().items())]

@@ -9,16 +9,59 @@ PROFILE_FIELDS = [
     "llm_service_class", "llm_capability_image",
     "llm_capability_audio", "llm_capability_video",
 ]
-FIELDS = ["llm_model_name", *PROFILE_FIELDS]
+# What a call carries beyond the connection: how hard the model should think,
+# and anything else the provider takes. Editable but never *asked for* when
+# adding a profile — a wizard that interrogates you about sampling before you
+# have sent one message is worse than a menu entry you find when you want it.
+# Kept out of ``PROFILE_FIELDS`` rather than filtered out of the add flow,
+# because that list is what ``_profile`` builds a new profile from: a name in
+# it is a key written to every profile, empty or not.
+#
+# Only one of the two is a stored key. ``llm_reasoning_effort`` is a *menu
+# entry* over ``llm_extra_params["reasoning_effort"]`` — the same relationship
+# ``llm_capability_image`` has with ``llm_capabilities``, and for the same
+# reason: the value belongs in the dict with its neighbours, and a picker
+# beats remembering a vocabulary and JSON syntax to set one member of it.
+TUNING_FIELDS = ["llm_reasoning_effort", "llm_extra_params"]
+EXTRA_PARAM_FIELDS = {"llm_reasoning_effort": "reasoning_effort"}
+FIELDS = ["llm_model_name", *PROFILE_FIELDS, *TUNING_FIELDS]
 FIELD_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
     "Service class", "Images", "Audio", "Video",
+    "Reasoning effort", "Extra parameters",
 ]
 CAPABILITY_FIELDS = {
     "llm_capability_image": "image",
     "llm_capability_audio": "audio",
     "llm_capability_video": "video",
 }
+# The cross-provider effort ladder, plus this command's spelling of "send
+# nothing" — which is a real choice now that the kernel supplies a level for a
+# profile that says nothing. It is stored as JSON ``null`` rather than the
+# word, so it cannot be confused with ``none``, a level several providers
+# accept meaning "think as little as possible".
+OFF = "off"
+# Keys the profile sets through its own fields, or that are the call itself.
+# The backend merges extras with ``setdefault``, so one of these here *wins*
+# over the profile silently — and an ``api_key`` also lands in plaintext
+# config instead of behind the ``secret_`` prefix that declares it a
+# credential. Refused where somebody typed it, rather than surfacing later as
+# a call going somewhere unexpected.
+RESERVED_PARAMS = {
+    "api_key": "the API key field",
+    "api_base": "the Endpoint field",
+    "model": "the profile's model name",
+    "messages": "the conversation itself",
+    "tools": "the agent's tool catalog",
+    "stream": "the kernel, per call",
+}
+REASONING_LEVELS = [
+    OFF, "none", "minimal", "low", "medium", "high", "xhigh", "max",
+]
+REASONING_LABELS = [
+    "Off — send nothing", "None", "Minimal", "Low", "Medium", "High",
+    "Extra high", "Max",
+]
 
 
 class LlmCommand(BaseCommand):
@@ -97,8 +140,12 @@ class LlmCommand(BaseCommand):
                     "field", "Choose which LLM setting to edit.", True,
                     enum=FIELDS, enum_labels=FIELD_LABELS),
                 FormStep(
-                    "value", _value_prompt(field, _backend_names(registry)),
-                    True, _value_type(field)),
+                    "value",
+                    _value_prompt(field, _backend_names(registry),
+                                  profiles.get(args.get("model_name")) or {}),
+                    True, _value_type(field),
+                    enum=_value_enum(field),
+                    enum_labels=_value_enum_labels(field)),
             ]
         return steps
 
@@ -139,6 +186,26 @@ class LlmCommand(BaseCommand):
                 profiles[name].setdefault("llm_capabilities", {})[
                     CAPABILITY_FIELDS[field]
                 ] = _coerce(field, args.get("value"))
+            elif field in EXTRA_PARAM_FIELDS:
+                # Into the dict, beside whatever else the profile sends. A
+                # ``None`` stays: it is the stored form of "send nothing", and
+                # dropping it would hand back the kernel's default.
+                profiles[name].setdefault("llm_extra_params", {})[
+                    EXTRA_PARAM_FIELDS[field]
+                ] = _coerce(field, args.get("value"))
+            elif field in TUNING_FIELDS:
+                # An empty dict is the absence of the key, never a stored
+                # ``{}``: a profile carrying one reads as configured to
+                # anything scanning config by hand, and every profile written
+                # before this existed carries nothing.
+                value = _coerce(field, args.get("value"))
+                refused = _reserved(value)
+                if refused:
+                    return refused
+                if value:
+                    profiles[name][field] = value
+                else:
+                    profiles[name].pop(field, None)
             else:
                 profiles[name][field] = _coerce(field, args.get("value"))
             sdk.config.write("llm_profiles", profiles, scope="plugin")
@@ -287,6 +354,23 @@ def _profile(args):
     return profile
 
 
+def _reserved(params):
+    """Refuse extras that would override the profile's own settings.
+
+    Returns a sentence naming each offender and where it is really set, or
+    an empty string when there is nothing wrong. A message rather than a
+    silent drop: the person meant something by typing it, and which field
+    they wanted is the part worth telling them.
+    """
+    named = [key for key in RESERVED_PARAMS if key in (params or {})]
+    if not named:
+        return ""
+    lines = "\n".join(
+        f"- `{key}` is set by {RESERVED_PARAMS[key]}" for key in named)
+    return ("These parameters cannot be set here:\n\n" + lines
+            + "\n\nRemove them and try again.")
+
+
 def _coerce(field, value):
     if field == "llm_context_size":
         return int(value or 0)
@@ -295,6 +379,14 @@ def _coerce(field, value):
             value if isinstance(value, bool)
             else str(value).strip().lower() in {"true", "yes", "1", "y"}
         )
+    if field == "llm_reasoning_effort":
+        effort = str(value or "").strip().lower()
+        return None if effort == OFF else effort
+    if field == "llm_extra_params":
+        # The step is declared ``object``, so the kernel has already parsed
+        # the JSON and re-prompted if it would not — this only has to decide
+        # what a non-object means, and it means nothing to send.
+        return dict(value) if isinstance(value, dict) else {}
     return "" if value is None else str(value)
 
 
@@ -311,13 +403,35 @@ def _describe(sdk, registry, profiles, default, name):
         key for key, value in (
             profile.get("llm_capabilities") or {}).items() if value
     ) or "none declared"
-    return sdk.md.card(f"{name}{mark}", [
+    pairs = [
         ("Status", "Loaded" if row.get("loaded") else "Unloaded"),
         ("Backend", _backend_label(
             registry, profile.get("llm_service_class", ""))),
         ("Context", context_text),
         ("Native attachments", capabilities),
-    ])
+    ]
+    # Reasoning is always shown, because there is always an answer now: a
+    # profile that says nothing still thinks at whatever the kernel supplies,
+    # and a card that stayed silent would be the only place you could not
+    # find that out.
+    pairs.append(("Reasoning", _effort_text(profile)))
+    extras = {key: value for key, value in (
+        profile.get("llm_extra_params") or {}).items()
+        if key != "reasoning_effort"}
+    if extras:
+        import json
+
+        pairs.append(("Extra params", json.dumps(extras)))
+    return sdk.md.card(f"{name}{mark}", pairs)
+
+
+def _effort_text(profile):
+    """What this profile's reasoning effort reads as, in all three states."""
+    extras = profile.get("llm_extra_params") or {}
+    if "reasoning_effort" not in extras:
+        return "default"
+    effort = extras["reasoning_effort"]
+    return "off (nothing sent)" if effort is None else str(effort)
 
 
 def _model_label(default, name):
@@ -364,11 +478,40 @@ def _value_type(field):
         return "integer"
     if field in CAPABILITY_FIELDS:
         return "boolean"
+    if field == "llm_extra_params":
+        # Declared rather than parsed in ``run``, so bad JSON is rejected at
+        # the step and asked again. Returning a sentence from the handler
+        # would mean re-running the whole command to fix a typo.
+        return "object"
     return "string"
 
 
-def _value_prompt(field, backends):
-    return {
+def _value_enum(field):
+    """The closed choices for a field, or None for free text.
+
+    Only reasoning effort has any, and deliberately as a *picker*: the levels
+    are a provider vocabulary nobody should have to spell from memory. A level
+    this list has not heard of yet is still reachable — put ``reasoning_effort``
+    in Extra parameters and leave this unset, which is the precedence the
+    kernel's ``Brain.params`` documents.
+    """
+    return REASONING_LEVELS if field == "llm_reasoning_effort" else None
+
+
+def _value_enum_labels(field):
+    """Human labels for whatever ``_value_enum`` offered."""
+    return REASONING_LABELS if field == "llm_reasoning_effort" else None
+
+
+def _value_prompt(field, backends, profile=None):
+    """What to ask for one field, and what it is set to now.
+
+    The current value matters most for the two tuning fields: a dict is
+    tedious to retype from memory, and there is nowhere else in the flow that
+    shows it before you overwrite it.
+    """
+    current = _current_value(field, profile or {})
+    return current + {
         "llm_endpoint": (
             "Enter a provider base URL, or leave it blank for the provider "
             "default."),
@@ -382,4 +525,27 @@ def _value_prompt(field, backends):
         "llm_capability_image": "Can this model read images natively?",
         "llm_capability_audio": "Can this model read audio natively?",
         "llm_capability_video": "Can this model read video natively?",
+        "llm_reasoning_effort": (
+            "How hard should this model think? Stored with this profile's "
+            "other provider parameters and sent as `reasoning_effort`. A "
+            "model that has no such setting either ignores it or refuses "
+            "the call, depending on the backend — choose Off to send "
+            "nothing at all."),
+        "llm_extra_params": (
+            "Enter a JSON object of extra provider parameters, for example "
+            "`{\"temperature\": 0.2}`. These are forwarded verbatim on every "
+            "call this profile makes, and a `null` value means send nothing "
+            "for that parameter. Enter `{}` to clear them."),
     }.get(field, "Enter the new value.")
+
+
+def _current_value(field, profile):
+    """A one-line "currently:" preamble, or nothing when there is nothing."""
+    if field == "llm_reasoning_effort":
+        return f"Currently: {_effort_text(profile)}\n\n"
+    if field == "llm_extra_params":
+        import json
+
+        value = profile.get(field) or {}
+        return f"Currently: {json.dumps(value)}\n\n" if value else ""
+    return ""

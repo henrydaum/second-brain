@@ -2038,6 +2038,11 @@ def _llm_list(ctx, args: dict) -> Result:
     name it was written with, and a migrated backend claims its predecessor's
     name — so a config saying ``LiteLLMService`` has to be resolvable to the
     class that replaced it before it can be displayed.
+
+    A profile row's ``params`` is what that profile adds to every call, fully
+    resolved — the kernel's default reasoning effort filled in and declined
+    params dropped — so a caller rendering it shows what goes on the wire
+    rather than what config happens to spell.
     """
     import llm
 

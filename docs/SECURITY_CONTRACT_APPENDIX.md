@@ -605,9 +605,12 @@ uninstalled and unloaded while conversations resolved those same profiles
 without trouble. `cron.*` fronting the timekeeper is the same shape: a kernel
 subsystem a command needs to reach.
 
-`llm.list` is safe for the reason `service.list` is — names, endpoints and
-context sizes. The API key is a `secret_*` setting and comes back as a handle
-like every other one. `llm.load`/`llm.unload` sit with `service.load`/
+`llm.list` is safe for the reason `service.list` is — names, endpoints,
+context sizes and the extra provider params a profile sends (reasoning effort
+and whatever else it configures). The API key is a `secret_*` setting and
+comes back as a handle like every other one; `llm_extra_params` is not a place
+to hide one, since a credential belongs to the connection rather than to the
+call and nothing in the kernel reads it as one. `llm.load`/`llm.unload` sit with `service.load`/
 `service.unload` and for the same argument: opening a brain starts a pool of
 real processes, each holding a provider SDK and a credential, and closing one
 ends calls that may be in flight.
