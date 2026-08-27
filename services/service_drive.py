@@ -111,8 +111,10 @@ def _stored_credentials(sdk, Credentials, path):
     except (sdk.Failed, TypeError, ValueError, KeyError) as exc:
         # A token written by an older format, or half-written. Not an error
         # worth failing on — the first poll replaces it.
-        sdk.log(f"stored token unusable, signing in on the first poll: {exc}",
-                level="debug")
+        # Not debug. A token file that cannot be read costs a browser window,
+        # and hiding the reason at debug is what made this expensive to chase.
+        sdk.log(f"stored token at {path} could not be read ({exc}); a sign-in "
+                f"will be needed", level="warning")
         return None
 
 
@@ -166,6 +168,44 @@ def _save_token(sdk, path, creds) -> None:
         payload["refresh_token"] = carried
     sdk.fs.write(path, json.dumps(payload))
 
+
+def _recorded_scopes(sdk, path):
+    """Scopes the shared token file already records, or an empty set.
+
+    Never raises: an unreadable or absent file simply records nothing.
+    """
+    try:
+        stored = json.loads(sdk.fs.read(path))
+    except (sdk.Failed, TypeError, ValueError):
+        return set()
+    recorded = stored.get("scopes") or []
+    return set(recorded) if isinstance(recorded, list) else set()
+
+
+def _consent_scopes(sdk, path, own):
+    """What to ask consent for: this service's scopes, plus what is on file.
+
+    ``token.json`` is shared with ``service_gmail``, and a consent mints a credential
+    carrying exactly the scopes it asked for. Asking for only ``own`` therefore
+    produces a *narrower* credential than the file was recording, and every
+    write of it -- including the ordinary hourly refresh -- replaces the shared
+    record with that narrower truth. The other service's ``has_scopes`` gate
+    then fails and it re-consents; and because a narrowing consent replaces the
+    app's grant for the whole account, the broader refresh token dies with it.
+    Two services, one file, each overwriting the other: a browser window every
+    few days, at whatever moment one of them happened to refresh.
+
+    Re-asking for what the file already records breaks that. The credential is
+    a true superset, so nothing it writes can narrow the record, and the loop
+    has nowhere to start.
+
+    Bounded by *our own* file, which is the difference between this and
+    ``include_granted_scopes="true"``: that asked Google for every scope the
+    account had ever granted this client -- calendar, contacts, directory --
+    and oauthlib refused the token for carrying scopes that were never asked
+    for. Here what is requested is exactly what comes back.
+    """
+    return sorted(set(own) | _recorded_scopes(sdk, path))
 
 class GoogleDriveService(BaseService):
     """Authenticated read-only access to Google Drive."""
@@ -259,8 +299,16 @@ class GoogleDriveService(BaseService):
                 # failed the load outright — and a service that will not load
                 # never reaches the poll that could have signed it back in, so
                 # the one recoverable failure was the one that locked the door.
-                sdk.log(f"stored token could not be refreshed, signing in on "
-                        f"the first poll: {exc}", level="warning")
+                # Logged at error with the provider's own words: this is the
+                # single line that says *why* a sign-in is about to be asked
+                # for, and every recurrence of that question has been
+                # diagnosed from it or not at all. "invalid_grant" means the
+                # refresh token is dead -- revoked, superseded by a narrowing
+                # consent, or aged out -- and is a different problem from a
+                # network failure wearing the same symptom.
+                sdk.log(f"stored token could not be refreshed ({exc}); a "
+                        f"sign-in will be needed on the first poll",
+                        level="error")
             else:
                 _save_token(sdk, token_path, creds)
                 self._creds = creds
@@ -335,8 +383,30 @@ class GoogleDriveService(BaseService):
         if not _exists(sdk, token_path):
             return False
         creds = _stored_credentials(sdk, Credentials, token_path)
-        if not creds or not creds.valid or not creds.has_scopes(SCOPES):
+        if not creds or not creds.has_scopes(SCOPES):
             return False
+
+        if not creds.valid:
+            # ``valid`` means the *access* token is unexpired, which is a one
+            # hour window -- so a perfectly good credential written ninety
+            # minutes ago failed this test and fell straight through to a
+            # browser. Refreshing is one HTTPS call against a token already
+            # held, needs nobody present, and is the whole reason a refresh
+            # token exists. Only a credential that cannot be refreshed is
+            # worth waking someone for.
+            from google.auth.exceptions import GoogleAuthError
+            from google.auth.transport.requests import Request
+
+            if not creds.expired or not creds.refresh_token:
+                return False
+            try:
+                creds.refresh(Request())
+            except GoogleAuthError as exc:
+                sdk.log(f"the stored token could not be refreshed, so a "
+                        f"sign-in is needed: {exc}", level="warning")
+                return False
+            _save_token(sdk, token_path, creds)
+
         self._creds = creds
         sdk.log("google drive adopted a token signed in elsewhere")
         return True
@@ -373,8 +443,10 @@ class GoogleDriveService(BaseService):
             level="warning")
 
         sdk.log("opening a browser to authenticate with Google Drive")
+        token_path = self._token_path(sdk)
         flow = InstalledAppFlow.from_client_config(
-            json.loads(sdk.fs.read(secret_path)), SCOPES)
+            json.loads(sdk.fs.read(secret_path)),
+            _consent_scopes(sdk, token_path, SCOPES))
         # prompt="consent" makes Google return a refresh token rather than
         # omitting it because this account has authorized the client before —
         # without it a re-consent writes a file that cannot be read back, and
@@ -400,7 +472,7 @@ class GoogleDriveService(BaseService):
         # consent returns a refresh token.
         creds = flow.run_local_server(port=0, prompt="consent")
 
-        _save_token(sdk, self._token_path(sdk), creds)
+        _save_token(sdk, token_path, creds)
         self._creds = creds
         sdk.log("google drive authenticated")
         self._notify(sdk, "Google Drive is connected",

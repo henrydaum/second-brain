@@ -151,6 +151,44 @@ def _save_token(sdk, path, creds) -> None:
     sdk.fs.write(path, json.dumps(payload))
 
 
+def _recorded_scopes(sdk, path):
+    """Scopes the shared token file already records, or an empty set.
+
+    Never raises: an unreadable or absent file simply records nothing.
+    """
+    try:
+        stored = json.loads(sdk.fs.read(path))
+    except (sdk.Failed, TypeError, ValueError):
+        return set()
+    recorded = stored.get("scopes") or []
+    return set(recorded) if isinstance(recorded, list) else set()
+
+
+def _consent_scopes(sdk, path, own):
+    """What to ask consent for: this service's scopes, plus what is on file.
+
+    ``token.json`` is shared with ``service_drive``, and a consent mints a credential
+    carrying exactly the scopes it asked for. Asking for only ``own`` therefore
+    produces a *narrower* credential than the file was recording, and every
+    write of it -- including the ordinary hourly refresh -- replaces the shared
+    record with that narrower truth. The other service's ``has_scopes`` gate
+    then fails and it re-consents; and because a narrowing consent replaces the
+    app's grant for the whole account, the broader refresh token dies with it.
+    Two services, one file, each overwriting the other: a browser window every
+    few days, at whatever moment one of them happened to refresh.
+
+    Re-asking for what the file already records breaks that. The credential is
+    a true superset, so nothing it writes can narrow the record, and the loop
+    has nowhere to start.
+
+    Bounded by *our own* file, which is the difference between this and
+    ``include_granted_scopes="true"``: that asked Google for every scope the
+    account had ever granted this client -- calendar, contacts, directory --
+    and oauthlib refused the token for carrying scopes that were never asked
+    for. Here what is requested is exactly what comes back.
+    """
+    return sorted(set(own) | _recorded_scopes(sdk, path))
+
 class GmailService(BaseService):
     """Authenticate once and expose bounded Gmail operations."""
 
@@ -330,7 +368,8 @@ class GmailService(BaseService):
 
         sdk.log("opening a browser to authenticate with Gmail")
         flow = InstalledAppFlow.from_client_config(
-            json.loads(sdk.fs.read(self.credentials_path)), SCOPES)
+            json.loads(sdk.fs.read(self.credentials_path)),
+            _consent_scopes(sdk, self.token_path, SCOPES))
         # prompt="consent" makes Google return a refresh token rather than
         # omitting it because this account has authorized the client before;
         # without it a re-consent writes a file that cannot be read back.
@@ -365,8 +404,13 @@ class GmailService(BaseService):
             # outright — and a service that will not load never reaches the
             # poll that could have signed it back in, so the one recoverable
             # failure was the one that locked the door.
-            sdk.log(f"stored token could not be refreshed, signing in on the "
-                    f"first poll: {error}", level="warning")
+            # Logged at error with the provider's own words: this is the one
+            # line that says *why* a sign-in is about to be asked for.
+            # "invalid_grant" means the refresh token is dead -- revoked,
+            # superseded by a narrowing consent, or aged out -- and is a
+            # different problem from a network failure with the same symptom.
+            sdk.log(f"stored token could not be refreshed ({error}); a "
+                    f"sign-in will be needed", level="error")
             return False
         _save_token(sdk, self.token_path, creds)
         sdk.log("gmail token refreshed")
