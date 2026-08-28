@@ -195,6 +195,32 @@ _KNOWN_PROVIDER_PREFIXES = {
     "minimax", "mistral", "ollama", "openai", "openrouter", "vertex_ai", "xai",
 }
 
+#: Parameters worth offering by name, with the label and shape a form needs.
+#: Deliberately short: this is the set somebody would go looking for, not
+#: everything a provider accepts - the rest are offered as plain text below.
+#: ``instead_of`` names the other spellings of the same idea, so a provider
+#: whose table omits one can still be pointed at the one it does take. That is
+#: the MiniMax case: ``reasoning_effort`` is absent, ``thinking`` is not.
+_TUNABLE_PARAMS = [
+    {"name": "reasoning_effort", "label": "Reasoning effort",
+     "kind": "choice", "choices": ["minimal", "low", "medium", "high"],
+     "instead_of": ("thinking", "reasoning", "reasoning_split")},
+    {"name": "temperature", "label": "Temperature",
+     "kind": "number", "choices": [], "instead_of": ()},
+    {"name": "top_p", "label": "Top-p", "kind": "number", "choices": [],
+     "instead_of": ()},
+    {"name": "max_tokens", "label": "Max output tokens", "kind": "number",
+     "choices": [], "instead_of": ()},
+]
+
+#: Supported params that are not *settings* - the kernel fills each of these
+#: from somewhere else, and offering them would invite a profile to fight it.
+_NOT_A_SETTING = {
+    "stream", "stream_options", "tools", "tool_choice", "functions",
+    "function_call", "messages", "model", "api_key", "api_base",
+    "max_retries", "extra_headers", "n",
+}
+
 # Errors that mean "this will fail again the same way" — no retry, no
 # reclassification as a context problem.
 _DETERMINISTIC_ERRORS = {
@@ -410,6 +436,23 @@ class LiteLLMBackend(BaseLLMBackend):
         refused. Nothing here needs to grow a table of what supports what.
         """
         kwargs = dict(request.params or {})
+        # ``getattr`` because the store ships on its own schedule: a kernel
+        # older than this field is a normal state for an installed backend,
+        # and reading it directly would turn every call into an AttributeError
+        # on exactly the deployments that update least often.
+        chosen = getattr(request, "chosen_params", None) or []
+        insist = [name for name in chosen if name in kwargs]
+        if insist:
+            # ``drop_params`` is set in ``start`` and silently discards
+            # anything litellm's table does not list for this provider - which
+            # is right for a value the kernel supplied and wrong for one
+            # somebody picked. That table has gaps: it omits
+            # ``reasoning_effort`` for a provider whose API documents it, so a
+            # profile could show a level it was not sending. Naming a param
+            # here overrides the drop for it alone, and if the endpoint then
+            # objects, the refusal is the answer - a loud no beats a setting
+            # that quietly does nothing.
+            kwargs["allowed_openai_params"] = insist
         if request.api_key:
             kwargs.setdefault("api_key", request.api_key)
         if request.base_url:
@@ -422,13 +465,188 @@ class LiteLLMBackend(BaseLLMBackend):
         A custom endpoint with an unfamiliar prefix is assumed to be
         OpenAI-compatible, which is what almost every self-hosted server is.
         """
-        name = request.model_name
+        return self._litellm_name(request.model_name, request.base_url)
+
+    @staticmethod
+    def _litellm_name(name: str, base_url: str) -> str:
+        """The prefix rule, as a plain function of its two inputs.
+
+        Split out of ``_model_name`` because discovery asks the same question
+        with no request in hand, and the two answers must not drift: what
+        ``models`` offers has to be exactly what ``chat`` will later send.
+        """
         provider = ""
         if "/" in name:
             provider = name.split("/", 1)[0].lower().replace("-", "_")
-        if request.base_url and provider not in _KNOWN_PROVIDER_PREFIXES:
+        if base_url and provider not in _KNOWN_PROVIDER_PREFIXES:
             return f"openai/{name}"
         return name
+
+    # -- describing what can be configured -----------------------------
+
+    def providers(self, sdk):
+        """LiteLLM's provider list. The endpoint is left for the user to give.
+
+        ``endpoint`` is always ``""`` here, and that is a decision rather than
+        a gap. LiteLLM keeps no static table of default base URLs; the only
+        way to get one is ``get_llm_provider``, and despite the name that is
+        not a lookup. For ``github_copilot`` and at least one other it starts
+        an **interactive OAuth device-code login** — printing a sign-in code
+        and blocking through three sixty-second waits for a human to
+        authorize it. Measured, not inferred.
+
+        So this cannot probe, and the reason is not the delay. Somebody
+        configuring a model must never be shown a login code for an unrelated
+        service they did not ask about: it is indistinguishable from a
+        phishing prompt, which the codes themselves warn about.
+
+        Which leaves guessing, and a guessed endpoint is the worse failure:
+        it is wrong silently, fails at the first real call, and the error
+        blames the model. So this offers the *names* — which is the half that
+        stops somebody having to know that MiniMax is spelled ``minimax`` —
+        and the URL stays a question, asked once, where a wrong answer is
+        visible and editable.
+        """
+        litellm = self._litellm
+        return [{"id": str(getattr(name, "value", name)),
+                 "label": str(getattr(name, "value", name))
+                          .replace("_", " ").title(),
+                 "endpoint": ""}
+                for name in sorted(getattr(litellm, "provider_list", []) or [],
+                                   key=lambda n: str(getattr(n, "value", n)))]
+
+    def models(self, sdk, endpoint, api_key, provider=""):
+        """What *endpoint* serves, asked of the endpoint itself where possible.
+
+        The live ``GET /v1/models`` comes first because it is the only
+        authoritative answer: it is current, and it covers the aggregators
+        that appear in no table anywhere - which is most of the endpoints
+        anybody actually types. LiteLLM's own index is the fallback, for a
+        provider named with no endpoint to ask.
+
+        What comes back is the name to *store* - the provider prefix restored
+        (see :meth:`_prefixed`), and nothing else. Notably **not**
+        ``_litellm_name``: the ``openai/`` shim that method adds is a fact
+        about how this backend dials a custom endpoint, not part of the
+        model's identity, and baking it into the stored name would put it in
+        front of the user everywhere the profile is listed. ``chat`` applies
+        it per call already, and applying it twice is harmless but pointless.
+        """
+        rows = self._live_models(sdk, endpoint, api_key)
+        if not rows and provider:
+            index = getattr(self._litellm, "models_by_provider", {}) or {}
+            rows = sorted(str(m) for m in index.get(provider, []) or [])
+        out, seen = [], set()
+        for raw in rows:
+            name = self._prefixed(raw, provider)
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append({"name": name, "label": raw})
+        return out
+
+    @staticmethod
+    def _prefixed(raw: str, provider: str) -> str:
+        """Put the provider back on a bare model id.
+
+        An endpoint's own ``/v1/models`` answers in its local vocabulary, and
+        MiniMax's is ``MiniMax-M3`` with no prefix. Handing that straight to
+        ``_litellm_name`` produces ``openai/MiniMax-M3`` - which routes to the
+        OpenAI config and loses everything litellm knows about MiniMax,
+        reasoning included. The working string is ``minimax/MiniMax-M3``, and
+        the provider is the piece the listing cannot supply because the server
+        has no reason to mention its own name.
+
+        So it is added back here, and only here: a name that already carries a
+        slash is left alone, because an aggregator's ids are prefixed *for
+        their own catalogue* (``deepseek-ai/deepseek-v4-pro``) and that prefix
+        is not litellm's. Getting this right is the whole reason ``models``
+        returns a name rather than a list of strings to type.
+
+        Both sources need it and neither reliably has it - litellm's own index
+        is prefixed for some providers and bare for others.
+        """
+        if not provider or "/" in raw:
+            return raw
+        return f"{provider}/{raw}"
+
+    def _live_models(self, sdk, endpoint, api_key):
+        """``GET {endpoint}/models``, or ``[]`` if it does not answer one.
+
+        Deliberately forgiving. This runs while somebody is filling in a form,
+        so every way it can fail - no endpoint yet, a wrong key, a server that
+        does not implement the route, a body shaped differently - has to come
+        back as "I cannot say" and let them type the name. Failing loudly here
+        would block setup on a listing that was only ever a convenience.
+        """
+        if not endpoint:
+            return []
+        url = endpoint.rstrip("/") + "/models"
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        try:
+            answer = sdk.net.http_json(url, headers=headers)
+        except Exception as exc:            # noqa: BLE001 - see docstring
+            sdk.log(f"no live model list from {url}: {exc}")
+            return []
+        if (answer or {}).get("status", 0) >= 400:
+            return []
+        body = (answer or {}).get("body") or {}
+        listing = body.get("data") if isinstance(body, dict) else body
+        if not isinstance(listing, list):
+            return []
+        names = []
+        for item in listing:
+            name = item.get("id") if isinstance(item, dict) else item
+            if isinstance(name, str) and name:
+                names.append(name)
+        return sorted(names)
+
+    def params(self, sdk, model_name, endpoint):
+        """Which extra params this model takes, reported and never enforced.
+
+        The supported list is litellm's own, and it is the same list
+        ``drop_params`` filters against - so a ``False`` here is an exact
+        prediction that the value will be discarded rather than a guess.
+
+        Exact is not the same as right. That table has gaps: a provider can
+        document a parameter its litellm config does not list, and then this
+        reports unsupported for something that works. So the note says what
+        will *happen to the value*, never what the model can do, and it names
+        the spelling that does get through when there is one. Whoever reads it
+        can then overrule this method, which is the point of it being a
+        report.
+        """
+        litellm = self._litellm
+        model = self._litellm_name(model_name, endpoint)
+        try:
+            resolved, provider, _k, _b = litellm.get_llm_provider(model=model)
+            supported = set(litellm.get_supported_openai_params(
+                model=resolved, custom_llm_provider=provider) or [])
+        except Exception as exc:            # noqa: BLE001 - unknown model
+            sdk.log(f"no parameter list for {model}: {exc}")
+            return []
+
+        out = []
+        for spec in _TUNABLE_PARAMS:
+            name = spec["name"]
+            ok = name in supported
+            note = ""
+            if not ok:
+                swap = [alt for alt in spec.get("instead_of", ())
+                        if alt in supported]
+                note = (f"this backend discards it for {provider}; "
+                        f"try {swap[0]!r} instead" if swap else
+                        f"this backend discards it for {provider}")
+            out.append({**{k: v for k, v in spec.items()
+                           if k != "instead_of"},
+                        "supported": ok, "note": note})
+        # Anything else the provider takes that is worth offering by name.
+        known = {spec["name"] for spec in _TUNABLE_PARAMS}
+        for name in sorted(supported - known - _NOT_A_SETTING):
+            out.append({"name": name, "label": name.replace("_", " "),
+                        "kind": "text", "choices": [],
+                        "supported": True, "note": ""})
+        return out
 
     def _usage(self, usage):
         """``(prompt_tokens, cached_prompt_tokens, completion_tokens)``.
