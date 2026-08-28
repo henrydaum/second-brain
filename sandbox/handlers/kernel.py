@@ -2064,8 +2064,12 @@ def _llm_list(ctx, args: dict) -> Result:
     ask_models = args.get("models")
     ask_params = args.get("params")
     discovered = {}
-    if args.get("providers"):
-        discovered["providers"] = llm.providers()
+    ask_providers = args.get("providers")
+    if ask_providers:
+        # ``True`` is the menu; a string is the one row somebody chose, with
+        # its endpoint resolved.
+        discovered["providers"] = llm.providers(
+            "" if ask_providers is True else str(ask_providers))
     if ask_models is not None:
         discovered["models"] = llm.models_at(
             str(ask_models or ""), str(args.get("key") or ""),

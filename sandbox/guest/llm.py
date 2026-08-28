@@ -346,15 +346,24 @@ class BaseLLMBackend:
     # also the *common* path — model aggregators appear in no provider
     # table — so nothing above these may treat an empty list as an error.
 
-    def providers(self, sdk) -> list:
+    def providers(self, sdk, provider: str = "") -> list:
         """Providers this backend can talk to.
 
-        Each entry is ``{"id": str, "label": str, "endpoint": str}``, where
-        ``endpoint`` is that provider's default URL or ``""`` when there is
-        none to offer. Empty is the honest answer for a provider reached
-        through its own SDK rather than a URL, and the user types one; a
-        guessed endpoint is worse than a blank field, because a wrong URL
-        fails much later and blames the model.
+        Each entry is ``{"id": str, "label": str, "endpoint": str}``.
+
+        Two questions share one method because they are the same question at
+        two widths. Asked bare, it is the *menu* — every provider, and
+        ``endpoint`` may be left ``""`` because filling in a hundred and fifty
+        of them is not worth what it costs. Asked with *provider*, it is the
+        one row somebody actually chose, and the endpoint is the whole reason
+        for asking: resolving it may be slow, may reach the network, and for a
+        provider that authenticates by device code may even start a login —
+        all of which is fine for a provider a person just selected, and none
+        of which is fine a hundred and fifty times over to draw a list.
+
+        ``endpoint`` still comes back ``""`` when there genuinely is none, as
+        for a provider reached through its own SDK. Blank is honest; a guessed
+        URL is not, because it fails much later and blames the model.
         """
         return []
 
@@ -444,7 +453,7 @@ class BaseLLMBackend:
         args = args or {}
         try:
             if question == "providers":
-                answer = self.providers(sdk)
+                answer = self.providers(sdk, args.get("provider") or "")
             elif question == "models":
                 answer = self.models(sdk, args.get("endpoint") or "",
                                      args.get("api_key") or "",

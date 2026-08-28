@@ -272,12 +272,15 @@ def _add_steps(sdk, registry, args):
             "includes every multi-provider gateway.",
             True, enum=ids, enum_labels=labels + ["Something else"]))
 
+    resolved = _endpoint_for(sdk, provider)
     steps.append(FormStep(
         "llm_endpoint",
-        "Enter the provider base URL [optional]. Leave blank for the "
-        "provider default.",
-        False, default=_endpoint_default(providers, provider),
-        prompt_when_missing=True))
+        (f"Base URL for {provider}. This is its default, already filled in "
+         "— change it only if you reach this provider somewhere else."
+         if resolved else
+         "Enter the provider base URL. Leave it blank only if this backend "
+         "already knows where to reach the provider."),
+        False, default=resolved, prompt_when_missing=True))
     steps.append(FormStep(
         "secret_llm_api_key",
         "Enter the API key, or the environment variable name that contains "
@@ -353,16 +356,28 @@ def _models(sdk, endpoint, api_key, provider):
     return answer.get("models") or []
 
 
-def _endpoint_default(providers, chosen):
-    """A provider's own URL when it published one, else blank.
+def _endpoint_for(sdk, provider):
+    """The chosen provider's own base URL, or ``""``.
 
-    Blank is the usual answer and is not a shortcoming: there is no reliable
-    table of provider base URLs, and a guessed one fails at the first real
-    call with an error that blames the model instead of the URL.
+    A second, narrower call rather than a field read off the menu, because the
+    menu deliberately carries no endpoints: resolving one is expensive enough
+    that doing it a hundred and fifty times to draw a list is what made this
+    hang. Asked here, about one provider, it is a single lookup.
+
+    And it is the whole point of the provider step existing. Without it that
+    step collects a name and the next step asks for the URL the name was
+    supposed to supply - two questions, where answering the second already
+    required knowing everything the first was meant to spare you.
     """
-    for row in providers or []:
-        if row.get("id") == chosen:
-            return row.get("endpoint") or ""
+    if not provider or provider == CUSTOM:
+        return ""
+    try:
+        rows = (sdk.llm.list(providers=provider) or {}).get("providers") or []
+    except sdk.Failed:
+        return ""
+    for row in rows:
+        if str(row.get("id") or "").lower() == provider.lower():
+            return str(row.get("endpoint") or "")
     return ""
 
 

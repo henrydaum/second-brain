@@ -780,7 +780,12 @@ class DescribingBackend(BaseLLMBackend):
     def chat(self, sdk, request):
         return LLMResponse(content="ok")
 
-    def providers(self, sdk):
+    def providers(self, sdk, provider=""):
+        # Asked bare it is the menu, with no endpoint; asked about one it is
+        # that provider with its URL resolved.
+        if provider:
+            return [{"id": provider, "label": provider.title(),
+                     "endpoint": f"https://{provider}.test/v1"}]
         return [{"id": "acme", "label": "Acme", "endpoint": ""}]
 
     def models(self, sdk, endpoint, api_key, provider="", live=False):
@@ -829,7 +834,7 @@ class BrokenBackend(BaseLLMBackend):
     def chat(self, sdk, request):
         return LLMResponse(content="ok")
 
-    def providers(self, sdk):
+    def providers(self, sdk, provider=""):
         raise RuntimeError("provider table unavailable")
 
     def params(self, sdk, model_name, endpoint):
@@ -845,6 +850,9 @@ def test_a_backend_answers_the_three_setup_questions(tree):
     try:
         assert target.providers() == [
             {"id": "acme", "label": "Acme", "endpoint": ""}]
+        # Naming one is what resolves its endpoint — the whole reason the
+        # provider step earns its place ahead of the endpoint step.
+        assert llm.registry.endpoint_for("acme") == "https://acme.test/v1"
         assert target.models("https://acme.test/v1", "k") == [
             {"name": "acme/big", "label": "big"}]
         names = [row["name"] for row in target.param_options("acme/big")]
@@ -1074,3 +1082,34 @@ def test_a_backend_rescan_is_what_drops_the_answers(tree):
     assert target.models("https://acme.test/v1", "k")
     assert target.loaded
     target.unload()
+
+
+def test_naming_a_provider_is_what_fills_in_its_endpoint(tree):
+    """The provider step has to answer the endpoint step, or it is a wasted question.
+
+    Asked bare, ``providers`` is a menu and carries no URLs — resolving one is
+    expensive enough that doing it across the whole list is what made the
+    command hang. Asked about one, it resolves. Both halves matter: without
+    the first the menu is unusable, and without the second the user is asked
+    for a URL immediately after telling us which provider they wanted.
+    """
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        menu = target.providers()
+        assert menu and all(not row["endpoint"] for row in menu)
+        assert llm.registry.endpoint_for("acme") == "https://acme.test/v1"
+    finally:
+        target.unload()
+
+
+def test_a_provider_with_no_endpoint_to_offer_says_so(tree):
+    """Blank is honest. A guessed URL fails later and blames the model."""
+    _write(tree, SILENT_BACKEND, stem="llm_silent")
+    llm.refresh(_config(tree, backend="SilentBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert llm.registry.endpoint_for("whoever") == ""
+    finally:
+        target.unload()

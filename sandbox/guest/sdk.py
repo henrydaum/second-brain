@@ -970,7 +970,7 @@ class _LLM(_Namespace):
     those same profiles work fine.
     """
 
-    def list(self, *, providers: bool = False, models=None, params=None,
+    def list(self, *, providers=False, models=None, params=None,
              key=None, provider=None, endpoint=None,
              live: bool = False) -> dict:
         """Configured profiles, installed backends, and the default.
@@ -991,7 +991,9 @@ class _LLM(_Namespace):
         nothing opens one merely to answer this.
 
         The three optional arguments are the setup questions, narrowing in
-        order. Pass ``providers=True`` for the provider list; ``models=<url>``
+        order. Pass ``providers=True`` for the provider list, or
+        ``providers=<name>`` for that one provider with its endpoint resolved;
+        ``models=<url>``
         (with ``key`` and ``provider``) for what one endpoint serves; or
         ``params=<model name>`` (with ``endpoint``) for what one model takes.
         Each adds a key of the same name to the answer. ``live`` additionally

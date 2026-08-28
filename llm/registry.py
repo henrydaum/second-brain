@@ -686,9 +686,13 @@ class Brain:
             _DESCRIBED[key] = answer
         return answer
 
-    def providers(self) -> list:
-        """Providers this brain's backend can reach. ``[]`` when it cannot say."""
-        return self._describe("providers")
+    def providers(self, provider: str = "") -> list:
+        """Providers this brain's backend can reach. ``[]`` when it cannot say.
+
+        Naming one asks for *its endpoint*, which is the expensive half — see
+        ``BaseLLMBackend.providers``.
+        """
+        return self._describe("providers", provider=provider)
 
     def models(self, endpoint: str = "", api_key: str = "",
                provider: str = "", live: bool = False) -> list:
@@ -940,21 +944,34 @@ def _asking_brains() -> list[Brain]:
     return sorted(ready, key=lambda target: not target.loaded)
 
 
-def providers() -> list[dict]:
+def providers(provider: str = "") -> list[dict]:
     """Providers the installed backends can reach, for step one of setup.
 
     Deduplicated by ``id`` across backends, first answer winning, so two
     backends offering the same provider do not show it twice.
+
+    Naming one narrows to that row and asks for its endpoint, which is the
+    part worth waiting for and the reason step one exists at all: a provider
+    picked from a menu should arrive at step two with its URL already filled
+    in, or the menu did nothing but ask a question it then repeats.
     """
     seen, out = set(), []
     for target in _asking_brains():
-        for row in target.providers():
+        for row in target.providers(provider):
             key = str(row.get("id") or row.get("label") or "").lower()
             if not key or key in seen:
                 continue
             seen.add(key)
             out.append(row)
     return out
+
+
+def endpoint_for(provider: str) -> str:
+    """One provider's default endpoint, or ``""`` when it has none to give."""
+    for row in providers(provider):
+        if str(row.get("id") or "").lower() == provider.lower():
+            return str(row.get("endpoint") or "")
+    return ""
 
 
 def models_at(endpoint: str, api_key: str = "", provider: str = "",
