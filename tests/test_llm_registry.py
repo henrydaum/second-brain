@@ -620,3 +620,405 @@ def test_a_well_formed_profile_says_nothing(caplog):
         Brain("c", {"llm_extra_params": {"temperature": 0.2}}).params
 
     assert not [r for r in caplog.records if "llm_extra_params" in r.getMessage()]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What a failed call says.
+#
+# The kernel puts a param on calls whose profile never asked for one, and a
+# backend does not forward that param — it translates it, into a dialect it
+# picks from the model *name*. So a refusal can be about ``reasoning_effort``
+# without anything on the wire, in the log, or on the screen containing the
+# word. Measured against one aggregator the entire refusal was
+# ``{'code': 400, 'msg': 'bad request'}``.
+#
+# What is pinned here is therefore not a diagnosis — nothing at this layer
+# can name the param a provider objected to — but that the inputs ride along
+# on the failure, and that the kernel's own contribution is marked as such.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_failure_names_the_params_the_call_carried():
+    """The missing half of the report: what was asked of the provider."""
+    target = Brain("gpt-test", {"llm_extra_params": {"temperature": 0.2}})
+
+    said = target._explained("bad request", {"temperature": 0.2})
+
+    assert "bad request" in said
+    assert "temperature=0.2" in said
+
+
+def test_a_failure_marks_the_params_nobody_asked_for():
+    """``reasoning_effort`` is the kernel's, so a person reading the refusal
+    is told they never chose it and where to unchoose it. A param they typed
+    themselves gets no such clause — they already know."""
+    target = Brain("gpt-test", {"llm_extra_params": {"temperature": 0.2}})
+
+    said = target._explained("bad request", target.params)
+
+    assert "temperature=0.2" in said            # listed: it was on the call
+    assert "reasoning_effort is a kernel default" in said
+    assert "/llm" in said
+    # ...and the profile's own param is never blamed on the kernel.
+    assert "temperature, reasoning_effort is a kernel default" not in said
+
+
+def test_a_declared_param_is_listed_but_not_called_a_default():
+    """Naming it — at any value, ``null`` included — is a decision, and a
+    decision needs no explaining back to whoever made it."""
+    target = Brain("gpt-test",
+                   {"llm_extra_params": {"reasoning_effort": "high"}})
+
+    said = target._explained("bad request", target.params)
+
+    assert "reasoning_effort='high'" in said
+    assert "kernel default" not in said
+
+
+def test_a_call_that_carried_nothing_is_left_alone():
+    """A profile that declined every param has nothing to be told, and the
+    provider's own sentence should not grow a paragraph for no reason."""
+    target = Brain("gpt-test",
+                   {"llm_extra_params": {"reasoning_effort": None}})
+
+    assert target._explained("bad request", target.params) == "bad request"
+
+
+def test_a_credential_in_the_extras_is_not_printed_at_the_failure():
+    """``/llm`` refuses ``api_key`` as an extra, so one only arrives through a
+    hand-edited config — which is exactly the path that would otherwise put it
+    on somebody's screen."""
+    target = Brain("gpt-test", {"llm_extra_params": {"api_key": "sk-live-42"}})
+
+    said = target._explained("bad request", target.params)
+
+    assert "sk-live-42" not in said
+    assert "redacted" in said
+
+
+def test_default_params_are_only_the_ones_the_profile_never_named():
+    """The distinction the whole report rests on."""
+    assert Brain("a", {}).default_params == {
+        "reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+    assert Brain("b", {"llm_extra_params":
+                       {"reasoning_effort": "low"}}).default_params == {}
+    assert Brain("c", {"llm_extra_params":
+                       {"reasoning_effort": None}}).default_params == {}
+    assert Brain("d", {"llm_extra_params": {"seed": 7}}).default_params == {
+        "reasoning_effort": llm.DEFAULT_REASONING_EFFORT}
+
+
+REFUSING_BACKEND = '''
+"""A backend whose provider refuses without saying what it objected to."""
+
+supports_streaming = False
+display_name = "Refusing"
+
+from guest.llm import BaseLLMBackend
+
+
+class RefusingBackend(BaseLLMBackend):
+    """Answer the way one aggregator really did."""
+
+    def chat(self, sdk, request):
+        """Refuse in the provider's own words, which name nothing."""
+        raise RuntimeError("Error code: 400 - {'code': 400, 'msg': 'bad request'}")
+'''
+
+
+def test_a_bare_refusal_comes_back_naming_what_was_sent(tree):
+    """The whole point, driven through a real box.
+
+    The guest catches the provider exception and hands back an error-shaped
+    response, so this is the path a person actually meets: a 400 whose text
+    mentions neither reasoning nor any other parameter, on a call the kernel
+    put ``reasoning_effort`` on by itself.
+    """
+    from llm import LLMRequest
+
+    _write(tree, REFUSING_BACKEND, stem="llm_refusing")
+    llm.refresh(_config(tree, backend="RefusingBackend"))
+    target = llm.brain("gpt-test")
+    assert target.load()
+
+    try:
+        answer = target.chat(LLMRequest(messages=[{"role": "user", "content": "hi"}],
+                                        params=target.params))
+    finally:
+        target.unload()
+
+    assert answer.is_error
+    assert "bad request" in answer.error                 # the provider's half
+    assert "reasoning_effort='medium'" in answer.error   # ours
+    assert "kernel default" in answer.error
+    # ``content`` is what a caller reading only text will render, so it must
+    # not be left holding the un-annotated sentence.
+    assert "reasoning_effort" in answer.content
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Describing what can be configured.
+#
+# Three questions asked while somebody is *setting a model up*, so none of
+# them may require a working one. What matters most is the degradation: a
+# backend that cannot answer has to be indistinguishable from one that was
+# never asked, because the flow that asked falls back to a typed value and a
+# raised exception there would strand somebody mid-form.
+# ──────────────────────────────────────────────────────────────────────
+
+DESCRIBING_BACKEND = '''
+"""A backend that answers the three setup questions."""
+
+ISOLATION
+display_name = "Describer"
+
+from guest.llm import BaseLLMBackend, LLMResponse
+
+
+class DescribingBackend(BaseLLMBackend):
+    """Answers from a fixed table, so the plumbing is the only variable."""
+
+    def chat(self, sdk, request):
+        return LLMResponse(content="ok")
+
+    def providers(self, sdk):
+        return [{"id": "acme", "label": "Acme", "endpoint": ""}]
+
+    def models(self, sdk, endpoint, api_key, provider=""):
+        if not endpoint and not provider:
+            return []
+        return [{"name": "acme/big", "label": "big"}]
+
+    def params(self, sdk, model_name, endpoint):
+        return [
+            {"name": "reasoning_effort", "label": "Reasoning effort",
+             "kind": "choice", "choices": ["low", "high"],
+             "supported": False, "note": "discarded for acme; try 'thinking'"},
+            {"name": "temperature", "label": "Temperature", "kind": "number",
+             "choices": [], "supported": True, "note": ""},
+        ]
+'''
+
+SILENT_BACKEND = '''
+"""A backend that cannot introspect, which is the default and must be fine."""
+
+ISOLATION
+display_name = "Silent"
+
+from guest.llm import BaseLLMBackend, LLMResponse
+
+
+class SilentBackend(BaseLLMBackend):
+    """Implements nothing beyond chat, like every backend written before."""
+
+    def chat(self, sdk, request):
+        return LLMResponse(content="ok")
+'''
+
+BROKEN_BACKEND = '''
+"""A backend whose introspection raises."""
+
+ISOLATION
+display_name = "Broken"
+
+from guest.llm import BaseLLMBackend, LLMResponse
+
+
+class BrokenBackend(BaseLLMBackend):
+    """Answers chat fine and blows up on every question about itself."""
+
+    def chat(self, sdk, request):
+        return LLMResponse(content="ok")
+
+    def providers(self, sdk):
+        raise RuntimeError("provider table unavailable")
+
+    def params(self, sdk, model_name, endpoint):
+        raise RuntimeError("no such model")
+'''
+
+
+def test_a_backend_answers_the_three_setup_questions(tree):
+    """The pyramid, driven through a real box: provider, model, params."""
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.providers() == [
+            {"id": "acme", "label": "Acme", "endpoint": ""}]
+        assert target.models("https://acme.test/v1", "k") == [
+            {"name": "acme/big", "label": "big"}]
+        names = [row["name"] for row in target.param_options("acme/big")]
+        assert names == ["reasoning_effort", "temperature"]
+    finally:
+        target.unload()
+
+
+def test_a_backend_that_cannot_introspect_is_not_an_error(tree):
+    """Silence is an ordinary answer, and the whole reason it is optional.
+
+    Every backend written before these methods existed is this one. If an
+    absent answer were a failure rather than ``[]``, adding the contract would
+    have broken all of them at once.
+    """
+    _write(tree, SILENT_BACKEND, stem="llm_silent")
+    llm.refresh(_config(tree, backend="SilentBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.providers() == []
+        assert target.models("https://x.test/v1", "k") == []
+        assert target.param_options("anything") == []
+        assert target.param_status == {}
+    finally:
+        target.unload()
+
+
+def test_introspection_that_raises_is_indistinguishable_from_silence(tree):
+    """A question asked mid-form must never be able to strand the form.
+
+    The guest catches it, so this pins the whole path rather than the base
+    class in isolation — the case that matters is a real backend whose
+    provider library moved on underneath it.
+    """
+    _write(tree, BROKEN_BACKEND, stem="llm_broken")
+    llm.refresh(_config(tree, backend="BrokenBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.providers() == []
+        assert target.param_options("acme/big") == []
+    finally:
+        target.unload()
+
+
+def test_param_status_reports_only_the_params_the_profile_sends(tree):
+    """The card's question is about *this profile*, not the whole menu.
+
+    ``param_options`` lists everything the model takes; ``param_status``
+    narrows that to what is actually being sent, which is the only part a
+    profile card can honestly warn about.
+    """
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.load()
+        status = target.param_status
+        # ``temperature`` is supported *and* unset, so it is not in the answer;
+        # ``reasoning_effort`` is sent, because the kernel supplies a default.
+        assert set(status) == {"reasoning_effort"}
+        supported, note = status["reasoning_effort"]
+        assert supported is False
+        assert "thinking" in note
+    finally:
+        target.unload()
+
+
+def test_a_closed_profile_reports_no_status_rather_than_opening_a_box(tree):
+    """Rendering a list of profiles must not start subprocesses.
+
+    ``{}`` here means "nobody has asked", which reads the same as "nothing to
+    say" on a card — and that is the right trade, because the alternative is
+    a menu that costs one process per row to draw.
+    """
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+
+    assert not target.loaded
+    assert target.param_status == {}
+    assert not target.loaded
+
+
+def test_describe_carries_param_status_for_a_ui_to_render(tree):
+    """``llm.list`` is what a web client reads, so the verdict rides there."""
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.load()
+        row = [r for r in llm.describe() if r["model_name"] == "gpt-test"][0]
+        assert row["param_status"]["reasoning_effort"][0] is False
+        # A list, not a tuple: this crosses the wire as JSON.
+        assert isinstance(row["param_status"]["reasoning_effort"], list)
+    finally:
+        target.unload()
+
+
+def test_an_answer_is_cached_per_question_and_arguments(tree):
+    """Forms redraw on every step, so asking must not cost a box call each time.
+
+    Keyed on the arguments rather than on the question alone, or step two
+    would answer for whichever endpoint happened to be asked about first.
+    """
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        first = target.models("https://acme.test/v1", "k")
+        assert target.models("https://acme.test/v1", "k") is first
+        # A different endpoint is a different question.
+        assert target.models("", "", "") is not first
+    finally:
+        target.unload()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Insisting on a value somebody chose.
+#
+# A backend may drop a parameter its provider table does not list. That is
+# right for a value the kernel supplied and wrong for one a person picked, so
+# the request carries which is which and the two outcomes must stay visibly
+# different — a silently inert setting and a call the provider might refuse
+# are opposite failures and want opposite warnings.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_call_names_the_params_the_profile_itself_chose(tree):
+    """``chosen_params`` is derived from the profile, never declared."""
+    from llm import LLMRequest
+
+    _write(tree, BACKEND)
+    llm.refresh(_config(tree, llm_extra_params={"temperature": 0.2}))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.load()
+        request = LLMRequest(messages=[{"role": "user", "content": "hi"}],
+                             params=target.params)
+        target.chat(request)
+        # Chosen by the profile; the kernel's own effort is not in here.
+        assert request.chosen_params == ["temperature"]
+        assert "reasoning_effort" in request.params
+        assert "reasoning_effort" not in request.chosen_params
+    finally:
+        target.unload()
+
+
+def test_a_chosen_param_reads_as_arriving_even_when_unlisted(tree):
+    """The two states a card must not confuse.
+
+    Same model, same parameter, same backend verdict — and opposite answers,
+    because one value was picked and the other was supplied. Pinning both in
+    one test because the bug this prevents is showing the wrong one.
+    """
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    settings = _config(tree, backend="DescribingBackend")
+
+    llm.refresh(settings)
+    supplied = llm.brain("gpt-test")
+    try:
+        assert supplied.load()
+        arrives, note = supplied.param_status["reasoning_effort"]
+        assert arrives is False              # dropped, and nobody asked for it
+        assert "thinking" in note            # the backend's own suggestion
+    finally:
+        supplied.unload()
+
+    chosen = Brain("gpt-test",
+                   {"llm_service_class": "DescribingBackend",
+                    "llm_extra_params": {"reasoning_effort": "high"}},
+                   settings)
+    try:
+        assert chosen.load()
+        arrives, note = chosen.param_status["reasoning_effort"]
+        assert arrives is True               # insisted on, so it goes
+        assert "you set it" in note          # and may come back refused
+    finally:
+        chosen.unload()

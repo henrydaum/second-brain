@@ -66,9 +66,25 @@ DEFAULT_BACKEND = "LiteLLMService"
 # its signed ``thinking_blocks`` back on the next tool-result turn or the API
 # refuses the call. Nothing here carries them (``LLMResponse`` has no field
 # for one), so a Claude profile on any level but ``none`` will fail its second
-# tool call until that round trip exists. The failure is loud — a 400 naming
-# the missing block — which is what makes this default worth taking now and
-# revisiting if a Claude profile ever appears.
+# tool call until that round trip exists.
+#
+# That was written as "the failure is loud — a 400 naming the missing block",
+# which is true of Anthropic and turned out to be a claim about one provider
+# rather than about the mechanism. A backend does not forward this param, it
+# *translates* it, into whatever dialect it believes the endpoint speaks —
+# and it believes that from the model *name*. So a name whose prefix happens
+# to match a provider LiteLLM knows gets that provider's spelling
+# (``deepseek`` becomes ``thinking``, ``ollama`` becomes ``think``) sent to
+# whatever host the profile's endpoint actually points at, while a name it
+# does not recognise is served over the OpenAI-compatible path and the param
+# is quietly dropped by ``drop_params`` instead. Neither outcome is visible
+# from ``/llm``, both are decided by a string nobody chose for this purpose,
+# and the refusal that comes back can be as bare as
+# ``{'code': 400, 'msg': 'bad request'}``.
+#
+# So the default stays, and ``Brain._explained`` is the part that makes it
+# affordable: a failed call now names the params it carried and marks the
+# ones the profile never asked for.
 DEFAULT_REASONING_EFFORT = "medium"
 
 # The word ``/llm``'s picker shows for "send nothing", accepted here as an
@@ -230,6 +246,20 @@ def _pool_ceiling(config: dict) -> int:
         return 5
 
 
+# Substrings that make a parameter name look like a credential. Extra params
+# are free-form and hand-editable, so one can land here despite ``/llm``
+# refusing ``api_key`` outright — and the place it would land is an error
+# message on somebody's screen.
+_SECRETISH = ("key", "token", "secret", "password", "auth")
+
+
+def _shown_value(name: str, value) -> str:
+    """One parameter's value, as it should appear in a failure message."""
+    if any(hint in name.lower() for hint in _SECRETISH):
+        return "<redacted>"
+    return repr(value)
+
+
 class Brain:
     """One configured model, and the way to reach it.
 
@@ -261,6 +291,11 @@ class Brain:
         # and without this the new brain would inherit the old one's box, and
         # with it the settings the edit was meant to change.
         self._id = uuid.uuid4().hex[:8]
+        # Answers to the three discovery questions, keyed on the arguments
+        # that produced them. A brain is rebuilt whenever its profile changes
+        # (``refresh``), so this cannot outlive the settings it describes —
+        # which is why the key is the arguments rather than the profile.
+        self._described: dict = {}
 
     # --- what the profile says -------------------------------------
 
@@ -310,8 +345,12 @@ class Brain:
         declaration for a backend to get wrong, and nothing in ``llm/`` that
         knows which library is on the other side. A backend that cannot carry
         a param degrades it (the store's LiteLLM sets ``drop_params``) or
-        reports the provider's own refusal, which is a sentence the person who
-        typed the value can act on.
+        reports the provider's own refusal.
+
+        That refusal is not reliably a sentence anybody can act on, which is
+        the cost of staying ignorant of providers here and is paid in
+        :meth:`_explained` rather than by learning their names. See
+        ``DEFAULT_REASONING_EFFORT`` for the shape of it.
 
         One key holds all of them — ``llm_extra_params`` — with reasoning
         effort as an ordinary member rather than a field of its own. ``/llm``
@@ -345,6 +384,65 @@ class Brain:
         declared.setdefault("reasoning_effort", DEFAULT_REASONING_EFFORT)
         return {key: value for key, value in declared.items()
                 if value is not None}
+
+    @property
+    def default_params(self) -> dict:
+        """The part of :attr:`params` this profile never asked for.
+
+        Exactly the keys the kernel supplied on its own — today that is
+        ``reasoning_effort`` and nothing else. It is a separate question from
+        ``params`` because it is the one a *failure* needs answered: a
+        provider refusing a param somebody typed is a sentence they can act
+        on, and a provider refusing a param the kernel invented is not, unless
+        something says which it was.
+
+        Naming a param and leaving it null still counts as asking — the
+        profile made a decision, the decision was "send nothing", and there is
+        then nothing on the call to explain.
+        """
+        declared = self.profile.get("llm_extra_params")
+        named = set(declared) if isinstance(declared, dict) else set()
+        return {key: value for key, value in self.params.items()
+                if key not in named}
+
+    def _explained(self, message: str, params: dict) -> str:
+        """Name the provider params a failed call carried.
+
+        ``params`` here is what the kernel put on the wire, which is not what
+        the provider was asked — the backend translates first, and only it
+        knows into what. So this is deliberately a list of inputs rather than
+        a diagnosis: nothing at this layer can say which param an endpoint
+        objected to, and a guess dressed as an answer would be worse than the
+        silence it replaces.
+
+        The silence is the point. ``DEFAULT_REASONING_EFFORT`` puts a param on
+        every call whose profile never mentioned one, and the argument for
+        doing that (see the constant) rests on the failure being legible —
+        "the provider's own refusal, which is a sentence the person who typed
+        the value can act on". Both halves turn out to be optimistic in
+        practice: nobody typed the value, and one aggregator's whole refusal
+        was ``{'code': 400, 'msg': 'bad request'}``. Between the picker and
+        the screen, the word *reasoning* appeared nowhere.
+
+        Values are shown because a level is the whole content of the setting,
+        and redacted for anything named like a credential. ``/llm`` already
+        refuses ``api_key`` as an extra, so that only reaches here through a
+        hand-edited config — which is exactly the case that would put one on
+        someone's screen.
+        """
+        if not params:
+            return message
+        shown = ", ".join(f"{key}={_shown_value(key, value)}"
+                          for key, value in sorted(params.items()))
+        note = f"The call carried these provider parameters: {shown}."
+        unasked = sorted(set(self.default_params) & set(params))
+        if unasked:
+            one = len(unasked) == 1
+            note += (f" {', '.join(unasked)} {'is a' if one else 'are'} kernel "
+                     f"default{'' if one else 's'} that this profile did not "
+                     f"set; `/llm` can change or clear "
+                     f"{'it' if one else 'them'}.")
+        return f"{message} | {note}"
 
     def _complain_about_extras(self, extra) -> None:
         """Say once that a profile's extra params are unusable.
@@ -542,6 +640,118 @@ class Brain:
                 self._boxes.remove(box)
         box.interrupt()
 
+    # --- describing what can be configured -------------------------
+
+    def _describe(self, question: str, **args) -> list:
+        """Ask this brain's backend one discovery question.
+
+        Cached on the answer, because these are asked while somebody fills in
+        a form and a form redraws on every keystroke's worth of navigation.
+
+        Needs a live box, so it loads one. That is affordable *here* and
+        nowhere else: asking is something a person deliberately did, whereas
+        rendering a list of profiles is not — see ``describe()``, which
+        reports only what is already known and never opens anything.
+        """
+        key = (question, tuple(sorted(args.items())))
+        if key in self._described:
+            return self._described[key]
+        if not self.loaded and not self.load():
+            return []
+        box = self._lease()
+        if box is None:
+            return []
+        try:
+            result = box.call("__describe__", question=question, args=args)
+        finally:
+            self._release(box)
+        answer = result.data if result.ok and isinstance(result.data, list) else []
+        self._described[key] = answer
+        return answer
+
+    def providers(self) -> list:
+        """Providers this brain's backend can reach. ``[]`` when it cannot say."""
+        return self._describe("providers")
+
+    def models(self, endpoint: str = "", api_key: str = "",
+               provider: str = "") -> list:
+        """Models at *endpoint*, named the way this backend wants them back.
+
+        Defaults to this profile's own endpoint and key, since the common
+        caller is "show me what else this provider has".
+        """
+        return self._describe(
+            "models",
+            endpoint=endpoint or self.base_url,
+            api_key=api_key or self.api_key,
+            provider=provider)
+
+    def param_options(self, model_name: str = "",
+                      endpoint: str | None = None) -> list:
+        """Extra parameters *model_name* accepts, as reports rather than gates.
+
+        Named apart from :attr:`params`, which is the dict this profile
+        *sends*. One is the menu, the other is the order.
+
+        ``endpoint`` defaults to this profile's own, and is passed explicitly
+        only while setting a *new* profile up, where the endpoint being asked
+        about is not yet anybody's.
+        """
+        return self._describe(
+            "params",
+            model_name=model_name or self.model_name,
+            endpoint=self.base_url if endpoint is None else endpoint)
+
+    @property
+    def param_status(self) -> dict:
+        """``{param: (arrives, note)}`` for what this profile actually sends.
+
+        The configured-profile reading of :meth:`param_options`: it answers
+        only about the params in :attr:`params`, because those are the ones a
+        profile card can honestly say anything about.
+
+        ``arrives`` is **not** the backend's ``supported`` flag, and the gap
+        between them is the whole of what this property adds. A backend
+        reports what its provider table says; the kernel additionally knows
+        whether *this profile chose the value*, and a chosen value is insisted
+        on rather than dropped (``LLMRequest.chosen_params``). So a param the
+        table rejects still arrives when somebody picked it, and the note says
+        the provider may refuse it — which is a different warning, aimed at a
+        different outcome, from one that silently does nothing.
+
+        Returns ``{}`` when the backend cannot say **or when no box is open**.
+        Silence is the honest answer for a profile nobody has loaded; the
+        alternative is starting a subprocess to draw a menu row.
+        """
+        if not self.loaded:
+            return {}
+        sending = self.params
+        if not sending:
+            return {}
+        known = {row.get("name"): row for row in self.param_options()
+                 if isinstance(row, dict)}
+        defaulted = set(self.default_params)
+        status = {}
+        for name in sending:
+            row = known.get(name)
+            if row is None:
+                continue
+            listed = bool(row.get("supported", True))
+            note = row.get("note") or ""
+            if listed:
+                status[name] = (True, "")
+            elif name in defaulted:
+                # Nobody asked for this one, so it is left to be dropped —
+                # breaking a call over a value the user never chose would be
+                # indefensible.
+                status[name] = (False, note or "not sent by this backend")
+            else:
+                status[name] = (True, (
+                    "sent because you set it, though this backend does not "
+                    "list it for this model — the provider may reject the "
+                    "call"))
+        return status
+
     # --- the call --------------------------------------------------
 
     def chat(self, request: LLMRequest, on_delta=None, on_call=None) -> LLMResponse:
@@ -572,6 +782,14 @@ class Brain:
         request.model_name = request.model_name or self.model_name
         request.api_key = request.api_key or self.api_key
         request.base_url = request.base_url or self.base_url
+        # Which params this profile chose for itself, so a backend can insist
+        # on those and only those. Derived here rather than declared, because
+        # ``default_params`` is already the one place that knows the
+        # difference between a decision and a fallback.
+        if not request.chosen_params:
+            defaulted = set(self.default_params)
+            request.chosen_params = sorted(
+                key for key in request.params if key not in defaulted)
         streaming = bool(request.stream and on_delta is not None
                          and self.supports_streaming)
         request.stream = streaming
@@ -594,7 +812,7 @@ class Brain:
             message = result.error or "LLM backend call failed"
             if "context" in message.lower():
                 raise LLMProviderError(message, code="context_limit")
-            return LLMResponse.failure(message)
+            return LLMResponse.failure(self._explained(message, request.params))
 
         response = LLMResponse.from_dict(result.data)
         # A context overflow has to *raise*: the conversation loop's compaction
@@ -604,6 +822,15 @@ class Brain:
         if response.error_code == "context_limit":
             raise LLMProviderError(response.error or "context limit exceeded",
                                    code="context_limit")
+        # Everything else is a refusal somebody has to read, so it says what
+        # was asked. A context overflow is exempt on purpose: the layer above
+        # handles it without a person ever seeing it, and the params had
+        # nothing to do with it.
+        if response.is_error:
+            explained = self._explained(response.error, request.params)
+            if response.content.startswith("Error: "):
+                response.content = f"Error: {explained}"
+            response.error = explained
         return response
 
 
@@ -647,6 +874,72 @@ def refresh(config: dict, *, force: bool = False) -> dict[str, Brain]:
         if not (config or {}).get("default_llm_profile") and profiles:
             config["default_llm_profile"] = next(iter(profiles))
         return dict(_BRAINS)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Setup questions.
+#
+# The three of these are asked while somebody is *configuring* a model, so
+# none of them can require a configured model. They hang off the module
+# rather than off a ``Brain`` for that reason, and each borrows whichever
+# brain is available to do the asking — legitimate because a backend's
+# answers are about the backend, not about the profile that reached it.
+#
+# All three answer ``[]`` when nothing can say. That is the first-run state
+# and also the permanent state for a backend that does not introspect, so it
+# is an ordinary answer and never an error.
+# ──────────────────────────────────────────────────────────────────────
+
+def _asking_brains() -> list[Brain]:
+    """Brains whose backend is installed, in a stable order."""
+    return [target for _name, target in sorted(brains().items())
+            if target.available]
+
+
+def providers() -> list[dict]:
+    """Providers the installed backends can reach, for step one of setup.
+
+    Deduplicated by ``id`` across backends, first answer winning, so two
+    backends offering the same provider do not show it twice.
+    """
+    seen, out = set(), []
+    for target in _asking_brains():
+        for row in target.providers():
+            key = str(row.get("id") or row.get("label") or "").lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(row)
+    return out
+
+
+def models_at(endpoint: str, api_key: str = "",
+              provider: str = "") -> list[dict]:
+    """Models reachable at *endpoint*, for step two.
+
+    First backend with an answer wins rather than merging: a model name is
+    only meaningful to the backend that produced it — the prefix it carries is
+    that backend's convention — so pooling two backends' answers would build a
+    list where picking the wrong row silently misroutes the call.
+    """
+    for target in _asking_brains():
+        found = target.models(endpoint, api_key, provider)
+        if found:
+            return found
+    return []
+
+
+def param_options_for(model_name: str, endpoint: str = "") -> list[dict]:
+    """Parameters *model_name* accepts, for step three.
+
+    First answer wins, for the reason ``models_at`` gives: whether a param
+    survives is a fact about a particular backend's translation of it.
+    """
+    for target in _asking_brains():
+        found = target.param_options(model_name, endpoint)
+        if found:
+            return found
+    return []
 
 
 def brains() -> dict[str, Brain]:
@@ -745,6 +1038,12 @@ def describe() -> list[dict]:
     ``params`` is the *resolved* dict rather than either profile key, so a
     caller showing what a profile will send never has to know that reasoning
     effort is spelled one way in config and another on the wire.
+
+    ``param_status`` says which of those params will actually reach the
+    provider — ``{name: [supported, note]}``, and ``{}`` for a profile whose
+    box is closed, since nothing here opens one to answer. It is the field a
+    UI needs to stop presenting a setting that is being discarded as though
+    it were in force.
     """
     return [{
         "model_name": name,
@@ -752,6 +1051,8 @@ def describe() -> list[dict]:
         "endpoint": target.base_url,
         "context_size": target.context_size,
         "params": target.params,
+        "param_status": {key: list(value)
+                         for key, value in target.param_status.items()},
         "loaded": target.loaded,
         "sandboxed": True,
     } for name, target in sorted(brains().items())]

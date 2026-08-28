@@ -2043,10 +2043,36 @@ def _llm_list(ctx, args: dict) -> Result:
     resolved — the kernel's default reasoning effort filled in and declined
     params dropped — so a caller rendering it shows what goes on the wire
     rather than what config happens to spell.
+
+    Three optional arguments answer the questions a *setup* flow asks, in
+    order of narrowing: ``providers`` names the providers a backend can reach,
+    ``models`` names what one endpoint serves, and ``params`` names what one
+    model accepts. They grew here rather than becoming three Request types
+    because the subject is the same one this type already has — the model
+    registry — and a caller needs the ordinary answer alongside them anyway.
+
+    Each answers ``[]`` when nothing can say, which is a real answer and not a
+    failure: no backend is obliged to introspect, and the flow that asked
+    falls back to a typed value. ``models`` needs a live listing and so may be
+    slow; it is asked once, when somebody has just entered an endpoint.
     """
     import llm
 
+    ask_models = args.get("models")
+    ask_params = args.get("params")
+    discovered = {}
+    if args.get("providers"):
+        discovered["providers"] = llm.providers()
+    if ask_models is not None:
+        discovered["models"] = llm.models_at(
+            str(ask_models or ""), str(args.get("key") or ""),
+            str(args.get("provider") or ""))
+    if ask_params:
+        discovered["params"] = llm.param_options_for(
+            str(ask_params), str(args.get("endpoint") or ""))
+
     return Result(data={
+        **discovered,
         "profiles": llm.describe(),
         "backends": [
             {"name": name, "display_name": display}

@@ -970,7 +970,8 @@ class _LLM(_Namespace):
     those same profiles work fine.
     """
 
-    def list(self) -> dict:
+    def list(self, *, providers: bool = False, models=None, params=None,
+             key=None, provider=None, endpoint=None) -> dict:
         """Configured profiles, installed backends, and the default.
 
         Answers ``{"profiles": [...], "backends": [...], "aliases": {...},
@@ -983,9 +984,37 @@ class _LLM(_Namespace):
         (a ``null`` in the profile) are gone, and the names are the ones that
         go on the wire. ``aliases`` maps a retired
         backend name to the one that replaced it, which is what a stored
-        ``llm_service_class`` may still be.
+        ``llm_service_class`` may still be. Each profile row also carries
+        ``param_status`` — ``{param: [supported, note]}`` for the params that
+        profile sends, and ``{}`` for a profile whose box is closed, since
+        nothing opens one merely to answer this.
+
+        The three optional arguments are the setup questions, narrowing in
+        order. Pass ``providers=True`` for the provider list; ``models=<url>``
+        (with ``key`` and ``provider``) for what one endpoint serves; or
+        ``params=<model name>`` (with ``endpoint``) for what one model takes.
+        Each adds a key of the same name to the answer.
+
+        Every one of them can answer ``[]``, and that is ordinary rather than
+        a failure — no backend is obliged to introspect, and a caller handed
+        nothing should let the value be typed instead. ``models`` may make a
+        live call to the endpoint, so ask it once, at the point an endpoint
+        has just been given.
         """
-        return self._ask(LLM_LIST)
+        args = {}
+        if providers:
+            args["providers"] = True
+        if models is not None:
+            args["models"] = models
+        if params is not None:
+            args["params"] = params
+        if key is not None:
+            args["key"] = key
+        if provider is not None:
+            args["provider"] = provider
+        if endpoint is not None:
+            args["endpoint"] = endpoint
+        return self._ask(LLM_LIST, **args)
 
     def load(self, name: str) -> bool:
         """Open one profile's box pool."""

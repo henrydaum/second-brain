@@ -41,6 +41,11 @@ CAPABILITY_FIELDS = {
 # word, so it cannot be confused with ``none``, a level several providers
 # accept meaning "think as little as possible".
 OFF = "off"
+# What "none of these" is called in the two menus that can be incomplete.
+# Both lists come from a backend introspecting somebody else's catalogue, so
+# neither can ever be assumed complete — and a menu with no way past it turns
+# a missing entry into an unusable command.
+CUSTOM = "custom"
 # Keys the profile sets through its own fields, or that are the call itself.
 # The backend merges extras with ``setdefault``, so one of these here *wins*
 # over the profile silently — and an ``api_key`` also lands in plaintext
@@ -79,9 +84,16 @@ class LlmCommand(BaseCommand):
     # AST, which sees literals and not a call.
     approval_actions = ("edit", "set_default", "load", "unload", "remove")
     approval_actor_id = "user"
+    # ``net.http`` is here for the *backend's* half of ``llm.list(models=...)``:
+    # the authoritative model catalogue is the one the endpoint serves, and
+    # fetching it is egress. Declared so an approved action carries it rather
+    # than a dialog interrupting a half-filled form. Refusing it is not fatal
+    # — the listing falls back to what the backend knows offline, and past
+    # that to typing the name — so this widens the grant for a convenience,
+    # never for a capability the command depends on.
     requests = [
         "config.read", "config.write", "plugin.list",
-        "llm.list", "llm.load", "llm.unload",
+        "llm.list", "llm.load", "llm.unload", "net.http",
     ]
     def form(self, sdk, args):
         profiles = sdk.config.read("llm_profiles") or {}
@@ -96,35 +108,7 @@ class LlmCommand(BaseCommand):
             enum_labels=[_model_label(default, item) for item in names],
         )]
         if args.get("model_name") == "add":
-            backends = _backend_names(registry)
-            return steps + [
-                FormStep(
-                    "llm_service_class",
-                    "Choose how Second Brain should connect to this model.",
-                    True, enum=backends, default=backends[0]),
-                FormStep(
-                    "new_model_name",
-                    "Enter the model name exactly, including provider prefix "
-                    "when needed (for example `openai/gpt-4o-mini` or "
-                    "`anthropic/claude-3-5-sonnet-latest`).",
-                    True),
-                FormStep(
-                    "llm_endpoint",
-                    "Enter the provider base URL [optional]. Leave blank for "
-                    "the provider default.",
-                    False, default="", prompt_when_missing=True),
-                FormStep(
-                    "secret_llm_api_key",
-                    "Enter the API key, or the environment variable name that "
-                    "contains it. Leave blank to use the provider default.",
-                    False, default="", prompt_when_missing=True),
-                FormStep(
-                    "llm_context_size",
-                    "Optional context window size in tokens. Use 0 for "
-                    "dynamic compaction or if unknown.",
-                    False, "integer", default=0, prompt_when_missing=True),
-                *_capability_steps(),
-            ]
+            return steps + _add_steps(sdk, registry, args)
         name = args.get("model_name")
         if name:
             actions, labels = _actions_for(registry, default, name)
@@ -154,7 +138,7 @@ class LlmCommand(BaseCommand):
         default = sdk.config.read("default_llm_profile") or ""
         name = args.get("model_name")
         if name == "add":
-            name = (args.get("new_model_name") or "").strip()
+            name = _chosen_model(args)
             if not name:
                 return "Model name is required."
             first = not profiles
@@ -251,6 +235,135 @@ class LlmCommand(BaseCommand):
             sdk.config.write("llm_profiles", profiles, scope="plugin")
             return f"Removed LLM profile: {name}"
         return f"Unknown action: {action}"
+
+
+def _add_steps(sdk, registry, args):
+    """Adding a profile, asked from least specific to most.
+
+    Provider, then endpoint, then model, then the parameters that model takes
+    — each answer narrowing what the next one offers. The ordering is forced
+    rather than chosen: listing models means asking the endpoint, and asking
+    the endpoint means already holding its URL and key.
+
+    Every step degrades to a typed value, and that is the *common* path rather
+    than a fallback. Aggregators appear in no provider list, plenty of
+    endpoints serve no catalogue, and a backend need not introspect at all —
+    so a step whose lookup came back empty simply asks for the value the way
+    it always did. Nothing here treats an empty answer as a problem.
+    """
+    backends = _backend_names(registry)
+    provider = args.get("llm_provider") or ""
+    endpoint = (args.get("llm_endpoint") or "").strip()
+    steps = [
+        FormStep(
+            "llm_service_class",
+            "Choose how Second Brain should connect to this model.",
+            True, enum=backends, default=backends[0]),
+    ]
+
+    providers = _providers(sdk)
+    if providers:
+        ids = [row["id"] for row in providers] + [CUSTOM]
+        labels = [row.get("label") or row["id"] for row in providers]
+        steps.append(FormStep(
+            "llm_provider",
+            "Which provider is this model served by? Choose "
+            f"`{CUSTOM}` for anything reached through its own URL, which "
+            "includes every multi-provider gateway.",
+            True, enum=ids, enum_labels=labels + ["Something else"]))
+
+    steps.append(FormStep(
+        "llm_endpoint",
+        "Enter the provider base URL [optional]. Leave blank for the "
+        "provider default.",
+        False, default=_endpoint_default(providers, provider),
+        prompt_when_missing=True))
+    steps.append(FormStep(
+        "secret_llm_api_key",
+        "Enter the API key, or the environment variable name that contains "
+        "it. Leave blank to use the provider default.",
+        False, default="", prompt_when_missing=True))
+
+    # The model step only becomes a menu once there is something to ask.
+    # ``llm_endpoint`` is answered by the step above, so on the pass that
+    # renders this one it is already in ``args``.
+    catalogue = _models(sdk, endpoint, args.get("secret_llm_api_key") or "",
+                        "" if provider == CUSTOM else provider)
+    if catalogue:
+        names = [row["name"] for row in catalogue] + [CUSTOM]
+        labels = [row.get("label") or row["name"] for row in catalogue]
+        steps.append(FormStep(
+            "new_model_name",
+            "Which model? The name is stored exactly as shown, prefix "
+            f"included, so it routes correctly. Choose `{CUSTOM}` to type "
+            "one that is not listed.",
+            True, enum=names, enum_labels=labels + ["Type it myself"]))
+        if args.get("new_model_name") == CUSTOM:
+            steps.append(FormStep(
+                "custom_model_name",
+                "Enter the model name exactly, including the provider prefix "
+                "when one is needed (for example `openai/gpt-4o-mini`).",
+                True))
+    else:
+        steps.append(FormStep(
+            "new_model_name",
+            "Enter the model name exactly, including provider prefix when "
+            "needed (for example `openai/gpt-4o-mini` or "
+            "`anthropic/claude-3-5-sonnet-latest`).",
+            True))
+
+    steps.append(FormStep(
+        "llm_context_size",
+        "Optional context window size in tokens. Use 0 for dynamic "
+        "compaction or if unknown.",
+        False, "integer", default=0, prompt_when_missing=True))
+    steps.extend(_capability_steps())
+    return steps
+
+
+def _chosen_model(args):
+    """The model name the add flow settled on, menu or typed."""
+    picked = (args.get("new_model_name") or "").strip()
+    if picked == CUSTOM:
+        return (args.get("custom_model_name") or "").strip()
+    return picked
+
+
+def _providers(sdk):
+    """Step one, or ``[]`` when no backend can name any."""
+    try:
+        return (sdk.llm.list(providers=True) or {}).get("providers") or []
+    except sdk.Failed:
+        return []
+
+
+def _models(sdk, endpoint, api_key, provider):
+    """Step two. Needs an endpoint or a provider; answers ``[]`` without both.
+
+    Guarded rather than always asked, because this is the one question that
+    can reach the network — and a form redraws on every step.
+    """
+    if not endpoint and not provider:
+        return []
+    try:
+        answer = sdk.llm.list(models=endpoint, key=api_key,
+                              provider=provider) or {}
+    except sdk.Failed:
+        return []
+    return answer.get("models") or []
+
+
+def _endpoint_default(providers, chosen):
+    """A provider's own URL when it published one, else blank.
+
+    Blank is the usual answer and is not a shortcoming: there is no reliable
+    table of provider base URLs, and a guessed one fails at the first real
+    call with an error that blames the model instead of the URL.
+    """
+    for row in providers or []:
+        if row.get("id") == chosen:
+            return row.get("endpoint") or ""
+    return ""
 
 
 def _capability_steps():
@@ -414,7 +527,7 @@ def _describe(sdk, registry, profiles, default, name):
     # profile that says nothing still thinks at whatever the kernel supplies,
     # and a card that stayed silent would be the only place you could not
     # find that out.
-    pairs.append(("Reasoning", _effort_text(profile)))
+    pairs.append(("Reasoning", _effort_text(profile, row)))
     extras = {key: value for key, value in (
         profile.get("llm_extra_params") or {}).items()
         if key != "reasoning_effort"}
@@ -425,13 +538,49 @@ def _describe(sdk, registry, profiles, default, name):
     return sdk.md.card(f"{name}{mark}", pairs)
 
 
-def _effort_text(profile):
-    """What this profile's reasoning effort reads as, in all three states."""
+def _effort_text(profile, row=None):
+    """What this profile's reasoning effort reads as, in all four states.
+
+    The fourth is new and is the reason this takes a registry row: a level can
+    be set, displayed, and *discarded before the call*, which used to read
+    exactly like one that was working. A dial that cannot be trusted is worse
+    than no dial, so when the backend says the value will not survive, the
+    card says so beside it.
+
+    Worded as what happens to the *value*, never as a claim about the model.
+    The case that forced this rule was a provider whose model reasons perfectly
+    well and whose entry in the middleman's table simply omits the parameter —
+    "not supported" would have been a lie, and one the user could not check.
+    """
     extras = profile.get("llm_extra_params") or {}
     if "reasoning_effort" not in extras:
-        return "default"
-    effort = extras["reasoning_effort"]
-    return "off (nothing sent)" if effort is None else str(effort)
+        text = "default"
+    elif extras["reasoning_effort"] is None:
+        return "off (nothing sent)"
+    else:
+        text = str(extras["reasoning_effort"])
+    note = _param_note(row, "reasoning_effort")
+    return f"{text} — {note}" if note else text
+
+
+def _param_note(row, param):
+    """The caveat for one param, or ``""`` when there is nothing to say.
+
+    Reads the *note* rather than the boolean beside it, and that is the whole
+    of the logic: the registry writes a note exactly when a param needs one,
+    and there are two such cases pointing opposite ways — a value being
+    discarded, and a value being forced through that the provider may refuse.
+    Branching on the boolean would print the first and swallow the second,
+    which is the warning somebody most needs before a call fails.
+
+    Silent in three cases that look identical from here and should: the
+    backend cannot introspect, the profile's box is closed so nobody has
+    asked, and the setting is simply fine.
+    """
+    entry = ((row or {}).get("param_status") or {}).get(param)
+    if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+        return ""
+    return str(entry[1] or "")
 
 
 def _model_label(default, name):

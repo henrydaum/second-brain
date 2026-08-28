@@ -142,6 +142,14 @@ class LLMRequest:
     attachments: list[dict] = field(default_factory=list)
     # Extra provider kwargs (temperature, tool_choice, ...). Forwarded as-is.
     params: dict = field(default_factory=dict)
+    # Which of ``params`` the *profile* named, as opposed to the ones the
+    # kernel supplied because nobody said otherwise. A backend that would
+    # otherwise drop a parameter should insist on these and let the provider
+    # refuse them: somebody chose the value, so a loud rejection is feedback,
+    # where a silent discard is a setting that lies. The kernel's own defaults
+    # are deliberately not in here — nothing may break a call over a value the
+    # user never asked for.
+    chosen_params: list = field(default_factory=list)
     # Connection. ``api_key`` is plaintext: a provider library does its own
     # I/O, so there is no outbound Request for the kernel to substitute a
     # ``<secret:...>`` handle into. See docs/SECURITY_CONTRACT_APPENDIX.md.
@@ -157,7 +165,8 @@ class LLMRequest:
         return {
             "model_name": self.model_name, "messages": self.messages,
             "tools": self.tools, "attachments": self.attachments,
-            "params": self.params, "api_key": self.api_key,
+            "params": self.params, "chosen_params": self.chosen_params,
+            "api_key": self.api_key,
             "base_url": self.base_url, "stream": self.stream,
         }
 
@@ -167,13 +176,14 @@ class LLMRequest:
         data = data or {}
         known = {f: data.get(f) for f in (
             "model_name", "messages", "tools", "attachments", "params",
-            "api_key", "base_url", "stream")}
+            "chosen_params", "api_key", "base_url", "stream")}
         return cls(
             model_name=known["model_name"] or "",
             messages=known["messages"] or [],
             tools=known["tools"],
             attachments=known["attachments"] or [],
             params=known["params"] or {},
+            chosen_params=list(known["chosen_params"] or []),
             api_key=known["api_key"] or "",
             base_url=known["base_url"] or "",
             stream=bool(known["stream"]),
@@ -322,6 +332,70 @@ class BaseLLMBackend:
         """Release anything ``start`` opened. Called once, as the box closes."""
         return True
 
+    # ── Describing what can be configured ─────────────────────────────
+    #
+    # Three optional questions, ordered from least to most specific:
+    # which providers exist, which models one endpoint serves, and which
+    # parameters one model takes. Each narrows the last, and each is
+    # answered by the backend because only it knows what its provider
+    # library can tell it.
+    #
+    # All three default to ``[]``, which means "I cannot say" and is a real
+    # answer rather than a failure: a backend implementing none of them
+    # leaves the user typing the values by hand, exactly as before. That is
+    # also the *common* path — model aggregators appear in no provider
+    # table — so nothing above these may treat an empty list as an error.
+
+    def providers(self, sdk) -> list:
+        """Providers this backend can talk to.
+
+        Each entry is ``{"id": str, "label": str, "endpoint": str}``, where
+        ``endpoint`` is that provider's default URL or ``""`` when there is
+        none to offer. Empty is the honest answer for a provider reached
+        through its own SDK rather than a URL, and the user types one; a
+        guessed endpoint is worse than a blank field, because a wrong URL
+        fails much later and blames the model.
+        """
+        return []
+
+    def models(self, sdk, endpoint: str, api_key: str,
+               provider: str = "") -> list:
+        """Models reachable at *endpoint*, as ``{"name", "label"}``.
+
+        ``name`` is the string **this backend wants to be handed back** in
+        ``LLMRequest.model_name`` — any provider prefix already applied. That
+        is the whole point of asking: which prefix a backend needs is a fact
+        about the backend, and making the user know it is how a working model
+        ends up unreachable for want of five characters.
+
+        Answer however you can. A live listing from the endpoint is worth
+        more than any table — it is current, and it covers aggregators that
+        no table has heard of — but a static answer or ``[]`` is fine.
+        """
+        return []
+
+    def params(self, sdk, model_name: str, endpoint: str) -> list:
+        """Extra provider parameters *model_name* accepts.
+
+        Each entry is ``{"name", "label", "kind", "choices", "supported",
+        "note"}``. ``kind`` is ``"choice"``, ``"number"``, ``"bool"`` or
+        ``"text"``; ``choices`` matters only for ``"choice"``.
+
+        ``supported`` is **a report, never a gate.** A caller shows a false
+        one greyed with its ``note`` and still lets it be set, because this
+        answer is a lookup in somebody else's table and those tables are
+        wrong sometimes — the case that forced this rule was a provider whose
+        table omitted the very parameter its API documents. Treating the
+        lookup as authoritative would have hidden the setting that works and
+        told the user their model could not reason.
+
+        So ``note`` carries the *why*, and should say what will happen to the
+        value rather than what the model can do: "this backend drops it; try
+        ``thinking``" is actionable, "not supported" is a claim about the
+        model that this method is in no position to make.
+        """
+        return []
+
     def __chat__(self, sdk, request: dict, token: str = ""):
         """Receive one call. The kernel calls this, never an author.
 
@@ -345,3 +419,34 @@ class BaseLLMBackend:
                                        code).to_dict()
         finally:
             sdk._delta_token = ""
+
+    def __describe__(self, sdk, question: str, args: dict = None):
+        """Answer one of the three discovery questions. The kernel calls this.
+
+        One entry point rather than three, because the three differ only in
+        their arguments and every one of them answers a list — a second and
+        third wire name would buy nothing and cost three places to keep in
+        step.
+
+        Anything raised becomes ``[]``. These questions are asked while
+        somebody is filling in a form, and a backend that cannot introspect
+        must be no worse than one that never offered to: the form falls back
+        to free text, which is where it started.
+        """
+        args = args or {}
+        try:
+            if question == "providers":
+                answer = self.providers(sdk)
+            elif question == "models":
+                answer = self.models(sdk, args.get("endpoint") or "",
+                                     args.get("api_key") or "",
+                                     args.get("provider") or "")
+            elif question == "params":
+                answer = self.params(sdk, args.get("model_name") or "",
+                                     args.get("endpoint") or "")
+            else:
+                return []
+            return [dict(row) for row in answer if isinstance(row, dict)]
+        except Exception as exc:                    # noqa: BLE001
+            sdk.log(f"backend could not answer {question!r}: {exc}")
+            return []
