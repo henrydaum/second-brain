@@ -1,33 +1,35 @@
 """What a profile's provider parameters actually become on the wire.
 
-The kernel puts ``reasoning_effort`` on every call whose profile did not say
-otherwise (``llm.registry.DEFAULT_REASONING_EFFORT``). It never reaches a
-provider in that spelling. A backend *translates* it, and LiteLLM decides how
-from the **model name** — so one string, chosen to name a model, silently
-decides three different outcomes:
+A backend does not forward a parameter, it *translates* it, and LiteLLM
+decides how from the **model name** — so one string, chosen to name a model,
+silently decides what an endpoint receives:
 
 * a name whose first path segment matches a provider LiteLLM knows gets that
   provider's dialect (``deepseek/…`` sends ``thinking={"type": "enabled"}``,
   ``ollama/…`` sends ``think=True``) — addressed to whatever host the
   profile's endpoint actually points at, which is very often not that
   provider. An endpoint that has never heard of the field answers 400.
-* a name it does not recognise is served over the OpenAI-compatible path,
-  where ``drop_params`` **discards** the parameter. The call succeeds and the
-  setting does nothing. ``/llm`` goes on showing the level you picked.
-* anything the endpoint does understand goes through unchanged.
+* anything else goes through as written.
 
-None of the three is visible from ``/llm``, and the failure of the first is
-whatever the endpoint says — measured against one aggregator, the entire
+The third outcome used to be *dropped*: LiteLLM's ``drop_params`` discards a
+parameter its table does not list for the resolved provider, and that table
+has gaps — it omits ``reasoning_effort`` for MiniMax, whose own API documents
+it. The backend now passes ``allowed_openai_params`` for everything a profile
+sends, so a configured value reaches the provider even if the provider then
+refuses it. This probe does the same, which is why DROPPED should no longer
+appear; if it does, the backend and this file have drifted.
+
+None of it is visible from ``/llm``'s own screen, and the failure of the first
+is whatever the endpoint says — measured against one aggregator, the entire
 refusal was ``{'code': 400, 'msg': 'bad request'}``.
 
-So this reports, per profile, which of the three you are in. It is offline by
-default: no key is used, nothing is sent, and the answer comes from the same
-LiteLLM translation the backend will perform. ``--live`` adds one real
-five-token call per profile, which is the only way to see the endpoint's own
-verdict on what we would send it.
+Offline by default: no key is used, nothing is sent, and the answer comes from
+the same LiteLLM translation the backend will perform. ``--live`` adds one
+real five-token call per profile, which is the only way to see the endpoint's
+own verdict on what we would send it.
 
     python dev/probe_params.py                       # every configured profile
-    python dev/probe_params.py --profile deepseek-ai/DeepSeek-V4-Pro
+    python dev/probe_params.py --profile minimax/MiniMax-M3
     python dev/probe_params.py --live                # +1 tiny call per profile
 
 Run it on the deployment that shows the symptom — the endpoint and the model
@@ -111,7 +113,12 @@ def translate(model, params):
     resolved, provider, _key_, _base = litellm.get_llm_provider(model=model)
     sendable = {k: v for k, v in params.items() if k != "tool_choice"}
     out = litellm.utils.get_optional_params(
-        model=resolved, custom_llm_provider=provider, **sendable)
+        model=resolved, custom_llm_provider=provider,
+        # What ``_provider_kwargs`` does: every parameter the profile set is
+        # insisted on, so ``drop_params`` cannot discard one somebody chose.
+        # Omitting this here would report drops the real call never makes.
+        allowed_openai_params=list(sendable),
+        **sendable)
     # ``stream`` is added by the translation itself and says nothing about
     # what the profile asked for.
     out.pop("stream", None)
@@ -174,7 +181,6 @@ def live_call(model, profile, params):
 def report(name, brain, prefixes, live):
     """One profile, as facts first and a verdict last."""
     params = brain.params
-    defaults = brain.default_params
     base_url = brain.base_url
     model = model_for_litellm(name, base_url, prefixes)
 
@@ -183,13 +189,12 @@ def report(name, brain, prefixes, live):
     print("  backend         %s" % brain.backend_name)
 
     if not params:
-        print("  profile sends   (nothing - every parameter is null)")
+        print("  profile sends   (nothing - this profile configures no "
+              "parameters)")
         return
 
     print("  profile sends   " + ", ".join(
-        "%s=%r%s" % (k, v, "  <- kernel default, not set by this profile"
-                     if k in defaults else "")
-        for k, v in sorted(params.items())))
+        "%s=%r" % (k, v) for k, v in sorted(params.items())))
 
     try:
         received, provider = translate(model, params)
@@ -202,8 +207,7 @@ def report(name, brain, prefixes, live):
     print()
     rows = verdicts(params, received)
     for key, verdict, detail in rows:
-        flag = "  <- kernel default" if key in defaults else ""
-        print("    %-20s %-11s %s%s" % (key, verdict, detail, flag))
+        print("    %-20s %-11s %s" % (key, verdict, detail))
 
     translated = [k for k, v, _ in rows if v == "TRANSLATED"]
     dropped = [k for k, v, _ in rows if v == "DROPPED"]
@@ -219,13 +223,11 @@ def report(name, brain, prefixes, live):
                  base_url or "(the provider default)", provider,
                  translated[0]))
     elif dropped:
-        print("DROPPED. %s never leaves this machine - drop_params\n"
-              "         discards it, because LiteLLM's %s config does not "
-              "list it as\n         supported. Nothing breaks and nothing "
-              "happens: the level /llm\n         shows is inert. If this "
-              "endpoint takes reasoning some other\n         way, spell that "
-              "way directly in Extra parameters."
-              % (", ".join(dropped), provider))
+        print("DROPPED. %s never leaves this machine, which should no\n"
+              "         longer be possible: the backend insists on every "
+              "parameter a\n         profile sets. Either this file and "
+              "llm_litellm.py have drifted,\n         or litellm stopped "
+              "honouring allowed_openai_params." % ", ".join(dropped))
     else:
         print("FORWARDED. Everything this profile sets reaches the endpoint "
               "as\n         written.")

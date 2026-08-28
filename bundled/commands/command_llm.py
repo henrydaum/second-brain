@@ -39,7 +39,7 @@ REMOVE = "remove"
 BASE_FIELDS = ["llm_model_name", *PROFILE_FIELDS]
 BASE_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
-    "Service class", "Images", "Audio", "Video",
+    "Backend", "Images", "Audio", "Video",
 ]
 CAPABILITY_FIELDS = {
     "llm_capability_image": "image",
