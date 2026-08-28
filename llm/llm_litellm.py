@@ -515,14 +515,17 @@ class LiteLLMBackend(BaseLLMBackend):
                 for name in sorted(getattr(litellm, "provider_list", []) or [],
                                    key=lambda n: str(getattr(n, "value", n)))]
 
-    def models(self, sdk, endpoint, api_key, provider=""):
+    def models(self, sdk, endpoint, api_key, provider="", live=False):
         """What *endpoint* serves, asked of the endpoint itself where possible.
 
-        The live ``GET /v1/models`` comes first because it is the only
-        authoritative answer: it is current, and it covers the aggregators
-        that appear in no table anywhere - which is most of the endpoints
-        anybody actually types. LiteLLM's own index is the fallback, for a
-        provider named with no endpoint to ask.
+        With ``live`` set, ``GET /v1/models`` comes first: it is the only
+        authoritative answer, it is current, and it covers the gateways that
+        appear in no table anywhere - which is most of the endpoints anybody
+        actually types. Without it the answer is LiteLLM's own index, which
+        needs a provider name and knows nothing about gateways.
+
+        Off by default because fetching is egress and the caller decides
+        whether it is in a position to be asked for it.
 
         What comes back is the name to *store* - the provider prefix restored
         (see :meth:`_prefixed`), and nothing else. Notably **not**
@@ -532,7 +535,7 @@ class LiteLLMBackend(BaseLLMBackend):
         front of the user everywhere the profile is listed. ``chat`` applies
         it per call already, and applying it twice is harmless but pointless.
         """
-        rows = self._live_models(sdk, endpoint, api_key)
+        rows = self._live_models(sdk, endpoint, api_key) if live else []
         if not rows and provider:
             index = getattr(self._litellm, "models_by_provider", {}) or {}
             rows = sorted(str(m) for m in index.get(provider, []) or [])
