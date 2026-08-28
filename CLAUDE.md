@@ -361,173 +361,59 @@ brains by naming one; the kernel resolves it when the call is placed. Same
 handle-not-the-thing move as `<secret:…>`, and it makes native and sandboxed
 hooks identical — a sandboxed one could never hold a live model anyway.
 
-**How hard the model thinks is a profile setting, and the kernel names
-exactly one param.** `Brain.params` builds the extra provider kwargs a profile
-sends on every call. They live in one optional key inside the free-form
-`llm_profiles` dict — `llm_extra_params`, forwarded verbatim — with reasoning
-effort as an ordinary member under its OpenAI-compatible wire name
-`reasoning_effort`, not a field of its own. `/llm` offers it a picker the way
-it offers a capability a checkbox: the same relationship
-`llm_capability_image` has with `llm_capabilities`, because the value belongs
-in the dict beside its neighbours and a picker beats remembering a vocabulary
-and JSON syntax to set one member of it. No schema change and no migration —
-an old profile simply has no such key.
+**Provider parameters are one opaque dict, and the kernel names no member
+of it.** `Brain.params` forwards `llm_extra_params` verbatim; a null-valued
+entry is dropped, which is a rule about every parameter. That is the whole of
+what keeps it **backend-agnostic**: no provider matrix, no `supported_params`
+declaration for a backend to get wrong, and nothing in `llm/`, `runtime/` or
+`/llm` that learns a provider's name.
 
-That is the whole of what keeps it **backend-agnostic**: one standard name, an
-opaque dict, and no declaration for a backend to get wrong. A backend that
-cannot carry a param degrades it (LiteLLM sets `drop_params`) or reports the
-provider's own refusal — and the alternative, a `supported_params` declaration
-the kernel filtered against, would make a backend written before this existed
-silently drop a setting the user could see in `/llm`. Nothing in `llm/`,
-`runtime/` or `/llm` learns a provider's name.
+**The kernel used to name one, and unwinding that is worth recording.**
+`reasoning_effort` was supplied at `DEFAULT_REASONING_EFFORT` for any profile
+that said nothing, on the argument that "whatever the provider felt like" is
+not a decision anybody made and left one profile silently thinking hard and
+its neighbour not at all — the comparison `/llm` exists to make readable. The
+argument was sound and rested on a premise that stopped being true: `/llm`
+now lists every parameter a profile sends, on its own row, with the backend's
+verdict beside it. The default bought a guess where there is a table.
 
-**The price of that ignorance is paid at the failure, and it took a real one
-to find where.** The claim used to be that a refusal is "a sentence the person
-who typed the value can act on". Neither half survives contact: the kernel
-defaults the effort, so *nobody typed it*, and a backend does not forward the
-param — it **translates** it, into whatever dialect it believes the endpoint
-speaks, which LiteLLM infers from the model *name*. One string chosen to name
-a model therefore decides three outcomes invisibly. A first path segment
-matching a provider LiteLLM knows gets that provider's spelling (`deepseek/…`
-becomes `thinking={"type": "enabled"}`, `ollama/…` becomes `think=True`) sent
-to whatever host `llm_endpoint` actually points at; a name it does not
-recognise goes over the OpenAI-compatible path where `drop_params` **discards**
-the param, so the level `/llm` shows is inert and nothing says so; and only a
-name whose provider genuinely matches the endpoint gets the param forwarded.
-The observed refusal for the first case was, in its entirety, `{'code': 400,
-'msg': 'bad request'}` — and between the picker and the screen the word
-*reasoning* appeared nowhere.
-
-So `Brain._explained` puts the inputs on the failure: every param the call
-carried, with the ones the profile never named marked as the kernel's and
-pointed at `/llm`. Deliberately a list rather than a diagnosis — nothing at
-this layer can know which param an endpoint objected to, and a guess dressed
-as an answer is worse than the silence. `Brain.default_params` is what draws
-that line, and naming a param counts as asking even at `null`: the profile
-made a decision, and a decision needs no explaining back to whoever made it.
-Context overflows are exempt, since the compaction layer handles those before
-a person sees one. `dev/probe_params.py` answers the same question ahead of
-time, per profile, offline — which of the three outcomes each profile is in.
-Run it on the deployment that shows the symptom; the endpoint and the model
-name are both part of the question.
-
-**And the same question is now answerable *before* the call, by asking the
-backend.** `BaseLLMBackend` grew three optional methods — `providers`,
-`models`, `params` — reached through one wire entry (`__describe__`) and one
-`Brain` cache, published on `llm.list` and its `describe()` rows. They are the
-pyramid a person actually walks when configuring a model: which provider,
-which of its models, which parameters that model takes. Each narrows the last,
-and the ordering is forced rather than chosen — listing models means asking an
-endpoint, which means already holding its URL and key.
-
-**All three answer `[]`, and that is an ordinary answer.** Every backend
-written before this is one that answers nothing, so an absent answer had to
-cost nothing; `__describe__` also swallows a raising method into `[]`, because
-these are asked while somebody is half-way through a form and an exception
-there strands them. The three failure modes — no backend can say, this backend
-broke, the answer is genuinely empty — are deliberately indistinguishable, and
-the flow that asked falls back to a typed value in all of them. That fallback
-is the *common* path, not an escape hatch: aggregators appear in no provider
-list at all.
-
-**The levels are not the same kind of thing, and the design has to respect
-it.** Measured against LiteLLM 1.94.0: the provider list is static and cheap,
-but *has no endpoints* — there is no table of default base URLs, and the only
-way to resolve one is `get_llm_provider`, which is **not** the pure lookup its
-name suggests: for at least two providers it starts an *interactive OAuth
-device-code login*, printing a sign-in code and blocking through three
-sixty-second attempts waiting for a human to authorize it. Measured, on
-`github_copilot` and one other, while probing the list. A settings form cannot
-make that call — not because it is slow, but because it would put login codes
-for an unrelated service in front of somebody configuring a model, and a
-credential prompt nobody asked for is the one thing a setup flow must never
-produce. So `endpoint` comes back blank and the user types it, which is also
-the safer half of the trade: a guessed URL fails at the first real call with an
-error that blames the model.
-
-Worth generalizing, because the next such helper will look equally harmless:
-**a provider library's "what is this" function may authenticate.** Anything the
-kernel calls to *describe* a configuration has to be assumed capable of side
-effects until checked, and checked by running it rather than by reading its
-signature. The *model* list is the
-opposite — LiteLLM cannot answer it at all, since it indexes by provider
-rather than endpoint, while the endpoint itself answers `GET /v1/models`
-authoritatively and covers every gateway no table has heard of. And the
-*param* list is a real per-model lookup (OpenAI's 220 models fall into eight
-distinct param sets) that is nonetheless **incomplete**.
-
-That last word is why `supported` is a **report and never a gate**.
-`drop_params` discards exactly the complement of `get_supported_openai_params`
-(litellm `utils.py`, `_check_valid_arg`), so a `False` is an exact prediction
-that the value will be thrown away — and still not proof the model lacks the
-capability. The case that forced the rule: LiteLLM's MiniMax entry lists
-`thinking` and `reasoning_split` and omits `reasoning_effort`, so a profile
-showing a confident **High** was sending nothing, for a model that reasons
-perfectly well. A design that trusted the lookup would have greyed out the
-setting and told the user their model could not think. So the note names
-**what happens to the value** and the spelling that does survive — "discards
-it for minimax; try `thinking`" — never what the model can do, and the field
-stays settable so the user can overrule the table.
-
-**`models` returns the name to *store*, prefix restored.** That is the single
-thing the method exists for: an endpoint's `/v1/models` answers in its own
-vocabulary (`MiniMax-M3`), and the string that routes is `minimax/MiniMax-M3`
-— the provider is the piece the listing cannot supply, because a server has no
-reason to name itself. `_prefixed` puts it back, and leaves alone any id that
-already carries a slash, since an aggregator's prefix is its own catalogue's
-rather than LiteLLM's. Notably it does **not** apply `_model_name`'s `openai/`
-shim: that is how this backend dials a custom endpoint, not part of the
-model's identity, and baking it in would put it in front of the user
-everywhere a profile is listed.
-
-`/llm` declares `net.http` for the live listing's sake, so an approved action
-carries it instead of a dialog interrupting a half-filled form. Refusal is not
-fatal — the listing falls back to what the backend knows offline, then to
-typing the name — which is the test for whether a widened grant is buying a
-convenience or a dependency.
-
-**A profile that says nothing gets `DEFAULT_REASONING_EFFORT`, and a `null`
-means send nothing.** Absent is not a decision, so the kernel makes one:
-"whatever the provider felt like" differs per model, which left one profile
-silently thinking hard and its neighbour not at all — the comparison `/llm`
-exists to make readable. That default is what forces the second half: without
-a way to decline, `reasoning_effort` would be the one param a profile could
-not refuse. It is written as JSON `null` rather than a magic word so it cannot
-be confused with `none`, a real level several providers accept meaning "think
-as little as possible", and the rule is stated generally — *any* null-valued
-extra is dropped — so the next param the kernel defaults needs no second
-mechanism. Note the order inside `params`: the default is applied *before* the
-nulls are dropped, or clearing the effort would hand it straight back.
-
-Two concessions to the fact that config gets hand-edited. `"off"` is accepted
-as an alias for that null, because it is the word `/llm`'s picker *shows* and
-therefore the word people type into the file — free to alias, since `off` is a
-level at no provider. And an `llm_extra_params` that is not an object is
-ignored with a **logged warning**, once per profile version rather than per
-call: staying reachable is right, staying silent about it is how somebody
-spends an afternoon on a setting they can see in a file and that does nothing.
-`/llm` also refuses `api_key`, `api_base`, `model`, `messages`, `tools` and
-`stream` as extras and names the field that really sets each — the backend
-merges with `setdefault`, so one of those would win over the profile silently,
-and a credential there sits in plaintext instead of behind the `secret_`
-prefix that declares it one.
-
-**There is one provider this default can break, and it is a known cost.**
-LiteLLM translates effort into thinking *token budgets* for Anthropic, and a
-Claude turn with thinking on must hand its cryptographically signed
-`thinking_blocks` back on the next tool-result turn or the API refuses the
-call — *"Expected `thinking` or `redacted_thinking`, but found `tool_use`"*.
-LiteLLM does its half in both directions (`anthropic_messages_pt` reads
-`thinking_blocks` straight off the assistant message it is given); what breaks
-the chain is us. `LLMResponse` has no field for one and `_for_provider`
+It also cost real breakage. LiteLLM translates effort into thinking *token
+budgets* for Anthropic, and a Claude turn with thinking on must hand its
+cryptographically signed `thinking_blocks` back on the next tool-result turn
+or the API refuses the call — *"Expected `thinking` or `redacted_thinking`,
+but found `tool_use`"*. `LLMResponse` has no field for one and `_for_provider`
 rebuilds assistant messages from `{role, content, tool_calls}`, so the blocks
-are discarded and cannot be handed back. A translation layer can normalize a
+are discarded and cannot be returned. A translation layer normalizes a
 *shape*; it cannot normalize *statefulness*. Carrying them would mean the same
-five threading points `attachments` and `author` already have — response
-field, wire `to_dict`/`from_dict`, history row, `conversation_messages`
-column, `_for_provider`. Until then, a Claude profile needs an explicit
-`none` or a `null`. The failure is loud, which is what makes the default worth
-taking now.
+five threading points `attachments` and `author` already have.
+
+**Removing the one named parameter removed four mechanisms with it**, which
+is the tell that the special case was load-bearing rather than incidental:
+`OFF_EFFORT` (a word aliased to null, so a profile could decline the one param
+it could not otherwise refuse — and a hazard for any provider taking `off` as
+a real value), `Brain.default_params` (which existed only to separate the
+kernel's parameter from the user's), `LLMRequest.chosen_params` (the wire
+field telling a backend which params to insist on, now every one of them), and
+a branch in `param_status` for a parameter nobody chose. What a profile sends
+is what somebody configured.
+
+**A set parameter is insisted on, not dropped.** LiteLLM's `drop_params`
+discards anything its table does not list for the resolved provider, and that
+table has gaps — it omits `reasoning_effort` for MiniMax, whose own API
+documents it. So the backend passes `allowed_openai_params` for everything the
+profile sends: a value somebody configured should reach the provider even if
+the provider then refuses it, because a loud refusal is feedback and a silent
+discard is a setting that lies.
+
+**The price of provider-ignorance is paid at the failure.** A refusal is often
+illegible on its own — one aggregator's entire answer to a parameter it would
+not take was `{'code': 400, 'msg': 'bad request'}`, naming nothing. So
+`Brain._explained` lists every parameter the call carried and points at
+`/llm`. Deliberately a list rather than a diagnosis: nothing at this layer can
+know which parameter an endpoint objected to, and a guess dressed as an answer
+is worse than the silence. Context overflows are exempt, since the compaction
+layer handles those before a person sees one. `dev/probe_params.py` answers
+the same question ahead of time, per profile, offline.
 
 **The merge happens where the brain is resolved, not where `ModelRequest` is
 built** (`_invoke_inner`): the profile's params go *underneath* the request's,

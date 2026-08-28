@@ -54,46 +54,12 @@ BACKEND_BASE = "BaseLLMBackend"
 # shim — a stored value nobody rewrites, and the alias is how it stays valid.
 DEFAULT_BACKEND = "LiteLLMService"
 
-# How hard a model thinks when its profile says nothing. A kernel default
-# rather than an absent param, because "whatever the provider felt like" is
-# not a decision anybody made and it differs per model — one profile silently
-# thinking hard and its neighbour not at all is the comparison ``/llm`` exists
-# to make readable.
-#
-# Note this is a real behaviour change for a profile nobody has touched, and
-# there is one provider it can break: LiteLLM translates effort into thinking
-# *token budgets* for Anthropic, and a Claude turn with thinking on must hand
-# its signed ``thinking_blocks`` back on the next tool-result turn or the API
-# refuses the call. Nothing here carries them (``LLMResponse`` has no field
-# for one), so a Claude profile on any level but ``none`` will fail its second
-# tool call until that round trip exists.
-#
-# That was written as "the failure is loud — a 400 naming the missing block",
-# which is true of Anthropic and turned out to be a claim about one provider
-# rather than about the mechanism. A backend does not forward this param, it
-# *translates* it, into whatever dialect it believes the endpoint speaks —
-# and it believes that from the model *name*. So a name whose prefix happens
-# to match a provider LiteLLM knows gets that provider's spelling
-# (``deepseek`` becomes ``thinking``, ``ollama`` becomes ``think``) sent to
-# whatever host the profile's endpoint actually points at, while a name it
-# does not recognise is served over the OpenAI-compatible path and the param
-# is quietly dropped by ``drop_params`` instead. Neither outcome is visible
-# from ``/llm``, both are decided by a string nobody chose for this purpose,
-# and the refusal that comes back can be as bare as
-# ``{'code': 400, 'msg': 'bad request'}``.
-#
-# So the default stays, and ``Brain._explained`` is the part that makes it
-# affordable: a failed call now names the params it carried and marks the
-# ones the profile never asked for.
-DEFAULT_REASONING_EFFORT = "medium"
-
-# The word ``/llm``'s picker shows for "send nothing", accepted here as an
-# alias for the ``null`` it writes. Config is hand-edited in practice, and the
-# label a person reads is the word they type — so the two spellings existing
-# is a fact about how this gets used rather than a design choice. Aliasing is
-# free precisely because ``off`` is a level at no provider: ``none`` is the
-# real one, and it keeps its own meaning ("think as little as possible").
-OFF_EFFORT = "off"
+# No provider parameter is named here, and that is the point. The kernel once
+# supplied ``reasoning_effort`` for a profile that said nothing, which made it
+# the one parameter with a default, an alias, a picker of its own and a branch
+# in four separate places. See ``Brain.params`` for why it no longer does. A
+# parameter is whatever the user configured, and they are all the same kind of
+# thing.
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -347,32 +313,31 @@ class Brain:
     def params(self) -> dict:
         """Extra provider kwargs this profile sends on every call.
 
-        The kernel names exactly one of them — ``reasoning_effort``, in the
-        OpenAI-compatible spelling every backend adapter already speaks — and
-        forwards ``llm_extra_params`` verbatim for everything else. That is
-        the whole of what keeps this backend-agnostic: no provider matrix, no
-        declaration for a backend to get wrong, and nothing in ``llm/`` that
-        knows which library is on the other side. A backend that cannot carry
-        a param degrades it (the store's LiteLLM sets ``drop_params``) or
-        reports the provider's own refusal.
+        One key holds all of them — ``llm_extra_params`` — forwarded verbatim,
+        with no member of it named anywhere in the kernel. That is the whole of
+        what keeps this backend-agnostic: no provider matrix, no declaration
+        for a backend to get wrong, and nothing in ``llm/`` that knows which
+        library is on the other side. A backend that cannot carry a param
+        degrades it (the store's LiteLLM sets ``drop_params``) or reports the
+        provider's own refusal — which is not reliably a sentence anybody can
+        act on, and is the cost of staying ignorant here. It is paid in
+        :meth:`_explained` rather than by learning provider names.
 
-        That refusal is not reliably a sentence anybody can act on, which is
-        the cost of staying ignorant of providers here and is paid in
-        :meth:`_explained` rather than by learning their names. See
-        ``DEFAULT_REASONING_EFFORT`` for the shape of it.
+        **The kernel used to name one of them.** ``reasoning_effort`` was
+        supplied at a default level for any profile that said nothing, on the
+        argument that "whatever the provider felt like" differs per model and
+        left one profile silently thinking hard and its neighbour not at all.
+        That argument rested on the comparison being invisible, and it is not
+        any more: ``/llm`` lists every parameter a profile sends, on its own
+        row, with the backend's verdict beside it. So the default bought a
+        guess where there is now a table, and cost real breakage — a Claude
+        profile with thinking on cannot hand its signed ``thinking_blocks``
+        back and the API refuses the next tool call. A parameter nobody set is
+        not sent.
 
-        One key holds all of them — ``llm_extra_params`` — with reasoning
-        effort as an ordinary member rather than a field of its own. ``/llm``
-        offers it a picker the way it offers a capability a checkbox, and
-        stores it here, the same shape ``llm_capabilities`` already has.
-
-        **A null means omit.** It is the one convention this adds, and it
-        exists because the kernel now supplies a value nobody asked for:
-        without a way to say "send nothing", ``reasoning_effort`` would become
-        the one param a profile could not decline. Writing it as JSON ``null``
-        rather than a magic word keeps "the user cleared this" and "the user
-        picked a level called off" from being the same string, and generalises
-        to any param the kernel defaults later.
+        **A null still means omit**, and that is a rule about every parameter
+        rather than a concession to one. It is what ``/llm`` writes when you
+        say to send nothing, and what a hand-edited config can say too.
 
         Tolerant like ``context_size``, and for the same reason: this is
         user-entered config, and a malformed extras blob must not be able to
@@ -384,35 +349,8 @@ class Brain:
         if extra is not None and not isinstance(extra, dict):
             self._complain_about_extras(extra)
         declared = dict(extra) if isinstance(extra, dict) else {}
-        effort = declared.get("reasoning_effort")
-        if isinstance(effort, str) and effort.strip().lower() == OFF_EFFORT:
-            declared["reasoning_effort"] = None
-        # Named-but-null is a decision; absent is not. So the default is
-        # applied before the nulls are dropped, or clearing the effort would
-        # simply hand it straight back.
-        declared.setdefault("reasoning_effort", DEFAULT_REASONING_EFFORT)
         return {key: value for key, value in declared.items()
                 if value is not None}
-
-    @property
-    def default_params(self) -> dict:
-        """The part of :attr:`params` this profile never asked for.
-
-        Exactly the keys the kernel supplied on its own — today that is
-        ``reasoning_effort`` and nothing else. It is a separate question from
-        ``params`` because it is the one a *failure* needs answered: a
-        provider refusing a param somebody typed is a sentence they can act
-        on, and a provider refusing a param the kernel invented is not, unless
-        something says which it was.
-
-        Naming a param and leaving it null still counts as asking — the
-        profile made a decision, the decision was "send nothing", and there is
-        then nothing on the call to explain.
-        """
-        declared = self.profile.get("llm_extra_params")
-        named = set(declared) if isinstance(declared, dict) else set()
-        return {key: value for key, value in self.params.items()
-                if key not in named}
 
     def _explained(self, message: str, params: dict) -> str:
         """Name the provider params a failed call carried.
@@ -424,14 +362,12 @@ class Brain:
         objected to, and a guess dressed as an answer would be worse than the
         silence it replaces.
 
-        The silence is the point. ``DEFAULT_REASONING_EFFORT`` puts a param on
-        every call whose profile never mentioned one, and the argument for
-        doing that (see the constant) rests on the failure being legible —
-        "the provider's own refusal, which is a sentence the person who typed
-        the value can act on". Both halves turn out to be optimistic in
-        practice: nobody typed the value, and one aggregator's whole refusal
-        was ``{'code': 400, 'msg': 'bad request'}``. Between the picker and
-        the screen, the word *reasoning* appeared nowhere.
+        It exists because a provider's refusal is often not legible on its
+        own. One aggregator's entire answer to a parameter it would not take
+        was ``{'code': 400, 'msg': 'bad request'}`` — between the picker that
+        set the value and the screen that reported the failure, the parameter
+        was named nowhere. Listing what the call carried is the smallest thing
+        that fixes that without the kernel learning any provider's name.
 
         Values are shown because a level is the whole content of the setting,
         and redacted for anything named like a credential. ``/llm`` already
@@ -443,14 +379,8 @@ class Brain:
             return message
         shown = ", ".join(f"{key}={_shown_value(key, value)}"
                           for key, value in sorted(params.items()))
-        note = f"The call carried these provider parameters: {shown}."
-        unasked = sorted(set(self.default_params) & set(params))
-        if unasked:
-            one = len(unasked) == 1
-            note += (f" {', '.join(unasked)} {'is a' if one else 'are'} kernel "
-                     f"default{'' if one else 's'} that this profile did not "
-                     f"set; `/llm` can change or clear "
-                     f"{'it' if one else 'them'}.")
+        note = (f"The call carried these provider parameters: {shown}. "
+                "`/llm` can change or clear them.")
         return f"{message} | {note}"
 
     def _complain_about_extras(self, extra) -> None:
@@ -747,12 +677,11 @@ class Brain:
 
         ``arrives`` is **not** the backend's ``supported`` flag, and the gap
         between them is the whole of what this property adds. A backend
-        reports what its provider table says; the kernel additionally knows
-        whether *this profile chose the value*, and a chosen value is insisted
-        on rather than dropped (``LLMRequest.chosen_params``). So a param the
-        table rejects still arrives when somebody picked it, and the note says
-        the provider may refuse it — which is a different warning, aimed at a
-        different outcome, from one that silently does nothing.
+        reports what its provider table says; the kernel knows that every one
+        of these was set by hand, and a set parameter is insisted on rather
+        than dropped. So a parameter the table rejects still arrives, and the
+        note warns that the provider may refuse it — a different warning,
+        aimed at a different outcome, from one that silently does nothing.
 
         Returns ``{}`` when the backend cannot say **or when no box is open**.
         Silence is the honest answer for a profile nobody has loaded; the
@@ -765,21 +694,13 @@ class Brain:
             return {}
         known = {row.get("name"): row for row in self.param_options()
                  if isinstance(row, dict)}
-        defaulted = set(self.default_params)
         status = {}
         for name in sending:
             row = known.get(name)
             if row is None:
                 continue
-            listed = bool(row.get("supported", True))
-            note = row.get("note") or ""
-            if listed:
+            if row.get("supported", True):
                 status[name] = (True, "")
-            elif name in defaulted:
-                # Nobody asked for this one, so it is left to be dropped —
-                # breaking a call over a value the user never chose would be
-                # indefensible.
-                status[name] = (False, note or "not sent by this backend")
             else:
                 status[name] = (True, (
                     "sent because you set it, though this backend does not "
@@ -817,14 +738,6 @@ class Brain:
         request.model_name = request.model_name or self.model_name
         request.api_key = request.api_key or self.api_key
         request.base_url = request.base_url or self.base_url
-        # Which params this profile chose for itself, so a backend can insist
-        # on those and only those. Derived here rather than declared, because
-        # ``default_params`` is already the one place that knows the
-        # difference between a decision and a fallback.
-        if not request.chosen_params:
-            defaulted = set(self.default_params)
-            request.chosen_params = sorted(
-                key for key in request.params if key not in defaulted)
         streaming = bool(request.stream and on_delta is not None
                          and self.supports_streaming)
         request.stream = streaming

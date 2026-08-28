@@ -482,22 +482,20 @@ def test_effort_is_one_parameter_among_the_others_now():
         "reasoning_effort": "high", "temperature": 0.2}
 
 
-def test_off_is_stored_as_a_null_not_as_the_word():
-    """``none`` is a real level several providers accept, meaning "think as
-    little as possible". Storing "off" beside it would be two spellings
-    nobody could tell apart in a config file.
+def test_no_word_is_read_as_an_instruction():
+    """The word was the bug. A free-text step told you to answer ``remove``
+    while ``run`` compared against a different string, so typing it set the
+    parameter *to* "remove" — and ``off`` had the same shape of problem in the
+    other direction, since ``off`` is a plausible value for a real provider
+    parameter and reading it as an instruction made that value unsettable.
 
-    It applies to every parameter now, not only reasoning: any of them can be
-    declined, and a dropped key would hand back the kernel's default instead."""
+    Declining a parameter is Remove, asked as its own question. Nothing typed
+    into a value means anything but itself."""
     module = _load("command_llm")
-    sdk = _LlmSdk({"m": {}}, default="m")
 
-    module.LlmCommand().run(sdk, {
-        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
-        "extra_param": "reasoning_effort", "extra_value": module.OFF})
-
-    assert sdk._config["llm_profiles"]["m"] == {
-        "llm_extra_params": {"reasoning_effort": None}}
+    assert module._extra_value({"extra_value": "off"}) == "off"
+    assert module._extra_value({"extra_value": "remove"}) == "remove"
+    assert not hasattr(module, "SEND_NOTHING")
 
 def test_a_configured_parameter_is_an_entry_you_can_open():
     """The point of the restructure: a parameter this profile sends sits in
@@ -510,21 +508,16 @@ def test_a_configured_parameter_is_an_entry_you_can_open():
     entries = dict(zip(names, labels))
 
     assert entries[module.PARAM_PREFIX + "temperature"] == "temperature = 0.2"
-    # A stored null is "off", not an empty label.
     assert entries[module.PARAM_PREFIX + "reasoning_effort"] == (
-        "reasoning_effort = off")
+        "reasoning_effort = (sends nothing)")
     # The prefix is what stops a provider parameter impersonating a field.
     assert module._param_field(module.PARAM_PREFIX + "temperature") == (
         "temperature")
     assert module._param_field("llm_endpoint") == ""
 
-
 def test_removing_the_last_parameter_removes_the_key():
     """An empty dict reads as configured to anything scanning config by hand,
-    and every profile written before extras existed carries nothing.
-
-    Removal is also the one thing a parameter can do that a profile field
-    cannot, which is why the two kinds of entry stay distinguishable."""
+    and every profile written before extras existed carries nothing."""
     module = _load("command_llm")
     sdk = _LlmSdk({"m": {"llm_extra_params": {"temperature": 0.2}}},
                   default="m")
@@ -532,53 +525,45 @@ def test_removing_the_last_parameter_removes_the_key():
     module.LlmCommand().run(sdk, {
         "model_name": "m", "action": "edit",
         "field": module.PARAM_PREFIX + "temperature",
-        "extra_value": module.REMOVE})
+        "param_action": module.REMOVE})
 
     assert sdk._config["llm_profiles"]["m"] == {}
 
 
-def test_removing_is_not_the_same_as_sending_nothing():
-    """``off`` stores a JSON null and actively sends the parameter as one;
-    removing stops sending it, so whatever would have happened unasked
-    happens again. Two different requests that a single "clear" would have
-    collapsed into one."""
+def test_changing_and_removing_are_asked_before_either_happens():
+    """Two questions where one nearly did. The single-question version had to
+    carry "delete" as a word inside a free-text value, which is how it came to
+    set the parameter to the string "remove"."""
     module = _load("command_llm")
     sdk = _LlmSdk({"m": {"llm_extra_params": {"reasoning_effort": "high"}}},
                   default="m")
+    # The shared fake's ``card`` answers with pairs, which the other tests
+    # read; this one drives the real form, which concatenates it into a
+    # prompt.
+    sdk.md.card = staticmethod(lambda title, pairs: "")
 
-    module.LlmCommand().run(sdk, {
+    steps = {step["name"]: step for step in module.LlmCommand().form(sdk, {
+        "model_name": "m", "action": "edit",
+        "field": module.PARAM_PREFIX + "reasoning_effort"})}
+
+    assert steps["param_action"]["enum"] == [module.EDIT, module.REMOVE]
+    # The value is not asked for until the answer says it is wanted.
+    assert "extra_value" not in steps
+
+    steps = {step["name"]: step for step in module.LlmCommand().form(sdk, {
         "model_name": "m", "action": "edit",
         "field": module.PARAM_PREFIX + "reasoning_effort",
-        "extra_value": module.OFF})
-
-    assert sdk._config["llm_profiles"]["m"] == {
-        "llm_extra_params": {"reasoning_effort": None}}
-
-def test_an_existing_parameter_offers_removal_and_a_new_one_does_not():
-    """Removing a parameter that was never set is not a coherent request, so
-    the option only appears where it means something."""
-    module = _load("command_llm")
-    spec = {"kind": "choice", "choices": ["low", "high"], "note": ""}
-
-    existing = module._value_step(
-        "reasoning_effort", spec, {"reasoning_effort": "high"},
-        removable=True)
-    assert module.REMOVE in existing["enum"]
-    assert "Currently `high`" in existing["prompt"]
-
-    fresh = module._value_step("reasoning_effort", spec, {})
-    assert module.REMOVE not in fresh["enum"]
+        "param_action": module.EDIT})}
+    assert "extra_value" in steps
 
 def test_the_card_says_what_the_model_will_actually_do():
-    """Reasoning is always on the card, because there is always an answer: a
-    profile that says nothing still thinks at whatever the kernel supplies,
-    and a card that stayed silent would be the only place you could not find
-    that out.
+    """Every parameter gets its own row, so each can carry its own caveat.
 
-    Every other parameter now gets its own row too. It used to be one JSON
-    blob, which is unreadable at a glance and had nowhere to put the warning
-    that a value is being discarded — that warning existed only for reasoning
-    because reasoning was the only one with a row."""
+    It used to be one JSON blob with reasoning promoted out of it into a row
+    of its own — unreadable at a glance, and the promotion was the only reason
+    one parameter could carry a warning and the rest could not. There is no
+    "Reasoning" row now, because there is no parameter the kernel supplies and
+    therefore nothing to report about a profile that sets none."""
     module = _load("command_llm")
     sdk = _LlmSdk({})
 
@@ -586,42 +571,36 @@ def test_the_card_says_what_the_model_will_actually_do():
         return module._describe(sdk, {}, {"m": {"llm_service_class": "X",
                                                 **profile}}, "m", "m")
 
-    assert ("Reasoning", "default") in card({})
-    assert ("Reasoning", "high") in card(
-        {"llm_extra_params": {"reasoning_effort": "high"}})
-    assert ("Reasoning", "off (nothing sent)") in card(
-        {"llm_extra_params": {"reasoning_effort": None}})
+    assert not [pair for pair in card({}) if pair[0] == "Reasoning"]
 
     tuned = card({"llm_extra_params": {"reasoning_effort": "low",
-                                       "temperature": 0.2}})
-    assert ("Reasoning", "low") in tuned
+                                       "temperature": 0.2,
+                                       "thinking": None}})
+    assert ("reasoning_effort", "low") in tuned
     assert ("temperature", "0.2") in tuned
-    # The effort has its own row, so it is not repeated among the rest.
-    assert not [pair for pair in tuned if pair[0] == "reasoning_effort"]
-
-
-
+    assert ("thinking", "(sends nothing)") in tuned
 
 def test_a_value_step_is_shaped_by_what_the_backend_said():
     """The parameter menu is per model, so the *value* question is too.
 
-    A closed set of levels becomes a picker; a number is asked as free text so
-    "off" stays sayable, which a numeric step would refuse. Getting this wrong
-    is how a provider's own vocabulary becomes unreachable.
+    A closed set of values becomes a picker of exactly those values; anything
+    else is free text with no magic words in it.
     """
     module = _load("command_llm")
 
     choice = module._value_step(
         "reasoning_effort",
         {"kind": "choice", "choices": ["low", "high"], "note": ""}, {})
-    assert choice["enum"] == ["low", "high", module.OFF]
+    assert choice["enum"] == ["low", "high"]
 
     number = module._value_step("temperature", {"kind": "number"}, {})
     assert not number["enum"]
+    assert "off" not in number["prompt"] and "remove" not in number["prompt"]
 
     # A parameter the backend could not describe is still settable.
     unknown = module._value_step("enable_thinking", None, {})
     assert not unknown["enum"]
+    assert "off" not in unknown["prompt"] and "remove" not in unknown["prompt"]
 
 def test_reserved_params_are_refused_where_somebody_typed_them():
     """The backend merges extras with ``setdefault``, so one of these wins
@@ -652,20 +631,17 @@ def test_the_reserved_list_covers_what_the_backend_merges():
 
 
 
-def test_the_command_and_the_kernel_agree_on_the_off_spelling():
-    """A command is guest code and cannot import ``llm``, so the coupling is a
-    literal on each side. A mismatch would store a word the kernel reads as a
-    level and send it to a provider as one."""
-    import llm
+def test_a_value_arrives_as_the_type_it_looks_like():
+    """JSON where it parses, so a number is a number and an object is an
+    object; a bare word is not valid JSON and stays the text it was.
 
+    This used to also read ``off`` and ``null`` as instructions. ``null``
+    needs no special case — JSON already reads it — and ``off`` was a bug."""
     module = _load("command_llm")
 
-    assert module.OFF == llm.OFF_EFFORT
-    assert module._extra_value({"extra_value": module.OFF}) is None
-    # JSON is read where it parses, so a number is a number and an object is
-    # an object; a bare word is not valid JSON and stays the text it was.
     assert module._extra_value({"extra_value": "0.2"}) == 0.2
     assert module._extra_value({"extra_value": "true"}) is True
+    assert module._extra_value({"extra_value": "null"}) is None
     assert module._extra_value({"extra_value": '{"type": "enabled"}'}) == {
         "type": "enabled"}
     assert module._extra_value({"extra_value": "medium"}) == "medium"

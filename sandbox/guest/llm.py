@@ -142,14 +142,6 @@ class LLMRequest:
     attachments: list[dict] = field(default_factory=list)
     # Extra provider kwargs (temperature, tool_choice, ...). Forwarded as-is.
     params: dict = field(default_factory=dict)
-    # Which of ``params`` the *profile* named, as opposed to the ones the
-    # kernel supplied because nobody said otherwise. A backend that would
-    # otherwise drop a parameter should insist on these and let the provider
-    # refuse them: somebody chose the value, so a loud rejection is feedback,
-    # where a silent discard is a setting that lies. The kernel's own defaults
-    # are deliberately not in here — nothing may break a call over a value the
-    # user never asked for.
-    chosen_params: list = field(default_factory=list)
     # Connection. ``api_key`` is plaintext: a provider library does its own
     # I/O, so there is no outbound Request for the kernel to substitute a
     # ``<secret:...>`` handle into. See docs/SECURITY_CONTRACT_APPENDIX.md.
@@ -165,8 +157,7 @@ class LLMRequest:
         return {
             "model_name": self.model_name, "messages": self.messages,
             "tools": self.tools, "attachments": self.attachments,
-            "params": self.params, "chosen_params": self.chosen_params,
-            "api_key": self.api_key,
+            "params": self.params, "api_key": self.api_key,
             "base_url": self.base_url, "stream": self.stream,
         }
 
@@ -176,14 +167,13 @@ class LLMRequest:
         data = data or {}
         known = {f: data.get(f) for f in (
             "model_name", "messages", "tools", "attachments", "params",
-            "chosen_params", "api_key", "base_url", "stream")}
+            "api_key", "base_url", "stream")}
         return cls(
             model_name=known["model_name"] or "",
             messages=known["messages"] or [],
             tools=known["tools"],
             attachments=known["attachments"] or [],
             params=known["params"] or {},
-            chosen_params=list(known["chosen_params"] or []),
             api_key=known["api_key"] or "",
             base_url=known["base_url"] or "",
             stream=bool(known["stream"]),

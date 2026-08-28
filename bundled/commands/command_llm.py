@@ -30,12 +30,12 @@ EXTRA_PARAM = "extra_param"
 # call something ``llm_endpoint`` if it likes; the prefix is what keeps a
 # parameter from impersonating a profile field.
 PARAM_PREFIX = "param:"
-# A parameter's value can be *deleted*, which nothing else in that menu can
-# be, and that is the whole reason the two kinds of entry stay
-# distinguishable. Note deleting is not ``OFF``: ``off`` stores a JSON null
-# and actively sends nothing, while removing the key hands the decision back
-# to whatever the kernel or provider would have done unasked.
-REMOVE = "__remove__"
+# What to do with a parameter that is already set. Asked as its own question
+# rather than smuggled into the value step as a magic word, which is what it
+# was: the free-text branch told you to answer ``remove`` and ``run`` compared
+# against a different string, so typing it set the parameter to "remove".
+EDIT = "edit"
+REMOVE = "remove"
 BASE_FIELDS = ["llm_model_name", *PROFILE_FIELDS]
 BASE_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
@@ -46,12 +46,11 @@ CAPABILITY_FIELDS = {
     "llm_capability_audio": "audio",
     "llm_capability_video": "video",
 }
-# This command's spelling of "send nothing", which is a real choice for any
-# parameter now that the kernel supplies a level for a profile that says
-# nothing. Stored as JSON ``null`` rather than the word, so it cannot be
-# confused with ``none`` — a level several providers accept, meaning "think
-# as little as possible".
-OFF = "off"
+# Nothing here names a parameter. There was a "send this as a null" option,
+# which existed because the kernel supplied ``reasoning_effort`` for a profile
+# that said nothing: deleting the key handed the default back, so declining it
+# needed a spelling of its own. The kernel supplies nothing now, so a null and
+# an absent key are the same act, and Remove is that act.
 # What "none of these" is called in the two menus that can be incomplete.
 # Both lists come from a backend introspecting somebody else's catalogue, so
 # neither can ever be assumed complete — and a menu with no way past it turns
@@ -135,16 +134,23 @@ class LlmCommand(BaseCommand):
                 enum=field_names, enum_labels=field_labels))
             held = _param_field(field)
             if held:
-                # An already-configured parameter: straight to its value, with
-                # no need to ask which one.
-                spec = next(
-                    (row for row in _param_options(
-                        sdk, args.get("model_name") or "",
-                        profile.get("llm_endpoint") or "")
-                     if row["name"] == held), None)
-                steps.append(_value_step(
-                    held, spec,
-                    profile.get("llm_extra_params") or {}, removable=True))
+                # Change it or delete it, asked before either happens. Two
+                # questions where one nearly did, because the one had to carry
+                # "delete" as a word inside a free-text value.
+                steps.append(FormStep(
+                    "param_action",
+                    f"What do you want to do with `{held}`?", True,
+                    enum=[EDIT, REMOVE],
+                    enum_labels=["Change its value",
+                                 "Remove it from this profile"]))
+                if args.get("param_action") == EDIT:
+                    spec = next(
+                        (row for row in _param_options(
+                            sdk, args.get("model_name") or "",
+                            profile.get("llm_endpoint") or "")
+                         if row["name"] == held), None)
+                    steps.append(_value_step(
+                        held, spec, profile.get("llm_extra_params") or {}))
             elif field == EXTRA_PARAM:
                 # Adding one: which parameter, then its value.
                 steps.extend(_extra_param_steps(
@@ -210,7 +216,7 @@ class LlmCommand(BaseCommand):
                 if refused:
                     return refused
                 extras = profiles[name].setdefault("llm_extra_params", {})
-                if args.get("extra_value") == REMOVE:
+                if args.get("param_action") == REMOVE:
                     extras.pop(chosen, None)
                     # An empty dict is the absence of the key, never a stored
                     # ``{}``: a profile carrying one reads as configured to
@@ -447,12 +453,12 @@ def _extra_param_steps(sdk, args, model, endpoint, profile):
     return steps
 
 
-def _value_step(name, spec, current, removable=False):
+def _value_step(name, spec, current):
     """The step that collects one parameter's value, shaped by its kind.
 
-    ``removable`` adds the one thing a parameter can do that a profile field
-    cannot. It is offered only for a parameter already set, because removing
-    one that was never there is not a coherent request.
+    Nothing here is a word you type to mean something other than itself.
+    Declining a parameter is Remove, on the step before this one; there is no
+    second spelling of it hidden in the value.
     """
     kind = (spec or {}).get("kind") or "text"
     held = current.get(name, "__unset__")
@@ -461,36 +467,22 @@ def _value_step(name, spec, current, removable=False):
            f"Currently `{held}`.\n\n")
     note = (spec or {}).get("note") or ""
     warning = f"\n\nNote: {note}" if note else ""
-    # ``off`` and removal are genuinely different and both are offered: one
-    # sends the parameter as a null, the other stops sending it at all and
-    # lets whatever would have happened unasked happen again.
-    drop = [REMOVE] if removable else []
-    drop_label = ["Remove — stop setting this"] if removable else []
-    tail = (" Answer `remove` to stop setting it altogether."
-            if removable else "")
     if kind == "choice" and (spec or {}).get("choices"):
         return FormStep(
             "extra_value",
             f"{now}Choose a value for `{name}`.{warning}",
-            True, enum=list(spec["choices"]) + [OFF] + drop,
-            enum_labels=[str(item) for item in spec["choices"]]
-                        + ["Off — send nothing"] + drop_label)
+            True, enum=[str(item) for item in spec["choices"]])
     if kind == "bool":
         return FormStep(
             "extra_value", f"{now}Set `{name}` to?{warning}", True,
-            enum=["true", "false", OFF] + drop,
-            enum_labels=["True", "False", "Off — send nothing"] + drop_label)
+            enum=["true", "false"], enum_labels=["True", "False"])
     if kind == "number":
         return FormStep(
-            "extra_value",
-            f"{now}Enter a number for `{name}`, or `off` to send "
-            f"nothing.{tail}{warning}",
-            True)
+            "extra_value", f"{now}Enter a number for `{name}`.{warning}", True)
     return FormStep(
         "extra_value",
-        f"{now}Enter a value for `{name}`, or `off` to send nothing.{tail} "
-        f"JSON is accepted, so `true`, `2`, or `{{\"type\": \"enabled\"}}` "
-        f"all work.{warning}",
+        f"{now}Enter a value for `{name}`. JSON is accepted, so `true`, `2`, "
+        f"or `{{\"type\": \"enabled\"}}` all work.{warning}",
         True)
 
 
@@ -532,20 +524,18 @@ def _param_options(sdk, model, endpoint):
 def _extra_value(args):
     """The value to store, from whatever the value step collected.
 
-    ``off`` becomes ``None``, which is the stored form of "send nothing" and
-    the one value that must survive: dropping the key instead would hand back
-    the kernel's default, which is the opposite of what was asked for.
+    Read as JSON when it can be, so `2`, `true`, `null` and an object all
+    arrive as themselves rather than as strings. A provider that wants literal
+    text still gets it, because a bare word is not valid JSON and falls
+    through unchanged.
 
-    Everything else is read as JSON when it can be, so `2`, `true` and an
-    object all arrive as themselves rather than as strings. A provider that
-    wants the literal text still gets it, because a bare word is not valid
-    JSON and falls through unchanged.
+    No word means anything but itself. This used to read ``off`` as an
+    instruction, which made ``off`` unsettable for a provider that takes it as
+    a real value.
     """
     raw = args.get("extra_value")
     if isinstance(raw, str):
         text = raw.strip()
-        if text.lower() in (OFF, "null", "none — send nothing"):
-            return None
         try:
             import json
 
@@ -598,7 +588,7 @@ def _fields(profile):
         value = profile["llm_extra_params"][key]
         names.append(PARAM_PREFIX + key)
         labels.append(f"{key} = "
-                      + ("off" if value is None else str(value)))
+                      + ("(sends nothing)" if value is None else str(value)))
     names.append(EXTRA_PARAM)
     labels.append("Add a parameter")
     return names, labels
@@ -816,48 +806,15 @@ def _describe(sdk, registry, profiles, default, name):
         ("Context", context_text),
         ("Native attachments", capabilities),
     ]
-    # Reasoning is always shown, because there is always an answer now: a
-    # profile that says nothing still thinks at whatever the kernel supplies,
-    # and a card that stayed silent would be the only place you could not
-    # find that out.
-    pairs.append(("Reasoning", _effort_text(profile, row)))
-    # Then everything else the profile sends, one row each with its own
-    # caveat. Previously this was a single JSON blob, which is unreadable at a
-    # glance and had nowhere to put the warning that a value is being
-    # discarded — the warning only existed for reasoning because reasoning was
-    # the only one with a row of its own.
+    # Everything the profile sends, one row each with its own caveat. This
+    # was a single JSON blob with reasoning promoted out of it into a row of
+    # its own — unreadable at a glance, and the promotion was the only reason
+    # one parameter could carry a warning and the rest could not.
     for key, value in sorted((profile.get("llm_extra_params") or {}).items()):
-        if key == "reasoning_effort":
-            continue
-        shown = "off (nothing sent)" if value is None else str(value)
+        shown = "(sends nothing)" if value is None else str(value)
         note = _param_note(row, key)
         pairs.append((key, f"{shown} — {note}" if note else shown))
     return sdk.md.card(f"{name}{mark}", pairs)
-
-
-def _effort_text(profile, row=None):
-    """What this profile's reasoning effort reads as, in all four states.
-
-    The fourth is new and is the reason this takes a registry row: a level can
-    be set, displayed, and *discarded before the call*, which used to read
-    exactly like one that was working. A dial that cannot be trusted is worse
-    than no dial, so when the backend says the value will not survive, the
-    card says so beside it.
-
-    Worded as what happens to the *value*, never as a claim about the model.
-    The case that forced this rule was a provider whose model reasons perfectly
-    well and whose entry in the middleman's table simply omits the parameter —
-    "not supported" would have been a lie, and one the user could not check.
-    """
-    extras = profile.get("llm_extra_params") or {}
-    if "reasoning_effort" not in extras:
-        text = "default"
-    elif extras["reasoning_effort"] is None:
-        return "off (nothing sent)"
-    else:
-        text = str(extras["reasoning_effort"])
-    note = _param_note(row, "reasoning_effort")
-    return f"{text} — {note}" if note else text
 
 
 def _param_note(row, param):
