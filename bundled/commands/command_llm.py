@@ -163,7 +163,11 @@ class LlmCommand(BaseCommand):
             if first:
                 sdk.config.write(
                     "default_llm_profile", name, scope="plugin")
-            return f"Added LLM profile: {name}"
+            return (
+                f"Added LLM profile: {name}\n\n"
+                "To tune how it behaves — reasoning effort, temperature, "
+                "anything else the provider takes — run `/llm`, pick this "
+                "profile, choose Edit, then **Configure extra parameter**.")
         if name not in profiles:
             return "Unknown LLM profile."
         action = args.get("action")
@@ -347,20 +351,24 @@ def _add_steps(sdk, registry, args):
             "`anthropic/claude-3-5-sonnet-latest`).",
             True))
 
+    window = _context_size(sdk, _chosen_model(args), endpoint)
     steps.append(FormStep(
         "llm_context_size",
-        "Optional context window size in tokens. Use 0 for dynamic "
-        "compaction or if unknown.",
-        False, "integer", default=0, prompt_when_missing=True))
+        (f"Context window in tokens. This model reports {window:,}, already "
+         "filled in — change it only if you know better."
+         if window else
+         "Context window size in tokens. Nothing could look this up for this "
+         "model, so enter it if you know it, or use 0 to let the kernel "
+         "compact reactively instead."),
+        False, "integer", default=window, prompt_when_missing=True))
     steps.extend(_capability_steps())
-    # Last, and skippable. Every step before this one is needed to reach the
-    # model at all; this one is tuning, so it defaults to "Done" and a profile
-    # that answers nothing is complete. It is offered here rather than left to
-    # a second trip through Edit because the reasoning level is the setting
-    # people most often want from the start, and the flow already knows which
-    # model it is asking about.
-    steps.extend(_extra_param_steps(
-        sdk, args, _chosen_model(args), endpoint, {}))
+    # And that is the whole of setting a model up. Provider parameters are
+    # deliberately not asked for here: everything above is needed to reach the
+    # model at all, while temperature and reasoning are tuning, and a wizard
+    # that interrogates you about sampling before you have sent one message is
+    # worse than a menu entry you find when you want it. ``run`` says where
+    # that entry is, since a setting nobody can find is the same as no
+    # setting.
     return steps
 
 
@@ -504,6 +512,27 @@ def _extra_value(args):
         except (TypeError, ValueError):
             return text
     return raw
+
+
+def _context_size(sdk, model, endpoint):
+    """The model's own input context window, or ``0``.
+
+    ``0`` is not a failure here: the kernel reads it as "compact reactively",
+    which works. That is why a blank is offered rather than a guess — a wrong
+    window is budgeted against every turn, so it either wastes most of the
+    context or overflows it, and both look like a bad model rather than a bad
+    number.
+    """
+    if not model:
+        return 0
+    try:
+        answer = sdk.llm.list(info=model, endpoint=endpoint or "") or {}
+    except sdk.Failed:
+        return 0
+    try:
+        return int((answer.get("info") or {}).get("context_size") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _chosen_model(args):

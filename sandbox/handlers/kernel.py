@@ -2077,6 +2077,9 @@ def _llm_list(ctx, args: dict) -> Result:
     if ask_params:
         discovered["params"] = llm.param_options_for(
             str(ask_params), str(args.get("endpoint") or ""))
+    if args.get("info"):
+        discovered["info"] = llm.info_for(
+            str(args["info"]), str(args.get("endpoint") or ""))
 
     return Result(data={
         **discovered,

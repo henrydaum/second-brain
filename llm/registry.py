@@ -709,6 +709,18 @@ class Brain:
             api_key=api_key or self.api_key,
             provider=provider, live=bool(live))
 
+    def info(self, model_name: str = "", endpoint: str | None = None) -> dict:
+        """What the backend knows about a model: ``{"context_size": int}``.
+
+        ``{}`` when it cannot say, which is every backend that does not
+        implement it and every model missing from the one that does.
+        """
+        rows = self._describe(
+            "info",
+            model_name=model_name or self.model_name,
+            endpoint=self.base_url if endpoint is None else endpoint)
+        return dict(rows[0]) if rows and isinstance(rows[0], dict) else {}
+
     def param_options(self, model_name: str = "",
                       endpoint: str | None = None) -> list:
         """Extra parameters *model_name* accepts, as reports rather than gates.
@@ -988,6 +1000,15 @@ def models_at(endpoint: str, api_key: str = "", provider: str = "",
         if found:
             return found
     return []
+
+
+def info_for(model_name: str, endpoint: str = "") -> dict:
+    """One model's facts, from the first backend that has any."""
+    for target in _asking_brains():
+        found = target.info(model_name, endpoint)
+        if found:
+            return found
+    return {}
 
 
 def param_options_for(model_name: str, endpoint: str = "") -> list[dict]:

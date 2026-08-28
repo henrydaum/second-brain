@@ -391,6 +391,22 @@ class BaseLLMBackend:
         """
         return []
 
+    def info(self, sdk, model_name: str, endpoint: str = "") -> list:
+        """Facts about one model, as a single-row list.
+
+        ``[{"context_size": int}]`` today. A list rather than a dict because
+        every discovery answer is a list and ``__describe__`` normalizes one
+        shape; a lone dict would iterate as its keys and arrive as nonsense.
+
+        ``context_size`` is the *input* window, which is what the kernel
+        budgets against — not the output cap, which is a different and usually
+        much smaller number. Answer ``[]`` or omit the key when the model is
+        not in whatever table this backend consults; a wrong context size is
+        worse than none, because the kernel compacts against it and would
+        either waste most of the window or overflow it every turn.
+        """
+        return []
+
     def params(self, sdk, model_name: str, endpoint: str) -> list:
         """Extra provider parameters *model_name* accepts.
 
@@ -459,6 +475,9 @@ class BaseLLMBackend:
                                      args.get("api_key") or "",
                                      args.get("provider") or "",
                                      bool(args.get("live")))
+            elif question == "info":
+                answer = self.info(sdk, args.get("model_name") or "",
+                                   args.get("endpoint") or "")
             elif question == "params":
                 answer = self.params(sdk, args.get("model_name") or "",
                                      args.get("endpoint") or "")

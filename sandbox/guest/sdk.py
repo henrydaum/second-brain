@@ -970,7 +970,7 @@ class _LLM(_Namespace):
     those same profiles work fine.
     """
 
-    def list(self, *, providers=False, models=None, params=None,
+    def list(self, *, providers=False, models=None, params=None, info=None,
              key=None, provider=None, endpoint=None,
              live: bool = False) -> dict:
         """Configured profiles, installed backends, and the default.
@@ -995,7 +995,9 @@ class _LLM(_Namespace):
         ``providers=<name>`` for that one provider with its endpoint resolved;
         ``models=<url>``
         (with ``key`` and ``provider``) for what one endpoint serves; or
-        ``params=<model name>`` (with ``endpoint``) for what one model takes.
+        ``params=<model name>`` (with ``endpoint``) for what one model takes;
+        or ``info=<model name>`` for facts about it, currently its context
+        window.
         Each adds a key of the same name to the answer. ``live`` additionally
         lets ``models`` ask the endpoint rather than answering from what the
         backend knows offline. That is egress, so it is off by default and
@@ -1020,6 +1022,8 @@ class _LLM(_Namespace):
             args["models"] = models
         if params is not None:
             args["params"] = params
+        if info is not None:
+            args["info"] = info
         if key is not None:
             args["key"] = key
         if provider is not None:

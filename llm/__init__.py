@@ -21,8 +21,8 @@ from .registry import (DEFAULT_BACKEND, DEFAULT_REASONING_EFFORT,
                        OFF_EFFORT, Brain, backend_aliases,
                        backend_display_names, backend_names, brain, brains,
                        default_brain, default_name, describe, discover,
-                       load_default, models_at, param_options_for, providers,
-                       refresh, resolve, unload_all, usable_brain)
+                       info_for, load_default, models_at, param_options_for,
+                       providers, refresh, resolve, unload_all, usable_brain)
 from sandbox.guest.llm import (BaseLLMBackend, LLMProviderError, LLMRequest,
                                LLMResponse, extract_llm_error_text,
                                is_context_limit_error)
@@ -34,6 +34,7 @@ __all__ = [
     "backend_display_names", "backend_names", "brain", "brains",
     "default_brain", "default_name", "describe", "discover",
     "extract_llm_error_text", "is_context_limit_error", "load_default",
-    "models_at", "param_options_for", "providers", "refresh", "resolve",
+    "info_for", "models_at", "param_options_for", "providers", "refresh",
+    "resolve",
     "unload_all", "usable_brain",
 ]
