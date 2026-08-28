@@ -195,22 +195,21 @@ _KNOWN_PROVIDER_PREFIXES = {
     "minimax", "mistral", "ollama", "openai", "openrouter", "vertex_ai", "xai",
 }
 
-#: Parameters worth offering by name, with the label and shape a form needs.
-#: Deliberately short: this is the set somebody would go looking for, not
-#: everything a provider accepts - the rest are offered as plain text below.
-#: ``instead_of`` names the other spellings of the same idea, so a provider
-#: whose table omits one can still be pointed at the one it does take. That is
-#: the MiniMax case: ``reasoning_effort`` is absent, ``thinking`` is not.
+#: Parameters worth giving a friendlier label and shape than their bare name.
+#: Not a list of what is offered - that comes from the provider - and not a
+#: source of accepted *values*, which are read from litellm's own signature
+#: (see ``_value_choices``). ``instead_of`` names other spellings of the same
+#: idea, so a provider whose table omits one can be pointed at the one it does
+#: take: MiniMax has no ``reasoning_effort`` and does have ``thinking``.
 _TUNABLE_PARAMS = [
     {"name": "reasoning_effort", "label": "Reasoning effort",
-     "kind": "choice", "choices": ["minimal", "low", "medium", "high"],
+     "kind": "choice",
      "instead_of": ("thinking", "reasoning", "reasoning_split")},
-    {"name": "temperature", "label": "Temperature",
-     "kind": "number", "choices": [], "instead_of": ()},
-    {"name": "top_p", "label": "Top-p", "kind": "number", "choices": [],
+    {"name": "temperature", "label": "Temperature", "kind": "number",
      "instead_of": ()},
+    {"name": "top_p", "label": "Top-p", "kind": "number", "instead_of": ()},
     {"name": "max_tokens", "label": "Max output tokens", "kind": "number",
-     "choices": [], "instead_of": ()},
+     "instead_of": ()},
 ]
 
 #: Supported params that are not *settings* - the kernel fills each of these
@@ -436,21 +435,15 @@ class LiteLLMBackend(BaseLLMBackend):
         refused. Nothing here needs to grow a table of what supports what.
         """
         kwargs = dict(request.params or {})
-        # ``getattr`` because the store ships on its own schedule: a kernel
-        # older than this field is a normal state for an installed backend,
-        # and reading it directly would turn every call into an AttributeError
-        # on exactly the deployments that update least often.
-        chosen = getattr(request, "chosen_params", None) or []
-        insist = [name for name in chosen if name in kwargs]
+        insist = list(kwargs)
         if insist:
             # ``drop_params`` is set in ``start`` and silently discards
-            # anything litellm's table does not list for this provider - which
-            # is right for a value the kernel supplied and wrong for one
-            # somebody picked. That table has gaps: it omits
-            # ``reasoning_effort`` for a provider whose API documents it, so a
-            # profile could show a level it was not sending. Naming a param
-            # here overrides the drop for it alone, and if the endpoint then
-            # objects, the refusal is the answer - a loud no beats a setting
+            # anything litellm's table does not list for this provider. Every
+            # one of these was configured by hand, so discarding one is a
+            # setting that lies; that table also has gaps, omitting
+            # ``reasoning_effort`` for a provider whose own API documents it.
+            # Naming them here overrides the drop, and if the endpoint then
+            # objects, its refusal is the answer - a loud no beats a setting
             # that quietly does nothing.
             kwargs["allowed_openai_params"] = insist
         if request.api_key:
@@ -724,14 +717,51 @@ class LiteLLMBackend(BaseLLMBackend):
                         f"this backend discards it for {provider}")
             out.append({**{k: v for k, v in spec.items()
                            if k != "instead_of"},
+                        "choices": self._value_choices(name),
                         "supported": ok, "note": note})
         # Anything else the provider takes that is worth offering by name.
         known = {spec["name"] for spec in _TUNABLE_PARAMS}
         for name in sorted(supported - known - _NOT_A_SETTING):
+            choices = self._value_choices(name)
             out.append({"name": name, "label": name.replace("_", " "),
-                        "kind": "text", "choices": [],
-                        "supported": True, "note": ""})
+                        "kind": "choice" if choices else "text",
+                        "choices": choices, "supported": True, "note": ""})
         return out
+
+    def _value_choices(self, name):
+        """The accepted values for a parameter, read off litellm's signature.
+
+        ``litellm.completion`` annotates a handful of parameters with a
+        ``Literal``, which is the only machine-readable statement of accepted
+        *values* anywhere in the library - three of forty-odd today
+        (``reasoning_effort``, ``verbosity``, ``modalities``). Reading them
+        beats a table here for the usual reason: a hardcoded one drifts, and
+        this one was already wrong, missing ``none``, ``xhigh`` and
+        ``default``.
+
+        It is the union litellm accepts rather than what one model does, so it
+        is a picker's contents and not a claim about the provider - the same
+        standing every other answer from ``params`` has.
+        """
+        import inspect
+        import typing
+
+        try:
+            annotation = inspect.signature(
+                self._litellm.completion).parameters[name].annotation
+        except (KeyError, TypeError, ValueError):
+            return []
+        found = []
+        # ``Literal['a', 'b'] | None`` and ``List[Literal[...]]`` both appear,
+        # so the whole tree is walked rather than the top level matched.
+        stack = [annotation]
+        while stack:
+            node = stack.pop()
+            if typing.get_origin(node) is typing.Literal:
+                found.extend(str(arg) for arg in typing.get_args(node))
+            else:
+                stack.extend(typing.get_args(node))
+        return sorted(set(found), key=found.index) if found else []
 
     def _usage(self, usage):
         """``(prompt_tokens, cached_prompt_tokens, completion_tokens)``.
