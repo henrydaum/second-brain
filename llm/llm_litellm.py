@@ -664,6 +664,28 @@ class LiteLLMBackend(BaseLLMBackend):
                 names.append(name)
         return sorted(names)
 
+    def info(self, sdk, model_name, endpoint=""):
+        """One model's facts. Currently just its input context window.
+
+        ``max_input_tokens`` is the right field and the two beside it are
+        traps: ``max_output_tokens`` caps a reply, and ``max_tokens`` is
+        whichever of the two that entry happens to carry. The kernel budgets
+        a conversation against this number, so an output cap here would make
+        it compact a million-token model at eight thousand.
+
+        An unknown model raises out of ``get_model_info`` and comes back as
+        ``[]`` rather than a guess: the kernel treats 0 as "compact
+        reactively", which copes, while a wrong number does not.
+        """
+        try:
+            found = self._litellm.get_model_info(
+                model=self._litellm_name(model_name, endpoint))
+        except Exception as exc:        # noqa: BLE001 - model not in the map
+            sdk.log(f"no model info for {model_name}: {exc}")
+            return []
+        window = (found or {}).get("max_input_tokens")
+        return [{"context_size": int(window)}] if window else []
+
     def params(self, sdk, model_name, endpoint):
         """Which extra params this model takes, reported and never enforced.
 
