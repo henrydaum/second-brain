@@ -484,8 +484,8 @@ class LiteLLMBackend(BaseLLMBackend):
 
     # -- describing what can be configured -----------------------------
 
-    def providers(self, sdk):
-        """LiteLLM's provider list. The endpoint is left for the user to give.
+    def providers(self, sdk, provider=""):
+        """LiteLLM's provider list, or one provider with its endpoint.
 
         ``endpoint`` is always ``""`` here, and that is a decision rather than
         a gap. LiteLLM keeps no static table of default base URLs; the only
@@ -508,12 +508,72 @@ class LiteLLMBackend(BaseLLMBackend):
         visible and editable.
         """
         litellm = self._litellm
-        return [{"id": str(getattr(name, "value", name)),
-                 "label": str(getattr(name, "value", name))
-                          .replace("_", " ").title(),
-                 "endpoint": ""}
-                for name in sorted(getattr(litellm, "provider_list", []) or [],
-                                   key=lambda n: str(getattr(n, "value", n)))]
+        names = sorted((str(getattr(n, "value", n))
+                        for n in getattr(litellm, "provider_list", []) or []))
+        if provider:
+            names = [n for n in names if n == provider] or [provider]
+        return [{"id": n, "label": n.replace("_", " ").title(),
+                 "endpoint": self._endpoint_for(n) if provider else ""}
+                for n in names]
+
+    def _endpoint_for(self, provider):
+        """A provider's default base URL, or ``""``.
+
+        ``get_llm_provider`` is the only accurate source and it is genuinely
+        expensive: it resolves credentials, may reach the network, and for a
+        device-code provider such as ``github_copilot`` it starts a login and
+        waits on it. All acceptable for one provider a person just picked, and
+        the reason this is never run across the whole list.
+
+        ``ProviderConfigManager`` looks like a cheap alternative and is not:
+        ``get_api_base`` inherits OpenAI's default, so it answers
+        ``https://api.openai.com/v1`` for DeepSeek, Groq, Mistral, xAI and
+        OpenRouter alike - a confidently wrong URL, which is worse than none.
+        """
+        try:
+            _r, _p, _k, base = self._litellm.get_llm_provider(
+                model=f"{provider}/probe")
+            if base:
+                return base
+        except Exception:               # noqa: BLE001 - fall through and try
+            pass                        # the other source
+        return self._declared_base(provider)
+
+    #: What ``get_api_base`` answers for a provider whose config inherits
+    #: OpenAI's and never overrode it. Correct for OpenAI and a confident lie
+    #: for everyone else, so it is only trusted when the provider really is
+    #: OpenAI.
+    _OPENAI_DEFAULT = "https://api.openai.com/v1"
+
+    def _declared_base(self, provider):
+        """The base URL a provider's own config class declares, if it declares one.
+
+        The second source, and needed because the first has holes exactly
+        where it matters: ``get_llm_provider`` answers nothing for MiniMax,
+        Anthropic and OpenAI, which is most of what anybody configures. This
+        answers those.
+
+        It has the opposite failure, which is why neither is used alone. A
+        provider config that inherits OpenAI's and never sets its own base
+        returns OpenAI's - so DeepSeek, Groq, Mistral, xAI and OpenRouter all
+        claim ``api.openai.com``. That value is therefore refused unless the
+        provider is OpenAI, and the four it would have got wrong are already
+        answered correctly by the first source.
+        """
+        try:
+            from litellm.types.utils import LlmProviders
+            from litellm.utils import ProviderConfigManager
+
+            config = ProviderConfigManager.get_provider_chat_config(
+                model="probe", provider=LlmProviders(provider))
+            base = config.get_api_base(None) if config is not None else ""
+        except Exception:               # noqa: BLE001 - nothing to offer
+            return ""
+        if not base:
+            return ""
+        if base == self._OPENAI_DEFAULT and provider != "openai":
+            return ""
+        return base
 
     def models(self, sdk, endpoint, api_key, provider="", live=False):
         """What *endpoint* serves, asked of the endpoint itself where possible.
