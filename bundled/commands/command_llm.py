@@ -275,16 +275,27 @@ def _add_steps(sdk, registry, args):
     resolved = _endpoint_for(sdk, provider)
     steps.append(FormStep(
         "llm_endpoint",
-        (f"Base URL for {provider}. This is its default, already filled in "
-         "— change it only if you reach this provider somewhere else."
+        # The URL is written into the prompt as well as pre-filled. A default
+        # only helps if it is on screen: a client that does not render one
+        # shows an empty box under a sentence promising it was filled in,
+        # which is worse than never claiming it.
+        (f"Base URL for {provider}. Its default is `{resolved}` — that is "
+         "already filled in, so continue unless you reach this provider "
+         "somewhere else."
          if resolved else
-         "Enter the provider base URL. Leave it blank only if this backend "
-         "already knows where to reach the provider."),
+         "Enter the provider base URL. Nothing here knows this provider's "
+         "default, so a blank almost certainly means the model will not be "
+         "found."),
         False, default=resolved, prompt_when_missing=True))
     steps.append(FormStep(
         "secret_llm_api_key",
-        "Enter the API key, or the environment variable name that contains "
-        "it. Leave blank to use the provider default.",
+        # Not "the provider default" — no provider has a default API key, and
+        # saying so invited somebody to leave it blank and wait for a 401.
+        # Blank is right for exactly two cases, and both are worth naming.
+        "Enter the API key, or the name of an environment variable holding "
+        "it. Leave it blank only for a provider that needs no key, such as a "
+        "local server, or when the key is already in the environment under "
+        "the name this provider looks for.",
         False, default="", prompt_when_missing=True))
 
     # The model step only becomes a menu once there is something to ask.

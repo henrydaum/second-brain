@@ -1113,3 +1113,36 @@ def test_a_provider_with_no_endpoint_to_offer_says_so(tree):
         assert llm.registry.endpoint_for("whoever") == ""
     finally:
         target.unload()
+
+
+def test_asking_about_one_provider_sends_its_name_not_a_flag():
+    """A boolean where a name belonged, pinned at the layer that lost it.
+
+    ``sdk.llm.list`` took ``providers`` as a flag first and grew the name
+    later, and the body kept coercing it to ``True``. The failure is silent in
+    the worst way: the Request succeeds, the menu comes back, and the caller
+    simply finds no endpoint on it — so the setup form showed an empty box
+    under a sentence promising the URL was filled in.
+    """
+    import sandbox  # noqa: F401  - installs the ``guest`` alias
+    from guest.sdk import _LLM
+
+    sent = {}
+
+    class Recording(_LLM):
+        def __init__(self):
+            pass
+
+        def _ask(self, request_type, **args):
+            sent.clear()
+            sent.update(args)
+            return {}
+
+    Recording().list(providers=True)
+    assert sent["providers"] is True                 # the menu
+
+    Recording().list(providers="minimax")
+    assert sent["providers"] == "minimax"            # one row, with its URL
+
+    Recording().list()
+    assert "providers" not in sent

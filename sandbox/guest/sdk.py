@@ -1011,7 +1011,11 @@ class _LLM(_Namespace):
         """
         args = {}
         if providers:
-            args["providers"] = True
+            # Passed through as given: ``True`` asks for the menu, a name asks
+            # for that one provider with its endpoint resolved. Coercing to
+            # ``True`` here threw the name away and answered the menu, so the
+            # caller got no endpoint and could not tell why.
+            args["providers"] = providers
         if models is not None:
             args["models"] = models
         if params is not None:
