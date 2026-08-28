@@ -147,6 +147,9 @@ def discover() -> int:
     with _LOCK:
         _BACKENDS.clear()
         _ALIASES.clear()
+        # A rescan is the one event that can change what a backend would
+        # answer about itself, so it is the one thing that drops the cache.
+        _DESCRIBED.clear()
         seen: set[str] = set()
         for _root, backends in trees.dirs_for("llm"):
             if not backends.exists():
@@ -187,6 +190,17 @@ def discover() -> int:
         logger.info("LLM backend discovery: %d sandboxed backend(s).",
                     len(_BACKENDS))
         return len(_BACKENDS)
+
+
+def forget_descriptions() -> None:
+    """Drop cached discovery answers. Called when backend source may have moved.
+
+    Nothing else invalidates them, on purpose: what a backend knows about a
+    provider does not change because a profile was edited, and tying the two
+    together is what made a settings form restart a subprocess per step.
+    """
+    with _LOCK:
+        _DESCRIBED.clear()
 
 
 def backend_names() -> list[str]:
@@ -291,11 +305,6 @@ class Brain:
         # and without this the new brain would inherit the old one's box, and
         # with it the settings the edit was meant to change.
         self._id = uuid.uuid4().hex[:8]
-        # Answers to the three discovery questions, keyed on the arguments
-        # that produced them. A brain is rebuilt whenever its profile changes
-        # (``refresh``), so this cannot outlive the settings it describes —
-        # which is why the key is the arguments rather than the profile.
-        self._described: dict = {}
 
     # --- what the profile says -------------------------------------
 
@@ -645,17 +654,24 @@ class Brain:
     def _describe(self, question: str, **args) -> list:
         """Ask this brain's backend one discovery question.
 
-        Cached on the answer, because these are asked while somebody fills in
-        a form and a form redraws on every keystroke's worth of navigation.
+        Cached in ``_DESCRIBED``, which is the whole of what makes this
+        affordable: a form redraws on every step, and the first answer costs a
+        backend process start.
 
-        Needs a live box, so it loads one. That is affordable *here* and
-        nowhere else: asking is something a person deliberately did, whereas
-        rendering a list of profiles is not — see ``describe()``, which
-        reports only what is already known and never opens anything.
+        That start is the reason the cache cannot live on the brain. It did,
+        and a brain does not survive its profile being edited — which is
+        precisely what the form doing the asking is *for*. See ``_DESCRIBED``.
+
+        Still needs a live box, and opens one if there is none. Acceptable
+        because asking is something a person deliberately did, and it happens
+        once per backend rather than once per keystroke. Contrast
+        ``param_status``, which refuses to open anything at all: rendering a
+        list of profiles is nobody's deliberate act.
         """
-        key = (question, tuple(sorted(args.items())))
-        if key in self._described:
-            return self._described[key]
+        key = (self.backend_name, question, tuple(sorted(args.items())))
+        with _LOCK:
+            if key in _DESCRIBED:
+                return _DESCRIBED[key]
         if not self.loaded and not self.load():
             return []
         box = self._lease()
@@ -666,7 +682,8 @@ class Brain:
         finally:
             self._release(box)
         answer = result.data if result.ok and isinstance(result.data, list) else []
-        self._described[key] = answer
+        with _LOCK:
+            _DESCRIBED[key] = answer
         return answer
 
     def providers(self) -> list:
@@ -674,17 +691,19 @@ class Brain:
         return self._describe("providers")
 
     def models(self, endpoint: str = "", api_key: str = "",
-               provider: str = "") -> list:
+               provider: str = "", live: bool = False) -> list:
         """Models at *endpoint*, named the way this backend wants them back.
 
         Defaults to this profile's own endpoint and key, since the common
-        caller is "show me what else this provider has".
+        caller is "show me what else this provider has". ``live`` lets the
+        backend ask the endpoint itself and is off by default — see
+        ``BaseLLMBackend.models`` for why a form may never turn it on.
         """
         return self._describe(
             "models",
             endpoint=endpoint or self.base_url,
             api_key=api_key or self.api_key,
-            provider=provider)
+            provider=provider, live=bool(live))
 
     def param_options(self, model_name: str = "",
                       endpoint: str | None = None) -> list:
@@ -890,10 +909,35 @@ def refresh(config: dict, *, force: bool = False) -> dict[str, Brain]:
 # is an ordinary answer and never an error.
 # ──────────────────────────────────────────────────────────────────────
 
+#: Discovery answers, keyed ``(backend, question, args)``. Module-level and
+#: deliberately not on the ``Brain``, which was the first place it went and
+#: was wrong twice over.
+#:
+#: ``refresh`` rebuilds a brain whenever its profile dict changes and
+#: ``unload``\s the old one — closing the backend's process. A settings form
+#: writes config as it goes, so every step of it rebuilt the brain, killed the
+#: box, and made the next question start the provider library again. On a
+#: modest machine that reads as the command freezing, and it is the same
+#: process being started and torn down three or four times in a row.
+#:
+#: A brain is also the wrong owner on the merits: these answer what a
+#: *backend* knows — which providers exist, what an endpoint serves, what a
+#: model takes — and none of it varies by which profile did the asking. Keyed
+#: by backend for that reason, and invalidated by ``discover()``, which is
+#: exactly when a backend's source may have changed.
+_DESCRIBED: dict = {}
+
+
 def _asking_brains() -> list[Brain]:
-    """Brains whose backend is installed, in a stable order."""
-    return [target for _name, target in sorted(brains().items())
-            if target.available]
+    """Brains whose backend is installed, already-loaded ones first.
+
+    Order matters because asking needs a live box. Preferring one that is
+    already open means a discovery question reuses the running process
+    instead of starting a second copy of a provider library beside it.
+    """
+    ready = [target for _name, target in sorted(brains().items())
+             if target.available]
+    return sorted(ready, key=lambda target: not target.loaded)
 
 
 def providers() -> list[dict]:
@@ -913,8 +957,8 @@ def providers() -> list[dict]:
     return out
 
 
-def models_at(endpoint: str, api_key: str = "",
-              provider: str = "") -> list[dict]:
+def models_at(endpoint: str, api_key: str = "", provider: str = "",
+              live: bool = False) -> list[dict]:
     """Models reachable at *endpoint*, for step two.
 
     First backend with an answer wins rather than merging: a model name is
@@ -923,7 +967,7 @@ def models_at(endpoint: str, api_key: str = "",
     list where picking the wrong row silently misroutes the call.
     """
     for target in _asking_brains():
-        found = target.models(endpoint, api_key, provider)
+        found = target.models(endpoint, api_key, provider, live)
         if found:
             return found
     return []

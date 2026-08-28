@@ -2053,8 +2053,11 @@ def _llm_list(ctx, args: dict) -> Result:
 
     Each answers ``[]`` when nothing can say, which is a real answer and not a
     failure: no backend is obliged to introspect, and the flow that asked
-    falls back to a typed value. ``models`` needs a live listing and so may be
-    slow; it is asked once, when somebody has just entered an endpoint.
+    falls back to a typed value. ``models`` answers from what the backend
+    knows offline unless ``live`` is also passed, which lets it ask the
+    endpoint and therefore costs egress — never do that from a command's
+    ``form``, whose approval has not been evaluated yet and which deadlocks
+    on a dialog.
     """
     import llm
 
@@ -2066,7 +2069,7 @@ def _llm_list(ctx, args: dict) -> Result:
     if ask_models is not None:
         discovered["models"] = llm.models_at(
             str(ask_models or ""), str(args.get("key") or ""),
-            str(args.get("provider") or ""))
+            str(args.get("provider") or ""), bool(args.get("live")))
     if ask_params:
         discovered["params"] = llm.param_options_for(
             str(ask_params), str(args.get("endpoint") or ""))

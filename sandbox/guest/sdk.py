@@ -971,7 +971,8 @@ class _LLM(_Namespace):
     """
 
     def list(self, *, providers: bool = False, models=None, params=None,
-             key=None, provider=None, endpoint=None) -> dict:
+             key=None, provider=None, endpoint=None,
+             live: bool = False) -> dict:
         """Configured profiles, installed backends, and the default.
 
         Answers ``{"profiles": [...], "backends": [...], "aliases": {...},
@@ -993,7 +994,12 @@ class _LLM(_Namespace):
         order. Pass ``providers=True`` for the provider list; ``models=<url>``
         (with ``key`` and ``provider``) for what one endpoint serves; or
         ``params=<model name>`` (with ``endpoint``) for what one model takes.
-        Each adds a key of the same name to the answer.
+        Each adds a key of the same name to the answer. ``live`` additionally
+        lets ``models`` ask the endpoint rather than answering from what the
+        backend knows offline. That is egress, so it is off by default and
+        must **never** be set from a command's ``form``: approval is evaluated
+        on completed form arguments, so a form runs ungranted and the dialog
+        it raises deadlocks against the lock it is holding.
 
         Every one of them can answer ``[]``, and that is ordinary rather than
         a failure — no backend is obliged to introspect, and a caller handed
@@ -1014,6 +1020,8 @@ class _LLM(_Namespace):
             args["provider"] = provider
         if endpoint is not None:
             args["endpoint"] = endpoint
+        if live:
+            args["live"] = True
         return self._ask(LLM_LIST, **args)
 
     def load(self, name: str) -> bool:

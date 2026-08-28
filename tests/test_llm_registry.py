@@ -783,7 +783,7 @@ class DescribingBackend(BaseLLMBackend):
     def providers(self, sdk):
         return [{"id": "acme", "label": "Acme", "endpoint": ""}]
 
-    def models(self, sdk, endpoint, api_key, provider=""):
+    def models(self, sdk, endpoint, api_key, provider="", live=False):
         if not endpoint and not provider:
             return []
         return [{"name": "acme/big", "label": "big"}]
@@ -1022,3 +1022,55 @@ def test_a_chosen_param_reads_as_arriving_even_when_unlisted(tree):
         assert "you set it" in note          # and may come back refused
     finally:
         chosen.unload()
+
+
+def test_editing_a_profile_does_not_restart_the_backend_to_re_answer(tree):
+    """The freeze this caused, pinned.
+
+    ``refresh`` rebuilds a brain whose profile dict moved and ``unload``s the
+    old one, closing the backend's process. The discovery cache lived on the
+    brain, so it died with it — and the one thing guaranteed to edit a profile
+    repeatedly is the settings form doing the asking. Every step rebuilt the
+    brain, killed the box, and started the provider library again, which on a
+    modest machine is indistinguishable from the command hanging.
+
+    So the cache is keyed by *backend*, and this asserts the property that
+    matters rather than the mechanism: the same question across a rebuild
+    comes back without needing a live box.
+    """
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+
+    before = llm.brain("gpt-test")
+    answer = before.models("https://acme.test/v1", "k")
+    assert answer, "the backend should have answered at least once"
+    before.unload()
+
+    # An edit, exactly as saving one field of the form produces.
+    llm.refresh(_config(tree, backend="DescribingBackend",
+                        llm_context_size=4096))
+    after = llm.brain("gpt-test")
+    assert after is not before, "this test is pointless if nothing rebuilt"
+    assert not after.loaded
+
+    assert after.models("https://acme.test/v1", "k") == answer
+    # The whole point: answering did not have to open anything.
+    assert not after.loaded
+
+
+def test_a_backend_rescan_is_what_drops_the_answers(tree):
+    """The one event that can change what a backend says about itself."""
+    _write(tree, DESCRIBING_BACKEND, stem="llm_describing")
+    llm.refresh(_config(tree, backend="DescribingBackend"))
+    target = llm.brain("gpt-test")
+    try:
+        assert target.models("https://acme.test/v1", "k")
+    finally:
+        target.unload()
+
+    llm.registry.forget_descriptions()
+    assert not target.loaded
+    # Nothing cached, so answering now needs a box again.
+    assert target.models("https://acme.test/v1", "k")
+    assert target.loaded
+    target.unload()

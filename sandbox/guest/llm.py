@@ -359,7 +359,7 @@ class BaseLLMBackend:
         return []
 
     def models(self, sdk, endpoint: str, api_key: str,
-               provider: str = "") -> list:
+               provider: str = "", live: bool = False) -> list:
         """Models reachable at *endpoint*, as ``{"name", "label"}``.
 
         ``name`` is the string **this backend wants to be handed back** in
@@ -368,9 +368,17 @@ class BaseLLMBackend:
         about the backend, and making the user know it is how a working model
         ends up unreachable for want of five characters.
 
-        Answer however you can. A live listing from the endpoint is worth
-        more than any table — it is current, and it covers aggregators that
-        no table has heard of — but a static answer or ``[]`` is fine.
+        ``live`` is permission to *ask the endpoint*, and it defaults to off.
+        A listing fetched from the server is the better answer — current, and
+        it covers gateways no table has heard of — but fetching it is egress,
+        and the caller that most wants this is a settings form, which is the
+        one place that cannot do egress: a command's approval is evaluated on
+        its *completed* arguments, so anything a form does runs ungranted, and
+        a dialog raised while building a form deadlocks against the session
+        lock it is already holding.
+
+        So the default is whatever the backend knows offline, and ``live`` is
+        for a caller that already holds a grant. Answering ``[]`` is fine.
         """
         return []
 
@@ -440,7 +448,8 @@ class BaseLLMBackend:
             elif question == "models":
                 answer = self.models(sdk, args.get("endpoint") or "",
                                      args.get("api_key") or "",
-                                     args.get("provider") or "")
+                                     args.get("provider") or "",
+                                     bool(args.get("live")))
             elif question == "params":
                 answer = self.params(sdk, args.get("model_name") or "",
                                      args.get("endpoint") or "")

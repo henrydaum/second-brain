@@ -433,11 +433,23 @@ list at all.
 **The levels are not the same kind of thing, and the design has to respect
 it.** Measured against LiteLLM 1.94.0: the provider list is static and cheap,
 but *has no endpoints* — there is no table of default base URLs, and the only
-way to resolve one is `get_llm_provider`, which resolves credentials, reaches
-the network, and was measured at over two minutes for a dozen providers and
-hanging outright on one. So `endpoint` comes back blank and the user types it,
-which is also the safer half of the trade: a guessed URL fails at the first
-real call with an error that blames the model. The *model* list is the
+way to resolve one is `get_llm_provider`, which is **not** the pure lookup its
+name suggests: for at least two providers it starts an *interactive OAuth
+device-code login*, printing a sign-in code and blocking through three
+sixty-second attempts waiting for a human to authorize it. Measured, on
+`github_copilot` and one other, while probing the list. A settings form cannot
+make that call — not because it is slow, but because it would put login codes
+for an unrelated service in front of somebody configuring a model, and a
+credential prompt nobody asked for is the one thing a setup flow must never
+produce. So `endpoint` comes back blank and the user types it, which is also
+the safer half of the trade: a guessed URL fails at the first real call with an
+error that blames the model.
+
+Worth generalizing, because the next such helper will look equally harmless:
+**a provider library's "what is this" function may authenticate.** Anything the
+kernel calls to *describe* a configuration has to be assumed capable of side
+effects until checked, and checked by running it rather than by reading its
+signature. The *model* list is the
 opposite — LiteLLM cannot answer it at all, since it indexes by provider
 rather than endpoint, while the endpoint itself answers `GET /v1/models`
 authoritatively and covers every gateway no table has heard of. And the
