@@ -386,7 +386,20 @@ class _LlmSdk:
             "table": staticmethod(lambda *a, **k: ""),
         })()
         self.llm = type("Llm", (), {
-            "list": staticmethod(lambda: {"profiles": [], "backends": []}),
+            # ``list`` grew the setup questions, so the fake answers them.
+            # ``params`` is what the extra-parameter menu is built from.
+            "list": staticmethod(lambda **kw: {
+                "profiles": [], "backends": [],
+                "params": ([
+                    {"name": "reasoning_effort", "label": "Reasoning effort",
+                     "kind": "choice",
+                     "choices": ["low", "medium", "high"],
+                     "supported": True, "note": ""},
+                    {"name": "temperature", "label": "Temperature",
+                     "kind": "number", "choices": [],
+                     "supported": True, "note": ""},
+                ] if kw.get("params") else []),
+            }),
             "load": staticmethod(lambda name: True),
         })()
 
@@ -420,46 +433,63 @@ def test_adding_a_profile_never_writes_the_tuning_keys():
     assert set(module.TUNING_FIELDS) <= set(module.FIELDS)  # still editable
 
 
+
 def test_the_edit_menu_labels_line_up_with_its_fields():
     """Two parallel lists, and a mismatch renames every field after the gap."""
     module = _load("command_llm")
 
     assert len(module.FIELDS) == len(module.FIELD_LABELS)
-    assert len(module.REASONING_LEVELS) == len(module.REASONING_LABELS)
-    assert module.REASONING_LEVELS[0] == module.OFF
+    # The effort ladder is no longer a constant here. It arrives per model on
+    # the backend's ``reasoning_effort`` row, so a provider with a level this
+    # file never heard of can still be set to it.
+    assert not hasattr(module, "REASONING_LEVELS")
+    assert module.EXTRA_PARAM in module.FIELDS
 
 
-def test_effort_is_a_menu_entry_over_the_extras_dict():
-    """The same relationship ``llm_capability_image`` has with
-    ``llm_capabilities``: a picker beats remembering a vocabulary and JSON
-    syntax to set one member, and the value still belongs with its
-    neighbours rather than in a key of its own."""
+def test_effort_is_one_parameter_among_the_others_now():
+    """It used to be a field of its own, because it was the only member of
+    ``llm_extra_params`` anybody could name. The backend names the rest now,
+    so the special case stopped paying for itself — and a menu offering
+    reasoning while hiding ``temperature`` teaches that reasoning is the only
+    thing there is.
+
+    What has not changed is where the value lands: in the dict, beside its
+    neighbours, never in a key of its own."""
     module = _load("command_llm")
     sdk = _LlmSdk({"m": {}}, default="m")
 
     module.LlmCommand().run(sdk, {
-        "model_name": "m", "action": "edit",
-        "field": "llm_reasoning_effort", "value": "High"})
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": "reasoning_effort", "extra_value": "high"})
 
     assert sdk._config["llm_profiles"]["m"] == {
         "llm_extra_params": {"reasoning_effort": "high"}}
-    assert "llm_reasoning_effort" not in sdk._config["llm_profiles"]["m"]
+
+    # And the same route sets anything else the model takes.
+    module.LlmCommand().run(sdk, {
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": "temperature", "extra_value": "0.2"})
+
+    assert sdk._config["llm_profiles"]["m"]["llm_extra_params"] == {
+        "reasoning_effort": "high", "temperature": 0.2}
 
 
 def test_off_is_stored_as_a_null_not_as_the_word():
     """``none`` is a real level several providers accept, meaning "think as
     little as possible". Storing "off" beside it would be two spellings
-    nobody could tell apart in a config file."""
+    nobody could tell apart in a config file.
+
+    It applies to every parameter now, not only reasoning: any of them can be
+    declined, and a dropped key would hand back the kernel's default instead."""
     module = _load("command_llm")
     sdk = _LlmSdk({"m": {}}, default="m")
 
     module.LlmCommand().run(sdk, {
-        "model_name": "m", "action": "edit",
-        "field": "llm_reasoning_effort", "value": module.OFF})
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": "reasoning_effort", "extra_value": module.OFF})
 
     assert sdk._config["llm_profiles"]["m"] == {
         "llm_extra_params": {"reasoning_effort": None}}
-
 
 def test_clearing_the_extras_dict_removes_the_key():
     """An empty dict reads as configured to anything scanning config by hand,
@@ -485,11 +515,17 @@ def test_extra_params_are_parsed_by_the_form_not_the_handler():
     assert module._coerce("llm_extra_params", "not a dict") == {}
 
 
+
 def test_the_card_says_what_the_model_will_actually_do():
-    """Reasoning is always on the card now, because there is always an answer:
-    a profile that says nothing still thinks at whatever the kernel supplies,
+    """Reasoning is always on the card, because there is always an answer: a
+    profile that says nothing still thinks at whatever the kernel supplies,
     and a card that stayed silent would be the only place you could not find
-    that out."""
+    that out.
+
+    Every other parameter now gets its own row too. It used to be one JSON
+    blob, which is unreadable at a glance and had nowhere to put the warning
+    that a value is being discarded — that warning existed only for reasoning
+    because reasoning was the only one with a row."""
     module = _load("command_llm")
     sdk = _LlmSdk({})
 
@@ -502,20 +538,21 @@ def test_the_card_says_what_the_model_will_actually_do():
         {"llm_extra_params": {"reasoning_effort": "high"}})
     assert ("Reasoning", "off (nothing sent)") in card(
         {"llm_extra_params": {"reasoning_effort": None}})
-    # The effort has its own row, so it is not repeated in the raw dump.
+
     tuned = card({"llm_extra_params": {"reasoning_effort": "low",
                                        "temperature": 0.2}})
-    assert ("Extra params", '{"temperature": 0.2}') in tuned
+    assert ("Reasoning", "low") in tuned
+    assert ("temperature", "0.2") in tuned
+    # The effort has its own row, so it is not repeated among the rest.
+    assert not [pair for pair in tuned if pair[0] == "reasoning_effort"]
 
 
-def test_the_kernel_coerces_what_the_two_tuning_steps_declare():
+def test_the_kernel_coerces_what_the_raw_json_step_declares():
     """The seam between what ``/llm`` declares and what the form does with it.
 
-    Both fields lean on kernel behaviour rather than parsing anything
-    themselves — the enum resolves a label or a differently-cased word, and
-    ``object`` parses the JSON and rejects a typo at the step. Neither is
-    visible from the command's own helpers, and a wrong ``type`` string would
-    fail by quietly storing the raw text.
+    The raw-JSON entry leans on kernel behaviour rather than parsing anything
+    itself: ``object`` parses the JSON and rejects a typo at the step, so a
+    wrong ``type`` string would fail by quietly storing the raw text.
     """
     from state_machine.conversation import FormStep as KernelStep
 
@@ -523,23 +560,32 @@ def test_the_kernel_coerces_what_the_two_tuning_steps_declare():
 
     module = _load("command_llm")
 
-    def rebuilt(field):
-        return KernelStep.from_dict(dict(FormStep(
-            "value", "p", True, module._value_type(field),
-            enum=module._value_enum(field),
-            enum_labels=module._value_enum_labels(field))))
-
-    effort = rebuilt("llm_reasoning_effort")
-    assert effort.coerce("High") == "high"
-    assert effort.coerce("Off — send nothing") == module.OFF
-    assert effort.validate("turbo")[0] is False
-
-    extras = rebuilt("llm_extra_params")
+    extras = KernelStep.from_dict(dict(FormStep(
+        "value", "p", True, module._value_type("llm_extra_params"))))
     assert extras.coerce('{"temperature": 0.2}') == {"temperature": 0.2}
     assert extras.validate('{"temperature":')[0] is False
 
 
+def test_a_value_step_is_shaped_by_what_the_backend_said():
+    """The parameter menu is per model, so the *value* question is too.
 
+    A closed set of levels becomes a picker; a number is asked as free text so
+    "off" stays sayable, which a numeric step would refuse. Getting this wrong
+    is how a provider's own vocabulary becomes unreachable.
+    """
+    module = _load("command_llm")
+
+    choice = module._value_step(
+        "reasoning_effort",
+        {"kind": "choice", "choices": ["low", "high"], "note": ""}, {})
+    assert choice["enum"] == ["low", "high", module.OFF]
+
+    number = module._value_step("temperature", {"kind": "number"}, {})
+    assert not number["enum"]
+
+    # A parameter the backend could not describe is still settable.
+    unknown = module._value_step("enable_thinking", None, {})
+    assert not unknown["enum"]
 
 def test_reserved_params_are_refused_where_somebody_typed_them():
     """The backend merges extras with ``setdefault``, so one of these wins
@@ -566,6 +612,7 @@ def test_the_reserved_list_covers_what_the_backend_merges():
         "api_key", "api_base", "model", "messages", "tools", "stream"}
 
 
+
 def test_the_command_and_the_kernel_agree_on_the_off_spelling():
     """A command is guest code and cannot import ``llm``, so the coupling is a
     literal on each side. A mismatch would store a word the kernel reads as a
@@ -575,4 +622,12 @@ def test_the_command_and_the_kernel_agree_on_the_off_spelling():
     module = _load("command_llm")
 
     assert module.OFF == llm.OFF_EFFORT
-    assert module._coerce("llm_reasoning_effort", module.OFF) is None
+    assert module._extra_value({"extra_value": module.OFF}) is None
+    # JSON is read where it parses, so a number is a number and an object is
+    # an object; a bare word is not valid JSON and stays the text it was.
+    assert module._extra_value({"extra_value": "0.2"}) == 0.2
+    assert module._extra_value({"extra_value": "true"}) is True
+    assert module._extra_value({"extra_value": '{"type": "enabled"}'}) == {
+        "type": "enabled"}
+    assert module._extra_value({"extra_value": "medium"}) == "medium"
+

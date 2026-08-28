@@ -17,35 +17,44 @@ PROFILE_FIELDS = [
 # because that list is what ``_profile`` builds a new profile from: a name in
 # it is a key written to every profile, empty or not.
 #
-# Only one of the two is a stored key. ``llm_reasoning_effort`` is a *menu
-# entry* over ``llm_extra_params["reasoning_effort"]`` — the same relationship
-# ``llm_capability_image`` has with ``llm_capabilities``, and for the same
-# reason: the value belongs in the dict with its neighbours, and a picker
-# beats remembering a vocabulary and JSON syntax to set one member of it.
-TUNING_FIELDS = ["llm_reasoning_effort", "llm_extra_params"]
-EXTRA_PARAM_FIELDS = {"llm_reasoning_effort": "reasoning_effort"}
+# ``extra_param`` is not a stored key. It is the guided route into
+# ``llm_extra_params``: pick a parameter the model takes, then pick a value.
+# It replaced a dedicated ``llm_reasoning_effort`` entry, which was one member
+# of that dict promoted to a field of its own because it was the only member
+# anybody could name. The backend can name the rest now, so the special case
+# stopped paying for itself — and a menu that offers reasoning and hides
+# ``temperature`` teaches that reasoning is the only thing there is.
+#
+# The raw JSON entry stays beside it, for clearing several at once and for a
+# value no picker can express.
+EXTRA_PARAM = "extra_param"
+TUNING_FIELDS = [EXTRA_PARAM, "llm_extra_params"]
 FIELDS = ["llm_model_name", *PROFILE_FIELDS, *TUNING_FIELDS]
 FIELD_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
     "Service class", "Images", "Audio", "Video",
-    "Reasoning effort", "Extra parameters",
+    "Configure extra parameter", "Extra parameters (raw JSON)",
 ]
 CAPABILITY_FIELDS = {
     "llm_capability_image": "image",
     "llm_capability_audio": "audio",
     "llm_capability_video": "video",
 }
-# The cross-provider effort ladder, plus this command's spelling of "send
-# nothing" — which is a real choice now that the kernel supplies a level for a
-# profile that says nothing. It is stored as JSON ``null`` rather than the
-# word, so it cannot be confused with ``none``, a level several providers
-# accept meaning "think as little as possible".
+# This command's spelling of "send nothing", which is a real choice for any
+# parameter now that the kernel supplies a level for a profile that says
+# nothing. Stored as JSON ``null`` rather than the word, so it cannot be
+# confused with ``none`` — a level several providers accept, meaning "think
+# as little as possible".
 OFF = "off"
 # What "none of these" is called in the two menus that can be incomplete.
 # Both lists come from a backend introspecting somebody else's catalogue, so
 # neither can ever be assumed complete — and a menu with no way past it turns
 # a missing entry into an unusable command.
 CUSTOM = "custom"
+# "I am finished adding parameters." Present because the add flow offers this
+# step unprompted and most profiles want none of it, so there has to be a way
+# past that is not Cancel — Cancel abandons the profile.
+NONE = "__none__"
 # Keys the profile sets through its own fields, or that are the call itself.
 # The backend merges extras with ``setdefault``, so one of these here *wins*
 # over the profile silently — and an ``api_key`` also lands in plaintext
@@ -60,13 +69,10 @@ RESERVED_PARAMS = {
     "tools": "the agent's tool catalog",
     "stream": "the kernel, per call",
 }
-REASONING_LEVELS = [
-    OFF, "none", "minimal", "low", "medium", "high", "xhigh", "max",
-]
-REASONING_LABELS = [
-    "Off — send nothing", "None", "Minimal", "Low", "Medium", "High",
-    "Extra high", "Max",
-]
+# The effort ladder is no longer declared here. It arrives per model from the
+# backend, as the ``choices`` on the ``reasoning_effort`` row — so a provider
+# offering a level this file never heard of can still be set to it, and one
+# that takes no effort at all does not advertise the setting as though it did.
 
 
 class LlmCommand(BaseCommand):
@@ -84,16 +90,17 @@ class LlmCommand(BaseCommand):
     # AST, which sees literals and not a call.
     approval_actions = ("edit", "set_default", "load", "unload", "remove")
     approval_actor_id = "user"
-    # ``net.http`` is here for the *backend's* half of ``llm.list(models=...)``:
-    # the authoritative model catalogue is the one the endpoint serves, and
-    # fetching it is egress. Declared so an approved action carries it rather
-    # than a dialog interrupting a half-filled form. Refusing it is not fatal
-    # — the listing falls back to what the backend knows offline, and past
-    # that to typing the name — so this widens the grant for a convenience,
-    # never for a capability the command depends on.
+    # Deliberately no ``net.http``. The authoritative model catalogue is the
+    # one the endpoint serves, and this command cannot fetch it: approval is
+    # evaluated on *completed* form arguments, so everything a form does runs
+    # ungranted, and a dialog raised mid-form deadlocks against the session
+    # lock the form is holding. Declaring the Request would not have helped,
+    # because the grant does not exist yet at that point. So the model menu
+    # comes from what the backend knows offline, and an endpoint it has no
+    # index for falls through to typing the name.
     requests = [
         "config.read", "config.write", "plugin.list",
-        "llm.list", "llm.load", "llm.unload", "net.http",
+        "llm.list", "llm.load", "llm.unload",
     ]
     def form(self, sdk, args):
         profiles = sdk.config.read("llm_profiles") or {}
@@ -119,18 +126,23 @@ class LlmCommand(BaseCommand):
                 True, enum=actions, enum_labels=labels))
         if args.get("action") == "edit":
             field = args.get("field")
-            steps += [
-                FormStep(
-                    "field", "Choose which LLM setting to edit.", True,
-                    enum=FIELDS, enum_labels=FIELD_LABELS),
-                FormStep(
+            profile = profiles.get(args.get("model_name")) or {}
+            steps.append(FormStep(
+                "field", "Choose which LLM setting to edit.", True,
+                enum=FIELDS, enum_labels=FIELD_LABELS))
+            if field == EXTRA_PARAM:
+                # The same two questions the add flow asks, against the model
+                # this profile already names. Required here: reaching this
+                # entry is itself the statement that you want to set one.
+                steps.extend(_extra_param_steps(
+                    sdk, args, args.get("model_name") or "",
+                    profile.get("llm_endpoint") or "", profile,
+                    required=True))
+            elif field:
+                steps.append(FormStep(
                     "value",
-                    _value_prompt(field, _backend_names(registry),
-                                  profiles.get(args.get("model_name")) or {}),
-                    True, _value_type(field),
-                    enum=_value_enum(field),
-                    enum_labels=_value_enum_labels(field)),
-            ]
+                    _value_prompt(field, _backend_names(registry), profile),
+                    True, _value_type(field)))
         return steps
 
     def run(self, sdk, args):
@@ -143,6 +155,10 @@ class LlmCommand(BaseCommand):
                 return "Model name is required."
             first = not profiles
             profiles[name] = _profile(args)
+            chosen = _chosen_param(args)
+            if chosen:
+                profiles[name]["llm_extra_params"] = {
+                    chosen: _extra_value(args)}
             sdk.config.write("llm_profiles", profiles, scope="plugin")
             if first:
                 sdk.config.write(
@@ -170,13 +186,18 @@ class LlmCommand(BaseCommand):
                 profiles[name].setdefault("llm_capabilities", {})[
                     CAPABILITY_FIELDS[field]
                 ] = _coerce(field, args.get("value"))
-            elif field in EXTRA_PARAM_FIELDS:
+            elif field == EXTRA_PARAM:
+                chosen = _chosen_param(args)
+                if not chosen:
+                    return "No parameter chosen."
+                refused = _reserved({chosen: None})
+                if refused:
+                    return refused
                 # Into the dict, beside whatever else the profile sends. A
                 # ``None`` stays: it is the stored form of "send nothing", and
                 # dropping it would hand back the kernel's default.
                 profiles[name].setdefault("llm_extra_params", {})[
-                    EXTRA_PARAM_FIELDS[field]
-                ] = _coerce(field, args.get("value"))
+                    chosen] = _extra_value(args)
             elif field in TUNING_FIELDS:
                 # An empty dict is the absence of the key, never a stored
                 # ``{}``: a profile carrying one reads as configured to
@@ -332,7 +353,157 @@ def _add_steps(sdk, registry, args):
         "compaction or if unknown.",
         False, "integer", default=0, prompt_when_missing=True))
     steps.extend(_capability_steps())
+    # Last, and skippable. Every step before this one is needed to reach the
+    # model at all; this one is tuning, so it defaults to "Done" and a profile
+    # that answers nothing is complete. It is offered here rather than left to
+    # a second trip through Edit because the reasoning level is the setting
+    # people most often want from the start, and the flow already knows which
+    # model it is asking about.
+    steps.extend(_extra_param_steps(
+        sdk, args, _chosen_model(args), endpoint, {}))
     return steps
+
+
+def _extra_param_steps(sdk, args, model, endpoint, profile, required=False):
+    """Pick a provider parameter, then pick its value. Used by add and by edit.
+
+    One flow in both places because they are the same act: the add flow
+    reaches it once with the model just chosen, and ``/llm`` -> Edit reaches
+    it again later against the same model. Two spellings of it would drift,
+    and the second one would be the one nobody tested.
+
+    The menu is the backend's answer for *this* model, so it lists what the
+    model actually takes rather than a fixed vocabulary — and it keeps
+    unsupported entries, labelled, because that answer is a lookup in
+    somebody else's table and those have gaps. ``custom`` is always last for
+    the same reason: an endpoint the table has never heard of still has
+    parameters, and refusing to let them be typed would make this menu a
+    smaller version of the problem it replaces.
+    """
+    rows = _param_options(sdk, model, endpoint)
+    current = (profile or {}).get("llm_extra_params") or {}
+    names = [row["name"] for row in rows]
+    choices = names + [CUSTOM] + ([] if required else [NONE])
+    labels = [_param_label(row, current) for row in rows]
+    labels += ["Something else — type its name"]
+    labels += ([] if required else ["Done — no more parameters"])
+
+    steps = [FormStep(
+        EXTRA_PARAM,
+        ("Which provider parameter do you want to set? These are forwarded on "
+         "every call this profile makes."
+         + ("" if rows else
+            "\n\nNothing could be listed for this model, so type the name "
+            "yourself.")),
+        True, enum=choices, enum_labels=labels,
+        default=None if required else NONE)]
+
+    picked = args.get(EXTRA_PARAM)
+    if picked == NONE or not picked:
+        return steps
+    if picked == CUSTOM:
+        steps.append(FormStep(
+            "custom_param_name",
+            "Enter the parameter name exactly as the provider spells it, for "
+            "example `enable_thinking`.",
+            True))
+    chosen = _chosen_param(args)
+    spec = next((row for row in rows if row["name"] == chosen), None)
+    if chosen:
+        steps.append(_value_step(chosen, spec, current))
+    return steps
+
+
+def _value_step(name, spec, current):
+    """The step that collects one parameter's value, shaped by its kind."""
+    kind = (spec or {}).get("kind") or "text"
+    held = current.get(name, "__unset__")
+    now = ("" if held == "__unset__" else
+           f"Currently `off` (nothing sent).\n\n" if held is None else
+           f"Currently `{held}`.\n\n")
+    note = (spec or {}).get("note") or ""
+    warning = f"\n\nNote: {note}" if note else ""
+    if kind == "choice" and (spec or {}).get("choices"):
+        levels = list(spec["choices"]) + [OFF]
+        return FormStep(
+            "extra_value",
+            f"{now}Choose a value for `{name}`.{warning}",
+            True, enum=levels,
+            enum_labels=[str(item) for item in spec["choices"]]
+                        + ["Off — send nothing"])
+    if kind == "bool":
+        return FormStep("extra_value", f"{now}Set `{name}` to?{warning}",
+                        True, "boolean")
+    if kind == "number":
+        return FormStep(
+            "extra_value",
+            f"{now}Enter a number for `{name}`, or `off` to send "
+            f"nothing.{warning}",
+            True)
+    return FormStep(
+        "extra_value",
+        f"{now}Enter a value for `{name}`, or `off` to send nothing. JSON is "
+        f"accepted, so `true`, `2`, or `{{\"type\": \"enabled\"}}` all "
+        f"work.{warning}",
+        True)
+
+
+def _param_label(row, current):
+    """One menu entry: the name, what it is set to, and any caveat."""
+    name = row["name"]
+    label = row.get("label") or name
+    if name in current:
+        held = current[name]
+        label += " = off" if held is None else f" = {held}"
+    if not row.get("supported", True):
+        label += " (not listed for this model)"
+    return label
+
+
+def _chosen_param(args):
+    """The parameter name the flow settled on, menu or typed."""
+    picked = (args.get(EXTRA_PARAM) or "").strip()
+    if picked == CUSTOM:
+        return (args.get("custom_param_name") or "").strip()
+    return "" if picked in ("", NONE) else picked
+
+
+def _param_options(sdk, model, endpoint):
+    """What the backend says this model accepts. ``[]`` when it cannot say."""
+    if not model:
+        return []
+    try:
+        answer = sdk.llm.list(params=model, endpoint=endpoint or "") or {}
+    except sdk.Failed:
+        return []
+    return [row for row in (answer.get("params") or [])
+            if isinstance(row, dict) and row.get("name")]
+
+
+def _extra_value(args):
+    """The value to store, from whatever the value step collected.
+
+    ``off`` becomes ``None``, which is the stored form of "send nothing" and
+    the one value that must survive: dropping the key instead would hand back
+    the kernel's default, which is the opposite of what was asked for.
+
+    Everything else is read as JSON when it can be, so `2`, `true` and an
+    object all arrive as themselves rather than as strings. A provider that
+    wants the literal text still gets it, because a bare word is not valid
+    JSON and falls through unchanged.
+    """
+    raw = args.get("extra_value")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.lower() in (OFF, "null", "none — send nothing"):
+            return None
+        try:
+            import json
+
+            return json.loads(text)
+        except (TypeError, ValueError):
+            return text
+    return raw
 
 
 def _chosen_model(args):
@@ -518,9 +689,6 @@ def _coerce(field, value):
             value if isinstance(value, bool)
             else str(value).strip().lower() in {"true", "yes", "1", "y"}
         )
-    if field == "llm_reasoning_effort":
-        effort = str(value or "").strip().lower()
-        return None if effort == OFF else effort
     if field == "llm_extra_params":
         # The step is declared ``object``, so the kernel has already parsed
         # the JSON and re-prompted if it would not — this only has to decide
@@ -554,13 +722,17 @@ def _describe(sdk, registry, profiles, default, name):
     # and a card that stayed silent would be the only place you could not
     # find that out.
     pairs.append(("Reasoning", _effort_text(profile, row)))
-    extras = {key: value for key, value in (
-        profile.get("llm_extra_params") or {}).items()
-        if key != "reasoning_effort"}
-    if extras:
-        import json
-
-        pairs.append(("Extra params", json.dumps(extras)))
+    # Then everything else the profile sends, one row each with its own
+    # caveat. Previously this was a single JSON blob, which is unreadable at a
+    # glance and had nowhere to put the warning that a value is being
+    # discarded — the warning only existed for reasoning because reasoning was
+    # the only one with a row of its own.
+    for key, value in sorted((profile.get("llm_extra_params") or {}).items()):
+        if key == "reasoning_effort":
+            continue
+        shown = "off (nothing sent)" if value is None else str(value)
+        note = _param_note(row, key)
+        pairs.append((key, f"{shown} — {note}" if note else shown))
     return sdk.md.card(f"{name}{mark}", pairs)
 
 
@@ -661,23 +833,6 @@ def _value_type(field):
     return "string"
 
 
-def _value_enum(field):
-    """The closed choices for a field, or None for free text.
-
-    Only reasoning effort has any, and deliberately as a *picker*: the levels
-    are a provider vocabulary nobody should have to spell from memory. A level
-    this list has not heard of yet is still reachable — put ``reasoning_effort``
-    in Extra parameters and leave this unset, which is the precedence the
-    kernel's ``Brain.params`` documents.
-    """
-    return REASONING_LEVELS if field == "llm_reasoning_effort" else None
-
-
-def _value_enum_labels(field):
-    """Human labels for whatever ``_value_enum`` offered."""
-    return REASONING_LABELS if field == "llm_reasoning_effort" else None
-
-
 def _value_prompt(field, backends, profile=None):
     """What to ask for one field, and what it is set to now.
 
@@ -700,12 +855,6 @@ def _value_prompt(field, backends, profile=None):
         "llm_capability_image": "Can this model read images natively?",
         "llm_capability_audio": "Can this model read audio natively?",
         "llm_capability_video": "Can this model read video natively?",
-        "llm_reasoning_effort": (
-            "How hard should this model think? Stored with this profile's "
-            "other provider parameters and sent as `reasoning_effort`. A "
-            "model that has no such setting either ignores it or refuses "
-            "the call, depending on the backend — choose Off to send "
-            "nothing at all."),
         "llm_extra_params": (
             "Enter a JSON object of extra provider parameters, for example "
             "`{\"temperature\": 0.2}`. These are forwarded verbatim on every "
@@ -716,8 +865,6 @@ def _value_prompt(field, backends, profile=None):
 
 def _current_value(field, profile):
     """A one-line "currently:" preamble, or nothing when there is nothing."""
-    if field == "llm_reasoning_effort":
-        return f"Currently: {_effort_text(profile)}\n\n"
     if field == "llm_extra_params":
         import json
 
