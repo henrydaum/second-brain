@@ -421,30 +421,38 @@ class _LlmSdk:
 
 
 def test_adding_a_profile_never_writes_the_tuning_keys():
-    """They are edit-only, and that is structural rather than a filter:
+    """Parameters are edit-only, and that is structural rather than a filter:
     ``PROFILE_FIELDS`` is what ``_profile`` builds a new profile *from*, so a
     name in it is a key written to every profile whether asked for or not."""
     module = _load("command_llm")
 
-    profile = module._profile({"llm_endpoint": "http://x", "llm_context_size": 8})
+    profile = module._profile({"llm_endpoint": "http://x",
+                               "llm_context_size": 8})
 
-    assert not set(module.TUNING_FIELDS) & set(profile)
     assert "llm_extra_params" not in profile
-    assert set(module.TUNING_FIELDS) <= set(module.FIELDS)  # still editable
-
-
+    # Still reachable afterwards, as the menu's own entry.
+    names, _labels = module._fields(profile)
+    assert module.EXTRA_PARAM in names
 
 def test_the_edit_menu_labels_line_up_with_its_fields():
-    """Two parallel lists, and a mismatch renames every field after the gap."""
+    """Two parallel lists, and a mismatch renames every field after the gap.
+
+    Built per profile now rather than declared, because a configured
+    parameter is an entry in it.
+    """
     module = _load("command_llm")
 
-    assert len(module.FIELDS) == len(module.FIELD_LABELS)
-    # The effort ladder is no longer a constant here. It arrives per model on
-    # the backend's ``reasoning_effort`` row, so a provider with a level this
-    # file never heard of can still be set to it.
+    bare, bare_labels = module._fields({})
+    assert len(bare) == len(bare_labels)
+    assert not hasattr(module, "FIELDS")          # no longer a constant
+    # The effort ladder is not a constant here either. It arrives per model on
+    # the backend's ``reasoning_effort`` row.
     assert not hasattr(module, "REASONING_LEVELS")
-    assert module.EXTRA_PARAM in module.FIELDS
 
+    tuned, tuned_labels = module._fields(
+        {"llm_extra_params": {"temperature": 0.2, "reasoning_effort": None}})
+    assert len(tuned) == len(tuned_labels)
+    assert len(tuned) == len(bare) + 2
 
 def test_effort_is_one_parameter_among_the_others_now():
     """It used to be a field of its own, because it was the only member of
@@ -491,30 +499,75 @@ def test_off_is_stored_as_a_null_not_as_the_word():
     assert sdk._config["llm_profiles"]["m"] == {
         "llm_extra_params": {"reasoning_effort": None}}
 
-def test_clearing_the_extras_dict_removes_the_key():
-    """An empty dict reads as configured to anything scanning config by hand,
-    and every profile written before this existed carries nothing."""
+def test_a_configured_parameter_is_an_entry_you_can_open():
+    """The point of the restructure: a parameter this profile sends sits in
+    the same menu as its endpoint and context size, showing its value, so
+    finding out what a profile does no longer means reading a JSON blob."""
     module = _load("command_llm")
-    sdk = _LlmSdk({"m": {"llm_extra_params": {"temperature": 0.2}}}, default="m")
+
+    names, labels = module._fields(
+        {"llm_extra_params": {"temperature": 0.2, "reasoning_effort": None}})
+    entries = dict(zip(names, labels))
+
+    assert entries[module.PARAM_PREFIX + "temperature"] == "temperature = 0.2"
+    # A stored null is "off", not an empty label.
+    assert entries[module.PARAM_PREFIX + "reasoning_effort"] == (
+        "reasoning_effort = off")
+    # The prefix is what stops a provider parameter impersonating a field.
+    assert module._param_field(module.PARAM_PREFIX + "temperature") == (
+        "temperature")
+    assert module._param_field("llm_endpoint") == ""
+
+
+def test_removing_the_last_parameter_removes_the_key():
+    """An empty dict reads as configured to anything scanning config by hand,
+    and every profile written before extras existed carries nothing.
+
+    Removal is also the one thing a parameter can do that a profile field
+    cannot, which is why the two kinds of entry stay distinguishable."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {"llm_extra_params": {"temperature": 0.2}}},
+                  default="m")
 
     module.LlmCommand().run(sdk, {
         "model_name": "m", "action": "edit",
-        "field": "llm_extra_params", "value": {}})
+        "field": module.PARAM_PREFIX + "temperature",
+        "extra_value": module.REMOVE})
 
     assert sdk._config["llm_profiles"]["m"] == {}
 
 
-def test_extra_params_are_parsed_by_the_form_not_the_handler():
-    """Declaring the step ``object`` is what makes bad JSON re-ask at the
-    step. Returning a sentence from ``run`` would mean re-running the whole
-    command to fix a typo."""
+def test_removing_is_not_the_same_as_sending_nothing():
+    """``off`` stores a JSON null and actively sends the parameter as one;
+    removing stops sending it, so whatever would have happened unasked
+    happens again. Two different requests that a single "clear" would have
+    collapsed into one."""
     module = _load("command_llm")
+    sdk = _LlmSdk({"m": {"llm_extra_params": {"reasoning_effort": "high"}}},
+                  default="m")
 
-    assert module._value_type("llm_extra_params") == "object"
-    assert module._coerce("llm_extra_params", {"temperature": 0.2}) == {"temperature": 0.2}
-    assert module._coerce("llm_extra_params", "not a dict") == {}
+    module.LlmCommand().run(sdk, {
+        "model_name": "m", "action": "edit",
+        "field": module.PARAM_PREFIX + "reasoning_effort",
+        "extra_value": module.OFF})
 
+    assert sdk._config["llm_profiles"]["m"] == {
+        "llm_extra_params": {"reasoning_effort": None}}
 
+def test_an_existing_parameter_offers_removal_and_a_new_one_does_not():
+    """Removing a parameter that was never set is not a coherent request, so
+    the option only appears where it means something."""
+    module = _load("command_llm")
+    spec = {"kind": "choice", "choices": ["low", "high"], "note": ""}
+
+    existing = module._value_step(
+        "reasoning_effort", spec, {"reasoning_effort": "high"},
+        removable=True)
+    assert module.REMOVE in existing["enum"]
+    assert "Currently `high`" in existing["prompt"]
+
+    fresh = module._value_step("reasoning_effort", spec, {})
+    assert module.REMOVE not in fresh["enum"]
 
 def test_the_card_says_what_the_model_will_actually_do():
     """Reasoning is always on the card, because there is always an answer: a
@@ -547,23 +600,6 @@ def test_the_card_says_what_the_model_will_actually_do():
     assert not [pair for pair in tuned if pair[0] == "reasoning_effort"]
 
 
-def test_the_kernel_coerces_what_the_raw_json_step_declares():
-    """The seam between what ``/llm`` declares and what the form does with it.
-
-    The raw-JSON entry leans on kernel behaviour rather than parsing anything
-    itself: ``object`` parses the JSON and rejects a typo at the step, so a
-    wrong ``type`` string would fail by quietly storing the raw text.
-    """
-    from state_machine.conversation import FormStep as KernelStep
-
-    from guest.forms import FormStep
-
-    module = _load("command_llm")
-
-    extras = KernelStep.from_dict(dict(FormStep(
-        "value", "p", True, module._value_type("llm_extra_params"))))
-    assert extras.coerce('{"temperature": 0.2}') == {"temperature": 0.2}
-    assert extras.validate('{"temperature":')[0] is False
 
 
 def test_a_value_step_is_shaped_by_what_the_backend_said():
@@ -591,18 +627,21 @@ def test_reserved_params_are_refused_where_somebody_typed_them():
     """The backend merges extras with ``setdefault``, so one of these wins
     over the profile *silently* — and an ``api_key`` here also lands in
     plaintext config instead of behind the ``secret_`` prefix that declares it
-    a credential."""
+    a credential.
+
+    Checked on the typed name, since that is now the only way one of these can
+    be named at all: the menu offers what the model takes, and a reserved key
+    can only arrive through "Something else"."""
     module = _load("command_llm")
     sdk = _LlmSdk({"m": {}}, default="m")
 
     answer = module.LlmCommand().run(sdk, {
-        "model_name": "m", "action": "edit", "field": "llm_extra_params",
-        "value": {"api_key": "sk-oops", "temperature": 0.2}})
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": module.CUSTOM, "custom_param_name": "api_key",
+        "extra_value": "sk-oops"})
 
     assert "api_key" in answer and "API key field" in answer
-    assert "temperature" not in answer          # only the offenders are named
     assert sdk._config["llm_profiles"]["m"] == {}   # nothing was written
-
 
 def test_the_reserved_list_covers_what_the_backend_merges():
     """Two connection settings and the three parts of the call itself."""

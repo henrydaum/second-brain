@@ -24,16 +24,22 @@ PROFILE_FIELDS = [
 # anybody could name. The backend can name the rest now, so the special case
 # stopped paying for itself — and a menu that offers reasoning and hides
 # ``temperature`` teaches that reasoning is the only thing there is.
-#
-# The raw JSON entry stays beside it, for clearing several at once and for a
-# value no picker can express.
 EXTRA_PARAM = "extra_param"
-TUNING_FIELDS = [EXTRA_PARAM, "llm_extra_params"]
-FIELDS = ["llm_model_name", *PROFILE_FIELDS, *TUNING_FIELDS]
-FIELD_LABELS = [
+# What an already-configured parameter is called in the edit menu. Prefixed
+# because that menu is a flat list of field names and a provider is free to
+# call something ``llm_endpoint`` if it likes; the prefix is what keeps a
+# parameter from impersonating a profile field.
+PARAM_PREFIX = "param:"
+# A parameter's value can be *deleted*, which nothing else in that menu can
+# be, and that is the whole reason the two kinds of entry stay
+# distinguishable. Note deleting is not ``OFF``: ``off`` stores a JSON null
+# and actively sends nothing, while removing the key hands the decision back
+# to whatever the kernel or provider would have done unasked.
+REMOVE = "__remove__"
+BASE_FIELDS = ["llm_model_name", *PROFILE_FIELDS]
+BASE_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
     "Service class", "Images", "Audio", "Video",
-    "Configure extra parameter", "Extra parameters (raw JSON)",
 ]
 CAPABILITY_FIELDS = {
     "llm_capability_image": "image",
@@ -51,10 +57,6 @@ OFF = "off"
 # neither can ever be assumed complete — and a menu with no way past it turns
 # a missing entry into an unusable command.
 CUSTOM = "custom"
-# "I am finished adding parameters." Present because the add flow offers this
-# step unprompted and most profiles want none of it, so there has to be a way
-# past that is not Cancel — Cancel abandons the profile.
-NONE = "__none__"
 # Keys the profile sets through its own fields, or that are the call itself.
 # The backend merges extras with ``setdefault``, so one of these here *wins*
 # over the profile silently — and an ``api_key`` also lands in plaintext
@@ -127,17 +129,27 @@ class LlmCommand(BaseCommand):
         if args.get("action") == "edit":
             field = args.get("field")
             profile = profiles.get(args.get("model_name")) or {}
+            field_names, field_labels = _fields(profile)
             steps.append(FormStep(
                 "field", "Choose which LLM setting to edit.", True,
-                enum=FIELDS, enum_labels=FIELD_LABELS))
-            if field == EXTRA_PARAM:
-                # The same two questions the add flow asks, against the model
-                # this profile already names. Required here: reaching this
-                # entry is itself the statement that you want to set one.
+                enum=field_names, enum_labels=field_labels))
+            held = _param_field(field)
+            if held:
+                # An already-configured parameter: straight to its value, with
+                # no need to ask which one.
+                spec = next(
+                    (row for row in _param_options(
+                        sdk, args.get("model_name") or "",
+                        profile.get("llm_endpoint") or "")
+                     if row["name"] == held), None)
+                steps.append(_value_step(
+                    held, spec,
+                    profile.get("llm_extra_params") or {}, removable=True))
+            elif field == EXTRA_PARAM:
+                # Adding one: which parameter, then its value.
                 steps.extend(_extra_param_steps(
                     sdk, args, args.get("model_name") or "",
-                    profile.get("llm_endpoint") or "", profile,
-                    required=True))
+                    profile.get("llm_endpoint") or "", profile))
             elif field:
                 steps.append(FormStep(
                     "value",
@@ -190,31 +202,30 @@ class LlmCommand(BaseCommand):
                 profiles[name].setdefault("llm_capabilities", {})[
                     CAPABILITY_FIELDS[field]
                 ] = _coerce(field, args.get("value"))
-            elif field == EXTRA_PARAM:
-                chosen = _chosen_param(args)
+            elif field == EXTRA_PARAM or _param_field(field):
+                chosen = _param_field(field) or _chosen_param(args)
                 if not chosen:
                     return "No parameter chosen."
                 refused = _reserved({chosen: None})
                 if refused:
                     return refused
+                extras = profiles[name].setdefault("llm_extra_params", {})
+                if args.get("extra_value") == REMOVE:
+                    extras.pop(chosen, None)
+                    # An empty dict is the absence of the key, never a stored
+                    # ``{}``: a profile carrying one reads as configured to
+                    # anything scanning the file, and every profile written
+                    # before extras existed carries nothing.
+                    if not extras:
+                        profiles[name].pop("llm_extra_params", None)
+                    sdk.config.write("llm_profiles", profiles, scope="plugin")
+                    if was_loaded:
+                        sdk.llm.load(name)
+                    return f"Removed `{chosen}` from {name}."
                 # Into the dict, beside whatever else the profile sends. A
                 # ``None`` stays: it is the stored form of "send nothing", and
                 # dropping it would hand back the kernel's default.
-                profiles[name].setdefault("llm_extra_params", {})[
-                    chosen] = _extra_value(args)
-            elif field in TUNING_FIELDS:
-                # An empty dict is the absence of the key, never a stored
-                # ``{}``: a profile carrying one reads as configured to
-                # anything scanning config by hand, and every profile written
-                # before this existed carries nothing.
-                value = _coerce(field, args.get("value"))
-                refused = _reserved(value)
-                if refused:
-                    return refused
-                if value:
-                    profiles[name][field] = value
-                else:
-                    profiles[name].pop(field, None)
+                extras[chosen] = _extra_value(args)
             else:
                 profiles[name][field] = _coerce(field, args.get("value"))
             sdk.config.write("llm_profiles", profiles, scope="plugin")
@@ -372,7 +383,7 @@ def _add_steps(sdk, registry, args):
     return steps
 
 
-def _extra_param_steps(sdk, args, model, endpoint, profile, required=False):
+def _extra_param_steps(sdk, args, model, endpoint, profile):
     """Pick a provider parameter, then pick its value. Used by add and by edit.
 
     One flow in both places because they are the same act: the add flow
@@ -381,20 +392,35 @@ def _extra_param_steps(sdk, args, model, endpoint, profile, required=False):
     and the second one would be the one nobody tested.
 
     The menu is the backend's answer for *this* model, so it lists what the
-    model actually takes rather than a fixed vocabulary — and it keeps
-    unsupported entries, labelled, because that answer is a lookup in
-    somebody else's table and those have gaps. ``custom`` is always last for
-    the same reason: an endpoint the table has never heard of still has
-    parameters, and refusing to let them be typed would make this menu a
-    smaller version of the problem it replaces.
+    model actually takes rather than a fixed vocabulary, and it lists only
+    that. Offering a parameter the backend says this model does not take is
+    offering a setting that does nothing, and a menu of mostly-inert entries
+    teaches you to distrust all of them.
+
+    Hiding is safe here and would not be elsewhere, because nothing is made
+    unreachable: ``custom`` sits at the end of this menu and the raw-JSON
+    entry sits beside it in Edit. That is the difference from ``params``
+    itself, which reports and never gates — a *lookup* may not decide what is
+    possible, but a *menu* may decide what is worth suggesting.
+
+    One exception, and it is the case that would otherwise be a trap: a
+    parameter already set on this profile stays listed even when unsupported.
+    Otherwise the one thing you cannot do from this menu is fix the value that
+    prompted you to open it.
+
+    There is no "skip" entry. Reaching this is choosing **Configure extra
+    parameter** from the edit menu, which is already the statement that you
+    want to set one; Back is how you leave. It did have one, for an add flow
+    that offered this step unasked — that flow is gone, and an option whose
+    only caller went with it is worse than no option.
     """
-    rows = _param_options(sdk, model, endpoint)
     current = (profile or {}).get("llm_extra_params") or {}
+    rows = [row for row in _param_options(sdk, model, endpoint)
+            if row.get("supported", True) or row["name"] in current]
     names = [row["name"] for row in rows]
-    choices = names + [CUSTOM] + ([] if required else [NONE])
+    choices = names + [CUSTOM]
     labels = [_param_label(row, current) for row in rows]
     labels += ["Something else — type its name"]
-    labels += ([] if required else ["Done — no more parameters"])
 
     steps = [FormStep(
         EXTRA_PARAM,
@@ -403,11 +429,10 @@ def _extra_param_steps(sdk, args, model, endpoint, profile, required=False):
          + ("" if rows else
             "\n\nNothing could be listed for this model, so type the name "
             "yourself.")),
-        True, enum=choices, enum_labels=labels,
-        default=None if required else NONE)]
+        True, enum=choices, enum_labels=labels)]
 
     picked = args.get(EXTRA_PARAM)
-    if picked == NONE or not picked:
+    if not picked:
         return steps
     if picked == CUSTOM:
         steps.append(FormStep(
@@ -422,8 +447,13 @@ def _extra_param_steps(sdk, args, model, endpoint, profile, required=False):
     return steps
 
 
-def _value_step(name, spec, current):
-    """The step that collects one parameter's value, shaped by its kind."""
+def _value_step(name, spec, current, removable=False):
+    """The step that collects one parameter's value, shaped by its kind.
+
+    ``removable`` adds the one thing a parameter can do that a profile field
+    cannot. It is offered only for a parameter already set, because removing
+    one that was never there is not a coherent request.
+    """
     kind = (spec or {}).get("kind") or "text"
     held = current.get(name, "__unset__")
     now = ("" if held == "__unset__" else
@@ -431,28 +461,36 @@ def _value_step(name, spec, current):
            f"Currently `{held}`.\n\n")
     note = (spec or {}).get("note") or ""
     warning = f"\n\nNote: {note}" if note else ""
+    # ``off`` and removal are genuinely different and both are offered: one
+    # sends the parameter as a null, the other stops sending it at all and
+    # lets whatever would have happened unasked happen again.
+    drop = [REMOVE] if removable else []
+    drop_label = ["Remove — stop setting this"] if removable else []
+    tail = (" Answer `remove` to stop setting it altogether."
+            if removable else "")
     if kind == "choice" and (spec or {}).get("choices"):
-        levels = list(spec["choices"]) + [OFF]
         return FormStep(
             "extra_value",
             f"{now}Choose a value for `{name}`.{warning}",
-            True, enum=levels,
+            True, enum=list(spec["choices"]) + [OFF] + drop,
             enum_labels=[str(item) for item in spec["choices"]]
-                        + ["Off — send nothing"])
+                        + ["Off — send nothing"] + drop_label)
     if kind == "bool":
-        return FormStep("extra_value", f"{now}Set `{name}` to?{warning}",
-                        True, "boolean")
+        return FormStep(
+            "extra_value", f"{now}Set `{name}` to?{warning}", True,
+            enum=["true", "false", OFF] + drop,
+            enum_labels=["True", "False", "Off — send nothing"] + drop_label)
     if kind == "number":
         return FormStep(
             "extra_value",
             f"{now}Enter a number for `{name}`, or `off` to send "
-            f"nothing.{warning}",
+            f"nothing.{tail}{warning}",
             True)
     return FormStep(
         "extra_value",
-        f"{now}Enter a value for `{name}`, or `off` to send nothing. JSON is "
-        f"accepted, so `true`, `2`, or `{{\"type\": \"enabled\"}}` all "
-        f"work.{warning}",
+        f"{now}Enter a value for `{name}`, or `off` to send nothing.{tail} "
+        f"JSON is accepted, so `true`, `2`, or `{{\"type\": \"enabled\"}}` "
+        f"all work.{warning}",
         True)
 
 
@@ -464,6 +502,9 @@ def _param_label(row, current):
         held = current[name]
         label += " = off" if held is None else f" = {held}"
     if not row.get("supported", True):
+        # Only reachable for a parameter this profile already carries, since
+        # the menu drops the rest. Worth saying, because it explains why a
+        # value that is set may not be doing anything.
         label += " (not listed for this model)"
     return label
 
@@ -473,7 +514,7 @@ def _chosen_param(args):
     picked = (args.get(EXTRA_PARAM) or "").strip()
     if picked == CUSTOM:
         return (args.get("custom_param_name") or "").strip()
-    return "" if picked in ("", NONE) else picked
+    return picked
 
 
 def _param_options(sdk, model, endpoint):
@@ -533,6 +574,40 @@ def _context_size(sdk, model, endpoint):
         return int((answer.get("info") or {}).get("context_size") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _fields(profile):
+    """The edit menu for one profile: its settings, its parameters, then add.
+
+    Configured parameters sit in the same list as endpoint and context size,
+    because from the reader's side they are the same kind of thing — something
+    this profile is set to. Keeping them behind a separate "extra parameters"
+    entry meant the only way to see what a profile sent was to open a JSON
+    blob and read it.
+
+    They differ in exactly one way, and it is the reason the prefix exists
+    rather than the two being merged outright: a parameter can be removed, and
+    a profile field cannot. There is no meaningful "no endpoint" distinct from
+    an empty one, and every profile has a context size whether or not anybody
+    chose it.
+    """
+    extras = sorted((profile or {}).get("llm_extra_params") or {})
+    names = list(BASE_FIELDS)
+    labels = list(BASE_LABELS)
+    for key in extras:
+        value = profile["llm_extra_params"][key]
+        names.append(PARAM_PREFIX + key)
+        labels.append(f"{key} = "
+                      + ("off" if value is None else str(value)))
+    names.append(EXTRA_PARAM)
+    labels.append("Add a parameter")
+    return names, labels
+
+
+def _param_field(field):
+    """The parameter an edit-menu entry names, or ``""`` for a profile field."""
+    return (field or "")[len(PARAM_PREFIX):] if (
+        field or "").startswith(PARAM_PREFIX) else ""
 
 
 def _chosen_model(args):
@@ -718,11 +793,6 @@ def _coerce(field, value):
             value if isinstance(value, bool)
             else str(value).strip().lower() in {"true", "yes", "1", "y"}
         )
-    if field == "llm_extra_params":
-        # The step is declared ``object``, so the kernel has already parsed
-        # the JSON and re-prompted if it would not — this only has to decide
-        # what a non-object means, and it means nothing to send.
-        return dict(value) if isinstance(value, dict) else {}
     return "" if value is None else str(value)
 
 
@@ -854,11 +924,6 @@ def _value_type(field):
         return "integer"
     if field in CAPABILITY_FIELDS:
         return "boolean"
-    if field == "llm_extra_params":
-        # Declared rather than parsed in ``run``, so bad JSON is rejected at
-        # the step and asked again. Returning a sentence from the handler
-        # would mean re-running the whole command to fix a typo.
-        return "object"
     return "string"
 
 
@@ -884,19 +949,9 @@ def _value_prompt(field, backends, profile=None):
         "llm_capability_image": "Can this model read images natively?",
         "llm_capability_audio": "Can this model read audio natively?",
         "llm_capability_video": "Can this model read video natively?",
-        "llm_extra_params": (
-            "Enter a JSON object of extra provider parameters, for example "
-            "`{\"temperature\": 0.2}`. These are forwarded verbatim on every "
-            "call this profile makes, and a `null` value means send nothing "
-            "for that parameter. Enter `{}` to clear them."),
     }.get(field, "Enter the new value.")
 
 
 def _current_value(field, profile):
     """A one-line "currently:" preamble, or nothing when there is nothing."""
-    if field == "llm_extra_params":
-        import json
-
-        value = profile.get(field) or {}
-        return f"Currently: {json.dumps(value)}\n\n" if value else ""
     return ""
