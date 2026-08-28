@@ -4,38 +4,29 @@ from guest.bases import BaseCommand
 from guest.forms import FormStep
 
 
+# ══════════════════════════════════════════════════════════════════════
+# A profile has two halves, and the difference runs through this whole file.
+#
+# **Its settings** are how to reach the model: endpoint, key, context size,
+# which backend, what it can see. Every profile has all of them, whether or
+# not anybody chose a value, so they can be edited and never removed.
+#
+# **Its provider parameters** are how the model should behave: temperature,
+# reasoning effort, anything else the provider takes. They live together in
+# ``llm_extra_params``, the kernel names no member of it, and each one is
+# there only because somebody put it there — so each can be removed.
+#
+# The second half is not asked for when adding a profile. Everything in the
+# first half is needed to reach the model at all; tuning is not, and a wizard
+# that interrogates you about sampling before you have sent one message is
+# worse than a menu entry you find when you want it.
+# ══════════════════════════════════════════════════════════════════════
+
 PROFILE_FIELDS = [
     "llm_endpoint", "secret_llm_api_key", "llm_context_size",
     "llm_service_class", "llm_capability_image",
     "llm_capability_audio", "llm_capability_video",
 ]
-# What a call carries beyond the connection: how hard the model should think,
-# and anything else the provider takes. Editable but never *asked for* when
-# adding a profile — a wizard that interrogates you about sampling before you
-# have sent one message is worse than a menu entry you find when you want it.
-# Kept out of ``PROFILE_FIELDS`` rather than filtered out of the add flow,
-# because that list is what ``_profile`` builds a new profile from: a name in
-# it is a key written to every profile, empty or not.
-#
-# ``extra_param`` is not a stored key. It is the guided route into
-# ``llm_extra_params``: pick a parameter the model takes, then pick a value.
-# It replaced a dedicated ``llm_reasoning_effort`` entry, which was one member
-# of that dict promoted to a field of its own because it was the only member
-# anybody could name. The backend can name the rest now, so the special case
-# stopped paying for itself — and a menu that offers reasoning and hides
-# ``temperature`` teaches that reasoning is the only thing there is.
-EXTRA_PARAM = "extra_param"
-# What an already-configured parameter is called in the edit menu. Prefixed
-# because that menu is a flat list of field names and a provider is free to
-# call something ``llm_endpoint`` if it likes; the prefix is what keeps a
-# parameter from impersonating a profile field.
-PARAM_PREFIX = "param:"
-# What to do with a parameter that is already set. Asked as its own question
-# rather than smuggled into the value step as a magic word, which is what it
-# was: the free-text branch told you to answer ``remove`` and ``run`` compared
-# against a different string, so typing it set the parameter to "remove".
-EDIT = "edit"
-REMOVE = "remove"
 BASE_FIELDS = ["llm_model_name", *PROFILE_FIELDS]
 BASE_LABELS = [
     "Model name", "Endpoint", "API key", "Context size",
@@ -46,15 +37,22 @@ CAPABILITY_FIELDS = {
     "llm_capability_audio": "audio",
     "llm_capability_video": "video",
 }
-# Nothing here names a parameter. There was a "send this as a null" option,
-# which existed because the kernel supplied ``reasoning_effort`` for a profile
-# that said nothing: deleting the key handed the default back, so declining it
-# needed a spelling of its own. The kernel supplies nothing now, so a null and
-# an absent key are the same act, and Remove is that act.
-# What "none of these" is called in the two menus that can be incomplete.
-# Both lists come from a backend introspecting somebody else's catalogue, so
-# neither can ever be assumed complete — and a menu with no way past it turns
-# a missing entry into an unusable command.
+
+# The edit menu is a flat list of field names, so a parameter needs a prefix
+# to sit in it: a provider is free to call something ``llm_endpoint``, and
+# without this that parameter would impersonate a profile field.
+PARAM_PREFIX = "param:"
+# Adding one, as opposed to opening one already there. Not a stored key —
+# the guided route into ``llm_extra_params``: pick a parameter, pick a value.
+EXTRA_PARAM = "extra_param"
+# What to do with a parameter already set. Its own question, because the only
+# other place to put "delete" is inside the value — as a word, which then
+# cannot be told apart from a provider that accepts that word as a value.
+EDIT = "edit"
+REMOVE = "remove"
+# "None of these." Both menus that offer it are built from a backend reading
+# somebody else's catalogue, so neither can be assumed complete, and a menu
+# with no way past turns a missing entry into an unusable command.
 CUSTOM = "custom"
 # Keys the profile sets through its own fields, or that are the call itself.
 # The backend merges extras with ``setdefault``, so one of these here *wins*
@@ -70,10 +68,6 @@ RESERVED_PARAMS = {
     "tools": "the agent's tool catalog",
     "stream": "the kernel, per call",
 }
-# The effort ladder is no longer declared here. It arrives per model from the
-# backend, as the ``choices`` on the ``reasoning_effort`` row — so a provider
-# offering a level this file never heard of can still be set to it, and one
-# that takes no effort at all does not advertise the setting as though it did.
 
 
 class LlmCommand(BaseCommand):
@@ -103,6 +97,7 @@ class LlmCommand(BaseCommand):
         "config.read", "config.write", "plugin.list",
         "llm.list", "llm.load", "llm.unload",
     ]
+
     def form(self, sdk, args):
         profiles = sdk.config.read("llm_profiles") or {}
         default = sdk.config.read("default_llm_profile") or ""
@@ -157,10 +152,14 @@ class LlmCommand(BaseCommand):
                     sdk, args, args.get("model_name") or "",
                     profile.get("llm_endpoint") or "", profile))
             elif field:
+                backends = _backend_names(registry)
                 steps.append(FormStep(
                     "value",
-                    _value_prompt(field, _backend_names(registry), profile),
-                    True, _value_type(field)))
+                    _value_prompt(field, profile, registry),
+                    True, _value_type(field),
+                    enum=_value_enum(field, backends),
+                    enum_labels=_value_enum_labels(
+                        field, backends, registry)))
         return steps
 
     def run(self, sdk, args):
@@ -173,19 +172,16 @@ class LlmCommand(BaseCommand):
                 return "Model name is required."
             first = not profiles
             profiles[name] = _profile(args)
-            chosen = _chosen_param(args)
-            if chosen:
-                profiles[name]["llm_extra_params"] = {
-                    chosen: _extra_value(args)}
             sdk.config.write("llm_profiles", profiles, scope="plugin")
             if first:
                 sdk.config.write(
                     "default_llm_profile", name, scope="plugin")
             return (
                 f"Added LLM profile: {name}\n\n"
-                "To tune how it behaves — reasoning effort, temperature, "
-                "anything else the provider takes — run `/llm`, pick this "
-                "profile, choose Edit, then **Configure extra parameter**.")
+                "That is everything needed to reach it. To tune how it "
+                "behaves — reasoning effort, temperature, anything else this "
+                "provider takes — run `/llm`, pick this profile, choose "
+                "**Edit**, then **Add a parameter**.")
         if name not in profiles:
             return "Unknown LLM profile."
         action = args.get("action")
@@ -228,9 +224,7 @@ class LlmCommand(BaseCommand):
                     if was_loaded:
                         sdk.llm.load(name)
                     return f"Removed `{chosen}` from {name}."
-                # Into the dict, beside whatever else the profile sends. A
-                # ``None`` stays: it is the stored form of "send nothing", and
-                # dropping it would hand back the kernel's default.
+                # Into the dict, beside whatever else this profile sends.
                 extras[chosen] = _extra_value(args)
             else:
                 profiles[name][field] = _coerce(field, args.get("value"))
@@ -282,16 +276,21 @@ class LlmCommand(BaseCommand):
 def _add_steps(sdk, registry, args):
     """Adding a profile, asked from least specific to most.
 
-    Provider, then endpoint, then model, then the parameters that model takes
-    — each answer narrowing what the next one offers. The ordering is forced
-    rather than chosen: listing models means asking the endpoint, and asking
-    the endpoint means already holding its URL and key.
+    Backend, then provider, then endpoint, then model — each answer
+    narrowing what the next one offers. The ordering is forced rather than
+    chosen: listing models means asking the endpoint, and asking the endpoint
+    means already holding its URL and key.
+
+    Three of those arrive already answered, which is the whole point of asking
+    in this order: the provider supplies its own endpoint, the endpoint
+    supplies its models with the prefix each one needs, and the model supplies
+    its context window.
 
     Every step degrades to a typed value, and that is the *common* path rather
-    than a fallback. Aggregators appear in no provider list, plenty of
-    endpoints serve no catalogue, and a backend need not introspect at all —
-    so a step whose lookup came back empty simply asks for the value the way
-    it always did. Nothing here treats an empty answer as a problem.
+    than a fallback. Gateways appear in no provider list, plenty of endpoints
+    publish no catalogue, and a backend need not introspect at all — so a
+    step whose lookup came back empty simply asks for the value the way it
+    always did. Nothing here treats an empty answer as a problem.
     """
     backends = _backend_names(registry)
     provider = args.get("llm_provider") or ""
@@ -299,7 +298,7 @@ def _add_steps(sdk, registry, args):
     steps = [
         FormStep(
             "llm_service_class",
-            "Choose how Second Brain should connect to this model.",
+            "Choose how Second Brain connects to this model.",
             True, enum=backends, default=backends[0]),
     ]
 
@@ -309,9 +308,9 @@ def _add_steps(sdk, registry, args):
         labels = [row.get("label") or row["id"] for row in providers]
         steps.append(FormStep(
             "llm_provider",
-            "Which provider is this model served by? Choose "
-            f"`{CUSTOM}` for anything reached through its own URL, which "
-            "includes every multi-provider gateway.",
+            "Which provider serves this model? Pick **Something else** for "
+            "anything reached through its own URL, which includes every "
+            "multi-provider gateway.",
             True, enum=ids, enum_labels=labels + ["Something else"]))
 
     resolved = _endpoint_for(sdk, provider)
@@ -351,7 +350,7 @@ def _add_steps(sdk, registry, args):
         steps.append(FormStep(
             "new_model_name",
             "Which model? The name is stored exactly as shown, prefix "
-            f"included, so it routes correctly. Choose `{CUSTOM}` to type "
+            "included, so it routes correctly. Pick **Type it myself** for "
             "one that is not listed.",
             True, enum=names, enum_labels=labels + ["Type it myself"]))
         if args.get("new_model_name") == CUSTOM:
@@ -390,12 +389,7 @@ def _add_steps(sdk, registry, args):
 
 
 def _extra_param_steps(sdk, args, model, endpoint, profile):
-    """Pick a provider parameter, then pick its value. Used by add and by edit.
-
-    One flow in both places because they are the same act: the add flow
-    reaches it once with the model just chosen, and ``/llm`` -> Edit reaches
-    it again later against the same model. Two spellings of it would drift,
-    and the second one would be the one nobody tested.
+    """Adding a parameter: pick which one, then pick its value.
 
     The menu is the backend's answer for *this* model, so it lists what the
     model actually takes rather than a fixed vocabulary, and it lists only
@@ -403,38 +397,37 @@ def _extra_param_steps(sdk, args, model, endpoint, profile):
     offering a setting that does nothing, and a menu of mostly-inert entries
     teaches you to distrust all of them.
 
-    Hiding is safe here and would not be elsewhere, because nothing is made
-    unreachable: ``custom`` sits at the end of this menu and the raw-JSON
-    entry sits beside it in Edit. That is the difference from ``params``
-    itself, which reports and never gates — a *lookup* may not decide what is
-    possible, but a *menu* may decide what is worth suggesting.
+    Hiding is safe here and would not be safe in ``params`` itself, which
+    reports and never gates: a *lookup* may not decide what is possible, but a
+    *menu* may decide what is worth suggesting — and only because ``custom``
+    at the end of it keeps everything reachable anyway.
 
-    One exception, and it is the case that would otherwise be a trap: a
-    parameter already set on this profile stays listed even when unsupported.
-    Otherwise the one thing you cannot do from this menu is fix the value that
-    prompted you to open it.
+    Parameters this profile already sets are left out too, and that is the
+    restructure paying off rather than a second rule: each of them has its own
+    row in the edit menu now, showing its value and opening straight on it.
+    This menu once had to keep an unsupported-but-set parameter visible so it
+    could still be fixed — it was the only way to reach one — and that
+    exception left with the rows' arrival.
 
-    There is no "skip" entry. Reaching this is choosing **Configure extra
-    parameter** from the edit menu, which is already the statement that you
-    want to set one; Back is how you leave. It did have one, for an add flow
-    that offered this step unasked — that flow is gone, and an option whose
-    only caller went with it is worse than no option.
+    There is no "skip" entry. Reaching this is choosing **Add a parameter**
+    from the edit menu, which is already the statement that you want one;
+    Back is how you leave.
     """
     current = (profile or {}).get("llm_extra_params") or {}
     rows = [row for row in _param_options(sdk, model, endpoint)
-            if row.get("supported", True) or row["name"] in current]
+            if row.get("supported", True) and row["name"] not in current]
     names = [row["name"] for row in rows]
     choices = names + [CUSTOM]
-    labels = [_param_label(row, current) for row in rows]
+    labels = [row.get("label") or row["name"] for row in rows]
     labels += ["Something else — type its name"]
 
     steps = [FormStep(
         EXTRA_PARAM,
-        ("Which provider parameter do you want to set? These are forwarded on "
-         "every call this profile makes."
+        ("Which parameter do you want to set? These are sent on every call "
+         "this profile makes."
          + ("" if rows else
-            "\n\nNothing could be listed for this model, so type the name "
-            "yourself.")),
+            "\n\nNothing could be listed for this model, so pick "
+            "**Something else** and type the name.")),
         True, enum=choices, enum_labels=labels)]
 
     picked = args.get(EXTRA_PARAM)
@@ -461,10 +454,8 @@ def _value_step(name, spec, current):
     second spelling of it hidden in the value.
     """
     kind = (spec or {}).get("kind") or "text"
-    held = current.get(name, "__unset__")
-    now = ("" if held == "__unset__" else
-           f"Currently `off` (nothing sent).\n\n" if held is None else
-           f"Currently `{held}`.\n\n")
+    now = ("" if name not in current else
+           f"Currently `{_shown(current[name])}`.\n\n")
     note = (spec or {}).get("note") or ""
     warning = f"\n\nNote: {note}" if note else ""
     if kind == "choice" and (spec or {}).get("choices"):
@@ -486,19 +477,15 @@ def _value_step(name, spec, current):
         True)
 
 
-def _param_label(row, current):
-    """One menu entry: the name, what it is set to, and any caveat."""
-    name = row["name"]
-    label = row.get("label") or name
-    if name in current:
-        held = current[name]
-        label += " = off" if held is None else f" = {held}"
-    if not row.get("supported", True):
-        # Only reachable for a parameter this profile already carries, since
-        # the menu drops the rest. Worth saying, because it explains why a
-        # value that is set may not be doing anything.
-        label += " (not listed for this model)"
-    return label
+def _shown(value):
+    """How a stored parameter value reads on screen.
+
+    One helper because it appears in four places — both menus, the value
+    step's preamble and the profile card — and they had drifted into three
+    spellings of the same null. A parameter that reads "off" in one list and
+    "(sends nothing)" in the next looks like two different settings.
+    """
+    return "(sends nothing)" if value is None else str(value)
 
 
 def _chosen_param(args):
@@ -585,10 +572,8 @@ def _fields(profile):
     names = list(BASE_FIELDS)
     labels = list(BASE_LABELS)
     for key in extras:
-        value = profile["llm_extra_params"][key]
         names.append(PARAM_PREFIX + key)
-        labels.append(f"{key} = "
-                      + ("(sends nothing)" if value is None else str(value)))
+        labels.append(f"{key} = {_shown(profile['llm_extra_params'][key])}")
     names.append(EXTRA_PARAM)
     labels.append("Add a parameter")
     return names, labels
@@ -661,8 +646,9 @@ def _capability_steps():
     return [
         FormStep(
             field,
-            f"Can this model read {label} natively? Choose yes/no, or "
-            "/skip if unsure.",
+            f"Can this model read {label} natively? Skip if unsure — this "
+            f"only controls whether {label} are sent to it as files rather "
+            "than as text.",
             False, "boolean", default=None, prompt_when_missing=True,
         )
         for field, label in (
@@ -811,7 +797,7 @@ def _describe(sdk, registry, profiles, default, name):
     # its own — unreadable at a glance, and the promotion was the only reason
     # one parameter could carry a warning and the rest could not.
     for key, value in sorted((profile.get("llm_extra_params") or {}).items()):
-        shown = "(sends nothing)" if value is None else str(value)
+        shown = _shown(value)
         note = _param_note(row, key)
         pairs.append((key, f"{shown} — {note}" if note else shown))
     return sdk.md.card(f"{name}{mark}", pairs)
@@ -884,31 +870,89 @@ def _value_type(field):
     return "string"
 
 
-def _value_prompt(field, backends, profile=None):
+def _value_enum(field, backends):
+    """The closed choices for a profile field, or ``None`` for free text.
+
+    The add flow offers a picker for the backend and yes/no for each
+    capability; editing the same settings offered neither, so changing your
+    backend meant typing a class name from memory and getting
+    "Unknown LLM profile"-shaped failures for a typo. The two flows write the
+    same keys and should ask the same way.
+    """
+    if field == "llm_service_class":
+        return list(backends)
+    return None
+
+
+def _value_enum_labels(field, backends, registry):
+    """Human labels for whatever ``_value_enum`` offered.
+
+    Backends are shown by their declared display name, the same as everywhere
+    else a person picks one — the stored value is a class name and reading
+    it is not the user's job.
+    """
+    if field == "llm_service_class":
+        return [_backend_label(registry, name) for name in backends]
+    return None
+
+
+def _value_prompt(field, profile=None, registry=None):
     """What to ask for one field, and what it is set to now.
 
-    The current value matters most for the two tuning fields: a dict is
-    tedious to retype from memory, and there is nowhere else in the flow that
-    shows it before you overwrite it.
+    Worded to match the add flow question for question. They write the same
+    keys, and two descriptions of one setting is how a person ends up
+    believing there are two settings.
     """
-    current = _current_value(field, profile or {})
-    return current + {
+    return _current_value(field, profile or {}, registry) + {
+        "llm_model_name": (
+            "Enter the model name, exactly as the provider spells it and "
+            "including any prefix it needs."),
         "llm_endpoint": (
-            "Enter a provider base URL, or leave it blank for the provider "
-            "default."),
-        "llm_model_name": "Enter the model name for this profile.",
+            "Enter the provider base URL. Leave it blank only if this backend "
+            "already knows where to reach the provider."),
         "secret_llm_api_key": (
-            "Enter the API key value or environment variable name. Leave "
-            "blank to let the backend read its own environment."),
+            "Enter the API key, or the name of an environment variable "
+            "holding it. Leave it blank only for a provider that needs no "
+            "key, such as a local server, or when the key is already in the "
+            "environment under the name this provider looks for."),
         "llm_context_size": (
-            "Enter the context window size in tokens. Use 0 if unknown."),
-        "llm_service_class": f"Enter one of: {', '.join(backends)}.",
+            "Enter the context window in tokens. Use 0 to let the kernel "
+            "compact reactively instead."),
+        "llm_service_class": "Choose how Second Brain connects to this model.",
         "llm_capability_image": "Can this model read images natively?",
         "llm_capability_audio": "Can this model read audio natively?",
         "llm_capability_video": "Can this model read video natively?",
     }.get(field, "Enter the new value.")
 
 
-def _current_value(field, profile):
-    """A one-line "currently:" preamble, or nothing when there is nothing."""
-    return ""
+def _current_value(field, profile, registry=None):
+    """A "currently:" preamble, or nothing when there is nothing to say.
+
+    Editing a parameter has shown its present value since the value step was
+    built; editing a *setting* showed nothing, so the two halves of one menu
+    behaved differently for no reason anybody chose.
+
+    The key is the exception and is never echoed. Whether one is set is the
+    useful half and the only half that is safe to print: this renders into a
+    prompt, and a prompt is transcript.
+    """
+    if field == "secret_llm_api_key":
+        return ("Currently set.\n\n" if profile.get(field)
+                else "Not currently set.\n\n")
+    if field in CAPABILITY_FIELDS:
+        held = (profile.get("llm_capabilities") or {}).get(
+            CAPABILITY_FIELDS[field])
+        return "" if held is None else f"Currently `{bool(held)}`.\n\n"
+    if field == "llm_context_size":
+        held = int(profile.get(field, 0) or 0)
+        # No gloss on the zero: the prompt below already explains what it
+        # means, and saying it twice reads as two different facts.
+        return f"Currently `{held:,}`.\n\n"
+    held = profile.get(field)
+    if field == "llm_service_class" and held:
+        # The display name, matching the picker below it. The stored value is
+        # a class name and often a *retired* one, since a migrated backend
+        # claims its predecessor's — printing it raw names something that no
+        # longer exists, directly above a menu that has renamed it.
+        held = _backend_label(registry or {}, held)
+    return f"Currently `{held}`.\n\n" if held else ""
