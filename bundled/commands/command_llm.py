@@ -145,7 +145,8 @@ class LlmCommand(BaseCommand):
                             profile.get("llm_endpoint") or "")
                          if row["name"] == held), None)
                     steps.append(_value_step(
-                        held, spec, profile.get("llm_extra_params") or {}))
+                        sdk, held, spec,
+                        profile.get("llm_extra_params") or {}))
             elif field == EXTRA_PARAM:
                 # Adding one: which parameter, then its value.
                 steps.extend(_extra_param_steps(
@@ -313,7 +314,8 @@ def _add_steps(sdk, registry, args):
             "multi-provider gateway.",
             True, enum=ids, enum_labels=labels + ["Something else"]))
 
-    resolved = _endpoint_for(sdk, provider)
+    detail = _provider_detail(sdk, provider)
+    resolved = str(detail.get("endpoint") or "")
     steps.append(FormStep(
         "llm_endpoint",
         # The URL is written into the prompt as well as pre-filled. A default
@@ -336,7 +338,12 @@ def _add_steps(sdk, registry, args):
         "Enter the API key, or the name of an environment variable holding "
         "it. Leave it blank only for a provider that needs no key, such as a "
         "local server, or when the key is already in the environment under "
-        "the name this provider looks for.",
+        "the name this provider looks for."
+        # And that name is the one thing this sentence could never supply,
+        # since only the backend knows which variable its provider reads. It
+        # is quoted here rather than a step earlier because this is where the
+        # answer changes what you type.
+        + _about(sdk, detail),
         False, default="", prompt_when_missing=True))
 
     # The model step only becomes a menu once there is something to ask.
@@ -367,7 +374,7 @@ def _add_steps(sdk, registry, args):
             "`anthropic/claude-3-5-sonnet-latest`).",
             True))
 
-    window = _context_size(sdk, _chosen_model(args), endpoint)
+    window, facts = _model_facts(sdk, _chosen_model(args), endpoint)
     steps.append(FormStep(
         "llm_context_size",
         (f"Context window in tokens. This model reports {window:,}, already "
@@ -375,7 +382,11 @@ def _add_steps(sdk, registry, args):
          if window else
          "Context window size in tokens. Nothing could look this up for this "
          "model, so enter it if you know it, or use 0 to let the kernel "
-         "compact reactively instead."),
+         "compact reactively instead.")
+        # What the backend knows about the model, quoted under the first
+        # question that is about the model rather than about reaching it —
+        # and the last one before the three that ask what it can read.
+        + _about(sdk, facts),
         False, "integer", default=window, prompt_when_missing=True))
     steps.extend(_capability_steps())
     # And that is the whole of setting a model up. Provider parameters are
@@ -414,7 +425,8 @@ def _extra_param_steps(sdk, args, model, endpoint, profile):
     Back is how you leave.
     """
     current = (profile or {}).get("llm_extra_params") or {}
-    rows = [row for row in _param_options(sdk, model, endpoint)
+    options = _param_options(sdk, model, endpoint)
+    rows = [row for row in options
             if row.get("supported", True) and row["name"] not in current]
     names = [row["name"] for row in rows]
     choices = names + [CUSTOM]
@@ -440,41 +452,73 @@ def _extra_param_steps(sdk, args, model, endpoint, profile):
             "example `enable_thinking`.",
             True))
     chosen = _chosen_param(args)
-    spec = next((row for row in rows if row["name"] == chosen), None)
+    # Resolved against *every* option rather than the menu's own rows, so a
+    # name typed at **Something else** still arrives with whatever the backend
+    # knows about it. The menu hides what this profile already sets; that is a
+    # rule about what is worth suggesting, and it has no business deciding
+    # what can be explained.
+    spec = next((row for row in options if row["name"] == chosen), None)
     if chosen:
-        steps.append(_value_step(chosen, spec, current))
+        steps.append(_value_step(sdk, chosen, spec, current))
     return steps
 
 
-def _value_step(name, spec, current):
+def _value_step(sdk, name, spec, current):
     """The step that collects one parameter's value, shaped by its kind.
 
     Nothing here is a word you type to mean something other than itself.
     Declining a parameter is Remove, on the step before this one; there is no
     second spelling of it hidden in the value.
+
+    Three things can stand above the question and they answer three different
+    questions, which is why they stay three things rather than one paragraph:
+    what this profile sends today, what the parameter *is*, and what will
+    happen to this value here. Any of them may be missing.
     """
     kind = (spec or {}).get("kind") or "text"
     now = ("" if name not in current else
            f"Currently `{_shown(current[name])}`.\n\n")
+    about = _about(sdk, spec)
     note = (spec or {}).get("note") or ""
     warning = f"\n\nNote: {note}" if note else ""
     if kind == "choice" and (spec or {}).get("choices"):
         return FormStep(
             "extra_value",
-            f"{now}Choose a value for `{name}`.{warning}",
+            f"{now}Choose a value for `{name}`.{about}{warning}",
             True, enum=[str(item) for item in spec["choices"]])
     if kind == "bool":
         return FormStep(
-            "extra_value", f"{now}Set `{name}` to?{warning}", True,
+            "extra_value", f"{now}Set `{name}` to?{about}{warning}", True,
             enum=["true", "false"], enum_labels=["True", "False"])
     if kind == "number":
         return FormStep(
-            "extra_value", f"{now}Enter a number for `{name}`.{warning}", True)
+            "extra_value",
+            f"{now}Enter a number for `{name}`.{about}{warning}", True)
     return FormStep(
         "extra_value",
         f"{now}Enter a value for `{name}`. JSON is accepted, so `true`, `2`, "
-        f"or `{{\"type\": \"enabled\"}}` all work.{warning}",
+        f"or `{{\"type\": \"enabled\"}}` all work.{about}{warning}",
         True)
+
+
+def _about(sdk, row):
+    """A discovery row's own description, quoted, or ``""``.
+
+    Quoted rather than folded into the sentence, and that is the whole reason
+    this is a helper instead of an f-string in four places. The text is the
+    *backend's* account of the thing — read out of whatever its provider
+    library documents — so it may well describe the spec a parameter belongs
+    to rather than the model in front of you. A blockquote reads as "here is
+    what somebody else says", which is exactly the claim being made; writing
+    it in our own voice would upgrade it to an assertion.
+
+    Blank is an ordinary answer and never a problem. A provider-specific
+    parameter appears in no spec, a gateway describes none of its models, and
+    a backend need not implement any of this — so every step here reads
+    exactly as it did before descriptions existed.
+    """
+    text = str((row or {}).get("description") or "").strip()
+    return f"\n\n{sdk.md.quote(text)}" if text else ""
 
 
 def _shown(value):
@@ -532,25 +576,34 @@ def _extra_value(args):
     return raw
 
 
-def _context_size(sdk, model, endpoint):
-    """The model's own input context window, or ``0``.
+def _model_facts(sdk, model, endpoint):
+    """``(context window, row)`` for one model — ``(0, {})`` when unknown.
 
     ``0`` is not a failure here: the kernel reads it as "compact reactively",
     which works. That is why a blank is offered rather than a guess — a wrong
     window is budgeted against every turn, so it either wastes most of the
     context or overflows it, and both look like a bad model rather than a bad
     number.
+
+    The row comes back whole rather than as a second lookup, because it is one
+    question with two answers and the second is only worth having beside the
+    first: the description says what kind of model this is and what it can
+    read, which is the context for the number being asked about here and for
+    the three capability questions immediately after it.
     """
     if not model:
-        return 0
+        return 0, {}
     try:
         answer = sdk.llm.list(info=model, endpoint=endpoint or "") or {}
     except sdk.Failed:
-        return 0
+        return 0, {}
+    row = answer.get("info") or {}
+    if not isinstance(row, dict):
+        return 0, {}
     try:
-        return int((answer.get("info") or {}).get("context_size") or 0)
+        return int(row.get("context_size") or 0), row
     except (TypeError, ValueError):
-        return 0
+        return 0, row
 
 
 def _fields(profile):
@@ -617,8 +670,8 @@ def _models(sdk, endpoint, api_key, provider):
     return answer.get("models") or []
 
 
-def _endpoint_for(sdk, provider):
-    """The chosen provider's own base URL, or ``""``.
+def _provider_detail(sdk, provider):
+    """The chosen provider's own row: its base URL and whatever else it says.
 
     A second, narrower call rather than a field read off the menu, because the
     menu deliberately carries no endpoints: resolving one is expensive enough
@@ -629,17 +682,23 @@ def _endpoint_for(sdk, provider):
     step collects a name and the next step asks for the URL the name was
     supposed to supply - two questions, where answering the second already
     required knowing everything the first was meant to spare you.
+
+    The whole row rather than the URL alone, because the same call already
+    carries the answer to the question one step further on. What a backend
+    can say about a provider in words turns out to be about its *environment*
+    - which variable it falls back to - and that is exactly what somebody
+    deciding whether to leave the key blank needs to know.
     """
     if not provider or provider == CUSTOM:
-        return ""
+        return {}
     try:
         rows = (sdk.llm.list(providers=provider) or {}).get("providers") or []
     except sdk.Failed:
-        return ""
+        return {}
     for row in rows:
         if str(row.get("id") or "").lower() == provider.lower():
-            return str(row.get("endpoint") or "")
-    return ""
+            return row
+    return {}
 
 
 def _capability_steps():

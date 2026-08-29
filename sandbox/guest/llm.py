@@ -330,16 +330,32 @@ class BaseLLMBackend:
     # answered by the backend because only it knows what its provider
     # library can tell it.
     #
-    # All three default to ``[]``, which means "I cannot say" and is a real
+    # All four default to ``[]``, which means "I cannot say" and is a real
     # answer rather than a failure: a backend implementing none of them
     # leaves the user typing the values by hand, exactly as before. That is
     # also the *common* path — model aggregators appear in no provider
     # table — so nothing above these may treat an empty list as an error.
+    #
+    # **Every row may carry a ``description``**, and the same "I cannot say"
+    # rule governs it: ``""`` is the default and means nothing is rendered.
+    # It is prose *about the thing the row names* — what a parameter does,
+    # what kind of model this is — and it is deliberately the one field with
+    # no structure at all, because it exists for the cases where a fact is
+    # worth telling somebody and is not worth a key of its own.
+    #
+    # It is the backend's own account, never a claim the kernel makes, and a
+    # caller should render it as such — ``/llm`` quotes it. That register is
+    # the point rather than decoration: a backend reads these out of whatever
+    # its provider library documents, so the text may describe the *spec* a
+    # parameter belongs to rather than the model in front of you, and a quote
+    # says "here is what somebody else says" where a sentence of our own
+    # would be asserting it.
 
     def providers(self, sdk, provider: str = "") -> list:
         """Providers this backend can talk to.
 
-        Each entry is ``{"id": str, "label": str, "endpoint": str}``.
+        Each entry is ``{"id": str, "label": str, "endpoint": str}``, plus an
+        optional ``description``.
 
         Two questions share one method because they are the same question at
         two widths. Asked bare, it is the *menu* — every provider, and
@@ -354,12 +370,23 @@ class BaseLLMBackend:
         ``endpoint`` still comes back ``""`` when there genuinely is none, as
         for a provider reached through its own SDK. Blank is honest; a guessed
         URL is not, because it fails much later and blames the model.
+
+        ``description`` follows the same split, and for the same reason: it
+        belongs to the narrowed call. A hundred and fifty rows have nowhere to
+        put prose anyway — a menu shows labels — so anything worth saying is
+        worth saying about the one provider somebody picked.
         """
         return []
 
     def models(self, sdk, endpoint: str, api_key: str,
                provider: str = "", live: bool = False) -> list:
         """Models reachable at *endpoint*, as ``{"name", "label"}``.
+
+        A ``description`` here should be the *endpoint's own* words about the
+        model, when it volunteers any, rather than something composed from a
+        table — that is what ``info`` is for, asked about the one model
+        chosen. A row in a picker is a name and a label; only the model
+        somebody settled on has a place to be described at length.
 
         ``name`` is the string **this backend wants to be handed back** in
         ``LLMRequest.model_name`` — any provider prefix already applied. That
@@ -384,9 +411,16 @@ class BaseLLMBackend:
     def info(self, sdk, model_name: str, endpoint: str = "") -> list:
         """Facts about one model, as a single-row list.
 
-        ``[{"context_size": int}]`` today. A list rather than a dict because
+        ``[{"context_size": int, "description": str}]`` today, both optional.
+        This is the row that most earns a ``description``: it is asked once,
+        about a model somebody has chosen, at the moment they are being asked
+        to confirm numbers about it. A list rather than a dict because
         every discovery answer is a list and ``__describe__`` normalizes one
         shape; a lone dict would iterate as its keys and arrive as nonsense.
+
+        A row carrying only a ``description`` is a real answer — knowing what
+        kind of model this is while not knowing its window is an ordinary
+        state for a lookup table to be in, and the two facts are independent.
 
         ``context_size`` is the *input* window, which is what the kernel
         budgets against — not the output cap, which is a different and usually
@@ -401,8 +435,16 @@ class BaseLLMBackend:
         """Extra provider parameters *model_name* accepts.
 
         Each entry is ``{"name", "label", "kind", "choices", "supported",
-        "note"}``. ``kind`` is ``"choice"``, ``"number"``, ``"bool"`` or
-        ``"text"``; ``choices`` matters only for ``"choice"``.
+        "note"}``, plus an optional ``description``. ``kind`` is ``"choice"``,
+        ``"number"``, ``"bool"`` or ``"text"``; ``choices`` matters only for
+        ``"choice"``.
+
+        ``description`` and ``note`` answer different questions and both are
+        worth having: the description says **what this parameter is**, which
+        is true of the parameter wherever it is sent, while the note says
+        **what will happen to this value here**, which is a fact about this
+        model at this provider. So a supported parameter routinely has a
+        description and no note.
 
         ``supported`` is **a report, never a gate.** A caller shows a false
         one greyed with its ``note`` and still lets it be set, because this

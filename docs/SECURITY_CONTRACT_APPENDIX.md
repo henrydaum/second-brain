@@ -584,7 +584,7 @@ Everything that creates recurring unattended work is unsafe, for the same reason
 | `event.request(channel, payload, timeout)` | Blocking request/response | channel | safe |
 | `llm.proceed(request)` | Place the call an escort is holding | token | safe |
 | `llm.delta(text)` | Push streamed assistant text out of a backend | token | safe |
-| `llm.list()` | Configured profiles, installed backends, the default | — | safe |
+| `llm.list(...)` | Configured profiles and backends; or what a backend says about providers, models, one model, one model's params | — | safe |
 | `llm.load(name)` | Open one profile's box pool | name | **unsafe** |
 | `llm.unload(name)` | Close it | name | **unsafe** |
 
@@ -610,7 +610,18 @@ context sizes and the extra provider params a profile sends (reasoning effort
 and whatever else it configures). The API key is a `secret_*` setting and
 comes back as a handle like every other one; `llm_extra_params` is not a place
 to hide one, since a credential belongs to the connection rather than to the
-call and nothing in the kernel reads it as one. `llm.load`/`llm.unload` sit with `service.load`/
+call and nothing in the kernel reads it as one.
+
+**It also answers the four discovery questions**, selected by argument
+(`providers=`, `models=`, `info=`, `params=`) rather than by four Request
+types — a Request may grow arguments, and the subject is the same one. Safe on
+the same reading: every answer is a *report* about what could be configured,
+built from tables the backend already holds, and every row carries an optional
+`description` that is prose and nothing else. One of them can reach the
+network — `models=` with `live=True` asks the endpoint for its own catalogue —
+and that is why `live` defaults to off and a settings form never turns it on:
+a command's approval is evaluated on its *completed* arguments, so anything a
+form does runs ungranted. `llm.load`/`llm.unload` sit with `service.load`/
 `service.unload` and for the same argument: opening a brain starts a pool of
 real processes, each holding a provider SDK and a credential, and closing one
 ends calls that may be in flight.

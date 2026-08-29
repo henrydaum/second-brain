@@ -1546,6 +1546,46 @@ provider library opens its own socket, so there is no `net.http` for the kernel
 to substitute a handle into. If your provider speaks plain HTTP, prefer
 `sdk.net.http` and keep the handle.
 
+**Four optional methods say what can be configured**, ordered from least to
+most specific. Each narrows the last, and each is answered by you because only
+your provider library knows.
+
+```python
+# [{"id", "label", "endpoint"}]
+def providers(self, sdk, provider=""): ...
+# [{"name", "label"}]
+def models(self, sdk, endpoint, api_key, provider="", live=False): ...
+# [{"context_size"}]
+def info(self, sdk, model_name, endpoint=""): ...
+# [{"name", "label", "kind", "choices", "supported", "note"}]
+def params(self, sdk, model_name, endpoint): ...
+```
+
+**`[]` is a real answer and the common one.** Implement none of them and the
+user types the values by hand, exactly as before — model aggregators appear in
+no provider table, most endpoints publish no catalogue. Nothing above these
+treats an empty list as an error, so never raise to mean "I don't know".
+
+`models` returns the name **you want handed back** in `LLMRequest.model_name`,
+prefix already applied: which prefix you need is a fact about you, and making
+the user know it is how a working model ends up unreachable for want of five
+characters. `live` is permission to *ask the endpoint*, off by default, because
+the caller that most wants this is a settings form and a form cannot do egress.
+
+`params` reports and never gates. `supported: False` means "my provider's table
+does not list this", which is a lookup in somebody else's table and those are
+wrong sometimes — so a caller still lets it be set, and `note` says what will
+happen to the value rather than what the model can do.
+
+**Every row may carry a `description`**, and `""` — the default — means nothing
+is rendered. It is prose about the thing the row names: what a parameter does,
+what kind of model this is. It is *your* account, never a claim the kernel
+makes, and a caller quotes it rather than asserting it. That register is the
+point: you will be reading it out of whatever your provider library documents,
+so it may describe the spec a parameter belongs to rather than the model in
+front of the user. Say nothing rather than inventing a sentence — `/llm` reads
+exactly as it did before descriptions existed when there is nothing to say.
+
 ### Machinery
 
 ```python

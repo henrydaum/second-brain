@@ -384,20 +384,44 @@ class _LlmSdk:
         self.md = type("Md", (), {
             "card": staticmethod(lambda title, pairs: pairs),
             "table": staticmethod(lambda *a, **k: ""),
+            # Same shape as the real one, because the tests below assert on
+            # what a person reads rather than on the call being made.
+            "quote": staticmethod(lambda text: "\n".join(
+                f"> {line}" if line.strip() else ">"
+                for line in (text or "").splitlines())),
         })()
         self.llm = type("Llm", (), {
             # ``list`` grew the setup questions, so the fake answers them.
             # ``params`` is what the extra-parameter menu is built from.
             "list": staticmethod(lambda **kw: {
                 "profiles": [], "backends": [],
+                "providers": ([
+                    {"id": "acme", "label": "Acme",
+                     "endpoint": "https://acme.test/v1",
+                     "description": "Reads `ACME_API_KEY` from the environment."},
+                ] if kw.get("providers") else []),
+                "info": ({"context_size": 4096,
+                          "description": "A chat model served by acme."}
+                         if kw.get("info") else {}),
                 "params": ([
                     {"name": "reasoning_effort", "label": "Reasoning effort",
                      "kind": "choice",
                      "choices": ["low", "medium", "high"],
-                     "supported": True, "note": ""},
+                     "supported": True, "note": "",
+                     "description": "Constrains effort on reasoning."},
                     {"name": "temperature", "label": "Temperature",
                      "kind": "number", "choices": [],
-                     "supported": True, "note": ""},
+                     "supported": True, "note": "",
+                     "description": "What sampling temperature to use."},
+                    # Set on the profile below, so the *menu* hides it while
+                    # the value step must still explain it.
+                    {"name": "top_p", "label": "Top-p", "kind": "number",
+                     "choices": [], "supported": True, "note": "",
+                     "description": "Nucleus sampling."},
+                    # A provider's own parameter: in no spec, so no prose.
+                    {"name": "thinking", "label": "thinking", "kind": "text",
+                     "choices": [], "supported": True, "note": "",
+                     "description": ""},
                 ] if kw.get("params") else []),
             }),
             "load": staticmethod(lambda name: True),
@@ -588,17 +612,19 @@ def test_a_value_step_is_shaped_by_what_the_backend_said():
     """
     module = _load("command_llm")
 
+    sdk = _LlmSdk({}, default="")
+
     choice = module._value_step(
-        "reasoning_effort",
+        sdk, "reasoning_effort",
         {"kind": "choice", "choices": ["low", "high"], "note": ""}, {})
     assert choice["enum"] == ["low", "high"]
 
-    number = module._value_step("temperature", {"kind": "number"}, {})
+    number = module._value_step(sdk, "temperature", {"kind": "number"}, {})
     assert not number["enum"]
     assert "off" not in number["prompt"] and "remove" not in number["prompt"]
 
     # A parameter the backend could not describe is still settable.
-    unknown = module._value_step("enable_thinking", None, {})
+    unknown = module._value_step(sdk, "enable_thinking", None, {})
     assert not unknown["enum"]
     assert "off" not in unknown["prompt"] and "remove" not in unknown["prompt"]
 
@@ -646,3 +672,136 @@ def test_a_value_arrives_as_the_type_it_looks_like():
         "type": "enabled"}
     assert module._extra_value({"extra_value": "medium"}) == "medium"
 
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Saying what a thing is, in the backend's voice.
+# ──────────────────────────────────────────────────────────────────────
+
+def _prompt(steps, field):
+    """The prompt of one step, by field name."""
+    for step in steps:
+        if step["name"] == field:
+            return step["prompt"]
+    seen = [step["name"] for step in steps]
+    raise AssertionError(f"no {field} step in {seen}")
+
+
+def test_a_parameter_step_says_what_the_parameter_is():
+    """The value step asked for a number and never said what the number did.
+
+    Every one of these came out of the backend's own tables, so the command
+    learns no provider vocabulary to render them — which is the same rule
+    ``choices`` and ``note`` already follow.
+    """
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {}}, default="m")
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": "temperature"})
+
+    assert "> What sampling temperature to use." in _prompt(steps,
+                                                            "extra_value")
+
+
+def test_a_description_is_quoted_rather_than_asserted():
+    """It is somebody else's sentence — read out of whatever the provider
+    library documents — so it may describe the spec a parameter belongs to
+    rather than the model in front of you. A blockquote makes that claim
+    honestly; folding it into our own prose would not."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {}}, default="m")
+
+    assert module._about(sdk, {"description": "Two\nlines."}) == (
+        "\n\n> Two\n> lines.")
+
+
+def test_nothing_is_rendered_for_a_parameter_no_spec_names():
+    """The ordinary answer, and the one this must not treat as a problem: a
+    provider's own parameter appears in no spec, and a backend need not
+    implement any of this. The step then reads exactly as it did before
+    descriptions existed — no stray quote, no empty gap."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {}}, default="m")
+
+    assert module._about(sdk, {"description": ""}) == ""
+    assert module._about(sdk, {}) == ""
+    assert module._about(sdk, None) == ""
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": "thinking"})
+
+    assert ">" not in _prompt(steps, "extra_value")
+
+
+def test_a_parameter_already_set_is_still_explained():
+    """Opening one from the edit menu takes the other route into the value
+    step — the one that looks the spec up itself — and both have to carry the
+    description or the explanation depends on how you arrived."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {"llm_extra_params": {"top_p": 0.9}}}, default="m")
+    # The shared fake's ``card`` answers with pairs; this drives a real
+    # form, whose profile step concatenates it.
+    sdk.md.card = staticmethod(lambda title, pairs: "")
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "m", "action": "edit",
+        "field": module.PARAM_PREFIX + "top_p",
+        "param_action": module.EDIT})
+
+    prompt = _prompt(steps, "extra_value")
+    assert "Currently `0.9`" in prompt
+    assert "> Nucleus sampling." in prompt
+
+
+def test_a_typed_parameter_name_is_explained_too():
+    """The menu hides what this profile already sets, which is a rule about
+    what is worth *suggesting*. Resolving the spec against those same rows
+    let that rule decide what could be explained, so typing the name of a
+    parameter the backend knows perfectly well got you a bare prompt."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"m": {"llm_extra_params": {"top_p": 0.9}}}, default="m")
+    # The shared fake's ``card`` answers with pairs; this drives a real
+    # form, whose profile step concatenates it.
+    sdk.md.card = staticmethod(lambda title, pairs: "")
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "m", "action": "edit", "field": module.EXTRA_PARAM,
+        "extra_param": module.CUSTOM, "custom_param_name": "top_p"})
+
+    assert "> Nucleus sampling." in _prompt(steps, "extra_value")
+
+
+def test_setup_says_what_the_model_is_where_it_asks_about_the_model():
+    """The context-size step is the first question that is about the model
+    rather than about reaching it, and the three after it ask what the model
+    can read. So the description belongs on it: everything it answers is
+    about to be asked."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({}, default="")
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "add", "new_model_name": "acme/one",
+        "llm_endpoint": "https://acme.test/v1"})
+
+    assert "> A chat model served by acme." in _prompt(steps,
+                                                       "llm_context_size")
+
+
+def test_setup_names_the_environment_variable_it_falls_back_to():
+    """The key step tells you a blank works when the key is already in the
+    environment "under the name this provider looks for" — a name the
+    sentence could never supply, since only the backend knows it. It is
+    quoted where the answer changes what you type."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({}, default="")
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "add", "llm_provider": "acme"})
+
+    assert "> Reads `ACME_API_KEY` from the environment." in _prompt(
+        steps, "secret_llm_api_key")
+    # And the same call still answers the endpoint it was always asked for.
+    assert "https://acme.test/v1" in _prompt(steps, "llm_endpoint")
