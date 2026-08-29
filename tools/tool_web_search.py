@@ -28,7 +28,9 @@ class WebSearch(BaseTool):
         "local file system, especially current facts, external references, or verification. "
         "Uses Brave search by default and can use Brave Answers when mode='answers' or mode='auto'. "
         "DuckDuckGo is used as a fallback. If 'query' is a URL (http://, https://, or www.), "
-        "the page is fetched and its cleaned text is returned."
+        "the page is fetched and its cleaned text is returned; add mode='links' to get the "
+        "URLs the page links to instead of its text, which is how you find a file to download "
+        "when the link is on a button rather than in the prose."
     )
     parameters = {
         "type": "object",
@@ -39,8 +41,8 @@ class WebSearch(BaseTool):
             },
             "mode": {
                 "type": "string",
-                "description": "Search mode. 'auto' uses Answers for question-like queries and Search otherwise.",
-                "enum": ["auto", "search", "answers"],
+                "description": "Search mode. 'auto' uses Answers for question-like queries and Search otherwise. 'links' only applies when 'query' is a URL: it lists what the page links to instead of reading it.",
+                "enum": ["auto", "search", "answers", "links"],
                 "default": "auto",
             },
             "count": {
@@ -169,6 +171,8 @@ class WebSearch(BaseTool):
             return sdk.fail("Missing required parameter: query")
 
         if _URL_RE.match(query):
+            if (kwargs.get("mode") or "").strip().lower() == "links":
+                return self._links(sdk, query)
             return self._fetch(sdk, query)
 
         try:
@@ -178,6 +182,13 @@ class WebSearch(BaseTool):
         count = max(1, min(count, 20))
 
         mode = (kwargs.get("mode") or "auto").strip().lower()
+        if mode == "links":
+            # Reached only when the query was not a URL, and there is nothing
+            # sensible to fall back to: silently searching instead would
+            # answer a different question than the one asked.
+            return sdk.fail(
+                "mode='links' needs a URL as the query — it lists what one "
+                "page links to. Search for the page first, then pass its URL.")
         if mode not in {"auto", "search", "answers"}:
             mode = "auto"
 
@@ -257,6 +268,47 @@ class WebSearch(BaseTool):
         if data.get("truncated"):
             summary += "\n\n[content truncated]"
         return sdk.ok({"mode": "fetch", **data}, llm_summary=summary)
+
+    def _links(self, sdk, query):
+        """List what a page links to, rather than what it says.
+
+        Formatted as a table because the agent is choosing *one* of these, and
+        the three things it chooses on — what the link said, what kind of tag
+        held it, and the file extension — do not survive being flattened into
+        prose. The extension is the load-bearing column: it is what decides
+        whether the thing behind the link can be parsed once downloaded.
+        """
+        url = (query if query.lower().startswith(("http://", "https://"))
+               else "https://" + query)
+        data = self._call(sdk, "page_links", url=url)
+        status = int(data.get("status") or 0)
+        if status >= 400:
+            return sdk.fail(f"Fetch HTTP error {status} for {url}")
+        if (why := data.get("error")):
+            return sdk.fail(f"Could not read {url}: {why}")
+
+        links = data.get("links") or []
+        if not links:
+            return sdk.ok(
+                {"mode": "links", **data},
+                llm_summary=(
+                    f"{data.get('final_url') or url} links to nothing "
+                    f"reachable. Either the page is empty of links or they "
+                    f"are built by JavaScript, which cannot be read this way "
+                    f"— try the site's own download or API page."))
+
+        rows = [[link["url"], link.get("text") or "",
+                 link.get("extension") or "", link.get("kind") or ""]
+                for link in links]
+        table = sdk.md.table(["URL", "Link text", "Ext", "Tag"], rows)
+
+        header = f"{len(links)} link(s) on {data.get('final_url') or url}"
+        if data.get("title"):
+            header += f" ({data['title']})"
+        if data.get("truncated"):
+            header += ", truncated"
+        summary = header + ".\n\n" + table
+        return sdk.ok({"mode": "links", **data}, llm_summary=summary)
 
     def _duckduckgo(self, sdk, query, count, search_lang, prefix=""):
         """The keyless fallback, and the reason we are using it."""

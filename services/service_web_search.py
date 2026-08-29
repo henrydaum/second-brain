@@ -34,6 +34,148 @@ from guest.bases import BaseService
 
 _UA = "SecondBrain-WebSearch/3.0"
 
+#: Which attribute carries a URL, per tag. The set is small on purpose: these
+#: are the places a *file* is named, which is a narrower question than "every
+#: URL on the page" and keeps a link list short enough to read.
+_LINK_ATTRS = {
+    "a": ("href",),
+    "img": ("src", "data-src"),
+    "source": ("src",),
+    "video": ("src", "poster"),
+    "audio": ("src",),
+    "embed": ("src",),
+    "object": ("data",),
+    "link": ("href",),
+}
+
+#: ``<meta property="og:image" content="...">`` and friends. Social-card
+#: metadata is often the only place a page names its own primary asset in
+#: full resolution, so it is worth the four lines.
+_META_KEYS = ("og:image", "og:video", "og:audio", "twitter:image")
+
+#: Redirect statuses ``net.http`` hands back rather than following, when the
+#: hop leaves the host it was classified for.
+_REDIRECTS = (301, 302, 303, 307, 308)
+
+
+class _Links:
+    """Pull every URL a page names out of its HTML.
+
+    Regex rather than ``html.parser``: this file already strips tags that way
+    for :meth:`fetch_url`, the input is arbitrary broken markup that a strict
+    parser raises on more often than it helps, and nothing here needs a tree —
+    the question is "which attributes hold URLs", which is flat.
+
+    **This is the answer to links that are not in the text.** ``fetch_url``
+    returns a page rendered down to prose, which is right for reading and
+    throws away every ``href`` — so a download button, a "get the PDF" link,
+    an image gallery all vanish before the agent sees them. They were never
+    hidden; they were in the markup the cleaner discarded.
+
+    What it does not reach is a URL that does not exist until JavaScript
+    builds one. No amount of parsing finds those, and the honest answer is to
+    say so rather than to return a shorter list without comment.
+    """
+
+    #: One tag with its attributes, unparsed.
+    TAG = re.compile(r"<\s*(a|img|source|video|audio|embed|object|link)\b([^>]*)>",
+                     re.IGNORECASE)
+    ATTR = re.compile(r"([\w:-]+)\s*=\s*(\"[^\"]*\"|\'[^\']*\'|[^\s>]+)")
+    META = re.compile(r"<\s*meta\b([^>]*)>", re.IGNORECASE)
+    #: The visible text of an anchor, which is usually what the button said.
+    ANCHOR = re.compile(r"<a\b[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+
+    @staticmethod
+    def _attrs(raw: str) -> dict:
+        """One tag's attributes as a dict, lowercased keys, unquoted values."""
+        found = {}
+        for match in _Links.ATTR.finditer(raw or ""):
+            value = match.group(2).strip()
+            if value[:1] in ('"', "'"):
+                value = value[1:-1]
+            found[match.group(1).lower()] = html.unescape(value.strip())
+        return found
+
+    @staticmethod
+    def _labels(markup: str) -> dict:
+        """href -> the anchor's own visible text.
+
+        Read separately from the tag scan because the text sits *between* the
+        tags rather than in an attribute. It is what tells an agent which of
+        nine links on a release page is the one it wants, so it is worth a
+        second pass.
+        """
+        labels = {}
+        for match in _Links.ANCHOR.finditer(markup or ""):
+            opening = match.group(0)
+            attrs = _Links._attrs(opening[:opening.find(">")])
+            href = attrs.get("href", "")
+            if not href:
+                continue
+            text = html.unescape(re.sub(r"<[^>]+>", " ", match.group(1)))
+            text = re.sub(r"\s+", " ", text).strip()
+            if text and href not in labels:
+                labels[href] = text[:120]
+        return labels
+
+    @staticmethod
+    def extract(markup: str, base: str) -> list:
+        """Every URL the page names, absolute, in document order.
+
+        Deduplicated on the resolved URL, keeping the first occurrence — which
+        is the one whose label came from the page rather than from a repeated
+        footer.
+        """
+        markup = markup or ""
+        labels = _Links._labels(markup)
+        found, seen = [], set()
+
+        def add(raw, kind, label=""):
+            raw = (raw or "").strip()
+            if not raw or raw.startswith(("#", "javascript:", "data:", "mailto:", "tel:")):
+                return
+            try:
+                absolute = urllib.parse.urljoin(base, raw)
+            except ValueError:
+                return
+            if not absolute.lower().startswith(("http://", "https://")):
+                return
+            if absolute in seen:
+                return
+            seen.add(absolute)
+            path = urllib.parse.urlsplit(absolute).path
+            _, _, tail = path.rpartition("/")
+            extension = ""
+            if "." in tail[1:]:
+                extension = "." + tail.rsplit(".", 1)[1].lower()
+                if len(extension) > 8 or not extension[1:].isalnum():
+                    extension = ""
+            found.append({"url": absolute, "text": label, "kind": kind,
+                          "extension": extension})
+
+        for match in _Links.TAG.finditer(markup):
+            tag = match.group(1).lower()
+            attrs = _Links._attrs(match.group(2))
+            # ``<link rel=stylesheet>`` is machinery, not content; the ones
+            # worth keeping name a document or an icon.
+            if tag == "link" and attrs.get("rel", "").lower() not in (
+                    "alternate", "icon", "shortcut icon", "apple-touch-icon"):
+                continue
+            for attribute in _LINK_ATTRS.get(tag, ()):
+                if (value := attrs.get(attribute)):
+                    add(value, tag, labels.get(value, ""))
+            # ``srcset`` is a comma-separated list with size descriptors.
+            for candidate in (attrs.get("srcset") or "").split(","):
+                add(candidate.strip().split(" ")[0], tag)
+
+        for match in _Links.META.finditer(markup):
+            attrs = _Links._attrs(match.group(1))
+            key = (attrs.get("property") or attrs.get("name") or "").lower()
+            if key in _META_KEYS:
+                add(attrs.get("content"), "meta")
+
+        return found
+
 
 class WebSearchProvider(BaseService):
     """Brave Search, Brave Answers, and a DuckDuckGo fallback."""
@@ -46,6 +188,7 @@ class WebSearchProvider(BaseService):
         "search",
         "answers",
         "fetch_url",
+        "page_links",
         "duckduckgo_search",
         "has_search_key",
         "has_answers_key",
@@ -331,6 +474,62 @@ class WebSearchProvider(BaseService):
             "title": title,
             "text": body,
             "truncated": truncated,
+        }
+
+    def page_links(self, sdk, url, limit=200):
+        """Fetch a page and answer with the URLs it names, not its prose.
+
+        The counterpart to :meth:`fetch_url`, which renders a page down to
+        text and discards every ``href`` on the way. Both are one fetch; they
+        differ only in what is kept, which is why they live side by side
+        rather than one growing a flag.
+
+        Returns ``{url, final_url, status, content_type, title, links,
+        truncated}``, each link ``{url, text, kind, extension}``.
+
+        Redirects are followed here, one call at a time. ``net.http`` hands
+        back a cross-host 3xx rather than following it, so each hop is a fresh
+        policy decision — and a link extractor that gave up at the first
+        redirect would be useless, since a shortened or canonical URL is
+        exactly the kind a person pastes.
+        """
+        for _hop in range(5):
+            answer = sdk.net.http(url, headers={
+                "User-Agent": _UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;"
+                          "q=0.9,*/*;q=0.8",
+            })
+            status = int(answer.get("status") or 0)
+            location = (answer.get("headers") or {}).get("location") or ""
+            if status in _REDIRECTS and location:
+                url = urllib.parse.urljoin(url, location)
+                continue
+            break
+        else:
+            return {"url": url, "final_url": url, "status": 0,
+                    "content_type": "", "title": "", "links": [],
+                    "truncated": False, "error": "too many redirects"}
+
+        headers = answer.get("headers") or {}
+        markup = answer.get("body") or ""
+        content_type = (headers.get("content-type") or "").lower()
+
+        title = ""
+        if (match := re.search(r"<title[^>]*>(.*?)</title>", markup,
+                               re.DOTALL | re.IGNORECASE)):
+            title = self._clean_text(
+                html.unescape(re.sub(r"<[^>]+>", "", match.group(1))), 300)
+
+        links = _Links.extract(markup, url)
+        truncated = len(links) > limit
+        return {
+            "url": url,
+            "final_url": url,
+            "status": status,
+            "content_type": content_type,
+            "title": title,
+            "links": links[:limit],
+            "truncated": truncated or bool(answer.get("truncated")),
         }
 
     def duckduckgo_search(self, sdk, query, count=5, search_lang="en"):
