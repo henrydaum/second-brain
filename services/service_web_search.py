@@ -57,6 +57,32 @@ _META_KEYS = ("og:image", "og:video", "og:audio", "twitter:image")
 #: hop leaves the host it was classified for.
 _REDIRECTS = (301, 302, 303, 307, 308)
 
+#: How interesting a link is, by the tag that held it. Having a file
+#: extension separates files from pages; this separates the *file* somebody
+#: put there to be taken from the file the site needs to render itself.
+#:
+#: Ordering by extension alone put a favicon, an apple-touch-icon and a logo
+#: above the installers on python.org — all four are files, and only one kind
+#: is what anybody came for. The tag is what tells them apart, structurally
+#: and on every site: an ``<a>`` is something a person clicks, embedded media
+#: is what the page shows, and ``<link>``/``<meta>`` is chrome the browser
+#: reads and nobody looks at.
+#: Extensions that name a *page*, not a file. They have to be listed because
+#: the files/pages split reads the extension, and these are the ones where the
+#: extension lies about which side of it the link falls on: ``.php`` is a
+#: script that renders a document, ``.html`` is the document. Left in the file
+#: group they dominated it on any server that spells its URLs this way —
+#: archive.org put six ``search.php`` links above the video the page is about.
+_PAGE_EXTENSIONS = frozenset({
+    ".html", ".htm", ".xhtml", ".shtml", ".php", ".php3", ".php4", ".php5",
+    ".asp", ".aspx", ".jsp", ".jspx", ".cgi", ".pl", ".do", ".action",
+})
+
+_RANK = {"a": 0,
+         "video": 1, "audio": 1, "source": 1, "embed": 1, "object": 1,
+         "img": 2,
+         "link": 3, "meta": 3}
+
 
 class _Links:
     """Pull every URL a page names out of its HTML.
@@ -485,7 +511,8 @@ class WebSearchProvider(BaseService):
         rather than one growing a flag.
 
         Returns ``{url, final_url, status, content_type, title, links,
-        truncated}``, each link ``{url, text, kind, extension}``.
+        file_count, page_count, truncated}``, each link ``{url, text, kind,
+        extension}``. Links carrying a file extension come first — see below.
 
         Redirects are followed here, one call at a time. ``net.http`` hands
         back a cross-host 3xx rather than following it, so each hop is a fresh
@@ -521,15 +548,31 @@ class WebSearchProvider(BaseService):
                 html.unescape(re.sub(r"<[^>]+>", "", match.group(1))), 300)
 
         links = _Links.extract(markup, url)
-        truncated = len(links) > limit
+        # A link with a file extension points at a *thing*; one without points
+        # at another page. Every site's header and footer is the second kind
+        # and there are dozens of them, so ordering by that one bit is what
+        # makes the answer readable — and it is what makes ``limit`` safe,
+        # since the rows that fall off the end are now navigation rather than
+        # the file the caller came for. Files are then ranked by ``_RANK``,
+        # which is a stable sort, so document order survives inside a tier.
+        def is_file(link):
+            extension = link["extension"]
+            return bool(extension) and extension not in _PAGE_EXTENSIONS
+
+        files = sorted((link for link in links if is_file(link)),
+                       key=lambda link: _RANK.get(link["kind"], 2))
+        pages = [link for link in links if not is_file(link)]
+        ordered = files + pages
         return {
             "url": url,
             "final_url": url,
             "status": status,
             "content_type": content_type,
             "title": title,
-            "links": links[:limit],
-            "truncated": truncated or bool(answer.get("truncated")),
+            "links": ordered[:limit],
+            "file_count": len(files),
+            "page_count": len(pages),
+            "truncated": len(links) > limit or bool(answer.get("truncated")),
         }
 
     def duckduckgo_search(self, sdk, query, count=5, search_lang="en"):

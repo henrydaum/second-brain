@@ -18,6 +18,10 @@ from guest.bases import BaseTool
 _URL_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
 _PROVIDER = "web_search_provider"
 
+#: How many page links to show beside the files. Enough to navigate a site
+#: with, far short of enough to bury the thing the caller came for.
+PAGE_SAMPLE = 25
+
 
 class WebSearch(BaseTool):
     """Web search."""
@@ -272,11 +276,22 @@ class WebSearch(BaseTool):
     def _links(self, sdk, query):
         """List what a page links to, rather than what it says.
 
-        Formatted as a table because the agent is choosing *one* of these, and
-        the three things it chooses on — what the link said, what kind of tag
-        held it, and the file extension — do not survive being flattened into
-        prose. The extension is the load-bearing column: it is what decides
-        whether the thing behind the link can be parsed once downloaded.
+        **Two sections, because a page links to two different kinds of thing.**
+        A link with a file extension points at something downloadable; one
+        without points at another page, and every site carries dozens of those
+        in its header and footer. Reported as one flat list they came back at
+        roughly ten to one against, and the caller had to read 200 rows to find
+        the fourteen it wanted — which is what actually happened the first time
+        this ran against an image site.
+
+        So files come first and in full, and pages are sampled with a count of
+        the rest. Pages are not noise and are not dropped: following one is how
+        you get from a downloads index to a release page. They are just never
+        what you are looking at *this* list for.
+
+        A table, because the caller is choosing one row out of many and the
+        three things it chooses on — the link text, the tag that held it, the
+        extension — do not survive being flattened into prose.
         """
         url = (query if query.lower().startswith(("http://", "https://"))
                else "https://" + query)
@@ -288,6 +303,14 @@ class WebSearch(BaseTool):
             return sdk.fail(f"Could not read {url}: {why}")
 
         links = data.get("links") or []
+        if not links and not (200 <= status < 300):
+            # A 3xx we could not follow, or a 2xx-adjacent refusal. Saying
+            # "this page has no links" would be a claim about a page nobody
+            # was shown — sites answer 307 to an unrecognised client, and the
+            # status is the only part of that worth reporting.
+            return sdk.fail(
+                f"{url} answered {status} rather than a page, so there is "
+                f"nothing to list. The site may be refusing this client.")
         if not links:
             return sdk.ok(
                 {"mode": "links", **data},
@@ -297,18 +320,40 @@ class WebSearch(BaseTool):
                     f"are built by JavaScript, which cannot be read this way "
                     f"— try the site's own download or API page."))
 
-        rows = [[link["url"], link.get("text") or "",
-                 link.get("extension") or "", link.get("kind") or ""]
-                for link in links]
-        table = sdk.md.table(["URL", "Link text", "Ext", "Tag"], rows)
+        where = data.get("final_url") or url
+        files = [link for link in links if link.get("extension")]
+        pages = [link for link in links if not link.get("extension")]
 
-        header = f"{len(links)} link(s) on {data.get('final_url') or url}"
-        if data.get("title"):
-            header += f" ({data['title']})"
-        if data.get("truncated"):
-            header += ", truncated"
-        summary = header + ".\n\n" + table
-        return sdk.ok({"mode": "links", **data}, llm_summary=summary)
+        parts = [f"{len(files)} file link(s) and {len(pages)} page link(s) "
+                 f"on {where}"
+                 + (f" ({data['title']})" if data.get("title") else "")
+                 + ("; the list was truncated." if data.get("truncated")
+                    else ".")]
+
+        if files:
+            parts.append(sdk.md.table(
+                ["URL", "Link text", "Ext", "Tag"],
+                [[link["url"], link.get("text") or "",
+                  link.get("extension") or "", link.get("kind") or ""]
+                 for link in files]))
+        else:
+            parts.append(
+                "No link on this page names a file. The downloads are "
+                "probably on a page this one links to, or are built by "
+                "JavaScript and cannot be read this way.")
+
+        if pages:
+            shown = pages[:PAGE_SAMPLE]
+            listed = "\n".join(
+                f"- {link.get('text') or '(no text)'} — {link['url']}"
+                for link in shown)
+            heading = "Pages linked from here"
+            if len(pages) > len(shown):
+                heading += (f" (first {len(shown)} of {len(pages)}; ask for "
+                            f"one of these by URL to go deeper)")
+            parts.append(f"{heading}:\n{listed}")
+
+        return sdk.ok({"mode": "links", **data}, llm_summary="\n\n".join(parts))
 
     def _duckduckgo(self, sdk, query, count, search_lang, prefix=""):
         """The keyless fallback, and the reason we are using it."""
