@@ -1070,6 +1070,21 @@ def _owns_setting(chain: Chain, key: str) -> bool:
 #: standing answer to a dialog, so writing one is granting yourself whatever it
 #: covers. Anything named ``secret_*`` fails this too, and separately.
 #:
+#: **``active_agent_profile`` is the near miss, and the reason test 3 is
+#: written down.** It is the obvious next entry — the same shape of choice as
+#: the model, switched from the same panel, arguably more often — and it passes
+#: tests 1 and 2 exactly as ``default_llm_profile`` does. It fails test 3, and
+#: only test 3: an agent profile carries ``whitelist_or_blacklist_tools``, so
+#: choosing one chooses **what the agent may call**. Writing it freely would let
+#: an agent scoped to four tools move itself to a profile with all of them.
+#:
+#: A note for whenever a *user-scoped* key is added: ``_config_write`` routes by
+#: ``is_user_scoped``, not by the caller's ``scope`` argument, so the key name
+#: is the unit here and at the storage layer alike — which is what makes a
+#: key-only allowlist sound. The uid comes from the context, so there is no
+#: reaching another user's blob; what changes is that "the setting" means one
+#: per user, and the three tests have to hold for each of them.
+#:
 #: ``default_llm_profile`` passes all three, and earns the entry on volume:
 #: switching model is something a person does many times a day, and a dialog
 #: per switch is the kind of friction that teaches somebody to stop reading

@@ -889,7 +889,14 @@ def test_the_list_admits_nothing_that_grants_anything():
     is a capability nobody is ever asked about again."""
     from sandbox.policy import FREELY_WRITABLE_SETTINGS
 
-    for granting in ("net_allowed_hosts", "shell_allowed_prefixes",
+    # ``active_agent_profile`` is the near miss and the reason test 3 exists:
+    # same shape of choice as the model, switched from the same panel, and it
+    # passes tests 1 and 2 exactly as ``default_llm_profile`` does. An agent
+    # profile carries ``whitelist_or_blacklist_tools``, so choosing one chooses
+    # what the agent may call — an agent scoped to four tools could move itself
+    # to a profile with all of them.
+    for granting in ("active_agent_profile",
+                     "net_allowed_hosts", "shell_allowed_prefixes",
                      "security_mode", "autoload_services",
                      "enabled_frontends", "llm_profiles"):
         assert granting not in FREELY_WRITABLE_SETTINGS
