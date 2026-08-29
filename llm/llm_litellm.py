@@ -544,8 +544,46 @@ class LiteLLMBackend(BaseLLMBackend):
         if provider:
             names = [n for n in names if n == provider] or [provider]
         return [{"id": n, "label": n.replace("_", " ").title(),
-                 "endpoint": self._endpoint_for(n) if provider else ""}
+                 "endpoint": self._endpoint_for(n) if provider else "",
+                 "description": self._provider_note(n) if provider else ""}
                 for n in names]
+
+    def _provider_note(self, provider):
+        """What litellm can say about a provider in words, which is one fact.
+
+        There is no prose anywhere in the library about what a provider *is* -
+        ``provider_list`` is a list of strings - so inventing a sentence here
+        would mean writing a hundred and fifty of them by hand and watching
+        them rot. What does exist is ``validate_environment``, which names the
+        environment variables this provider looks for, and that is the one
+        thing somebody two steps from an API key prompt actually needs.
+
+        Those are not always *keys*, which is why the sentence does not say
+        so: Ollama's is ``OLLAMA_API_BASE``, a URL. ``missing_keys`` means
+        "environment this provider wants and does not have", and describing
+        it more specifically than that would be wrong for exactly the local
+        providers somebody is least sure how to configure.
+
+        It is a name lookup rather than a probe: no network, no credential
+        resolution, none of what makes ``_endpoint_for`` expensive. It is
+        still only asked about a named provider, because the bare menu has
+        nowhere to render prose and asking is only free relative to something.
+        """
+        try:
+            answer = self._litellm.validate_environment(
+                model=f"{provider}/probe") or {}
+        except Exception:               # noqa: BLE001 - nothing to say
+            return ""
+        missing = [str(key) for key in (answer.get("missing_keys") or []) if key]
+        if missing:
+            names = self._listed([f"`{key}`" for key in missing])
+            return (f"Reads {names} from this machine's environment. "
+                    "Nothing is set there now, so this profile has to "
+                    "carry it.")
+        if answer.get("keys_in_environment"):
+            return ("What this provider needs is already set in this "
+                    "machine's environment, so a blank here will work.")
+        return ""
 
     def _endpoint_for(self, provider):
         """A provider's default base URL, or ``""``.
@@ -629,14 +667,14 @@ class LiteLLMBackend(BaseLLMBackend):
         rows = self._live_models(sdk, endpoint, api_key) if live else []
         if not rows and provider:
             index = getattr(self._litellm, "models_by_provider", {}) or {}
-            rows = sorted(str(m) for m in index.get(provider, []) or [])
+            rows = [(str(m), "") for m in sorted(index.get(provider, []) or [])]
         out, seen = [], set()
-        for raw in rows:
+        for raw, note in rows:
             name = self._prefixed(raw, provider)
             if name in seen:
                 continue
             seen.add(name)
-            out.append({"name": name, "label": raw})
+            out.append({"name": name, "label": raw, "description": note})
         return out
 
     @staticmethod
@@ -665,7 +703,12 @@ class LiteLLMBackend(BaseLLMBackend):
         return f"{provider}/{raw}"
 
     def _live_models(self, sdk, endpoint, api_key):
-        """``GET {endpoint}/models``, or ``[]`` if it does not answer one.
+        """``GET {endpoint}/models`` as ``[(id, description)]``, or ``[]``.
+
+        The description is whatever the server said about its own model, and
+        this is the only place one can honestly come from: litellm's tables
+        hold numbers and flags, not sentences. Most endpoints say nothing and
+        the field is blank, which is the answer.
 
         Deliberately forgiving. This runs while somebody is filling in a form,
         so every way it can fail - no endpoint yet, a wrong key, a server that
@@ -688,15 +731,17 @@ class LiteLLMBackend(BaseLLMBackend):
         listing = body.get("data") if isinstance(body, dict) else body
         if not isinstance(listing, list):
             return []
-        names = []
+        found = []
         for item in listing:
-            name = item.get("id") if isinstance(item, dict) else item
+            entry = item if isinstance(item, dict) else {"id": item}
+            name = entry.get("id")
             if isinstance(name, str) and name:
-                names.append(name)
-        return sorted(names)
+                note = entry.get("description")
+                found.append((name, self._tidy(note) if note else ""))
+        return sorted(found)
 
     def info(self, sdk, model_name, endpoint=""):
-        """One model's facts. Currently just its input context window.
+        """One model's facts: its input context window, and what it is.
 
         ``max_input_tokens`` is the right field and the two beside it are
         traps: ``max_output_tokens`` caps a reply, and ``max_tokens`` is
@@ -707,6 +752,13 @@ class LiteLLMBackend(BaseLLMBackend):
         An unknown model raises out of ``get_model_info`` and comes back as
         ``[]`` rather than a guess: the kernel treats 0 as "compact
         reactively", which copes, while a wrong number does not.
+
+        The two halves are independent, and a row carrying only a description
+        is a real answer. Entries in that map are hand-maintained and
+        uneven — a model can be listed with its modality flags and no window
+        at all — and the sentence is worth having on its own, since the step
+        that asks for a context size is immediately followed by the ones
+        asking what the model can read.
         """
         try:
             found = self._litellm.get_model_info(
@@ -714,8 +766,62 @@ class LiteLLMBackend(BaseLLMBackend):
         except Exception as exc:        # noqa: BLE001 - model not in the map
             sdk.log(f"no model info for {model_name}: {exc}")
             return []
-        window = (found or {}).get("max_input_tokens")
-        return [{"context_size": int(window)}] if window else []
+        found = found or {}
+        window = found.get("max_input_tokens")
+        row = {}
+        if window:
+            row["context_size"] = int(window)
+        note = self._model_note(found)
+        if note:
+            row["description"] = note
+        return [row] if row else []
+
+    #: Flags worth reading back as a sentence, in the order they read best.
+    #: Deliberately a handful of the twenty-odd ``supports_*`` keys: the rest
+    #: describe plumbing nobody configuring a profile has to decide about,
+    #: and a description that lists everything known is one nobody reads.
+    _NOTABLE = (
+        ("supports_vision", "images"),
+        ("supports_audio_input", "audio"),
+        ("supports_pdf_input", "PDFs"),
+        ("supports_reasoning", "reasoning"),
+        ("supports_function_calling", "tool calls"),
+    )
+
+    def _model_note(self, found):
+        """One sentence or two about a model, from its map entry.
+
+        Only ``True`` counts. These flags are three-valued in practice —
+        true, false, and absent — and absent is by far the most common, so
+        reading a missing key as "no" would describe most of the map as a
+        model that does nothing. Saying less is the whole discipline here:
+        this text sits beside questions the user is about to answer about
+        this model, and a confident wrong answer is worse than a short one.
+        """
+        mode = str(found.get("mode") or "").replace("_", " ")
+        provider = str(found.get("litellm_provider") or "")
+        parts = []
+        if mode and provider:
+            parts.append(f"A {mode} model served by {provider}.")
+        elif mode:
+            parts.append(f"A {mode} model.")
+        elif provider:
+            parts.append(f"Served by {provider}.")
+        cap = found.get("max_output_tokens")
+        if cap:
+            parts.append(f"Replies are capped at {int(cap):,} tokens.")
+        able = [label for key, label in self._NOTABLE if found.get(key) is True]
+        if able:
+            parts.append("LiteLLM records support for "
+                         + self._listed(able) + ".")
+        return " ".join(parts)
+
+    @staticmethod
+    def _listed(items):
+        """``a``, ``a and b``, ``a, b and c``."""
+        if len(items) < 3:
+            return " and ".join(items)
+        return ", ".join(items[:-1]) + " and " + items[-1]
 
     def params(self, sdk, model_name, endpoint):
         """Which extra params this model takes, reported and never enforced.
@@ -731,6 +837,11 @@ class LiteLLMBackend(BaseLLMBackend):
         the spelling that does get through when there is one. Whoever reads it
         can then overrule this method, which is the point of it being a
         report.
+
+        ``description`` is the other half and the one that answers "what is
+        this thing" — see :meth:`_param_descriptions`. Unlike ``note`` it is
+        attached whether or not the parameter is supported here, because what
+        a parameter *does* does not change with the endpoint it is sent to.
         """
         litellm = self._litellm
         model = self._litellm_name(model_name, endpoint)
@@ -742,6 +853,7 @@ class LiteLLMBackend(BaseLLMBackend):
             sdk.log(f"no parameter list for {model}: {exc}")
             return []
 
+        docs = self._param_descriptions()
         out = []
         for spec in _TUNABLE_PARAMS:
             name = spec["name"]
@@ -759,6 +871,7 @@ class LiteLLMBackend(BaseLLMBackend):
                            if k != "instead_of"},
                         "choices": self._value_choices(name) if ok else [],
                         "role": self._role(name),
+                        "description": docs.get(name, ""),
                         "supported": ok, "note": note})
         # Anything else the provider takes that is worth offering by name.
         known = {spec["name"] for spec in _TUNABLE_PARAMS}
@@ -767,6 +880,7 @@ class LiteLLMBackend(BaseLLMBackend):
             out.append({"name": name, "label": name.replace("_", " "),
                         "kind": "choice" if choices else "text",
                         "choices": choices, "role": self._role(name),
+                        "description": docs.get(name, ""),
                         "supported": True, "note": ""})
         return out
 
@@ -816,6 +930,152 @@ class LiteLLMBackend(BaseLLMBackend):
             else:
                 stack.extend(typing.get_args(node))
         return sorted(set(found), key=found.index) if found else []
+
+    # -- describing a parameter in words -------------------------------
+
+    def _param_descriptions(self):
+        """``{param: prose}`` — what each parameter actually does.
+
+        There is a real answer to this and it is not litellm's own, which is
+        the part worth stating up front. litellm *normalizes to the OpenAI
+        chat-completions spec* - that is the whole premise of the library, and
+        the reason ``llm_extra_params`` uses OpenAI's spelling for a MiniMax
+        model. So the vocabulary being described here is one whose reference
+        text ships in the ``openai`` package litellm already depends on:
+        ``CompletionCreateParamsBase`` is a ``TypedDict`` with a docstring
+        under every field.
+
+        Read with :mod:`ast` rather than at runtime, because Python discards
+        attribute docstrings - they are a convention that tooling reads from
+        source, and there is nothing on the class to look them up on.
+        Read from *source* rather than copied here for the reason
+        ``_value_choices`` gives about values: a table written by hand drifts
+        from the library beside it, silently, and this one would be forty
+        paragraphs of drift.
+
+        Two sources, in order. OpenAI's is the better text and covers the
+        spec; ``litellm.completion``'s own docstring covers a handful the spec
+        does not name and is one line each. Anything in neither - a
+        provider-specific parameter such as ``thinking`` - gets ``""``, and a
+        caller renders nothing. That silence is the honest answer and it is
+        common; nothing here should invent a sentence to fill it.
+
+        **What this text is, exactly**: a description of the *parameter*, from
+        the spec it belongs to. It is not a statement about the model in hand
+        - where it names accepted values, those are OpenAI's - which is why
+        the contract asks a caller to quote it rather than assert it, and why
+        the per-model half of the row stays in ``supported`` and ``note``.
+
+        Cached on the instance: the parse is a few milliseconds and the answer
+        cannot change while the box is up, since it is read out of files that
+        were imported before it started.
+        """
+        cached = getattr(self, "_param_docs", None)
+        if cached is not None:
+            return cached
+        docs = {}
+        try:
+            from openai.types.chat import completion_create_params
+
+            docs.update(self._field_docs(completion_create_params,
+                                         "CompletionCreateParamsBase"))
+        except Exception:              # noqa: BLE001 - fall back to litellm's
+            pass
+        for name, text in self._signature_docs().items():
+            docs.setdefault(name, text)
+        self._param_docs = {name: self._tidy(text)
+                            for name, text in docs.items() if text}
+        return self._param_docs
+
+    @staticmethod
+    def _field_docs(module, class_name):
+        """``{field: docstring}`` for one ``TypedDict``, read from its source.
+
+        The convention is a bare string expression on the line after an
+        annotated field, which is what every documentation tool reads and
+        what the interpreter throws away. Scoped to one named class on
+        purpose: the same module holds nested dicts whose fields are called
+        ``name``, ``description`` and ``type``, and merging those in would
+        attach a sentence about a function's name to a parameter called name.
+        """
+        import ast
+        import inspect
+
+        try:
+            tree = ast.parse(inspect.getsource(module))
+        except (OSError, TypeError, SyntaxError):
+            return {}
+        out = {}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.ClassDef) and node.name == class_name):
+                continue
+            body = node.body
+            for index, item in enumerate(body):
+                if not (isinstance(item, ast.AnnAssign)
+                        and isinstance(item.target, ast.Name)):
+                    continue
+                following = body[index + 1] if index + 1 < len(body) else None
+                if (isinstance(following, ast.Expr)
+                        and isinstance(following.value, ast.Constant)
+                        and isinstance(following.value.value, str)):
+                    out[item.target.id] = following.value.value
+        return out
+
+    def _signature_docs(self):
+        """``{param: one line}`` from ``litellm.completion``'s own docstring.
+
+        The second source, and a much rougher one: a flat list of
+        ``name (type, optional): text`` lines, no markup, some of it years
+        stale. Worth having anyway for the parameters OpenAI's spec does not
+        name, and ordered second so its version never displaces the
+        maintained one.
+        """
+        import inspect
+        import re
+
+        try:
+            text = inspect.getdoc(self._litellm.completion) or ""
+        except (OSError, TypeError):
+            return {}
+        out = {}
+        for line in text.splitlines():
+            found = re.match(r"\s*(\w+)\s*(?:\([^)]*\))?\s*:\s+(\S.*)$",
+                             line)
+            if found:
+                out[found.group(1)] = found.group(2)
+        return out
+
+    @staticmethod
+    def _tidy(text, limit=300):
+        """Prose from a docstring, fit to sit in a quote block.
+
+        Three things happen and each has a reason. **Links lose their URLs**,
+        because the text is read in a terminal where a hundred-character
+        docs link is most of the line and none of the meaning. **Bullets end
+        it**: OpenAI's fields tail off into per-model exceptions, which are
+        about somebody else's models, and the prose above them is the part
+        that describes the parameter. **Paragraphs join and the whole is
+        capped** at a sentence boundary, so nothing is cut mid-clause.
+        """
+        import re
+
+        kept = []
+        for line in (text or "").splitlines():
+            stripped = line.strip()
+            if stripped[:2] in ("- ", "* ") or re.match(r"\d+\.\s", stripped):
+                break
+            kept.append(stripped)
+        out = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", " ".join(kept))
+        out = " ".join(out.split())
+        # ``Learn more`` was a link label, and the sentence it ends is empty
+        # once the URL has gone. Dropped as a courtesy to whoever reads it in
+        # a terminal, where it is an instruction with nowhere to go.
+        out = re.sub('\\s*\\b(Learn more( about[^.]*)?|See more)\\.\\s*$', "", out).strip()
+        if len(out) <= limit:
+            return out
+        cut = out[:limit]
+        stop = cut.rfind(". ")
+        return cut[:stop + 1] if stop > limit // 2 else cut.rstrip() + "…"
 
     def _usage(self, usage):
         """``(prompt_tokens, cached_prompt_tokens, completion_tokens)``.
