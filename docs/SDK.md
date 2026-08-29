@@ -459,6 +459,12 @@ out) raises.
 truncated body is a reason to reach for `to_file` below, not something to try
 to parse.
 
+A `Content-Encoding` of `gzip` or `deflate` is undone for you, so `body` is
+the page rather than its compression. Plenty of servers compress whether or
+not anyone asked. An encoding the kernel cannot undo (`br`, `zstd`) comes back
+with an empty `body` and its header intact, rather than as bytes pretending to
+be text — check `headers["content-encoding"]` if a body is unexpectedly empty.
+
 `params` URL-encodes query values, including repeated list values. `json`
 encodes a request body and supplies `Content-Type: application/json` unless
 you supplied one; it cannot be combined with `body`. Use `http_json` when the

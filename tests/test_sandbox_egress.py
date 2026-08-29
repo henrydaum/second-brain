@@ -6,8 +6,10 @@ pin that the decision cannot migrate into the code being decided about, and
 that the relaxation fails closed in every direction it could fail open.
 """
 
+import gzip
 import json
 import threading
+import zlib
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from socketserver import TCPServer
@@ -135,6 +137,9 @@ def test_a_plugin_cannot_declare_its_own_reach():
 #: them would come back mangled rather than merely different.
 BLOB = bytes(range(256)) * 512
 
+#: Something with a recognisable marker in it, for the compression tests.
+PAGE = b"<html><body><a href='/thing.pdf'>Download</a></body></html>" * 40
+
 
 class _Handler(BaseHTTPRequestHandler):
     """Answers 200 on /ok and 429 with an explanation everywhere else."""
@@ -152,6 +157,18 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/octet-stream")
         if declare:
             self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except OSError:
+            pass
+
+    def _encoded(self, payload, encoding, ctype="text/html"):
+        """Answer with a Content-Encoding, whether or not one was asked for."""
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Encoding", encoding)
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         try:
             self.wfile.write(payload)
@@ -190,6 +207,22 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/undeclared-flood":
             # No Content-Length, so only the streaming cap can catch it.
             return self._binary(BLOB * 200, declare=False)
+        if self.path == "/gzipped":
+            return self._encoded(gzip.compress(PAGE), "gzip")
+        if self.path == "/deflated":
+            return self._encoded(zlib.compress(PAGE), "deflate")
+        if self.path == "/raw-deflated":
+            packer = zlib.compressobj(wbits=-15)
+            return self._encoded(packer.compress(PAGE) + packer.flush(),
+                                 "deflate")
+        if self.path == "/brotlied":
+            return self._encoded(b"\x00" * 64, "br")
+        if self.path == "/gzip-bomb":
+            return self._encoded(gzip.compress(b"\0" * (64 * 1024 * 1024)),
+                                 "gzip", ctype="application/octet-stream")
+        if self.path == "/gzipped-file":
+            return self._encoded(gzip.compress(BLOB), "gzip",
+                                 ctype="application/octet-stream")
         body, code = (b'{"hello":"world"}', 200) if self.path == "/ok" else (
             json.dumps({"error": "rate limited", "retry_after": 60}).encode(),
             429)
@@ -567,3 +600,79 @@ def test_a_plain_fetch_is_unchanged_by_any_of_this():
     _allow("example.com")
     assert _decide("https://example.com/x").level == SAFE
     assert _decide("https://nope.test/x").level == UNSAFE
+
+
+# ── compressed replies ────────────────────────────────────────────────
+#
+# ``urllib`` advertises no ``Accept-Encoding``, so a well-behaved server sends
+# none of these. Plenty compress anyway — python.org does — and the old
+# failure was the worst available shape: gzip bytes decoded as UTF-8 with
+# replacement, so the answer was a page-sized string of mojibake that looked
+# exactly like a successfully fetched page with nothing in it.
+
+
+def test_a_gzipped_reply_is_decompressed(server):
+    """The regression, stated as the symptom: a real page with real links."""
+    result = _net_http(None, {"url": f"{server}/gzipped"})
+
+    assert result.ok
+    assert result.data["body"].startswith("<html>")
+    assert "thing.pdf" in result.data["body"]
+
+
+def test_both_spellings_of_deflate_are_decompressed(server):
+    """``deflate`` means zlib-wrapped to some servers and raw to others.
+
+    The wire says only "deflate" either way, so the raw case is retried on the
+    first chunk — the one point where nothing has been emitted and swapping
+    decompressors is still free.
+    """
+    for path in ("/deflated", "/raw-deflated"):
+        result = _net_http(None, {"url": f"{server}{path}"})
+        assert result.ok, path
+        assert "thing.pdf" in result.data["body"], path
+
+
+def test_an_encoding_we_cannot_undo_is_named_not_passed_through(server):
+    """Handing back bytes we could not decode is what caused this.
+
+    A download refuses outright; the text branch answers empty rather than
+    with mojibake. Either is better than a body that looks like content.
+    """
+    downloaded = _net_http(None, {"url": f"{server}/brotlied",
+                                  "to_file": "unused.bin"})
+    assert not downloaded.ok
+    assert "br" in downloaded.error
+
+    fetched = _net_http(None, {"url": f"{server}/brotlied"})
+    assert fetched.ok
+    assert fetched.data["body"] == ""
+
+
+def test_a_compressed_download_lands_decompressed(server, tmp_path):
+    """What is on disk is the file, not the transfer encoding of the file."""
+    dest = tmp_path / "payload.bin"
+    result = _net_http(_Ctx(), {"url": f"{server}/gzipped-file",
+                                "to_file": str(dest)})
+
+    assert result.ok
+    assert dest.read_bytes() == BLOB
+    # The reported size is what was written, not what crossed the wire.
+    assert result.data["bytes"] == len(BLOB)
+
+
+def test_the_cap_bounds_what_comes_out_not_what_came_in(server, tmp_path):
+    """A compression bomb is precisely the case where those two differ.
+
+    Content-Length describes the compressed stream and says nothing about the
+    file, so the declared-size check cannot fire — only bounding the
+    decompressor's *output* catches this, which is why ``max_length`` is
+    passed on every feed.
+    """
+    dest = tmp_path / "bomb.bin"
+    result = _net_http(_Ctx(), {"url": f"{server}/gzip-bomb",
+                                "to_file": str(dest)})
+
+    assert not result.ok
+    assert "download limit" in result.error
+    assert not dest.exists()

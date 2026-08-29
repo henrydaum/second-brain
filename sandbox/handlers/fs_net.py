@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 
 from .. import provenance, walk
@@ -789,6 +790,73 @@ def _net_http(ctx, args: dict) -> Result:
         return Result.failure(f"request failed: {exc}", retryable=True)
 
 
+#: Content-Encodings the kernel can undo. ``urllib`` advertises support for
+#: none of them, and a well-behaved server therefore sends none — but plenty
+#: compress unconditionally anyway (python.org does), and the failure was
+#: silent in the worst way: gzip bytes decoded as UTF-8 with replacement, so
+#: the answer was a page-sized string of garbage that looked like an answer.
+#: Every caller that parses HTML saw a document with no links in it.
+_INFLATABLE = ("gzip", "x-gzip", "deflate")
+
+
+class _Inflater:
+    """Undo a Content-Encoding, incrementally and boundedly.
+
+    ``wbits=47`` auto-detects between a gzip and a zlib header, which covers
+    ``gzip`` and the common spelling of ``deflate`` in one object. The other
+    spelling of ``deflate`` — raw, no header — is retried on the first chunk
+    only, because that is the only point at which nothing has been emitted yet
+    and switching decompressors is still free.
+
+    ``max_length`` is not optional. The cap upstream counts *compressed*
+    bytes, and the whole point of a compression bomb is that the two numbers
+    are unrelated: a few hundred kilobytes expand to gigabytes. Bounding the
+    output is what makes decompressing untrusted bytes safe to do at all.
+    """
+
+    def __init__(self, encoding: str):
+        self.encoding = encoding
+        self._obj = zlib.decompressobj(47)
+        self._first = True
+
+    def feed(self, chunk: bytes, limit: int) -> bytes:
+        """Decompress one chunk, emitting at most ``limit`` bytes."""
+        try:
+            out = self._obj.decompress(chunk, max(1, limit))
+        except zlib.error:
+            if not self._first or self.encoding != "deflate":
+                raise
+            # Raw deflate, which has no header for wbits=47 to recognise.
+            self._obj = zlib.decompressobj(-15)
+            out = self._obj.decompress(chunk, max(1, limit))
+        self._first = False
+        return out
+
+    def flush(self, limit: int) -> bytes:
+        """Whatever is still buffered inside the decompressor."""
+        try:
+            return self._obj.flush(max(1, limit))
+        except zlib.error:
+            return b""
+
+
+def _inflater(headers: dict):
+    """``(inflater, None)``, ``(None, None)`` for plain bytes, or an error.
+
+    An encoding this cannot undo is *named* rather than passed through.
+    Returning the raw bytes would be the old behaviour, and the old behaviour
+    is what made a compressed reply indistinguishable from a broken page.
+    """
+    encoding = (headers.get("content-encoding") or "").strip().lower()
+    if not encoding or encoding == "identity":
+        return None, None
+    if encoding in _INFLATABLE:
+        return _Inflater(encoding), None
+    return None, Result.failure(
+        f"the reply is {encoding}-encoded, which this kernel cannot decode; "
+        f"ask for it without that Content-Encoding")
+
+
 def _headers(response) -> dict:
     """A reply's headers, lowercased.
 
@@ -828,16 +896,29 @@ def _answer(response) -> dict:
     text on its way to a guest. ``truncated`` says when it bit, since a body
     silently cut in half is a parse failure with nothing to explain it.
     """
+    headers = _headers(response)
     truncated = False
+    inflater, undecodable = _inflater(headers)
+    if undecodable is not None:
+        # Nothing readable to give. Handing back the compressed bytes is the
+        # old behaviour, and the old behaviour is what made a compressed reply
+        # look like a page with nothing on it; the header is still there to
+        # say why the body is empty.
+        return {"status": _status(response), "body": "",
+                "headers": headers, "truncated": False}
     try:
         raw = response.read(MAX_READ_BYTES + 1)
+        if inflater is not None:
+            # Read further than the text cap first: compressed input shrinks,
+            # so the cap has to be applied to what comes *out*.
+            raw = inflater.feed(raw, MAX_READ_BYTES + 1)
         if len(raw) > MAX_READ_BYTES:
             raw, truncated = raw[:MAX_READ_BYTES], True
         payload = raw.decode("utf-8", errors="replace")
-    except (OSError, ValueError):
+    except (OSError, ValueError, zlib.error):
         payload = ""
     return {"status": _status(response), "body": payload,
-            "headers": _headers(response), "truncated": truncated}
+            "headers": headers, "truncated": truncated}
 
 
 def _host_of(url) -> str:
@@ -905,8 +986,14 @@ def _redirected(request, url: str, status: int):
 def _stream_download(response, dest: Path, cap: int) -> Result:
     """Write a reply body to disk, bounded, and answer about the file."""
     headers = _headers(response)
+    inflater, refused = _inflater(headers)
+    if refused is not None:
+        return refused
     declared = headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > cap:
+    # Only meaningful when the bytes on the wire are the bytes on disk: a
+    # compressed reply declares its *compressed* length, which says nothing
+    # about the file. Those are caught by the streaming check instead.
+    if inflater is None and declared.isdigit() and int(declared) > cap:
         # The cheapest possible refusal: the server said how big it is before
         # a byte of it was read.
         return Result.failure(
@@ -920,12 +1007,20 @@ def _stream_download(response, dest: Path, cap: int) -> Result:
                 chunk = response.read(DOWNLOAD_CHUNK)
                 if not chunk:
                     break
+                if inflater is not None:
+                    chunk = inflater.feed(chunk, cap - written + 1)
                 written += len(chunk)
                 if written > cap:
                     over = True
                     break
                 handle.write(chunk)
-    except OSError as exc:
+            if inflater is not None and not over:
+                if (tail := inflater.flush(cap - written + 1)):
+                    written += len(tail)
+                    over = written > cap
+                    if not over:
+                        handle.write(tail)
+    except (OSError, zlib.error) as exc:
         _discard(dest)
         return Result.failure(f"download failed: {exc}", retryable=True)
     if over:

@@ -1010,6 +1010,16 @@ with `truncated` saying when that bit. It was unbounded, and the only thing
 stopping a large reply was `protocol.encode` refusing the finished Result —
 after the kernel had already buffered the lot.
 
+**Compressed replies are decompressed**, `gzip` and `deflate` on both
+branches. `urllib` advertises no `Accept-Encoding`, so a well-behaved server
+sends neither — but many compress unconditionally, and the old failure was the
+worst available shape: gzip bytes decoded as UTF-8 with replacement, so a
+caller parsing HTML got a page-sized string of mojibake that read as a page
+with nothing on it. Decompression is bounded by `max_length` on every chunk,
+because the cap counts bytes on the wire and a compression bomb is exactly the
+case where the two numbers are unrelated. An encoding the kernel cannot undo is
+named rather than passed through.
+
 **`to_file` is a download, and the second capability is asked about
 separately.** Name a path and the reply is streamed there instead of crossing
 the wire; the answer carries `path`, `bytes`, `content_type` and `final_url`
