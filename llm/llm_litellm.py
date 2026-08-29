@@ -38,22 +38,23 @@ Written in ``plugin_config.json`` like this::
         }
     }
 
-``/llm`` -> Edit -> Extra parameters edits that object; ``/llm`` -> Edit ->
-Reasoning effort edits the one member with a picker.
+``/llm`` -> pick a profile -> Edit lists each of these on its own row, and
+**Add a parameter** offers what ``params`` below says this model takes.
 
 TWO RULES BEFORE THE LIST
 -------------------------
 
-**A null means "do not send this".** ``{"reasoning_effort": null}`` omits the
-param entirely. This is a kernel convention rather than a LiteLLM one, and it
-exists because the kernel supplies ``reasoning_effort`` for a profile that
-says nothing (``llm.DEFAULT_REASONING_EFFORT``) — without a way to decline, it
-would be the one param a profile could not refuse. Note ``null`` and
-``"none"`` are different things: null sends nothing and the model does
-whatever it natively does, ``"none"`` actively asks the provider not to think.
-The literal string ``"off"`` is accepted as an alias for null, because that is
-the word ``/llm``'s picker shows and therefore the word people hand-edit into
-the file; it is safe to alias because ``off`` is a level at no provider.
+**A null means "do not send this", and an absent key means the same.** The
+kernel once supplied ``reasoning_effort`` for a profile that said nothing, so
+declining it needed a spelling of its own; nothing is supplied now, so removing
+the key and storing a null have the same effect. Note neither is ``"none"``,
+which is a real level at several providers meaning "think as little as
+possible" — a stored null sends nothing and the model does whatever it
+natively does.
+
+The string ``"off"`` used to be aliased to null. It is not any more, and must
+not be reintroduced: ``off`` is a plausible *value* for some real parameter,
+and reading it as an instruction makes that value unsettable.
 
 **Five keys belong to the profile's own fields, not here.** ``api_key`` and
 ``api_base`` come from ``secret_llm_api_key`` / ``llm_endpoint``; ``model``,
@@ -67,31 +68,41 @@ put them here.
 WHAT ``drop_params`` COVERS, AND WHAT IT DOES NOT
 -------------------------------------------------
 
-``start`` sets ``litellm.drop_params = True``, which means:
+``start`` sets ``litellm.drop_params = True``, which would remove any param
+litellm's table does not list for the resolved provider. **That table has
+gaps** — it omits ``reasoning_effort`` for MiniMax, whose own API documents it
+— so a discard is not evidence the provider would have refused the value.
 
-* an **unsupported param** for the resolved model is removed before the call.
-  Sending ``reasoning_effort`` to a model that has no such setting is free.
-* an **unsupported value** for a supported param is *not* touched. It goes to
-  the provider, which decides — usually a 400. ``"reasoning_effort": "off"``
-  is not a level anywhere; the spelling for that is ``null``.
+``_provider_kwargs`` therefore passes ``allowed_openai_params`` for everything
+the profile set, which overrides the drop. Every parameter here was configured
+by hand, so a silent discard is a setting that lies, while a refusal from the
+provider is feedback. What reaches the endpoint is what the profile says.
 
-So the safety net catches the wrong *key*, never the wrong *word*.
+That leaves ``drop_params`` covering only params *nothing* configured, which
+is now none of them. An **unsupported value** for a param was never touched by
+it and still is not: it goes to the provider, which decides — usually a 400.
 
 THE PARAMS WORTH KNOWING
 ------------------------
 
 Coverage below is measured with ``get_supported_openai_params`` across six
 representative providers (OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Groq)
-and is a rough guide, not a contract — ask LiteLLM about the model in hand
-rather than trusting this list to stay current.
+and is a rough guide, not a contract. Nothing reads it: ``params`` asks LiteLLM
+about the model in hand, and ``/llm`` shows that answer. When this list and
+that answer disagree, that answer is right.
 
 *Reasoning*
 
 ``reasoning_effort``  (4/6 — OpenAI, Anthropic, Gemini, DeepSeek)
-    ``"none" | "minimal" | "low" | "medium" | "high" | "xhigh"``, which is
-    LiteLLM's own literal in ``main.completion``. ``"max"`` appears only on
-    the Responses-API path for Claude 4.6+, so do not rely on it here.
-    The cross-provider standard, and the one to reach for first.
+    The cross-provider standard, and the one to reach for first. Its accepted
+    values are not listed here on purpose: ``_value_choices`` reads them from
+    ``litellm.completion``'s own signature, so ``params`` answers with whatever
+    that names today rather than with whatever this comment said years ago.
+
+    Note those values are *global* to the OpenAI-spec parameter. ``params``
+    only reports them when the parameter is supported for the model in hand,
+    since values for a parameter a model may not take are two lookups
+    contradicting each other.
 
 ``thinking``  (4/6 — Anthropic, Gemini, DeepSeek, MiniMax)
     Provider-shaped: ``{"type": "enabled", "budget_tokens": 2048}`` for
@@ -211,6 +222,33 @@ _TUNABLE_PARAMS = [
     {"name": "max_tokens", "label": "Max output tokens", "kind": "number",
      "instead_of": ()},
 ]
+
+#: Parameters that are the same dial under different names. Which spelling a
+#: provider uses is exactly the sort of fact this file exists to hold, so a
+#: client is told the *role* and never has to recognise the name: a UI matching
+#: on "effort" or "reasoning" itself would be provider vocabulary leaking one
+#: layer further out.
+#:
+#: Checked against every supported parameter rather than only the ones
+#: ``_TUNABLE_PARAMS`` names, because a provider calling it ``effort`` arrives
+#: through the generic loop at the end of ``params`` and would otherwise come
+#: back with no role at all.
+#:
+#: An explicit set rather than a substring match, and ``reasoning_split`` is
+#: why: it is in the family by name and is not an effort dial: it controls
+#: whether reasoning comes back separately. ``"reason" in name`` would offer it
+#: as the control. The set cannot be complete, and that is survivable - an
+#: unlisted name means a client shows nothing, which is the same silence an
+#: unknown value already produces, and adding one is a line here rather than a
+#: change in any client.
+#:
+#: Carrying the role is necessary and not sufficient. A client still has to be
+#: told what values are accepted, so ``enable_thinking`` - a boolean nothing
+#: names values for - offers no control either.
+_REASONING_PARAMS = {
+    "reasoning_effort", "reasoning", "effort", "thinking", "reasoning_split",
+    "enable_thinking", "thinking_budget", "reasoning_mode",
+}
 
 #: Supported params that are not *settings* - the kernel fills each of these
 #: from somewhere else, and offering them would invite a profile to fight it.
@@ -712,12 +750,15 @@ class LiteLLMBackend(BaseLLMBackend):
             if not ok:
                 swap = [alt for alt in spec.get("instead_of", ())
                         if alt in supported]
-                note = (f"this backend discards it for {provider}; "
-                        f"try {swap[0]!r} instead" if swap else
-                        f"this backend discards it for {provider}")
+                note = (f"litellm does not list it for {provider}; it is sent "
+                        f"anyway and may be refused. Try {swap[0]!r} instead"
+                        if swap else
+                        f"litellm does not list it for {provider}; it is sent "
+                        f"anyway and may be refused")
             out.append({**{k: v for k, v in spec.items()
                            if k != "instead_of"},
-                        "choices": self._value_choices(name),
+                        "choices": self._value_choices(name) if ok else [],
+                        "role": self._role(name),
                         "supported": ok, "note": note})
         # Anything else the provider takes that is worth offering by name.
         known = {spec["name"] for spec in _TUNABLE_PARAMS}
@@ -725,8 +766,17 @@ class LiteLLMBackend(BaseLLMBackend):
             choices = self._value_choices(name)
             out.append({"name": name, "label": name.replace("_", " "),
                         "kind": "choice" if choices else "text",
-                        "choices": choices, "supported": True, "note": ""})
+                        "choices": choices, "role": self._role(name),
+                        "supported": True, "note": ""})
         return out
+
+    @staticmethod
+    def _role(name):
+        """What a parameter is *for*, when several names mean one thing.
+
+        ``""`` for the ordinary case, where the name is the whole answer.
+        """
+        return "reasoning" if name in _REASONING_PARAMS else ""
 
     def _value_choices(self, name):
         """The accepted values for a parameter, read off litellm's signature.
@@ -739,9 +789,13 @@ class LiteLLMBackend(BaseLLMBackend):
         this one was already wrong, missing ``none``, ``xhigh`` and
         ``default``.
 
-        It is the union litellm accepts rather than what one model does, so it
-        is a picker's contents and not a claim about the provider - the same
-        standing every other answer from ``params`` has.
+        The annotation is *global* - the union litellm accepts for the
+        OpenAI-spec parameter, with nothing per-model about it. So ``params``
+        only asks when the parameter is supported for the model in hand, and
+        answers ``[]`` otherwise. Offering seven values for a parameter nothing
+        says this model takes is two facts from two different lookups
+        contradicting each other on one row, and a caller cannot tell which
+        half to believe.
         """
         import inspect
         import typing
