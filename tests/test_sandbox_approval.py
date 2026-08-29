@@ -848,6 +848,60 @@ def test_resident_service_cannot_persist_another_plugins_setting(monkeypatch):
     assert not decision.safe
 
 
+def test_a_preference_is_writable_without_asking():
+    """Switching model is something a person does many times a day, and a
+    dialog per switch is the friction that teaches somebody to stop reading
+    dialogs. It qualifies because writing it again undoes it, because it can
+    only name a profile somebody already configured, and because it changes no
+    later Request's answer."""
+    from sandbox.policy import FREELY_WRITABLE_SETTINGS
+
+    decision = classify(
+        Request(R.CONFIG_WRITE,
+                {"key": "default_llm_profile", "value": "minimax/MiniMax-M3"}),
+        Chain(root="user"))
+
+    assert decision.safe
+    assert "preference" in decision.reason
+    assert "default_llm_profile" in FREELY_WRITABLE_SETTINGS
+
+
+def test_a_preference_is_writable_by_anyone_including_a_background_agent():
+    """It is a fact about the *setting*, so it does not turn on who is asking
+    — which is the whole of why it is checked before ownership. An unattended
+    chain is the case that matters: nothing unsafe can be approved there, so
+    a rule needing a person present would leave a scheduled agent unable to
+    pick its own model."""
+    decision = classify(
+        Request(R.CONFIG_WRITE, {"key": "default_llm_profile", "value": "x"}),
+        Chain(root="cron:nightly").push("some_tool"))
+
+    assert decision.safe
+
+
+def test_the_list_admits_nothing_that_grants_anything():
+    """The three tests in ``FREELY_WRITABLE_SETTINGS`` exist to be applied to
+    a fourth entry, and the ones that will be got wrong read exactly like
+    preferences from outside: each of these is the standing answer to a
+    dialog, so writing one is granting yourself whatever it covers.
+
+    Pinned as a negative because the failure is silent — an entry added here
+    is a capability nobody is ever asked about again."""
+    from sandbox.policy import FREELY_WRITABLE_SETTINGS
+
+    for granting in ("net_allowed_hosts", "shell_allowed_prefixes",
+                     "security_mode", "autoload_services",
+                     "enabled_frontends", "llm_profiles"):
+        assert granting not in FREELY_WRITABLE_SETTINGS
+        decision = classify(
+            Request(R.CONFIG_WRITE, {"key": granting, "value": ["anything"]}),
+            Chain(root="user"))
+        assert not decision.safe, granting
+
+    assert not any(key.startswith("secret_")
+                   for key in FREELY_WRITABLE_SETTINGS)
+
+
 # ────────────────────────────────────────────────────────────────────
 # The sandbox must have an approver (was test_sandbox_approval_wiring.py)
 # ────────────────────────────────────────────────────────────────────

@@ -149,7 +149,7 @@ itself, above `classify` — this table is the summary of that comment:
 | # | Mechanism | Question | Used by |
 |---|---|---|---|
 | 1 | **Destination** | is the path inside a scratch root? | `fs.write`, `fs.write_bytes`, `fs.move`, `fs.delete` |
-| 2 | **Allowlist** | is the host in `net_allowed_hosts`? (dot-boundary subdomain match) | `net.http` |
+| 2 | **Allowlist** | is the host in `net_allowed_hosts`? (dot-boundary subdomain match) — or the setting in `policy.FREELY_WRITABLE_SETTINGS`? | `net.http`, `config.write` |
 | 3 | **Ownership** | did this plugin *declare* this setting? | `secret.reveal`, `config.write` |
 | 4 | **Shape** | does the SQL delete from a kernel table? | `db.write` |
 | 5 | **Polarity** | does this widen or narrow? | `task.pause` (pause safe, unpause unsafe) |

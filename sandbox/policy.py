@@ -1049,6 +1049,46 @@ def _owns_setting(chain: Chain, key: str) -> bool:
     return bool(_setting_owners(key) & _callers(chain))
 
 
+#: Settings any caller may write without being asked. **Add to this list only
+#: against the three tests below**, all of which have to hold.
+#:
+#: **1. Writing it again undoes it.** The same test the db-write branch states
+#: for itself: the write worth asking about is the one that cannot be undone
+#: by writing again. A preference fails nothing permanently.
+#:
+#: **2. It chooses among things a person already configured**, so it hands out
+#: nothing that was not already handed out. ``default_llm_profile`` names a key
+#: in ``llm_profiles``, and every profile in there — its endpoint, its
+#: credential, its model — was put there by somebody. Creating one is still a
+#: write to ``llm_profiles`` and still asks.
+#:
+#: **3. It is a preference, not a permission.** Nothing here may change how a
+#: *later* Request is answered. This is the test that will be got wrong, because
+#: the settings it excludes read exactly like preferences from the outside:
+#: ``net_allowed_hosts`` is "which sites", ``shell_allowed_prefixes`` is "which
+#: commands", ``security_mode`` is "how careful" — and each of them is the
+#: standing answer to a dialog, so writing one is granting yourself whatever it
+#: covers. Anything named ``secret_*`` fails this too, and separately.
+#:
+#: ``default_llm_profile`` passes all three, and earns the entry on volume:
+#: switching model is something a person does many times a day, and a dialog
+#: per switch is the kind of friction that teaches somebody to stop reading
+#: dialogs. Note the value is deliberately **not** checked against the profiles
+#: that exist. Every string is either a profile (a switch) or a name that
+#: matches none (a broken pointer, loud at the next turn and fixed by the next
+#: write), and neither is worth the layering it would cost policy to look.
+#:
+#: **Kept in code rather than in config**, which is the opposite call from
+#: ``net_allowed_hosts`` one mechanism over, and deliberately: a *setting*
+#: listing the settings that need no approval is a setting that grants
+#: everything to whoever writes it, and it would have to exclude itself to be
+#: safe at all. A list that can only be edited by editing this file cannot be
+#: talked into growing.
+FREELY_WRITABLE_SETTINGS = frozenset({
+    "default_llm_profile",
+})
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The eight mechanisms.
 # ──────────────────────────────────────────────────────────────────────
@@ -1067,6 +1107,11 @@ def _owns_setting(chain: Chain, key: str) -> bool:
 #      ``net.http`` against ``net_allowed_hosts``, matched on a dot boundary.
 #      Deliberately config and not a plugin declaration — see the egress
 #      section for why that distinction is the whole of it.
+#      ``config.write`` against ``FREELY_WRITABLE_SETTINGS`` is the same
+#      mechanism with the list in *code*, and the inversion is the point: a
+#      setting naming the settings that need no approval would grant
+#      everything to whoever wrote it. Which way round a list belongs is a
+#      question about what the list authorizes, not a house style.
 #
 #   3. OWNERSHIP    — did the asker declare this thing?
 #      ``secret.reveal`` and ``config.write``, resolved through the setting
@@ -1243,6 +1288,12 @@ def classify(request: Request, chain: Chain) -> Decision:
         if chain.typed_command:
             return Decision(SAFE, "a command the user typed")
         key = args.get("key") or ""
+        # A handful of settings are preferences a person changes constantly and
+        # can change back — see ``FREELY_WRITABLE_SETTINGS`` for the three tests
+        # an entry has to pass. Checked before ownership because it is a fact
+        # about the *setting*, true whoever is asking.
+        if key in FREELY_WRITABLE_SETTINGS:
+            return Decision(SAFE, f"{key} is a preference, freely writable")
         if args.get("scope") == "plugin" and _owns_setting(chain, key):
             owner = sorted(_setting_owners(key) & _callers(chain))[0]
             return Decision(SAFE, f"{owner} persists its own {key}")

@@ -397,10 +397,29 @@ question died as a `TypeError` reported back as "could not ask".
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `config.read(key, scope)` | Global or user-scoped setting | `secret_` prefix | safe, **`secret_*` returned as handles** |
-| `config.write(key, value, scope)` | Change a setting | key, scope | unsafe |
+| `config.write(key, value, scope)` | Change a setting | key, scope, chain | unsafe, **safe for a freely-writable key** |
 | `paths.get(name)` | Resolve a named application location | fixed name allowlist | safe |
 
 Scope (`global` / `user`) is an argument, not a separate Request.
+
+**A short list of settings is writable without asking**
+(`policy.FREELY_WRITABLE_SETTINGS`, `default_llm_profile` today). Three tests
+have to hold for an entry: writing it again undoes it, it only chooses among
+things a person already configured, and it is a *preference* rather than a
+*permission* — nothing on the list may change how a later Request is answered.
+That third one is the test worth stating, because the settings it excludes read
+exactly like preferences from outside: `net_allowed_hosts` is "which sites",
+`shell_allowed_prefixes` is "which commands", `security_mode` is "how careful",
+and each is the standing answer to a dialog, so writing one grants you whatever
+it covers. `default_llm_profile` earns its place on volume — switching model
+happens many times a day, and a dialog per switch teaches somebody to stop
+reading dialogs.
+
+The list lives in **code**, which is the opposite call from `net_allowed_hosts`
+under the same mechanism and is deliberate: a *setting* naming the settings
+that need no approval grants everything to whoever writes it, and would have to
+exclude itself to be safe at all. Every write still announces itself by key
+name, so a change nobody approved is still a change nobody missed.
 
 Two of `paths.get`'s names are not locations: `python` (the interpreter
 hosting the app) and `platform` (`sys.platform`). They are here because the
