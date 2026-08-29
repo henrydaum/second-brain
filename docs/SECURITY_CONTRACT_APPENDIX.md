@@ -403,15 +403,25 @@ question died as a `TypeError` reported back as "could not ask".
 Scope (`global` / `user`) is an argument, not a separate Request.
 
 **A short list of settings is writable without asking**
-(`policy.FREELY_WRITABLE_SETTINGS`, `default_llm_profile` today). Three tests
+(`policy.FREELY_WRITABLE_SETTINGS`, `default_llm_profile` today). Four tests
 have to hold for an entry: writing it again undoes it, it only chooses among
-things a person already configured, and it is a *preference* rather than a
-*permission* — nothing on the list may change how a later Request is answered.
-That third one is the test worth stating, because the settings it excludes read
+things a person already configured, it is a *preference* rather than a
+*permission* — nothing on the list may change how a later Request is answered —
+and somebody changes it constantly.
+
+The third is the test worth stating, because the settings it excludes read
 exactly like preferences from outside: `net_allowed_hosts` is "which sites",
 `shell_allowed_prefixes` is "which commands", `security_mode` is "how careful",
 and each is the standing answer to a dialog, so writing one grants you whatever
-it covers. `default_llm_profile` earns its place on volume — switching model
+it covers. `active_agent_profile` is the near miss — it passes the first two
+and selects a tool whitelist.
+
+The fourth is what keeps the list short, and it has teeth. Across all 29 kernel
+settings, twenty-two fail the third test and two fail the first, but **four
+pass all three and are excluded on frequency alone** (`memory_index_cap`,
+`max_workers`, `poll_interval`, `startup_restore_conversation`). A dialog
+nobody sees twice costs nothing, so a harmless setting touched once a year is
+pure downside. `default_llm_profile` earns its place because switching model
 happens many times a day, and a dialog per switch teaches somebody to stop
 reading dialogs.
 

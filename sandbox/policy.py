@@ -1050,7 +1050,9 @@ def _owns_setting(chain: Chain, key: str) -> bool:
 
 
 #: Settings any caller may write without being asked. **Add to this list only
-#: against the three tests below**, all of which have to hold.
+#: against the four tests below**, all of which have to hold. The first three
+#: ask whether an entry is harmless; the fourth asks whether the exception is
+#: worth making, and it is the one that keeps the list short.
 #:
 #: **1. Writing it again undoes it.** The same test the db-write branch states
 #: for itself: the write worth asking about is the one that cannot be undone
@@ -1077,6 +1079,24 @@ def _owns_setting(chain: Chain, key: str) -> bool:
 #: only test 3: an agent profile carries ``whitelist_or_blacklist_tools``, so
 #: choosing one chooses **what the agent may call**. Writing it freely would let
 #: an agent scoped to four tools move itself to a profile with all of them.
+#:
+#: **4. Somebody changes it constantly.** The first three ask whether an entry
+#: is *harmless*; this one asks whether the exception is *worth making*, and it
+#: is the test that keeps the list short. A dialog nobody sees twice costs
+#: nothing and is one more thing that cannot go wrong, so a setting that passes
+#: 1–3 and is touched once a year is pure downside — the risk of a rule read
+#: slightly wrong later, bought for no relief at all.
+#:
+#: It has teeth. Applied to all 29 kernel settings, twenty-two fail test 3 and
+#: two fail test 1 (``data_retention_days``, where a ``1`` destroys the action
+#: ledger at the next sweep, and ``attachment_cache_size_gb``, where lowering it
+#: evicts cached files) — but **four pass 1–3 and are excluded on this one**:
+#: ``memory_index_cap``, ``max_workers``, ``poll_interval`` and
+#: ``startup_restore_conversation``. Every one of them is a genuine preference
+#: that grants nothing, and every one is set once and forgotten. They are named
+#: here so the pass does not have to be done again, and so that reaching for one
+#: of them later is a decision about *frequency* rather than a rediscovery of
+#: whether it is safe.
 #:
 #: A note for whenever a *user-scoped* key is added: ``_config_write`` routes by
 #: ``is_user_scoped``, not by the caller's ``scope`` argument, so the key name
