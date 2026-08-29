@@ -152,6 +152,18 @@ class LlmCommand(BaseCommand):
                 steps.extend(_extra_param_steps(
                     sdk, args, args.get("model_name") or "",
                     profile.get("llm_endpoint") or "", profile))
+            elif field == "llm_model_name":
+                # The same picker the add flow builds, narrowed by the
+                # provider the stored name already carries. The key is *not*
+                # sent along: it is a ``<secret:...>`` handle here, and the
+                # only thing a key buys is a live listing, which a form may
+                # never ask for.
+                name = args.get("model_name") or ""
+                steps.extend(_model_steps(
+                    sdk, "value", args,
+                    profile.get("llm_endpoint") or "", "",
+                    _provider_of(name),
+                    lead=f"Currently `{name}`.\n\n"))
             elif field:
                 backends = _backend_names(registry)
                 steps.append(FormStep(
@@ -190,7 +202,12 @@ class LlmCommand(BaseCommand):
             field = args.get("field")
             was_loaded = _profile_row(_registry(sdk), name).get("loaded", False)
             if field == "llm_model_name":
-                new_name = _coerce(field, args.get("value")).strip()
+                # Read the same way the add flow reads its own model step,
+                # because it *is* that step now — so a name picked from the
+                # catalogue and a name typed at **Type it myself** both
+                # arrive, rather than the literal word ``custom`` becoming
+                # somebody's profile.
+                new_name = _typed_or_picked(args, "value")
                 if not new_name:
                     return "Model name is required."
                 if new_name != name and new_name in profiles:
@@ -346,33 +363,12 @@ def _add_steps(sdk, registry, args):
         + _about(sdk, detail),
         False, default="", prompt_when_missing=True))
 
-    # The model step only becomes a menu once there is something to ask.
     # ``llm_endpoint`` is answered by the step above, so on the pass that
     # renders this one it is already in ``args``.
-    catalogue = _models(sdk, endpoint, args.get("secret_llm_api_key") or "",
-                        "" if provider == CUSTOM else provider)
-    if catalogue:
-        names = [row["name"] for row in catalogue] + [CUSTOM]
-        labels = [row.get("label") or row["name"] for row in catalogue]
-        steps.append(FormStep(
-            "new_model_name",
-            "Which model? The name is stored exactly as shown, prefix "
-            "included, so it routes correctly. Pick **Type it myself** for "
-            "one that is not listed.",
-            True, enum=names, enum_labels=labels + ["Type it myself"]))
-        if args.get("new_model_name") == CUSTOM:
-            steps.append(FormStep(
-                "custom_model_name",
-                "Enter the model name exactly, including the provider prefix "
-                "when one is needed (for example `openai/gpt-4o-mini`).",
-                True))
-    else:
-        steps.append(FormStep(
-            "new_model_name",
-            "Enter the model name exactly, including provider prefix when "
-            "needed (for example `openai/gpt-4o-mini` or "
-            "`anthropic/claude-3-5-sonnet-latest`).",
-            True))
+    steps.extend(_model_steps(
+        sdk, "new_model_name", args,
+        endpoint, args.get("secret_llm_api_key") or "",
+        "" if provider == CUSTOM else provider))
 
     window, facts = _model_facts(sdk, _chosen_model(args), endpoint)
     steps.append(FormStep(
@@ -638,12 +634,86 @@ def _param_field(field):
         field or "").startswith(PARAM_PREFIX) else ""
 
 
-def _chosen_model(args):
-    """The model name the add flow settled on, menu or typed."""
-    picked = (args.get("new_model_name") or "").strip()
+def _model_steps(sdk, field, args, endpoint, api_key, provider, lead=""):
+    """Ask which model, as a picker wherever one can be built.
+
+    Shared by the add flow and the edit flow, because they write the same key
+    and had drifted apart: adding a profile offered the endpoint's catalogue
+    while *changing* the model on an existing profile was a bare text box, so
+    the prefix the picker exists to get right was back to being typed from
+    memory. That is the same failure ``_value_enum`` already describes for the
+    backend field, one field over, and it was missed because the two are built
+    by different mechanisms — a static list against a live lookup — rather
+    than because anybody decided the model was different.
+
+    One step or two. A catalogue makes the first a picker with **Type it
+    myself** on the end, and choosing that adds the second; with no catalogue
+    the first *is* the typed step. That is the common path rather than a
+    fallback, and both flows read the answer back through
+    :func:`_typed_or_picked`.
+    """
+    catalogue = _models(sdk, endpoint, api_key, provider)
+    if not catalogue:
+        return [FormStep(
+            field,
+            lead + "Enter the model name exactly, including provider prefix "
+            "when needed (for example `openai/gpt-4o-mini` or "
+            "`anthropic/claude-3-5-sonnet-latest`).",
+            True)]
+    names = [row["name"] for row in catalogue] + [CUSTOM]
+    labels = [row.get("label") or row["name"] for row in catalogue]
+    steps = [FormStep(
+        field,
+        lead + "Which model? The name is stored exactly as shown, prefix "
+        "included, so it routes correctly. Pick **Type it myself** for one "
+        "that is not listed.",
+        True, enum=names, enum_labels=labels + ["Type it myself"])]
+    if args.get(field) == CUSTOM:
+        steps.append(FormStep(
+            "custom_model_name",
+            "Enter the model name exactly, including the provider prefix "
+            "when one is needed (for example `openai/gpt-4o-mini`).",
+            True))
+    return steps
+
+
+def _typed_or_picked(args, field):
+    """The model name a flow settled on, menu or typed.
+
+    One reader for both flows, since ``custom_model_name`` is the escape
+    hatch either of them lands on and a second spelling of it is a way for
+    one of them to stop honouring it.
+    """
+    picked = (args.get(field) or "").strip()
     if picked == CUSTOM:
         return (args.get("custom_model_name") or "").strip()
     return picked
+
+
+def _chosen_model(args):
+    """The model name the add flow settled on."""
+    return _typed_or_picked(args, "new_model_name")
+
+
+def _provider_of(model_name):
+    """The provider a stored model name carries, or ``""``.
+
+    Needed because ``models`` cannot answer from an endpoint alone: doing that
+    means *asking* the endpoint, which is egress a form may not commit to, so
+    the offline answer is an index keyed by provider. The add flow has the
+    name from its own first step; the edit flow has only what was stored.
+
+    The prefix is where that name came from. ``_prefixed`` in the backend put
+    it there precisely so ``minimax/MiniMax-M3`` routes to MiniMax's config
+    rather than OpenAI's, which makes it the most reliable statement of
+    provider anybody has.
+
+    A guess, and it fails to the right side. An aggregator's ids are prefixed
+    for its own catalogue (``deepseek-ai/deepseek-v4-pro``), so this answers a
+    name no provider table knows, the lookup comes back empty, and the step is
+    the typed one it has always been.
+    """
+    return model_name.split("/", 1)[0] if "/" in (model_name or "") else ""
 
 
 def _providers(sdk):
@@ -963,9 +1033,10 @@ def _value_prompt(field, profile=None, registry=None):
     believing there are two settings.
     """
     return _current_value(field, profile or {}, registry) + {
-        "llm_model_name": (
-            "Enter the model name, exactly as the provider spells it and "
-            "including any prefix it needs."),
+        # ``llm_model_name`` is deliberately absent: it is asked by
+        # ``_model_steps``, the add flow's own question, so a second wording
+        # here would be a second description of one setting — which is how a
+        # person ends up believing there are two.
         "llm_endpoint": (
             "Enter the provider base URL. Leave it blank only if this backend "
             "already knows where to reach the provider."),

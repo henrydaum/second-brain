@@ -403,6 +403,12 @@ class _LlmSdk:
                 "info": ({"context_size": 4096,
                           "description": "A chat model served by acme."}
                          if kw.get("info") else {}),
+                # Only ``acme`` has a catalogue, so a test can reach both the
+                # picker and the typed fallback by choosing a provider.
+                "models": ([
+                    {"name": "acme/one", "label": "one", "description": ""},
+                    {"name": "acme/two", "label": "two", "description": ""},
+                ] if kw.get("provider") == "acme" else []),
                 "params": ([
                     {"name": "reasoning_effort", "label": "Reasoning effort",
                      "kind": "choice",
@@ -678,13 +684,18 @@ def test_a_value_arrives_as_the_type_it_looks_like():
 # Saying what a thing is, in the backend's voice.
 # ──────────────────────────────────────────────────────────────────────
 
-def _prompt(steps, field):
-    """The prompt of one step, by field name."""
+def _step(steps, field):
+    """One step, by field name."""
     for step in steps:
         if step["name"] == field:
-            return step["prompt"]
+            return step
     seen = [step["name"] for step in steps]
     raise AssertionError(f"no {field} step in {seen}")
+
+
+def _prompt(steps, field):
+    """The prompt of one step, by field name."""
+    return _step(steps, field)["prompt"]
 
 
 def test_a_parameter_step_says_what_the_parameter_is():
@@ -805,3 +816,97 @@ def test_setup_names_the_environment_variable_it_falls_back_to():
         steps, "secret_llm_api_key")
     # And the same call still answers the endpoint it was always asked for.
     assert "https://acme.test/v1" in _prompt(steps, "llm_endpoint")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# One model question, however you arrived at it.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_editing_the_model_name_offers_the_same_picker_as_adding_one():
+    """It was a bare text box, so changing the model on a profile meant
+    typing the name — prefix included — from memory, which is the exact thing
+    the picker exists to get right. Same failure ``_value_enum`` already
+    describes for the backend field, one field over, and it was missed
+    because the two are built by different mechanisms: a static list against
+    a live lookup."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"acme/one": {"llm_endpoint": "https://acme.test/v1"}},
+                  default="acme/one")
+    sdk.md.card = staticmethod(lambda title, pairs: "")
+
+    step = _step(module.LlmCommand().form(sdk, {
+        "model_name": "acme/one", "action": "edit",
+        "field": "llm_model_name"}), "value")
+
+    assert step["enum"] == ["acme/one", "acme/two", module.CUSTOM]
+    assert step["enum_labels"][-1] == "Type it myself"
+    # And it says what the model is now, like every other field's edit step.
+    assert "Currently `acme/one`" in step["prompt"]
+
+
+def test_the_provider_comes_off_the_prefix_the_stored_name_carries():
+    """``models`` cannot answer from an endpoint alone — that means *asking*
+    the endpoint, which is egress a form may not commit to — so the offline
+    answer is an index keyed by provider. The add flow has that name from its
+    own first step; editing has only what was stored, and the prefix is where
+    the name came from."""
+    module = _load("command_llm")
+
+    assert module._provider_of("minimax/MiniMax-M3") == "minimax"
+    assert module._provider_of("gpt-5") == ""
+    assert module._provider_of("") == ""
+    assert module._provider_of(None) == ""
+
+
+def test_a_prefix_no_table_knows_falls_back_to_typing_it():
+    """An aggregator's ids are prefixed for its *own* catalogue, so the guess
+    answers a provider nothing has heard of. That has to degrade to the step
+    this always was rather than to an empty picker, which would offer nothing
+    but ``Type it myself`` and no way to see why."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"deepseek-ai/v4": {"llm_endpoint": "https://gw.test/v1"}},
+                  default="deepseek-ai/v4")
+    sdk.md.card = staticmethod(lambda title, pairs: "")
+
+    step = _step(module.LlmCommand().form(sdk, {
+        "model_name": "deepseek-ai/v4", "action": "edit",
+        "field": "llm_model_name"}), "value")
+
+    assert not step["enum"]
+    assert "Enter the model name exactly" in step["prompt"]
+
+
+def test_choosing_to_type_it_stores_the_name_and_not_the_word():
+    """The picker's escape hatch is a sentinel, and the edit path read
+    ``value`` straight — so wiring the picker up without this would have made
+    ``custom`` somebody's profile name."""
+    module = _load("command_llm")
+    sdk = _LlmSdk({"acme/one": {"llm_endpoint": "https://acme.test/v1"}},
+                  default="acme/one")
+    sdk.md.card = staticmethod(lambda title, pairs: "")
+
+    steps = module.LlmCommand().form(sdk, {
+        "model_name": "acme/one", "action": "edit",
+        "field": "llm_model_name", "value": module.CUSTOM})
+    assert _step(steps, "custom_model_name")
+
+    module.LlmCommand().run(sdk, {
+        "model_name": "acme/one", "action": "edit",
+        "field": "llm_model_name", "value": module.CUSTOM,
+        "custom_model_name": "acme/three"})
+
+    assert sorted(sdk._config["llm_profiles"]) == ["acme/three"]
+    # The default followed the rename, as it did before the picker existed.
+    assert sdk._config["default_llm_profile"] == "acme/three"
+
+
+def test_the_model_question_is_asked_in_one_place():
+    """Both flows write the same key, and the way they stay worded alike is
+    that there is one wording. ``_value_prompt`` naming the field again would
+    be a second description of one setting."""
+    module = _load("command_llm")
+
+    assert "llm_model_name" in module.BASE_FIELDS
+    assert "model name" not in module._value_prompt("llm_model_name").lower()
+    # It falls through to the generic default rather than to prose of its own.
+    assert module._value_prompt("llm_model_name") == "Enter the new value."
