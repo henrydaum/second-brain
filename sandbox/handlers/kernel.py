@@ -2039,17 +2039,20 @@ def _llm_list(ctx, args: dict) -> Result:
     name — so a config saying ``LiteLLMService`` has to be resolvable to the
     class that replaced it before it can be displayed.
 
-    A profile row's ``params`` is what that profile adds to every call, fully
-    resolved — the kernel's default reasoning effort filled in and declined
-    params dropped — so a caller rendering it shows what goes on the wire
-    rather than what config happens to spell.
+    A profile row's ``params`` is what that profile adds to every call, as
+    resolved rather than as configured: a null-valued entry means "do not send
+    this" and is dropped, so a caller rendering it shows what goes on the wire
+    rather than what config happens to spell. Nothing is filled *in* — the
+    kernel supplied a default reasoning effort once and names no provider
+    parameter now, so what a profile sends is what somebody configured.
 
-    Three optional arguments answer the questions a *setup* flow asks, in
+    Four optional arguments answer the questions a *setup* flow asks, in
     order of narrowing: ``providers`` names the providers a backend can reach,
-    ``models`` names what one endpoint serves, and ``params`` names what one
-    model accepts. They grew here rather than becoming three Request types
-    because the subject is the same one this type already has — the model
-    registry — and a caller needs the ordinary answer alongside them anyway.
+    ``models`` names what one endpoint serves, ``info`` says what one model is
+    and how big its window is, and ``params`` names what that model accepts.
+    They grew here rather than becoming four Request types because the subject
+    is the same one this type already has — the model registry — and a caller
+    needs the ordinary answer alongside them anyway.
 
     Each answers ``[]`` when nothing can say, which is a real answer and not a
     failure: no backend is obliged to introspect, and the flow that asked

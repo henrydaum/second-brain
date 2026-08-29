@@ -980,17 +980,18 @@ class _LLM(_Namespace):
         ``endpoint``, ``context_size``, ``params``, ``loaded`` and
         ``sandboxed``; a backend row carries ``name`` and ``display_name``.
         ``params`` is the extra provider kwargs that profile sends on every
-        call — reasoning effort and whatever else it configures — already
-        resolved: the kernel's default effort is filled in, declined params
-        (a ``null`` in the profile) are gone, and the names are the ones that
-        go on the wire. ``aliases`` maps a retired
+        call — reasoning effort and whatever else it configures — as resolved
+        rather than as configured: declined params (a ``null`` in the profile)
+        are gone, and the names are the ones that go on the wire. Nothing is
+        filled *in*; the kernel names no provider parameter, so what a profile
+        sends is what somebody configured. ``aliases`` maps a retired
         backend name to the one that replaced it, which is what a stored
         ``llm_service_class`` may still be. Each profile row also carries
         ``param_status`` — ``{param: [supported, note]}`` for the params that
         profile sends, and ``{}`` for a profile whose box is closed, since
         nothing opens one merely to answer this.
 
-        The three optional arguments are the setup questions, narrowing in
+        The four optional arguments are the setup questions, narrowing in
         order. Pass ``providers=True`` for the provider list, or
         ``providers=<name>`` for that one provider with its endpoint resolved;
         ``models=<url>``

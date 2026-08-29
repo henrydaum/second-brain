@@ -324,9 +324,9 @@ class BaseLLMBackend:
 
     # ── Describing what can be configured ─────────────────────────────
     #
-    # Three optional questions, ordered from least to most specific:
-    # which providers exist, which models one endpoint serves, and which
-    # parameters one model takes. Each narrows the last, and each is
+    # Four optional questions, ordered from least to most specific: which
+    # providers exist, which models one endpoint serves, what one model is,
+    # and which parameters it takes. Each narrows the last, and each is
     # answered by the backend because only it knows what its provider
     # library can tell it.
     #
@@ -486,12 +486,13 @@ class BaseLLMBackend:
             sdk._delta_token = ""
 
     def __describe__(self, sdk, question: str, args: dict = None):
-        """Answer one of the three discovery questions. The kernel calls this.
+        """Answer one of the discovery questions. The kernel calls this.
 
-        One entry point rather than three, because the three differ only in
-        their arguments and every one of them answers a list — a second and
-        third wire name would buy nothing and cost three places to keep in
-        step.
+        One entry point rather than one per question, because they differ only
+        in their arguments and every one of them answers a list — a wire name
+        each would buy nothing and cost as many places to keep in step. That
+        is not hypothetical: ``info`` was added as a fourth, and the only
+        thing it cost here was a branch.
 
         Anything raised becomes ``[]``. These questions are asked while
         somebody is filling in a form, and a backend that cannot introspect
