@@ -449,11 +449,15 @@ comes back `running` and stays collectable. Each finished report is
 `sdk.agent.spawn` instead when the work needs judgement rather than code.
 
 **Reaching the network.** `sdk.net.http` answers with
-`{status, body, headers}`, and an HTTP *error* status is an ordinary answer
-rather than a failure — check `status` the way you would for a 200. That is
-deliberate: a 429's body is where an API tells you which limit you hit and for
-how long, and only a request that got no reply at all (DNS, refused, timed out)
-raises. `body` is decoded text; there is no binary download.
+`{status, body, headers, truncated}`, and an HTTP *error* status is an ordinary
+answer rather than a failure — check `status` the way you would for a 200. That
+is deliberate: a 429's body is where an API tells you which limit you hit and
+for how long, and only a request that got no reply at all (DNS, refused, timed
+out) raises.
+
+`body` is decoded text and is capped; `truncated` says when the cap bit. A
+truncated body is a reason to reach for `to_file` below, not something to try
+to parse.
 
 `params` URL-encodes query values, including repeated list values. `json`
 encodes a request body and supplies `Content-Type: application/json` unless
@@ -461,10 +465,39 @@ you supplied one; it cannot be combined with `body`. Use `http_json` when the
 response should be decoded too. It keeps the same envelope and replaces its
 text `body` with the parsed value; an empty body becomes `None`.
 
-Redirects are also ordinary answers and are **not followed automatically**.
-Read the 3xx response's `headers["location"]` and make another `sdk.net.http`
-call if you want to follow it. That second call is intentional: a server may
-choose a new host, but it cannot authorize that host on the plugin's behalf.
+**Downloading a file.** Name a path in `to_file` and the reply is streamed
+straight to it instead of crossing the boundary. That is the only way to fetch
+anything binary or large — an image, a PDF, an archive, a video — because the
+wire carries decoded text and has a size limit that a file does not.
+
+```python
+answer = sdk.net.http(url, to_file=sdk.path.join(downloads, "chart.png"))
+if answer["status"] == 200:
+    sdk.log(f"{answer['bytes']} bytes of {answer['content_type']}")
+```
+
+The answer carries `path`, `bytes`, `content_type` and `final_url` alongside
+the usual keys, with `body` empty. A non-2xx status answers in the *same*
+shape with `path` empty and the server's explanation in `body`, so one branch
+on `status` covers both and there is no separate error case to remember.
+
+Two things follow from a download being two acts rather than one. Writing is a
+**second capability**: the kernel asks about the destination as well as the
+host, so a path outside the folders you may write to is a dialog even when the
+host is on the list — keep downloads inside your own tree and neither is asked
+about. And the ceiling is the user's `max_download_mb` setting, enforced while
+streaming; anything over it fails and the partial file is deleted, because
+half a file is not a smaller answer. `max_bytes` lowers that ceiling for one
+call and cannot raise it.
+
+Redirects are ordinary answers and are **not followed automatically**. Read the
+3xx response's `headers["location"]` and make another `sdk.net.http` call if
+you want to follow it. That second call is intentional: a server may choose a
+new host, but it cannot authorize that host on the plugin's behalf. A
+`to_file` download is the one exception, and only halfway — hops *within the
+same host* are followed for you, since that host was already decided, while a
+hop to a different host still comes back as a 3xx for you to re-call. Real
+downloads redirect constantly, and almost always within one host.
 
 Whether it asks the user depends entirely on **where** it is going. The kernel
 config setting `net_allowed_hosts` lists hosts a plugin may reach without a

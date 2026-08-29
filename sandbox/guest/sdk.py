@@ -1632,7 +1632,8 @@ class _Net(_Namespace):
     """Network Requests — always classified, never auto-safe."""
 
     def http(self, url: str, method: str = "GET", headers: dict | None = None,
-             body=None, *, params=None, json=None):
+             body=None, *, params=None, json=None, to_file: str = "",
+             max_bytes: int = 0):
         """Perform an outbound HTTP request.
 
         Secret handles may appear anywhere in the url, headers, or body; the
@@ -1641,6 +1642,30 @@ class _Net(_Namespace):
         are never followed automatically: call ``http`` again with the
         response's ``location`` header so the new host gets its own policy
         decision.
+
+        Answers ``{status, body, headers, truncated}``. ``body`` is decoded
+        text and is capped — ``truncated`` says when the cap bit, and a
+        truncated body is a reason to reach for ``to_file`` rather than to
+        parse what came back.
+
+        **``to_file`` downloads.** Name a path and the reply is streamed
+        straight to it instead of crossing the wire, which is what makes an
+        image, a PDF, an archive or anything large fetchable at all — the wire
+        refuses every one of them. The answer then carries ``path``, ``bytes``,
+        ``content_type`` and ``final_url``, with ``body`` empty; a non-2xx
+        status answers in the same shape with ``path`` empty and the server's
+        explanation in ``body``, so one branch on ``status`` covers both.
+
+        Two things to know about it. Writing is a **second capability**: the
+        kernel asks about the destination as well as the host, so a path
+        outside the folders you may write to is refused even when the host is
+        allowed. And redirects behave differently here — hops *within the same
+        host* are followed for you (the host was already decided), while a hop
+        to a different host comes back as a 3xx to re-call, because that host
+        has not been asked about.
+
+        ``max_bytes`` lowers the user's own download ceiling for this one
+        call. It cannot raise it.
         """
         if body is not None and json is not None:
             raise ValueError("body and json are mutually exclusive")
@@ -1650,12 +1675,20 @@ class _Net(_Namespace):
             args["params"] = params
         if json is not None:
             args["json"] = json
+        if to_file:
+            args["to_file"] = str(to_file)
+        if max_bytes:
+            args["max_bytes"] = int(max_bytes)
         return self._ask(NET_HTTP, **args)
 
     def http_json(self, url: str, method: str = "GET",
                   headers: dict | None = None, body=None, *, params=None,
                   json=None):
-        """Perform an HTTP request and decode its text body as JSON."""
+        """Perform an HTTP request and decode its text body as JSON.
+
+        No ``to_file``: a download has no body to decode, and asking for both
+        is asking for two different answers to one call.
+        """
         answer = self.http(url, method=method, headers=headers, body=body,
                            params=params, json=json) or {}
         raw = answer.get("body", "")

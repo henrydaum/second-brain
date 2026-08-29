@@ -940,7 +940,7 @@ are hardest to recover would otherwise be exactly the largest edits.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `net.http(url, method, headers, body, params, json)` | Any outbound HTTP | the URL's host | safe for a host in `net_allowed_hosts`, otherwise **unsafe** |
+| `net.http(url, method, headers, body, params, json, to_file, max_bytes)` | Any outbound HTTP; with `to_file`, a download | the URL's host, and the destination when there is one | safe for a host in `net_allowed_hosts` **and** a freely-writable destination, otherwise **unsafe** |
 
 One Request, one gate. The verb is irrelevant: a `GET` with data in the query
 string is exfiltration exactly as much as a `POST` body is, so only the
@@ -971,19 +971,59 @@ recognisable host and is asked about rather than allowed. And an unparseable URL
 yields the empty host, which no allowlist entry can equal.
 
 **The answer includes error statuses.** `net.http` returns
-`{status, body, headers}`, and an HTTP error status arrives that way too rather
-than collapsing into a failure — a 429's body is where an API says which limit
-and for how long, and a caller that gets `http 429` and nothing else cannot act
-on it. Only a request that got no reply at all (DNS, refused, timed out) is a
-failure. The body is UTF-8-decoded with replacement, so this Request answers
-about text and text only; binary egress is absent by design, since the things
-wanting it are foreign libraries doing their own I/O inside their own box.
+`{status, body, headers, truncated}`, and an HTTP error status arrives that way
+too rather than collapsing into a failure — a 429's body is where an API says
+which limit and for how long, and a caller that gets `http 429` and nothing else
+cannot act on it. Only a request that got no reply at all (DNS, refused, timed
+out) is a failure. The body is UTF-8-decoded with replacement, so this branch
+answers about text and text only, and it is read *bounded* at `fs.read`'s cap
+with `truncated` saying when that bit. It was unbounded, and the only thing
+stopping a large reply was `protocol.encode` refusing the finished Result —
+after the kernel had already buffered the lot.
+
+**`to_file` is a download, and the second capability is asked about
+separately.** Name a path and the reply is streamed there instead of crossing
+the wire; the answer carries `path`, `bytes`, `content_type` and `final_url`
+with `body` empty, and a non-2xx answers in the same shape with `path` empty.
+
+This is how anything binary or large is fetched at all — the alternative was a
+foreign library doing its own I/O inside its own box, which is outside the
+kernel's reach entirely. Streaming to a named path brings it back inside: the
+bytes are mediated, the destination is classified, and the ledger row records
+where they landed (`data_json.paths`, via `FILE_ARGS`).
+
+Two grants, kept by different people, so **both are asked and the stricter
+wins**: `net_allowed_hosts` says who may be talked to, the writable folders say
+where bytes may land. A destination outside them is a dialog however friendly
+the host is — otherwise the egress allowlist would quietly be a way of granting
+writes, which is not what anybody typed it for. `_guard_write` backs this with
+the same kernel-owned-path refusal every other write gets, before the request is
+even built.
+
+It is also the one place a command's `chain.approved` grant is not the whole
+answer (`policy._granted`). A command declaring `net.http` declared egress and
+not a write to anywhere on disk, so the destination half needs `fs.write_bytes`
+in the manifest too. The question stays decidable — it asks what the command
+*declared*, never where a URL might end up.
+
+Size is bounded by the user's `max_download_mb`, enforced while streaming
+rather than only against `Content-Length` (a chunked reply need not declare
+one). An overrun deletes the partial file: half a file is not a smaller answer.
+A guest's `max_bytes` may lower that ceiling for one call and is clamped, never
+raised.
 
 **Redirects are answers, never implicit Requests.** The host HTTP client does
 not follow a 3xx. It returns the status and `Location` header, and following it
 requires another `net.http` Request. That makes a redirect to a different host
 cross the same policy gate as any other outbound destination instead of
 spending the original host's approval twice.
+
+A `to_file` download follows **same-host** hops itself, and only those. The host
+was classified before the handler ran, so another hop inside it grants nothing
+new, while a hop elsewhere still comes back as a 3xx to re-call. Following none
+of them would make the argument useless — real downloads redirect constantly,
+and almost always within one host — and following all of them would make the
+allowlist a formality.
 
 Secret handles are substituted here, on the way out, after the policy function
 has already decided.

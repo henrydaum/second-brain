@@ -154,6 +154,16 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list"}),
 
+    ("Max Download Size (MB)", "max_download_mb",
+     "The largest single file the agent may download. A reply over this is "
+     "refused and any part of it already written is deleted — a half-file is "
+     "not a smaller answer. This bounds one download, not the folder they "
+     "collect in, and it is the only limit on a download: bytes fetched to a "
+     "file never cross the sandbox boundary, so nothing else is measuring "
+     "them.",
+     100,
+     {"type": "slider", "range": (1, 2000, 40), "is_float": False}),
+
     ("Writable Directories", "fs_writable_dirs",
      "Folders the agent may create, edit, move and delete files in without "
      "asking you first — your own project directory, say, rather than only "

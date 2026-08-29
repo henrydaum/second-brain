@@ -56,6 +56,21 @@ MAX_READ_BYTES = MAX_TEXT_READ_BYTES
 MAX_READ_BINARY = (protocol.MAX_MESSAGE_BYTES - 1024 * 1024) * 3 // 4
 MAX_SEARCH_HITS = 500
 HTTP_TIMEOUT = 30.0
+
+# A download is bounded by a *setting* rather than by the wire, because
+# ``to_file`` is precisely the path where the bytes never cross it. Everything
+# else in this file derives its ceiling from ``protocol.MAX_MESSAGE_BYTES``;
+# here that number means nothing, and a 200 MB video is an ordinary thing to
+# fetch. So the user says how much disk the agent may spend in one go.
+#
+# Enforced *while* streaming and not only against ``Content-Length``: a server
+# is under no obligation to declare one, and a chunked reply that never ends is
+# exactly the case a declared length cannot catch.
+DEFAULT_MAX_DOWNLOAD_MB = 100
+DOWNLOAD_CHUNK = 256 * 1024
+# Bounds a loop, not a grant — only same-host hops are followed at all.
+MAX_REDIRECT_HOPS = 5
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 # Ten minutes, because the command that most needs the headroom is the one a
 # user just approved a dialog for — ``pip install`` of something that builds
 # from source. A box waiting here is *blocked*, not running, so the watchdog
@@ -697,10 +712,23 @@ def _net_http(ctx, args: dict) -> Result:
     The one place secret handles are swapped back for real credentials: the
     sandbox never held the key, and substitution happens after the policy
     function has already decided.
+
+    ``to_file`` splits this in two. Without it the body comes back as decoded
+    text, capped, as it always has. With it the reply is streamed to that path
+    and the answer is about the *file* — which is the only way anything binary
+    or large can be fetched at all, since the wire refuses both. Policy sees
+    the argument and asks about the destination as well as the host, so the
+    second capability is not something the first quietly buys.
     """
     url = args.get("url")
     if not url:
         return Result.failure("net.http requires a url")
+    # Before the request is built, let alone sent: a doomed destination should
+    # not cost a round trip, and it certainly should not cost one that leaves
+    # bytes with nowhere to go.
+    to_file = args.get("to_file")
+    if to_file and (refused := _guard_write(to_file)) is not None:
+        return refused
 
     lookup = lookup_from(ctx)
     url = resolve(url, lookup)
@@ -739,6 +767,8 @@ def _net_http(ctx, args: dict) -> Result:
         url, method=method, headers=headers,
         data=body.encode("utf-8") if isinstance(body, str) else body,
     )
+    if to_file:
+        return _download(request, Path(to_file), _download_cap(ctx, args))
     try:
         with _HTTP_OPENER.open(request, timeout=HTTP_TIMEOUT) as response:
             return Result(data=_answer(response))
@@ -759,30 +789,205 @@ def _net_http(ctx, args: dict) -> Result:
         return Result.failure(f"request failed: {exc}", retryable=True)
 
 
+def _headers(response) -> dict:
+    """A reply's headers, lowercased.
+
+    HTTP header names are case-insensitive, and a caller comparing one should
+    not have to guess which case it got.
+    """
+    try:
+        return {str(k).lower(): str(v)
+                for k, v in (response.headers or {}).items()}
+    except Exception:
+        return {}
+
+
+def _status(response) -> int:
+    """A reply's status code. ``HTTPError`` spells it ``code``."""
+    status = getattr(response, "status", None) or getattr(response, "code", 0)
+    return int(status or 0)
+
+
 def _answer(response) -> dict:
     """One HTTP reply as plain data.
 
     ``HTTPError`` is itself a readable response object, which is why the
-    success and error paths share this: the same three keys either way, so
-    nothing downstream has to know which branch produced it.
+    success and error paths share this: the same keys either way, so nothing
+    downstream has to know which branch produced it.
 
-    The body is UTF-8-decoded with replacement, so this Request answers about
-    text and text only. Binary egress is deliberately absent — the things that
-    want it (model weights, media) are foreign libraries doing their own I/O
-    inside their own box, already outside the kernel's reach and documented as
-    such.
+    The body is UTF-8-decoded with replacement, so this branch answers about
+    text and text only. Anything else — an image, a PDF, an archive, or simply
+    something large — is what ``to_file`` is for: the reply is streamed to a
+    path the caller named and never crosses the wire at all.
+
+    It is read *bounded*, and that is newer than it looks. ``response.read()``
+    took the whole reply into kernel memory however big it was, and the only
+    thing that stopped it was ``protocol.encode`` refusing the finished Result
+    — a crash-shaped answer to an ordinary request, arriving after the cost had
+    already been paid. The cap is ``fs.read``'s, because this is the same act:
+    text on its way to a guest. ``truncated`` says when it bit, since a body
+    silently cut in half is a parse failure with nothing to explain it.
     """
+    truncated = False
     try:
-        payload = response.read().decode("utf-8", errors="replace")
+        raw = response.read(MAX_READ_BYTES + 1)
+        if len(raw) > MAX_READ_BYTES:
+            raw, truncated = raw[:MAX_READ_BYTES], True
+        payload = raw.decode("utf-8", errors="replace")
     except (OSError, ValueError):
         payload = ""
+    return {"status": _status(response), "body": payload,
+            "headers": _headers(response), "truncated": truncated}
+
+
+def _host_of(url) -> str:
+    """The host a URL names, lowercased, or "" if it names none.
+
+    Deliberately three local lines rather than an import of
+    ``policy.request_host``: a handler must not reach into the authorization
+    layer, even for a string. What this decides is whether a redirect stays
+    inside the host the gate already saw — a question about a *loop*, not
+    about a grant.
+    """
     try:
-        headers = {str(k).lower(): str(v)
-                   for k, v in (response.headers or {}).items()}
-    except Exception:
-        headers = {}
-    status = getattr(response, "status", None) or getattr(response, "code", 0)
-    return {"status": int(status or 0), "body": payload, "headers": headers}
+        return (urllib.parse.urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _download_cap(ctx, args: dict) -> int:
+    """How many bytes one download may write.
+
+    The user's setting is the ceiling. A guest may name a smaller
+    ``max_bytes`` — narrowing, so it needs nobody's permission — and a larger
+    one is clamped rather than refused, on the same "a plugin may ask, it does
+    not get to grant itself" rule the timeouts follow.
+
+    Read off the context this handler was already handed rather than through
+    ``runtime.context``, so nothing in this module has to learn where the
+    kernel keeps its config. No context at all (tests, a bare container) takes
+    the default: an absent kernel must not mean an absent limit.
+    """
+    config = getattr(ctx, "config", None) or {}
+    try:
+        megabytes = int(config.get("max_download_mb")
+                        or DEFAULT_MAX_DOWNLOAD_MB)
+    except (TypeError, ValueError):
+        megabytes = DEFAULT_MAX_DOWNLOAD_MB
+    cap = max(1, megabytes) * 1024 * 1024
+    asked, _bad = int_arg(args, "max_bytes", 0, lo=0)
+    return min(cap, asked) if asked > 0 else cap
+
+
+def _discard(path: Path) -> None:
+    """Remove a partial download. Half a file is not a smaller answer."""
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _redirected(request, url: str, status: int):
+    """The same request aimed at a new URL.
+
+    ``303`` means "fetch that other thing instead", so the method drops to GET
+    and the body goes with it; every other redirect keeps both, which is what
+    ``307`` and ``308`` exist to promise.
+    """
+    method, data = request.get_method(), request.data
+    if status == 303 and method not in ("GET", "HEAD"):
+        method, data = "GET", None
+    return urllib.request.Request(
+        url, method=method, data=data,
+        headers={key: value for key, value in request.header_items()})
+
+
+def _stream_download(response, dest: Path, cap: int) -> Result:
+    """Write a reply body to disk, bounded, and answer about the file."""
+    headers = _headers(response)
+    declared = headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > cap:
+        # The cheapest possible refusal: the server said how big it is before
+        # a byte of it was read.
+        return Result.failure(
+            f"the reply declares {int(declared)} bytes, over the "
+            f"{cap}-byte download limit (see max_download_mb)")
+    written, over = 0, False
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as handle:
+            while True:
+                chunk = response.read(DOWNLOAD_CHUNK)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > cap:
+                    over = True
+                    break
+                handle.write(chunk)
+    except OSError as exc:
+        _discard(dest)
+        return Result.failure(f"download failed: {exc}", retryable=True)
+    if over:
+        _discard(dest)
+        return Result.failure(
+            f"the reply exceeds the {cap}-byte download limit "
+            f"(see max_download_mb)")
+    return Result(data={
+        "status": _status(response), "headers": headers,
+        "body": "", "truncated": False,
+        "path": str(dest), "bytes": written,
+        "content_type": headers.get("content-type", ""),
+        "final_url": getattr(response, "url", "") or "",
+    })
+
+
+def _download(request, dest: Path, cap: int) -> Result:
+    """Fetch to disk instead of across the wire.
+
+    The wire cap is the whole reason this exists: a reply big enough to be
+    worth saving is a reply ``protocol.encode`` refuses, and it refused it
+    *after* the kernel had buffered the lot. Streaming to a path the caller
+    named means the only bound left is the one the user set.
+
+    **Same-host redirects are followed here; cross-host ones are not.** The
+    host was classified before this ran, so another hop inside it grants
+    nothing new — but a hop somewhere else is a destination nobody was asked
+    about, so it comes back as the 3xx it is and the guest re-calls, which
+    sends the new host through the gate like any other. Following none of them
+    would make the argument useless, since almost every real download redirects
+    at least once; following all of them would make the allowlist a formality.
+    """
+    for _hop in range(MAX_REDIRECT_HOPS + 1):
+        try:
+            with _HTTP_OPENER.open(request, timeout=HTTP_TIMEOUT) as response:
+                return _stream_download(response, dest, cap)
+        except urllib.error.HTTPError as exc:
+            # A 3xx arrives here rather than as a reply: ``_NoRedirect``
+            # declines to build the next request, so urllib falls through to
+            # its default error handler.
+            status, headers = _status(exc), _headers(exc)
+            target = headers.get("location") or ""
+            nxt = (urllib.parse.urljoin(request.full_url, target)
+                   if target else "")
+            if (status in _REDIRECT_STATUSES and nxt
+                    and _host_of(nxt) == _host_of(request.full_url)):
+                exc.close()
+                request = _redirected(request, nxt, status)
+                continue
+            # An error status, or a hop the gate has not seen. Either way
+            # there is no file, and the body is where the server explains
+            # itself — so the shape is the same with the file half empty.
+            answer = _answer(exc)
+            exc.close()
+            return Result(data={
+                **answer, "path": "", "bytes": 0,
+                "content_type": headers.get("content-type", ""),
+                "final_url": request.full_url})
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            return Result.failure(f"request failed: {exc}", retryable=True)
+    return Result.failure(
+        f"more than {MAX_REDIRECT_HOPS} redirects within the same host")
 
 
 # ── running commands ──────────────────────────────────────────────────

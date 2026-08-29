@@ -812,12 +812,29 @@ def _host_allowed(host: str, allowed: set) -> bool:
 
 
 def _classify_net(args: dict) -> Decision:
-    """Decide about one outbound request. See the section comment above."""
+    """Decide about one outbound request. See the section comment above.
+
+    ``to_file`` makes this two questions rather than one. A download reaches a
+    host *and* writes a file, and the two grants are kept by different people:
+    the host list says who may be talked to, the writable folders say where
+    bytes may land. So both are asked, the stricter answer wins, and a
+    destination outside the agent's own tree is a dialog however friendly the
+    host is. Anything else would make the egress allowlist a way of granting
+    writes, which is not what anybody typed it for.
+    """
     url = args.get("url", "")
     host = request_host(url)
+    destination = args.get("to_file")
+    if destination and not _freely_writable(destination):
+        return Decision(UNSAFE, f"download from {url} to {destination}",
+                        say="That saves the reply outside the folders you "
+                            "allow writes in.")
     # A GET with data in the query string is exfiltration exactly as much as a
     # POST body is, so the verb is not consulted — only where it is going.
     if _host_allowed(host, _allowed_hosts()):
+        if destination:
+            return Decision(SAFE, f"{host} is an allowed host, "
+                                  f"{_write_reason(destination, verb='saved')}")
         return Decision(SAFE, f"{host} is an allowed host")
     for recognize in _NET_RECOGNIZERS:
         try:
@@ -835,6 +852,26 @@ def _classify_net(args: dict) -> Decision:
                     say=(f"{host} is not on your allowed-hosts list."
                          if host else "This reaches a host outside your "
                          "allowed-hosts list."))
+
+
+def _granted(kind: str, args: dict, chain) -> bool:
+    """Whether a command's approval reaches this Request *in full*.
+
+    One Request can be two capabilities. ``net.http`` with ``to_file`` fetches
+    and writes, and a command that declared egress did not thereby declare a
+    write to anywhere on disk — the grant is the manifest, and the manifest
+    named one of the two. So the destination half has to be named too, exactly
+    as it would be if the command wrote the bytes itself; a command wanting
+    both declares both.
+
+    This is the only place a declared type is not the whole answer, and it is
+    deliberately a question about the *declaration* rather than about the
+    argument. Predicting where a URL ends up would be a guess; asking whether
+    the command said it writes files is set membership.
+    """
+    if kind == NET_HTTP and args.get("to_file"):
+        return R.FS_WRITE_BYTES in chain.approved
+    return True
 
 
 #: How much of a value the dialog will show before giving up on it. A person
@@ -1093,7 +1130,7 @@ def classify(request: Request, chain: Chain) -> Decision:
     # outside the grant falls through to the branches below and is asked about
     # on its own — so a command that reaches past its manifest gets caught
     # rather than riding in on the one "yes" the user already gave.
-    if chain.approved and kind in chain.approved:
+    if chain.approved and kind in chain.approved and _granted(kind, args, chain):
         return Decision(SAFE, "approved command")
 
     # ── egress: checked regardless of verb ────────────────────────

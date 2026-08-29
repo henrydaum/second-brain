@@ -39,6 +39,10 @@ FILE_ARGS = {
     "fs.write_bytes": ("path",),
     "fs.delete": ("path",),
     "fs.move": ("src", "dst"),
+    # A download is a write, and the one whose provenance is least obvious
+    # from anywhere else: the row already names the URL, and this names what
+    # the URL became on disk.
+    "net.http": ("to_file",),
 }
 
 #: Requests whose file effects are inside a command line rather than an
