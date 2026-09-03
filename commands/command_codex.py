@@ -4,6 +4,7 @@
 
 
 
+
 dependencies_files = ['services/service_codex_auth.py']
 dependencies_pip = []
 
@@ -50,7 +51,7 @@ class CodexCommand(BaseCommand):
     description = "Sign in to the Codex LLM backend with your ChatGPT plan"
     category = "Capabilities"
     timeout = 600
-    approval_actions = ("login", "refresh", "usage", "logout")
+    approval_actions = ("login", "profile", "refresh", "usage", "logout")
     approval_actor_id = "user"
     requests = [
         "config.read", "config.write", "service.list", "service.load",
@@ -60,8 +61,8 @@ class CodexCommand(BaseCommand):
     def form(self, sdk, args):
         signed_in, status = self._form_status(sdk)
         if signed_in:
-            actions = ["usage", "refresh", "logout"]
-            labels = ["Usage", "Refresh now", "Sign out"]
+            actions = ["usage", "profile", "refresh", "logout"]
+            labels = ["Usage", "Add model profile", "Refresh now", "Sign out"]
         else:
             actions = ["login"]
             labels = ["Sign in"]
@@ -72,13 +73,21 @@ class CodexCommand(BaseCommand):
             enum=actions,
             enum_labels=labels,
         )]
-        if args.get("action") == "login":
-            steps.append(FormStep(
-                "model",
-                "Enter the Codex model ID for the LLM profile.",
-                True,
-                default=DEFAULT_MODEL,
-            ))
+        if args.get("action") == "profile":
+            catalog = self._catalog(sdk)
+            if catalog:
+                steps.append(FormStep(
+                    "model",
+                    "Choose a model available to this ChatGPT account.",
+                    True,
+                    enum=[row["slug"] for row in catalog],
+                    enum_labels=[row.get("display_name") or row["slug"]
+                                 for row in catalog],
+                ))
+            else:
+                steps.append(FormStep(
+                    "model", "Enter the Codex model ID.", True,
+                    default=DEFAULT_MODEL))
         return steps
 
     def _form_status(self, sdk):
@@ -134,12 +143,22 @@ class CodexCommand(BaseCommand):
                 "secret_codex_oauth_state", json.dumps(state), scope="plugin"
             )
             self._ensure_service(sdk, reload=True)
-            model = (args.get("model") or DEFAULT_MODEL).strip()
+            model = self._preferred_model(sdk)
             self._ensure_profile(sdk, model)
             return (
                 "Signed in to ChatGPT for Codex.\n\n"
                 f"Created or updated the `{model}` LLM profile. Use `/llm` "
                 "to load it or make it the default."
+            )
+        if action == "profile":
+            self._ensure_service(sdk)
+            model = (args.get("model") or "").strip()
+            if not model:
+                return "No Codex model was selected."
+            self._ensure_profile(sdk, model)
+            return (
+                f"Created or updated the `{model}` Codex LLM profile. "
+                "Use `/llm` to load it or make it the default."
             )
         if action == "refresh":
             self._ensure_service(sdk)
@@ -153,6 +172,20 @@ class CodexCommand(BaseCommand):
                 sdk.config.write("secret_codex_oauth_state", "", scope="plugin")
             return "Signed out of ChatGPT for Codex. The LLM profile was kept."
         return f"Unknown Codex action: {action}"
+
+    def _catalog(self, sdk):
+        if not self._service_loaded(sdk):
+            return []
+        try:
+            rows = sdk.services.call("codex_auth", "model_catalog") or []
+        except sdk.Failed:
+            return []
+        return [row for row in rows
+                if isinstance(row, dict) and row.get("slug")]
+
+    def _preferred_model(self, sdk):
+        catalog = self._catalog(sdk)
+        return str(catalog[0]["slug"]) if catalog else DEFAULT_MODEL
 
     def _status(self, sdk):
         if not self._service_loaded(sdk):
