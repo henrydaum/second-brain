@@ -2,6 +2,7 @@
 
 
 
+
 dependencies_files = ['services/service_codex_auth.py']
 dependencies_pip = []
 
@@ -103,6 +104,7 @@ class CodexCommand(BaseCommand):
         if action == "refresh":
             self._ensure_service(sdk)
             status = sdk.services.call("codex_auth", "refresh")
+            self._sync_capabilities(sdk)
             return self._status_text(status, "Codex credentials refreshed.")
         if action == "logout":
             if self._service_loaded(sdk):
@@ -220,6 +222,18 @@ class CodexCommand(BaseCommand):
             sdk.services.call("codex_auth", "reload")
 
     def _ensure_profile(self, sdk, model):
+        modalities = []
+        try:
+            rows = sdk.services.call("codex_auth", "model_catalog") or []
+            match = next((row for row in rows if isinstance(row, dict) and
+                          str(row.get("slug") or "").lower() == model.lower()), {})
+            modalities = match.get("input_modalities") or []
+        except Exception:
+            pass
+        # Codex's current GPT catalogue supports images. Account metadata is
+        # authoritative when present; the image default keeps first login
+        # useful during a transient catalogue failure.
+        known = {str(value).lower() for value in modalities}
         profiles = sdk.config.read("llm_profiles") or {}
         profile = dict(profiles.get(model) or {})
         profile.update({
@@ -227,12 +241,43 @@ class CodexCommand(BaseCommand):
             "secret_llm_api_key": "",
             "llm_context_size": _context_size(model),
             "llm_service_class": "CodexBackend",
-            "llm_capabilities": {"image": False, "audio": False, "video": False},
+            "llm_capabilities": {
+                "image": not known or "image" in known,
+                "audio": "audio" in known,
+                "video": False,
+            },
         })
         profiles[model] = profile
         sdk.config.write("llm_profiles", profiles, scope="plugin")
         if not sdk.config.read("default_llm_profile"):
             sdk.config.write("default_llm_profile", model, scope="plugin")
+
+    def _sync_capabilities(self, sdk):
+        rows = sdk.services.call("codex_auth", "model_catalog") or []
+        catalog = {
+            str(row.get("slug") or "").lower(): {
+                str(value).lower() for value in row.get("input_modalities") or []}
+            for row in rows if isinstance(row, dict) and row.get("slug")}
+        profiles = sdk.config.read("llm_profiles") or {}
+        changed = False
+        for name, original in list(profiles.items()):
+            profile = dict(original or {})
+            if profile.get("llm_service_class") != "CodexBackend":
+                continue
+            known = catalog.get(str(name).lower())
+            if known is None:
+                continue
+            desired = {
+                "image": "image" in known,
+                "audio": "audio" in known,
+                "video": False,
+            }
+            if profile.get("llm_capabilities") != desired:
+                profile["llm_capabilities"] = desired
+                profiles[name] = profile
+                changed = True
+        if changed:
+            sdk.config.write("llm_profiles", profiles, scope="plugin")
 
     def _device_login(self, sdk):
         headers = {"Accept": "application/json", "User-Agent": "SecondBrain/1"}
