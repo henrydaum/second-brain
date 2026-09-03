@@ -53,7 +53,7 @@ class CodexAuthService(BaseService):
     poll_interval = 60.0
     max_poll_failures = 100
     exports = [
-        "access_token", "models", "status", "reload", "refresh",
+        "access_token", "models", "model_catalog", "status", "reload", "refresh",
         "refresh_models", "logout",
     ]
     requests = ["config.read", "config.write", "secret.reveal", "net.http"]
@@ -107,6 +107,13 @@ class CodexAuthService(BaseService):
             self._load(sdk)
         rows = self._state.get("models") or []
         return [str(name) for name in rows if isinstance(name, str) and name]
+
+    def model_catalog(self, sdk):
+        """Return normalized account model metadata without network I/O."""
+        if not self._state:
+            self._load(sdk)
+        rows = self._state.get("model_catalog") or []
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     def access_token(self, sdk):
         if not self._state:
@@ -242,7 +249,8 @@ class CodexAuthService(BaseService):
 
     def _models_due(self):
         refreshed = self._state.get("models_refreshed_at")
-        return not isinstance(refreshed, (int, float)) or (
+        return not self._state.get("model_catalog") or not isinstance(
+            refreshed, (int, float)) or (
             refreshed <= _now() - MODEL_REFRESH_SECONDS)
 
     def _try_refresh_models(self, sdk, force=False):
@@ -286,15 +294,35 @@ class CodexAuthService(BaseService):
                 continue
             priority = item.get("priority")
             rank = int(priority) if isinstance(priority, (int, float)) else 10000
-            sortable.append((rank, name.strip()))
-        names = []
-        for _rank, name in sorted(sortable, key=lambda row: (row[0], row[1])):
-            if name not in names:
-                names.append(name)
-        if not names:
+            efforts = []
+            for effort in item.get("supported_reasoning_levels") or []:
+                value = effort.get("effort") if isinstance(effort, dict) else effort
+                if isinstance(value, str) and value and value not in efforts:
+                    efforts.append(value)
+            row = {
+                "slug": name.strip(),
+                "display_name": str(item.get("display_name") or name).strip(),
+                "description": str(item.get("description") or "").strip(),
+                "supported_reasoning_levels": efforts,
+                "default_reasoning_level": item.get("default_reasoning_level"),
+                "support_verbosity": bool(item.get("support_verbosity")),
+                "default_verbosity": item.get("default_verbosity"),
+                "context_window": item.get("context_window"),
+                "input_modalities": item.get("input_modalities") or [],
+            }
+            sortable.append((rank, row))
+        catalog = []
+        seen = set()
+        for _rank, row in sorted(
+                sortable, key=lambda value: (value[0], value[1]["slug"])):
+            if row["slug"] not in seen:
+                seen.add(row["slug"])
+                catalog.append(row)
+        if not catalog:
             raise RuntimeError("model catalogue was empty")
         updated = dict(self._state)
-        updated["models"] = names
+        updated["models"] = [row["slug"] for row in catalog]
+        updated["model_catalog"] = catalog
         updated["models_refreshed_at"] = _now()
         self._state = updated
         sdk.config.write(
