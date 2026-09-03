@@ -15,7 +15,16 @@ CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 ISSUER = "https://auth.openai.com"
 TOKEN_URL = f"{ISSUER}/oauth/token"
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "gpt-5.6-sol"
+
+
+def _context_size(model):
+    name = (model or "").lower()
+    if name == "gpt-5.3-codex-spark":
+        return 128000
+    if name.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+        return 272000
+    return 0
 
 
 def _quote(value):
@@ -130,7 +139,7 @@ class CodexCommand(BaseCommand):
         profile.update({
             "llm_endpoint": CODEX_BASE_URL,
             "secret_llm_api_key": "",
-            "llm_context_size": 400000,
+            "llm_context_size": _context_size(model),
             "llm_service_class": "CodexBackend",
             "llm_capabilities": {"image": False, "audio": False, "video": False},
         })
