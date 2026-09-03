@@ -1,11 +1,14 @@
 """ChatGPT-plan Codex backend using the Responses API."""
 
 
+
 dependencies_files = ['services/service_codex_auth.py']
-dependencies_pip = ['openai>=2.30.0']
+dependencies_pip = ['Pillow', 'openai>=2.30.0']
 
 import base64
+import io
 import json
+import mimetypes
 
 import openai
 
@@ -18,7 +21,7 @@ supports_streaming = True
 supports_tool_choice = False
 # The registry's empty declaration means "use the legacy all-modalities
 # default". A non-media sentinel therefore spells text-only honestly.
-native_modalities = ["text"]
+native_modalities = ["image", "audio"]
 display_name = "Codex (ChatGPT plan)"
 
 BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -27,6 +30,9 @@ MODELS = [
     "gpt-5.4-mini", "gpt-5.4", "gpt-5.3-codex",
     "gpt-5.3-codex-spark",
 ]
+IMAGE_EDGE = 2048
+IMAGE_QUALITY = 88
+MAX_IMAGE_PIXELS = 100_000_000
 
 
 class CodexBackend(BaseLLMBackend):
@@ -43,6 +49,7 @@ class CodexBackend(BaseLLMBackend):
     def chat(self, sdk, request):
         token = sdk.services.call("codex_auth", "access_token")
         payload = self._payload(request)
+        self._attach_media(sdk, request, payload)
         headers = self._headers(token)
         pieces = []
         calls = {}
@@ -257,6 +264,84 @@ class CodexBackend(BaseLLMBackend):
         except Exception:
             pass
         return headers
+
+    def _attach_media(self, sdk, request, payload):
+        """Append native image/audio blocks to the last user message."""
+        blocks = []
+        fallbacks = []
+        for item in request.attachments or []:
+            try:
+                block = self._media_block(sdk, item)
+            except Exception as exc:
+                sdk.log(
+                    f"Could not inline {item.get('file_name')}: {exc}",
+                    level="warning")
+                block = None
+            if block:
+                blocks.append(block)
+            else:
+                fallbacks.append(self._attachment_fallback(item))
+        if not blocks and not fallbacks:
+            return
+        for message in reversed(payload.get("input") or []):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content") or ""
+            parts = content if isinstance(content, list) else [
+                {"type": "input_text", "text": str(content)}]
+            if fallbacks:
+                parts.append({
+                    "type": "input_text", "text": "\n\n".join(fallbacks)})
+            message["content"] = [*parts, *blocks]
+            return
+
+    def _media_block(self, sdk, item):
+        path = item.get("path") or ""
+        modality = item.get("modality")
+        if modality == "image":
+            return {
+                "type": "input_image",
+                "image_url": self._image_data_url(sdk, path),
+                "detail": "auto",
+            }
+        if modality == "audio":
+            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            if not mime.startswith("audio/"):
+                return None
+            data = base64.b64encode(sdk.fs.read_bytes(path)).decode("ascii")
+            return {
+                "type": "input_audio",
+                "audio_url": f"data:{mime};base64,{data}",
+            }
+        return None
+
+    @staticmethod
+    def _attachment_fallback(item):
+        parsed = str(item.get("parsed_text") or "").strip()
+        name = item.get("file_name") or "attachment"
+        if parsed:
+            return f"The user attached {name}. Parsed contents:\n{parsed}"
+        return f"The user attached {name}, but it could not be sent natively."
+
+    def _image_data_url(self, sdk, path):
+        from PIL import Image, ImageFile
+
+        Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        image = None
+        try:
+            image = Image.open(io.BytesIO(sdk.fs.read_bytes(path)))
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image.thumbnail((IMAGE_EDGE, IMAGE_EDGE), Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            image.save(
+                buffer, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
+            data = base64.b64encode(buffer.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{data}"
+        finally:
+            if image is not None:
+                image.close()
 
     def _accept(self, sdk, request, event, pieces, calls, usage):
         kind = event.get("type") or ""
