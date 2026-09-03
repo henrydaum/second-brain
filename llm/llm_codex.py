@@ -1,5 +1,6 @@
 """ChatGPT-plan Codex backend using the Responses API."""
 
+
 dependencies_files = ['services/service_codex_auth.py']
 dependencies_pip = ['openai>=2.30.0']
 
@@ -87,24 +88,14 @@ class CodexBackend(BaseLLMBackend):
         }]
 
     def models(self, sdk, endpoint, api_key, provider="", live=False):
-        if live:
-            try:
-                token = sdk.services.call("codex_auth", "access_token")
-                answer = sdk.net.http_json(
-                    BASE_URL + "/models",
-                    headers=self._headers(token),
-                )
-                body = answer.get("body") or {}
-                listing = body.get("data") if isinstance(body, dict) else None
-                rows = []
-                for item in listing or []:
-                    name = item.get("id") if isinstance(item, dict) else item
-                    if isinstance(name, str) and name:
-                        rows.append({"name": name, "label": name})
-                if rows:
-                    return rows
-            except Exception as exc:
-                sdk.log(f"Codex model discovery failed: {exc}", level="debug")
+        try:
+            names = sdk.services.call("codex_auth", "models") or []
+            rows = [{"name": name, "label": name} for name in names
+                    if isinstance(name, str) and name]
+            if rows:
+                return rows
+        except Exception as exc:
+            sdk.log(f"Codex model cache unavailable: {exc}", level="debug")
         return [{"name": name, "label": name} for name in MODELS]
 
     def info(self, sdk, model_name, endpoint=""):
