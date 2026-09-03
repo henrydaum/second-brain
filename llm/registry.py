@@ -165,9 +165,9 @@ def forget_descriptions() -> None:
 
     Provider and parameter answers otherwise remain cached: they do not
     change because a profile was edited, and tying the two together is what
-    made a settings form restart a subprocess per step. Model catalogues are
-    the exception and expire after five minutes so a backend's background
-    account discovery can become visible without restarting Second Brain.
+    made a settings form restart a subprocess per step. Model catalogues and
+    their model-specific metadata are the exception and expire after five
+    minutes so background account discovery becomes visible without restart.
     """
     with _LOCK:
         _DESCRIBED.clear()
@@ -605,7 +605,7 @@ class Brain:
         """
         key = (self.backend_name, question, tuple(sorted(args.items())))
         with _LOCK:
-            fresh = (question != "models" or
+            fresh = (question not in {"models", "info", "params"} or
                      time.monotonic() - _DESCRIBED_AT.get(key, 0) < 300)
             if key in _DESCRIBED and fresh:
                 return _DESCRIBED[key]
@@ -863,9 +863,9 @@ def refresh(config: dict, *, force: bool = False) -> dict[str, Brain]:
 #: by backend for that reason, and invalidated by ``discover()``, which is
 #: exactly when a backend's source may have changed.
 _DESCRIBED: dict = {}
-# Model catalogues may be refreshed by a backend-owned service, so they get a
-# short lifetime. Other discovery answers describe backend behavior and stay
-# cached until backend discovery changes.
+# Model catalogues and per-model metadata may be refreshed by a backend-owned
+# service, so they get a short lifetime. Other discovery answers describe
+# backend behavior and stay cached until backend discovery changes.
 _DESCRIBED_AT: dict = {}
 
 
