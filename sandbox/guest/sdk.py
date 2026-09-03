@@ -971,7 +971,7 @@ class _LLM(_Namespace):
     """
 
     def list(self, *, providers=False, models=None, params=None, info=None,
-             key=None, provider=None, endpoint=None,
+             key=None, provider=None, endpoint=None, backend=None,
              live: bool = False) -> dict:
         """Configured profiles, installed backends, and the default.
 
@@ -999,7 +999,9 @@ class _LLM(_Namespace):
         ``params=<model name>`` (with ``endpoint``) for what one model takes;
         or ``info=<model name>`` for facts about it, currently its context
         window.
-        Each adds a key of the same name to the answer. ``live`` additionally
+        Each adds a key of the same name to the answer. ``backend`` limits
+        any setup question to the selected backend; omit it only when an
+        aggregate answer is wanted. ``live`` additionally
         lets ``models`` ask the endpoint rather than answering from what the
         backend knows offline. That is egress, so it is off by default and
         must **never** be set from a command's ``form``: approval is evaluated
@@ -1013,6 +1015,8 @@ class _LLM(_Namespace):
         has just been given.
         """
         args = {}
+        if backend:
+            args["backend"] = backend
         if providers:
             # Passed through as given: ``True`` asks for the menu, a name asks
             # for that one provider with its endpoint resolved. Coercing to

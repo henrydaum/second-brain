@@ -857,23 +857,30 @@ def refresh(config: dict, *, force: bool = False) -> dict[str, Brain]:
 _DESCRIBED: dict = {}
 
 
-def _asking_brains() -> list[Brain]:
+def _asking_brains(backend: str = "") -> list[Brain]:
     """Brains whose backend is installed, already-loaded ones first.
 
     Order matters because asking needs a live box. Preferring one that is
     already open means a discovery question reuses the running process
     instead of starting a second copy of a provider library beside it.
+    When *backend* is named, only profiles served by that backend may answer;
+    aliases are resolved the same way they are when a profile is loaded.
     """
+    wanted = _ALIASES.get(backend, backend)
     ready = [target for _name, target in sorted(brains().items())
-             if target.available]
+             if target.available and (
+                 not wanted or _ALIASES.get(target.backend_name,
+                                             target.backend_name) == wanted)]
     return sorted(ready, key=lambda target: not target.loaded)
 
 
-def providers(provider: str = "") -> list[dict]:
+def providers(provider: str = "", backend: str = "") -> list[dict]:
     """Providers the installed backends can reach, for step one of setup.
 
     Deduplicated by ``id`` across backends, first answer winning, so two
     backends offering the same provider do not show it twice.
+    Naming *backend* prevents that aggregation for a setup flow that has
+    already selected how it will connect.
 
     Naming one narrows to that row and asks for its endpoint, which is the
     part worth waiting for and the reason step one exists at all: a provider
@@ -881,7 +888,7 @@ def providers(provider: str = "") -> list[dict]:
     in, or the menu did nothing but ask a question it then repeats.
     """
     seen, out = set(), []
-    for target in _asking_brains():
+    for target in _asking_brains(backend):
         for row in target.providers(provider):
             key = str(row.get("id") or row.get("label") or "").lower()
             if not key or key in seen:
@@ -900,7 +907,7 @@ def endpoint_for(provider: str) -> str:
 
 
 def models_at(endpoint: str, api_key: str = "", provider: str = "",
-              live: bool = False) -> list[dict]:
+              live: bool = False, backend: str = "") -> list[dict]:
     """Models reachable at *endpoint*, for step two.
 
     First backend with an answer wins rather than merging: a model name is
@@ -908,29 +915,30 @@ def models_at(endpoint: str, api_key: str = "", provider: str = "",
     that backend's convention — so pooling two backends' answers would build a
     list where picking the wrong row silently misroutes the call.
     """
-    for target in _asking_brains():
+    for target in _asking_brains(backend):
         found = target.models(endpoint, api_key, provider, live)
         if found:
             return found
     return []
 
 
-def info_for(model_name: str, endpoint: str = "") -> dict:
+def info_for(model_name: str, endpoint: str = "", backend: str = "") -> dict:
     """One model's facts, from the first backend that has any."""
-    for target in _asking_brains():
+    for target in _asking_brains(backend):
         found = target.info(model_name, endpoint)
         if found:
             return found
     return {}
 
 
-def param_options_for(model_name: str, endpoint: str = "") -> list[dict]:
+def param_options_for(model_name: str, endpoint: str = "",
+                      backend: str = "") -> list[dict]:
     """Parameters *model_name* accepts, for step three.
 
     First answer wins, for the reason ``models_at`` gives: whether a param
     survives is a fact about a particular backend's translation of it.
     """
-    for target in _asking_brains():
+    for target in _asking_brains(backend):
         found = target.param_options(model_name, endpoint)
         if found:
             return found

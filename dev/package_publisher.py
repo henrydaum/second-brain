@@ -192,7 +192,7 @@ class _PathStore:
 
 
 def _file_pair(source: Path, dest: str, seen: set[str]) -> tuple[Path, Path]:
-    dest = package_manager._validate_rel_path(dest)
+    dest = _validate_package_dest(dest)
     if dest in seen:
         raise StorePublishError(f"Duplicate destination path: {dest}")
     seen.add(dest)
@@ -203,6 +203,8 @@ def _validate_package_dest(path: str) -> str:
     p = Path(path.replace("\\", "/"))
     if p.is_absolute() or not p.parts or any(part in {"", ".", ".."} for part in p.parts):
         raise StorePublishError(f"Invalid package destination: {path}")
+    if p.parts[0] == "bundles" and p.suffix == ".json":
+        return p.as_posix()
     if p.suffix == ".py":
         return package_manager._validate_rel_path(path)
     if p.parts[0] not in package_manager.TREE_ROOTS:

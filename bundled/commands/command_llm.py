@@ -142,7 +142,8 @@ class LlmCommand(BaseCommand):
                     spec = next(
                         (row for row in _param_options(
                             sdk, args.get("model_name") or "",
-                            profile.get("llm_endpoint") or "")
+                            profile.get("llm_endpoint") or "",
+                            profile.get("llm_service_class") or "")
                          if row["name"] == held), None)
                     steps.append(_value_step(
                         sdk, held, spec,
@@ -151,7 +152,8 @@ class LlmCommand(BaseCommand):
                 # Adding one: which parameter, then its value.
                 steps.extend(_extra_param_steps(
                     sdk, args, args.get("model_name") or "",
-                    profile.get("llm_endpoint") or "", profile))
+                    profile.get("llm_endpoint") or "", profile,
+                    profile.get("llm_service_class") or ""))
             elif field == "llm_model_name":
                 # The same picker the add flow builds, narrowed by the
                 # provider the stored name already carries. The key is *not*
@@ -163,6 +165,7 @@ class LlmCommand(BaseCommand):
                     sdk, "value", args,
                     profile.get("llm_endpoint") or "", "",
                     _provider_of(name),
+                    profile.get("llm_service_class") or "",
                     lead=f"Currently `{name}`.\n\n"))
             elif field:
                 backends = _backend_names(registry)
@@ -320,7 +323,8 @@ def _add_steps(sdk, registry, args):
             True, enum=backends, default=backends[0]),
     ]
 
-    providers = _providers(sdk)
+    backend = args.get("llm_service_class") or ""
+    providers = _providers(sdk, backend)
     if providers:
         ids = [row["id"] for row in providers] + [CUSTOM]
         labels = [row.get("label") or row["id"] for row in providers]
@@ -331,7 +335,7 @@ def _add_steps(sdk, registry, args):
             "multi-provider gateway.",
             True, enum=ids, enum_labels=labels + ["Something else"]))
 
-    detail = _provider_detail(sdk, provider)
+    detail = _provider_detail(sdk, provider, backend)
     resolved = str(detail.get("endpoint") or "")
     steps.append(FormStep(
         "llm_endpoint",
@@ -368,9 +372,10 @@ def _add_steps(sdk, registry, args):
     steps.extend(_model_steps(
         sdk, "new_model_name", args,
         endpoint, args.get("secret_llm_api_key") or "",
-        "" if provider == CUSTOM else provider))
+        "" if provider == CUSTOM else provider, backend))
 
-    window, facts = _model_facts(sdk, _chosen_model(args), endpoint)
+    window, facts = _model_facts(
+        sdk, _chosen_model(args), endpoint, backend)
     steps.append(FormStep(
         "llm_context_size",
         (f"Context window in tokens. This model reports {window:,}, already "
@@ -395,7 +400,7 @@ def _add_steps(sdk, registry, args):
     return steps
 
 
-def _extra_param_steps(sdk, args, model, endpoint, profile):
+def _extra_param_steps(sdk, args, model, endpoint, profile, backend=""):
     """Adding a parameter: pick which one, then pick its value.
 
     The menu is the backend's answer for *this* model, so it lists what the
@@ -421,7 +426,7 @@ def _extra_param_steps(sdk, args, model, endpoint, profile):
     Back is how you leave.
     """
     current = (profile or {}).get("llm_extra_params") or {}
-    options = _param_options(sdk, model, endpoint)
+    options = _param_options(sdk, model, endpoint, backend)
     rows = [row for row in options
             if row.get("supported", True) and row["name"] not in current]
     names = [row["name"] for row in rows]
@@ -536,12 +541,13 @@ def _chosen_param(args):
     return picked
 
 
-def _param_options(sdk, model, endpoint):
+def _param_options(sdk, model, endpoint, backend=""):
     """What the backend says this model accepts. ``[]`` when it cannot say."""
     if not model:
         return []
     try:
-        answer = sdk.llm.list(params=model, endpoint=endpoint or "") or {}
+        answer = sdk.llm.list(
+            params=model, endpoint=endpoint or "", backend=backend) or {}
     except sdk.Failed:
         return []
     return [row for row in (answer.get("params") or [])
@@ -572,7 +578,7 @@ def _extra_value(args):
     return raw
 
 
-def _model_facts(sdk, model, endpoint):
+def _model_facts(sdk, model, endpoint, backend=""):
     """``(context window, row)`` for one model — ``(0, {})`` when unknown.
 
     ``0`` is not a failure here: the kernel reads it as "compact reactively",
@@ -590,7 +596,8 @@ def _model_facts(sdk, model, endpoint):
     if not model:
         return 0, {}
     try:
-        answer = sdk.llm.list(info=model, endpoint=endpoint or "") or {}
+        answer = sdk.llm.list(
+            info=model, endpoint=endpoint or "", backend=backend) or {}
     except sdk.Failed:
         return 0, {}
     row = answer.get("info") or {}
@@ -634,7 +641,8 @@ def _param_field(field):
         field or "").startswith(PARAM_PREFIX) else ""
 
 
-def _model_steps(sdk, field, args, endpoint, api_key, provider, lead=""):
+def _model_steps(sdk, field, args, endpoint, api_key, provider, backend="",
+                 lead=""):
     """Ask which model, as a picker wherever one can be built.
 
     Shared by the add flow and the edit flow, because they write the same key
@@ -652,7 +660,7 @@ def _model_steps(sdk, field, args, endpoint, api_key, provider, lead=""):
     fallback, and both flows read the answer back through
     :func:`_typed_or_picked`.
     """
-    catalogue = _models(sdk, endpoint, api_key, provider)
+    catalogue = _models(sdk, endpoint, api_key, provider, backend)
     if not catalogue:
         return [FormStep(
             field,
@@ -716,15 +724,16 @@ def _provider_of(model_name):
     return model_name.split("/", 1)[0] if "/" in (model_name or "") else ""
 
 
-def _providers(sdk):
+def _providers(sdk, backend=""):
     """Step one, or ``[]`` when no backend can name any."""
     try:
-        return (sdk.llm.list(providers=True) or {}).get("providers") or []
+        return (sdk.llm.list(
+            providers=True, backend=backend) or {}).get("providers") or []
     except sdk.Failed:
         return []
 
 
-def _models(sdk, endpoint, api_key, provider):
+def _models(sdk, endpoint, api_key, provider, backend=""):
     """Step two. Needs an endpoint or a provider; answers ``[]`` without both.
 
     Guarded rather than always asked, because this is the one question that
@@ -734,13 +743,13 @@ def _models(sdk, endpoint, api_key, provider):
         return []
     try:
         answer = sdk.llm.list(models=endpoint, key=api_key,
-                              provider=provider) or {}
+                              provider=provider, backend=backend) or {}
     except sdk.Failed:
         return []
     return answer.get("models") or []
 
 
-def _provider_detail(sdk, provider):
+def _provider_detail(sdk, provider, backend=""):
     """The chosen provider's own row: its base URL and whatever else it says.
 
     A second, narrower call rather than a field read off the menu, because the
@@ -762,7 +771,8 @@ def _provider_detail(sdk, provider):
     if not provider or provider == CUSTOM:
         return {}
     try:
-        rows = (sdk.llm.list(providers=provider) or {}).get("providers") or []
+        rows = (sdk.llm.list(
+            providers=provider, backend=backend) or {}).get("providers") or []
     except sdk.Failed:
         return {}
     for row in rows:

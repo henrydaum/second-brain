@@ -1141,5 +1141,9 @@ def test_asking_about_one_provider_sends_its_name_not_a_flag():
     Recording().list(providers="minimax")
     assert sent["providers"] == "minimax"            # one row, with its URL
 
+    Recording().list(providers=True, backend="CodexBackend")
+    assert sent["providers"] is True
+    assert sent["backend"] == "CodexBackend"          # only that backend
+
     Recording().list()
     assert "providers" not in sent
