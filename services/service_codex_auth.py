@@ -1,5 +1,6 @@
 """Persistent OAuth token owner for the ChatGPT Codex backend."""
 
+
 dependencies_files = []
 dependencies_pip = []
 
@@ -12,7 +13,9 @@ from guest.bases import BaseService
 
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
+MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0"
 REFRESH_SKEW_SECONDS = 120
+MODEL_REFRESH_SECONDS = 6 * 60 * 60
 
 
 def _now() -> float:
@@ -49,7 +52,10 @@ class CodexAuthService(BaseService):
     shared = True
     poll_interval = 60.0
     max_poll_failures = 100
-    exports = ["access_token", "status", "reload", "refresh", "logout"]
+    exports = [
+        "access_token", "models", "status", "reload", "refresh",
+        "refresh_models", "logout",
+    ]
     requests = ["config.read", "config.write", "secret.reveal", "net.http"]
     config_settings = [
         (
@@ -73,6 +79,7 @@ class CodexAuthService(BaseService):
             except Exception as exc:
                 self._last_error = str(exc)
                 sdk.log(f"Codex token refresh at startup failed: {exc}", level="warning")
+        self._try_refresh_models(sdk)
         return True
 
     def stop(self, sdk):
@@ -86,11 +93,20 @@ class CodexAuthService(BaseService):
             except Exception as exc:
                 self._last_error = str(exc)
                 sdk.log(f"Codex token refresh failed: {exc}", level="warning")
+        self._try_refresh_models(sdk)
         return False
 
     def reload(self, sdk):
         self._load(sdk)
+        self._try_refresh_models(sdk, force=True)
         return self.status(sdk)
+
+    def models(self, sdk):
+        """Return the last account-specific catalogue without network I/O."""
+        if not self._state:
+            self._load(sdk)
+        rows = self._state.get("models") or []
+        return [str(name) for name in rows if isinstance(name, str) and name]
 
     def access_token(self, sdk):
         if not self._state:
@@ -110,7 +126,16 @@ class CodexAuthService(BaseService):
         if not self._state:
             raise RuntimeError("Codex is not signed in. Run /codex and choose Sign in.")
         self._refresh(sdk)
+        self._try_refresh_models(sdk, force=True)
         return self.status(sdk)
+
+    def refresh_models(self, sdk):
+        if not self._state:
+            self._load(sdk)
+        if not self._state:
+            raise RuntimeError("Codex is not signed in. Run /codex and choose Sign in.")
+        self._refresh_models(sdk)
+        return self.models(sdk)
 
     def logout(self, sdk):
         self._state = {}
@@ -128,6 +153,8 @@ class CodexAuthService(BaseService):
             "account_id": auth.get("chatgpt_account_id") or "",
             "expires_at": self._expires_at(),
             "last_refresh": self._state.get("last_refresh") or "",
+            "model_count": len(self._state.get("models") or []),
+            "models_refreshed_at": self._state.get("models_refreshed_at") or 0,
             "last_error": self._last_error,
         }
 
@@ -209,6 +236,67 @@ class CodexAuthService(BaseService):
             updated["expires_at"] = _now() + float(expires_in)
         self._state = updated
         self._last_error = ""
+        sdk.config.write(
+            "secret_codex_oauth_state", json.dumps(updated), scope="plugin"
+        )
+
+    def _models_due(self):
+        refreshed = self._state.get("models_refreshed_at")
+        return not isinstance(refreshed, (int, float)) or (
+            refreshed <= _now() - MODEL_REFRESH_SECONDS)
+
+    def _try_refresh_models(self, sdk, force=False):
+        if not self._state or (not force and not self._models_due()):
+            return
+        try:
+            self._refresh_models(sdk)
+        except Exception as exc:
+            sdk.log(f"Codex model discovery failed: {exc}", level="warning")
+
+    def _refresh_models(self, sdk):
+        token = self._state.get("access_token") or ""
+        if not token:
+            raise RuntimeError("Codex credentials contain no access token.")
+        claims = _jwt_claims(token)
+        account = (claims.get("https://api.openai.com/auth") or {}).get(
+            "chatgpt_account_id")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "SecondBrain/1",
+        }
+        if account:
+            headers["ChatGPT-Account-Id"] = account
+        response = sdk.net.http_json(MODELS_URL, headers=headers)
+        status = response.get("status", 0)
+        if status != 200:
+            raise RuntimeError(f"model catalogue returned HTTP {status}")
+        body = response.get("body") or {}
+        entries = body.get("models") if isinstance(body, dict) else None
+        if not isinstance(entries, list):
+            raise RuntimeError("model catalogue had an unexpected response")
+        sortable = []
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("slug")
+            visibility = str(item.get("visibility") or "").lower()
+            if not isinstance(name, str) or not name.strip() or visibility in (
+                    "hide", "hidden"):
+                continue
+            priority = item.get("priority")
+            rank = int(priority) if isinstance(priority, (int, float)) else 10000
+            sortable.append((rank, name.strip()))
+        names = []
+        for _rank, name in sorted(sortable, key=lambda row: (row[0], row[1])):
+            if name not in names:
+                names.append(name)
+        if not names:
+            raise RuntimeError("model catalogue was empty")
+        updated = dict(self._state)
+        updated["models"] = names
+        updated["models_refreshed_at"] = _now()
+        self._state = updated
         sdk.config.write(
             "secret_codex_oauth_state", json.dumps(updated), scope="plugin"
         )
