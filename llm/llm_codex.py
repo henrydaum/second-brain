@@ -21,6 +21,11 @@ native_modalities = ["text"]
 display_name = "Codex (ChatGPT plan)"
 
 BASE_URL = "https://chatgpt.com/backend-api/codex"
+MODELS = [
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+    "gpt-5.4-mini", "gpt-5.4", "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+]
 
 
 class CodexBackend(BaseLLMBackend):
@@ -82,22 +87,46 @@ class CodexBackend(BaseLLMBackend):
         }]
 
     def models(self, sdk, endpoint, api_key, provider="", live=False):
-        return []
+        if live:
+            try:
+                token = sdk.services.call("codex_auth", "access_token")
+                answer = sdk.net.http_json(
+                    BASE_URL + "/models",
+                    headers=self._headers(token),
+                )
+                body = answer.get("body") or {}
+                listing = body.get("data") if isinstance(body, dict) else None
+                rows = []
+                for item in listing or []:
+                    name = item.get("id") if isinstance(item, dict) else item
+                    if isinstance(name, str) and name:
+                        rows.append({"name": name, "label": name})
+                if rows:
+                    return rows
+            except Exception as exc:
+                sdk.log(f"Codex model discovery failed: {exc}", level="debug")
+        return [{"name": name, "label": name} for name in MODELS]
 
     def info(self, sdk, model_name, endpoint=""):
-        return [{
+        row = {
             "description": (
                 "A Codex model available to this ChatGPT account. OpenAI's "
                 "allow-list changes, so the model ID is entered explicitly."
             )
-        }]
+        }
+        name = (model_name or "").lower()
+        if name == "gpt-5.3-codex-spark":
+            row["context_size"] = 128000
+        elif name.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+            row["context_size"] = 272000
+        return [row]
 
     def params(self, sdk, model_name, endpoint):
         return [
             {
                 "name": "reasoning_effort", "label": "Reasoning effort",
                 "kind": "choice",
-                "choices": ["none", "low", "medium", "high", "xhigh"],
+                "choices": ["none", "low", "medium", "high", "xhigh", "max"],
                 "supported": True, "note": "",
                 "description": "Controls how much reasoning the model performs.",
             },
