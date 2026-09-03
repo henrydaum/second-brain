@@ -37,6 +37,7 @@ import ast
 import logging
 import os
 import threading
+import time
 import uuid
 
 from sandbox.guest.llm import LLMProviderError, LLMRequest, LLMResponse
@@ -116,6 +117,7 @@ def discover() -> int:
         # A rescan is the one event that can change what a backend would
         # answer about itself, so it is the one thing that drops the cache.
         _DESCRIBED.clear()
+        _DESCRIBED_AT.clear()
         seen: set[str] = set()
         for _root, backends in trees.dirs_for("llm"):
             if not backends.exists():
@@ -161,12 +163,15 @@ def discover() -> int:
 def forget_descriptions() -> None:
     """Drop cached discovery answers. Called when backend source may have moved.
 
-    Nothing else invalidates them, on purpose: what a backend knows about a
-    provider does not change because a profile was edited, and tying the two
-    together is what made a settings form restart a subprocess per step.
+    Provider and parameter answers otherwise remain cached: they do not
+    change because a profile was edited, and tying the two together is what
+    made a settings form restart a subprocess per step. Model catalogues are
+    the exception and expire after five minutes so a backend's background
+    account discovery can become visible without restarting Second Brain.
     """
     with _LOCK:
         _DESCRIBED.clear()
+        _DESCRIBED_AT.clear()
 
 
 def backend_names() -> list[str]:
@@ -600,7 +605,9 @@ class Brain:
         """
         key = (self.backend_name, question, tuple(sorted(args.items())))
         with _LOCK:
-            if key in _DESCRIBED:
+            fresh = (question != "models" or
+                     time.monotonic() - _DESCRIBED_AT.get(key, 0) < 300)
+            if key in _DESCRIBED and fresh:
                 return _DESCRIBED[key]
         if not self.loaded and not self.load():
             return []
@@ -614,6 +621,7 @@ class Brain:
         answer = result.data if result.ok and isinstance(result.data, list) else []
         with _LOCK:
             _DESCRIBED[key] = answer
+            _DESCRIBED_AT[key] = time.monotonic()
         return answer
 
     def providers(self, provider: str = "") -> list:
@@ -855,6 +863,10 @@ def refresh(config: dict, *, force: bool = False) -> dict[str, Brain]:
 #: by backend for that reason, and invalidated by ``discover()``, which is
 #: exactly when a backend's source may have changed.
 _DESCRIBED: dict = {}
+# Model catalogues may be refreshed by a backend-owned service, so they get a
+# short lifetime. Other discovery answers describe backend behavior and stay
+# cached until backend discovery changes.
+_DESCRIBED_AT: dict = {}
 
 
 def _asking_brains(backend: str = "") -> list[Brain]:
