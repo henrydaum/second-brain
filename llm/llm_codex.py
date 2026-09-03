@@ -89,9 +89,17 @@ class CodexBackend(BaseLLMBackend):
 
     def models(self, sdk, endpoint, api_key, provider="", live=False):
         try:
-            names = sdk.services.call("codex_auth", "models") or []
-            rows = [{"name": name, "label": name} for name in names
-                    if isinstance(name, str) and name]
+            catalog = sdk.services.call("codex_auth", "model_catalog") or []
+            rows = [{
+                "name": row["slug"],
+                "label": row.get("display_name") or row["slug"],
+                "description": row.get("description") or "",
+            } for row in catalog
+                    if isinstance(row, dict) and row.get("slug")]
+            if not rows:
+                names = sdk.services.call("codex_auth", "models") or []
+                rows = [{"name": name, "label": name} for name in names
+                        if isinstance(name, str) and name]
             if rows:
                 return rows
         except Exception as exc:
@@ -99,6 +107,14 @@ class CodexBackend(BaseLLMBackend):
         return [{"name": name, "label": name} for name in MODELS]
 
     def info(self, sdk, model_name, endpoint=""):
+        cached = self._model_info(sdk, model_name)
+        if cached:
+            row = {"description": cached.get("description") or (
+                "A Codex model available to this ChatGPT account.")}
+            window = cached.get("context_window")
+            if isinstance(window, (int, float)) and window > 0:
+                row["context_size"] = int(window)
+            return [row]
         row = {
             "description": (
                 "A Codex model available to this ChatGPT account. OpenAI's "
@@ -113,20 +129,49 @@ class CodexBackend(BaseLLMBackend):
         return [row]
 
     def params(self, sdk, model_name, endpoint):
-        return [
-            {
-                "name": "reasoning_effort", "label": "Reasoning effort",
-                "kind": "choice",
-                "choices": ["none", "low", "medium", "high", "xhigh", "max"],
-                "supported": True, "note": "",
-                "description": "Controls how much reasoning the model performs.",
-            },
-            {
-                "name": "verbosity", "label": "Verbosity", "kind": "choice",
-                "choices": ["low", "medium", "high"], "supported": True,
-                "note": "", "description": "Controls the detail of text responses.",
-            },
-        ]
+        cached = self._model_info(sdk, model_name)
+        if cached:
+            out = []
+            efforts = cached.get("supported_reasoning_levels") or []
+            if efforts:
+                default = cached.get("default_reasoning_level")
+                note = f"Model default: {default}." if default else ""
+                out.append({
+                    "name": "reasoning_effort", "label": "Reasoning effort",
+                    "kind": "choice", "choices": efforts,
+                    "supported": True, "note": note,
+                    "description": "Controls how much reasoning the model performs.",
+                })
+            if cached.get("support_verbosity"):
+                default = cached.get("default_verbosity")
+                note = f"Model default: {default}." if default else ""
+                out.append({
+                    "name": "verbosity", "label": "Verbosity",
+                    "kind": "choice", "choices": ["low", "medium", "high"],
+                    "supported": True, "note": note,
+                    "description": "Controls the detail of text responses.",
+                })
+            return out
+        return [{
+            "name": "reasoning_effort", "label": "Reasoning effort",
+            "kind": "choice",
+            "choices": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            "supported": True,
+            "note": "Live metadata unavailable; unsupported values may be rejected.",
+            "description": "Controls how much reasoning the model performs.",
+        }]
+
+    def _model_info(self, sdk, model_name):
+        try:
+            rows = sdk.services.call("codex_auth", "model_catalog") or []
+        except Exception as exc:
+            sdk.log(f"Codex model metadata unavailable: {exc}", level="debug")
+            return {}
+        wanted = (model_name or "").lower()
+        for row in rows:
+            if isinstance(row, dict) and str(row.get("slug") or "").lower() == wanted:
+                return row
+        return {}
 
     def _payload(self, request):
         instructions = []
