@@ -1,5 +1,6 @@
 """Slash command for ChatGPT device-code authentication used by Codex."""
 
+
 dependencies_files = ['services/service_codex_auth.py']
 dependencies_pip = []
 
@@ -75,7 +76,14 @@ class CodexCommand(BaseCommand):
         if action == "status":
             return self._status(sdk)
         if action == "login":
-            state = self._device_login(sdk)
+            try:
+                state = self._device_login(sdk)
+            except Exception as exc:
+                return (
+                    "Codex sign-in did not complete. No credentials or LLM "
+                    "profile were changed.\n\n"
+                    f"{exc}\n\nRun `/codex` and choose **Sign in** to try again."
+                )
             sdk.config.write(
                 "secret_codex_oauth_state", json.dumps(state), scope="plugin"
             )
@@ -171,7 +179,11 @@ class CodexCommand(BaseCommand):
             "Open https://auth.openai.com/codex/device and enter code "
             f"{code}. Waiting for sign-in…"
         )
-        deadline = time.monotonic() + 540
+        # Leave ample room beneath the command's ten-minute hard limit for a
+        # final poll and token exchange. A nine-minute polling window could
+        # cross that limit when the auth page was abandoned or unreachable,
+        # which made the whole command session look as though it crashed.
+        deadline = time.monotonic() + 450
         authorization = None
         while time.monotonic() < deadline:
             time.sleep(interval)
@@ -187,7 +199,7 @@ class CodexCommand(BaseCommand):
                     f"Device authorization failed with HTTP {poll.get('status', 0)}."
                 )
         if not authorization:
-            raise RuntimeError("Device authorization timed out after nine minutes.")
+            raise RuntimeError("Device authorization timed out after 7½ minutes.")
         auth_code = authorization.get("authorization_code") or ""
         verifier = authorization.get("code_verifier") or ""
         if not auth_code or not verifier:
