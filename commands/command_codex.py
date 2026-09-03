@@ -3,6 +3,7 @@
 
 
 
+
 dependencies_files = ['services/service_codex_auth.py']
 dependencies_pip = []
 
@@ -57,13 +58,19 @@ class CodexCommand(BaseCommand):
     ]
 
     def form(self, sdk, args):
+        signed_in, status = self._form_status(sdk)
+        if signed_in:
+            actions = ["usage", "refresh", "logout"]
+            labels = ["Usage", "Refresh now", "Sign out"]
+        else:
+            actions = ["login"]
+            labels = ["Sign in"]
         steps = [FormStep(
             "action",
-            "Manage the ChatGPT session used by the Codex LLM backend.",
+            status,
             True,
-            enum=["status", "usage", "login", "refresh", "logout"],
-            enum_labels=[
-                "Show status", "Show usage", "Sign in", "Refresh now", "Sign out"],
+            enum=actions,
+            enum_labels=labels,
         )]
         if args.get("action") == "login":
             steps.append(FormStep(
@@ -73,6 +80,39 @@ class CodexCommand(BaseCommand):
                 default=DEFAULT_MODEL,
             ))
         return steps
+
+    def _form_status(self, sdk):
+        """Status card and auth toggle state, without loading or refreshing."""
+        present = bool(sdk.config.read(
+            "secret_codex_oauth_state", present=True))
+        status = None
+        if self._service_loaded(sdk):
+            try:
+                status = sdk.services.call("codex_auth", "status")
+            except sdk.Failed:
+                status = None
+        signed_in = bool(status.get("signed_in")) if status else present
+        if not signed_in:
+            return False, (
+                "### Codex\n\n**Not signed in**\n\n"
+                "Connect a ChatGPT account to use its Codex plan in Second Brain.")
+        lines = ["### Codex", "**Signed in to ChatGPT**"]
+        if status:
+            expires = status.get("expires_at") or 0
+            if expires:
+                when = datetime.fromtimestamp(
+                    float(expires), tz=timezone.utc).astimezone()
+                lines.append(
+                    "Access token refreshes automatically; current token "
+                    f"expires {when.strftime('%a %b %d at %I:%M %p %Z')}.")
+            count = status.get("model_count")
+            if count:
+                lines.append(f"Models discovered for this account: **{count}**")
+            if status.get("last_error"):
+                lines.append(f"Last refresh error: {status['last_error']}")
+        else:
+            lines.append("Credentials are stored; status will refresh when used.")
+        return True, "\n\n".join(lines)
 
     def run(self, sdk, args):
         action = args.get("action") or "status"
