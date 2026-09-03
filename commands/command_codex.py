@@ -1,6 +1,7 @@
 """Slash command for ChatGPT device-code authentication used by Codex."""
 
 
+
 dependencies_files = ['services/service_codex_auth.py']
 dependencies_pip = []
 
@@ -47,7 +48,7 @@ class CodexCommand(BaseCommand):
     description = "Sign in to the Codex LLM backend with your ChatGPT plan"
     category = "Capabilities"
     timeout = 600
-    approval_actions = ("login", "refresh", "logout")
+    approval_actions = ("login", "refresh", "usage", "logout")
     approval_actor_id = "user"
     requests = [
         "config.read", "config.write", "service.list", "service.load",
@@ -59,8 +60,9 @@ class CodexCommand(BaseCommand):
             "action",
             "Manage the ChatGPT session used by the Codex LLM backend.",
             True,
-            enum=["status", "login", "refresh", "logout"],
-            enum_labels=["Show status", "Sign in", "Refresh now", "Sign out"],
+            enum=["status", "usage", "login", "refresh", "logout"],
+            enum_labels=[
+                "Show status", "Show usage", "Sign in", "Refresh now", "Sign out"],
         )]
         if args.get("action") == "login":
             steps.append(FormStep(
@@ -75,6 +77,9 @@ class CodexCommand(BaseCommand):
         action = args.get("action") or "status"
         if action == "status":
             return self._status(sdk)
+        if action == "usage":
+            self._ensure_service(sdk)
+            return self._usage_text(sdk.services.call("codex_auth", "usage"))
         if action == "login":
             try:
                 state = self._device_login(sdk)
@@ -127,6 +132,79 @@ class CodexCommand(BaseCommand):
         if status.get("last_error"):
             lines.append(f"Last refresh error: {status['last_error']}")
         return "\n\n".join(lines)
+
+    def _usage_text(self, payload):
+        limits = payload.get("rate_limit") or payload.get("rate_limits") or {}
+        lines = ["Codex usage"]
+        plan = payload.get("plan_type")
+        if plan:
+            lines.append(f"Plan: **{str(plan).replace('_', ' ').title()}**")
+        windows = [
+            ("primary", limits.get("primary_window") or limits.get("primary")),
+            ("secondary", limits.get("secondary_window") or limits.get("secondary")),
+        ]
+        for fallback, window in windows:
+            if isinstance(window, dict):
+                lines.append(self._window_text(window, fallback))
+        for item in payload.get("additional_rate_limits") or []:
+            if not isinstance(item, dict):
+                continue
+            window = item.get("rate_limit") or {}
+            if not isinstance(window, dict):
+                continue
+            selected = window.get("primary_window") or window.get("primary")
+            if isinstance(selected, dict):
+                label = item.get("limit_name") or item.get("metered_feature") or "Additional"
+                lines.append(self._window_text(selected, str(label)))
+        credits = payload.get("credits") or {}
+        if isinstance(credits, dict):
+            if credits.get("unlimited") is True:
+                lines.append("Credits: **unlimited**")
+            elif credits.get("balance") is not None:
+                lines.append(f"Credits balance: **{credits['balance']}**")
+        resets = payload.get("rate_limit_reset_credits") or {}
+        if isinstance(resets, dict) and resets.get("available_count") is not None:
+            lines.append(f"Full-reset credits available: **{resets['available_count']}**")
+        if len(lines) == (2 if plan else 1):
+            lines.append("OpenAI returned no quota windows for this account.")
+        if limits.get("limit_reached"):
+            lines.append("**A Codex usage limit has been reached.**")
+        return "\n\n".join(lines)
+
+    def _window_text(self, window, fallback):
+        duration = window.get("limit_window_seconds")
+        if duration is None and window.get("window_minutes") is not None:
+            duration = float(window["window_minutes"]) * 60
+        try:
+            seconds = float(duration or 0)
+        except (TypeError, ValueError):
+            seconds = 0
+        if 4 * 3600 <= seconds <= 6 * 3600:
+            label = "5-hour"
+        elif 6 * 86400 <= seconds <= 8 * 86400:
+            label = "Weekly"
+        elif seconds:
+            label = f"{seconds / 3600:g}-hour"
+        else:
+            label = str(fallback).replace("_", " ").title()
+        used = window.get("used_percent")
+        if used is None:
+            used = window.get("usedPercent")
+        try:
+            used = float(used)
+            usage = f"**{used:g}% used** ({max(0.0, 100.0 - used):g}% remaining)"
+        except (TypeError, ValueError):
+            usage = "usage unavailable"
+        reset = window.get("reset_at") or window.get("resets_at") or window.get("resetsAt")
+        if not reset and window.get("reset_after_seconds") is not None:
+            reset = datetime.now(timezone.utc).timestamp() + float(
+                window["reset_after_seconds"])
+        try:
+            when = datetime.fromtimestamp(float(reset), tz=timezone.utc).astimezone()
+            reset_text = when.strftime("%a %b %d, %Y at %I:%M %p %Z")
+        except (TypeError, ValueError, OSError):
+            reset_text = "unknown"
+        return f"{label}: {usage}; resets {reset_text}"
 
     def _service_loaded(self, sdk):
         for row in sdk.services.list(details=True) or []:
