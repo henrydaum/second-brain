@@ -1,6 +1,7 @@
 """Persistent OAuth token owner for the ChatGPT Codex backend."""
 
 
+
 dependencies_files = []
 dependencies_pip = []
 
@@ -14,6 +15,7 @@ from guest.bases import BaseService
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0"
+USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 REFRESH_SKEW_SECONDS = 120
 MODEL_REFRESH_SECONDS = 6 * 60 * 60
 
@@ -53,7 +55,7 @@ class CodexAuthService(BaseService):
     poll_interval = 60.0
     max_poll_failures = 100
     exports = [
-        "access_token", "models", "model_catalog", "status", "reload", "refresh",
+        "access_token", "models", "model_catalog", "usage", "status", "reload", "refresh",
         "refresh_models", "logout",
     ]
     requests = ["config.read", "config.write", "secret.reveal", "net.http"]
@@ -114,6 +116,22 @@ class CodexAuthService(BaseService):
             self._load(sdk)
         rows = self._state.get("model_catalog") or []
         return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def usage(self, sdk):
+        """Fetch the account's current Codex quota windows."""
+        token = self.access_token(sdk)
+        try:
+            response = sdk.net.http_json(
+                USAGE_URL, headers=self._auth_headers(token))
+        except Exception as exc:
+            raise RuntimeError(f"Codex usage could not reach OpenAI: {exc}")
+        status = response.get("status", 0)
+        if status != 200:
+            raise RuntimeError(f"Codex usage request failed with HTTP {status}.")
+        body = response.get("body") or {}
+        if not isinstance(body, dict):
+            raise RuntimeError("Codex usage returned an unexpected response.")
+        return body
 
     def access_token(self, sdk):
         if not self._state:
@@ -265,17 +283,8 @@ class CodexAuthService(BaseService):
         token = self._state.get("access_token") or ""
         if not token:
             raise RuntimeError("Codex credentials contain no access token.")
-        claims = _jwt_claims(token)
-        account = (claims.get("https://api.openai.com/auth") or {}).get(
-            "chatgpt_account_id")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "SecondBrain/1",
-        }
-        if account:
-            headers["ChatGPT-Account-Id"] = account
-        response = sdk.net.http_json(MODELS_URL, headers=headers)
+        response = sdk.net.http_json(
+            MODELS_URL, headers=self._auth_headers(token))
         status = response.get("status", 0)
         if status != 200:
             raise RuntimeError(f"model catalogue returned HTTP {status}")
@@ -328,3 +337,17 @@ class CodexAuthService(BaseService):
         sdk.config.write(
             "secret_codex_oauth_state", json.dumps(updated), scope="plugin"
         )
+
+    @staticmethod
+    def _auth_headers(token):
+        claims = _jwt_claims(token)
+        account = (claims.get("https://api.openai.com/auth") or {}).get(
+            "chatgpt_account_id")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "SecondBrain/1",
+        }
+        if account:
+            headers["ChatGPT-Account-Id"] = account
+        return headers
