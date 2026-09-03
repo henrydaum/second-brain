@@ -1,0 +1,9 @@
+{
+  "name": "Codex (ChatGPT plan)",
+  "description": "Authenticate with a ChatGPT device code and use Codex as a streaming LLM backend.",
+  "files": [
+    "commands/command_codex.py",
+    "services/service_codex_auth.py",
+    "llm/llm_codex.py"
+  ]
+}
