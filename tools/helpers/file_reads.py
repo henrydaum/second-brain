@@ -48,7 +48,8 @@ def _bag(sdk) -> dict | None:
 def _save(sdk, bag: dict) -> None:
     """Persist the read map, ignoring a session that cannot hold it."""
     try:
-        sdk.session.state_set(bag, namespace=PLUGIN)
+        sdk.session.state_set(
+            bag, namespace=PLUGIN, reset_on_compaction=True)
     except sdk.Failed:
         pass
 

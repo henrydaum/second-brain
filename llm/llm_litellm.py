@@ -322,6 +322,7 @@ class LiteLLMBackend(BaseLLMBackend):
             # knows what ``ContextWindowExceededError`` is, and getting that
             # right is what makes the kernel compact and retry instead of
             # failing the turn.
+            sdk.log(f"LiteLLM provider call failed: {exc}", level="warning")
             raise self._classified(exc) from exc
 
         sdk.log(f"litellm answered in {time.time() - started:.2f}s")
@@ -1111,6 +1112,14 @@ class LiteLLMBackend(BaseLLMBackend):
 
         name = type(exc).__name__
         text = extract_llm_error_text(exc)
+        lowered = text.lower()
+        if (name == "MidStreamFallbackError"
+                or "incomplete chunked read" in lowered
+                or "peer closed connection" in lowered):
+            text = (
+                "The model provider disconnected before it finished the "
+                "response. This is usually temporary; retry the message."
+            )
         if name == "ContextWindowExceededError":
             return LLMProviderError(text, code="context_limit")
         if name in _DETERMINISTIC_ERRORS:

@@ -117,7 +117,8 @@ class Todo(BaseTool):
 
             if op != "list":
                 sdk.session.state_set(
-                    {"items": items, "next_id": next_id}, namespace=_NAMESPACE
+                    {"items": items, "next_id": next_id}, namespace=_NAMESPACE,
+                    reset_on_compaction=True,
                 )
             return self._checklist(sdk, conversation_id, items)
         except sdk.Denied as error:
