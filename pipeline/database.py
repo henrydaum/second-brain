@@ -314,7 +314,8 @@ class Database:
 				tool_name       TEXT,
 				timestamp       REAL,
 				attachments     TEXT,
-				author          TEXT
+				author          TEXT,
+				turn_id         TEXT
 			)
 		""")
 		self.conn.execute("""
@@ -351,6 +352,9 @@ class Database:
 			self.conn.commit()
 		except Exception:
 			pass
+		# Nullable for old history; never infer historical turn boundaries.
+		if "turn_id" not in {row[1] for row in self.conn.execute("PRAGMA table_info(conversation_messages)")}:
+			self.conn.execute("ALTER TABLE conversation_messages ADD COLUMN turn_id TEXT")
 		# Migration: conversations become user-owned. Add the column then backfill
 		# pre-existing rows to the base user so they stay visible to the operator.
 		try:
@@ -1621,7 +1625,7 @@ class Database:
 
 	def save_message(self, conversation_id, role, content,
 					 tool_call_id=None, tool_name=None, attachments=None,
-					 author=None):
+					 author=None, turn_id=None):
 		"""Save message.
 
 		``attachments`` is the list of files the message carried — a record
@@ -1642,10 +1646,10 @@ class Database:
 			self.conn.execute("""
 				INSERT INTO conversation_messages
 				(conversation_id, role, content, tool_call_id, tool_name, timestamp,
-				 attachments, author)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				 attachments, author, turn_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			""", (conversation_id, role, content, tool_call_id, tool_name, now,
-				  _pack_attachments(attachments), author or None))
+				  _pack_attachments(attachments), author or None, turn_id))
 			self.conn.execute(
 				"UPDATE conversations SET updated_at = ? WHERE id = ?",
 				(now, conversation_id))
@@ -1959,7 +1963,7 @@ class Database:
 				conversation_id, role, content,
 				msg.get("tool_call_id"), msg.get("name"),
 				ts, _pack_attachments(msg.get("attachments")),
-				msg.get("author") or None,
+				msg.get("author") or None, msg.get("turn_id"),
 			))
 		with self.lock:
 			self.conn.execute(
@@ -1969,8 +1973,8 @@ class Database:
 				self.conn.executemany("""
 					INSERT INTO conversation_messages
 					(conversation_id, role, content, tool_call_id, tool_name, timestamp,
-					 attachments, author)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+					 attachments, author, turn_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""", rows)
 			self.conn.execute(
 				"UPDATE conversations SET updated_at = ? WHERE id = ?",

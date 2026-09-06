@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from uuid import uuid4
 from typing import Any, Callable
 
 from events.event_bus import bus
@@ -504,12 +505,15 @@ class ConversationRuntime:
         normally: priority returns to the user and SESSION_TURN_COMPLETED is
         emitted instead of being suppressed for a re-drive that never comes."""
         _persist.ensure_conversation(session=session, runtime=self)
+        session.turn_id = session.turn_id or uuid4().hex
+        turn_id = session.turn_id
         session.busy = True
         session.cancel_event.clear()
         _persist.persist_marker(self, session)  # busy=True snapshot for crash recovery
         from events.event_channels import SESSION_TURN_STARTED
         old_phase, old_priority = session.cs.phase, session.cs.turn_priority
         (self.emit_event or bus.emit)(SESSION_TURN_STARTED, {
+            "turn_id": turn_id,
             "session_key": session.key,
             "conversation_id": session.conversation_id,
             "actor_id": "agent",
@@ -616,6 +620,8 @@ class ConversationRuntime:
                     final_text=reply or "",
                     reason=reason,
                 ), runtime=self)
+            if not session.restart_turn:
+                session.turn_id = None
 
         from events.event_channels import SESSION_TURN_COMPLETED
         if crash_error is not None:
@@ -623,6 +629,7 @@ class ConversationRuntime:
             # reclaimed priority for the user) before completing the turn.
             _disp.emit_state_change(session, old_phase, old_priority)
             (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
+                "turn_id": turn_id,
                 "session_key": session.key,
                 "conversation_id": session.conversation_id,
                 "user_id": self.session_user_id(session.key),
@@ -667,6 +674,7 @@ class ConversationRuntime:
         _disp.emit_state_change(session, old_phase, old_priority)
         if not session.restart_turn:
             (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
+                "turn_id": turn_id,
                 "session_key": session.key,
                 "conversation_id": session.conversation_id,
                 "user_id": self.session_user_id(session.key),

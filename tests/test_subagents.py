@@ -741,6 +741,15 @@ def test_a_normal_turn_still_collects_its_children(tmp_path):
     try:
         rt.iterate_agent_turn("repl", "go")
         assert "[Background agent" in "\n".join(seen)
+        session = rt.sessions["repl"]
+        rows = rt.db.get_conversation_messages(session.conversation_id)
+        ids = {row["turn_id"] for row in rows if row["role"] == "assistant"}
+        assert len(ids) == 1 and None not in ids
+        assert session.turn_id is None
+        child_ids = {row[0] for row in rt.db.conn.execute(
+            "SELECT turn_id FROM conversation_messages WHERE conversation_id != ? AND role = 'assistant'",
+            (session.conversation_id,))}
+        assert child_ids and not ids.intersection(child_ids)
     finally:
         rt.subagents.stop()
 

@@ -159,7 +159,7 @@ SESSION_FACTS = tuple(SESSION_GET_KEYS.values())
 #: ``service_flags`` is what it holds — the walk that checks this set against
 #: the handler flattens nested dicts, which is the conservative direction: a
 #: key it cannot place is one somebody has to decide about.
-TRANSIENT = ("phase", "busy", "attended", "debug", "service_flags")
+TRANSIENT = ("phase", "busy", "turn_id", "attended", "debug", "service_flags")
 
 #: Showing the agent's output to a person. Writes, all of them, and none of
 #: them in ``READ_ONLY`` — but **rendering is not a change**: they move text to

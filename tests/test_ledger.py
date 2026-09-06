@@ -422,6 +422,15 @@ def test_a_request_that_touches_no_file_records_no_paths(tmp_path):
     assert set(json.loads(db.get_ledger_rows()[0]["data_json"])) == {
         "chain", "level", "reason"}
 
+def test_sandbox_effect_carries_the_owning_logical_turn(tmp_path):
+    db, record = _sink(tmp_path)
+    ctx = _ctx("chat", conversation_id=4, user_id=9)
+    ctx.runtime.sessions["chat"].turn_id = "parent-turn"
+    record(Chain(root="http:main").push("edit_file"),
+           Request("fs.write", {"path": "/w/a"}), Decision(SAFE, "workspace"),
+           Result(data=True), ctx)
+    assert json.loads(db.get_ledger_rows()[0]["data_json"])["turn_id"] == "parent-turn"
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Reading it targeted.
@@ -523,12 +532,14 @@ def test_a_tool_that_showed_files_records_which(tmp_path):
     loop = ConversationLoop(FakeLLM([]), None, {}, "prompt", session_key="chat")
     loop._active_db, loop._active_conversation_id = db, cid
 
+    loop._session = lambda: SimpleNamespace(turn_id="parent-turn")
     shown = ToolResult(success=True, attachment_paths=["/w/chart.png", "/w/report.md"])
     loop._record_ledger("call_tool", {"name": "show_files"}, "agent",
                         SimpleNamespace(ok=True, error=None,
                                         data={"result": shown}), None, time.perf_counter())
 
     [row] = db.get_ledger_rows(origin="agent_enact")
+    assert json.loads(row["data_json"])["turn_id"] == "parent-turn"
     assert json.loads(row["data_json"])["attachments"] == [
         "/w/chart.png", "/w/report.md"]
 

@@ -496,3 +496,33 @@ def test_system_stats_groups_files_and_tasks(db):
     stats = db.get_system_stats()
     assert stats["files"]["text"] == 1
     assert stats["tasks"]["extract_text"]["PENDING"] == 1
+
+def test_turn_id_roundtrips_history_and_rewrites(db):
+    from state_machine.serialization import messages_to_history, save_history_message
+    from runtime.conversation_loop import _for_provider
+
+    conv = db.create_conversation("turn identity")
+    db.save_message(conv, "user", "legacy")
+    save_history_message(db, conv, {"role": "assistant", "content": "First", "turn_id": "turn-a"})
+    save_history_message(db, conv, {"role": "user", "content": "interrupt", "turn_id": "turn-a"})
+    save_history_message(db, conv, {"role": "assistant", "content": "Second", "turn_id": "turn-a"})
+    rows = db.get_conversation_messages(conv)
+    assert [row["turn_id"] for row in rows] == [None, "turn-a", "turn-a", "turn-a"]
+    history = messages_to_history(rows)
+    assert all("turn_id" not in _for_provider(message) for message in history)
+    db.replace_conversation_messages(conv, history)
+    assert [row["turn_id"] for row in db.get_conversation_messages(conv)] == [None, "turn-a", "turn-a", "turn-a"]
+
+
+def test_turn_id_migration_is_nullable_and_idempotent(tmp_path):
+    path = str(tmp_path / "legacy.db")
+    database = Database(path)
+    conv = database.create_conversation("legacy")
+    database.save_message(conv, "assistant", "Old reply")
+    database.conn.execute("ALTER TABLE conversation_messages DROP COLUMN turn_id")
+    database.conn.commit()
+    database.conn.close()
+    for _ in range(2):
+        database = Database(path)
+        assert database.get_conversation_messages(conv)[0]["turn_id"] is None
+        database.conn.close()

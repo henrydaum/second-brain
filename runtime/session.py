@@ -177,6 +177,8 @@ class RuntimeSession:
     history: list[dict[str, Any]] = field(default_factory=list)
     conversation_id: int | None = None
     busy: bool = False
+    # Logical turn identity survives re-drives, not process recovery.
+    turn_id: str | None = field(default=None, kw_only=True)
     active_agent_profile: str = "default"
     # Subagent / specialist sessions pin a profile and can register extra tool
     # instances that are not part of the global tool_registry. When None /

@@ -488,7 +488,8 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
 
         def on_delta(payload: dict):
             """Fan streamed text deltas out to frontends over the bus."""
-            bus.emit(AGENT_TEXT_DELTA, {"session_key": session_key, **payload})
+            bus.emit(AGENT_TEXT_DELTA, {"session_key": session_key, **payload,
+                "turn_id": getattr(session, "turn_id", None)})
 
     started, finished = tool_callbacks(runtime, session_key)
     return ConversationLoop(
@@ -561,6 +562,7 @@ def tool_callbacks(runtime, session_key: str | None):
             # blurb that renders until the tool returns and then disappears.
             runtime.emit_event(TOOL_CALL_STARTED, {
                 "session_key": session_key, "call_id": call_id,
+                "turn_id": getattr(getattr(runtime, "sessions", {}).get(session_key), "turn_id", None),
                 "tool_name": name, "args": args or {},
                 "narration": tool_blurb((args or {}).get("narration")),
             })
@@ -578,6 +580,7 @@ def tool_callbacks(runtime, session_key: str | None):
             # nothing left of the started payload by the time this lands.
             runtime.emit_event(TOOL_CALL_FINISHED, {
                 "session_key": session_key, "call_id": call_id,
+                "turn_id": getattr(getattr(runtime, "sessions", {}).get(session_key), "turn_id", None),
                 "tool_name": name, "ok": ok, "error": err,
                 "narration": tool_blurb(narration),
                 "summary": tool_outcome(tool_result) if ok else "",

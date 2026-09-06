@@ -49,8 +49,13 @@ def test_turn_started_and_completed_bracket_a_foreground_turn(tmp_path):
     assert started["session_key"] == "s"
     assert started["conversation_id"] == session.conversation_id
     assert started["actor_id"] == "agent"
+    assert started["turn_id"]
+    assert session.turn_id is None
+    rows = rt.db.get_conversation_messages(session.conversation_id)
+    assert {row["turn_id"] for row in rows if row["role"] == "assistant"} == {started["turn_id"]}
 
     completed = next(p for c, p in seen if c == SESSION_TURN_COMPLETED)
+    assert completed["turn_id"] == started["turn_id"]
     assert completed["ok"] is True
     assert completed["cancelled"] is False
     assert completed["final_text"] == "Hi there."
@@ -80,6 +85,7 @@ def test_crashed_drive_completes_the_turn_with_ok_false(tmp_path):
             u()
 
     assert not out.ok
+    assert session.turn_id is None
     completed = next(p for c, p in seen if c == SESSION_TURN_COMPLETED)
     assert completed["ok"] is False
     assert "boom" in completed["error"]
@@ -148,6 +154,11 @@ def test_turn_finish_restart_redrives_with_agent_priority(tmp_path):
     # One logical turn: turn_finish waited for the drive that ended it.
     assert len(seen) == 1
     assert seen[0][1]["final_text"] == "Here is the briefing."
+    identity = seen[0][1]["turn_id"]
+    rows = rt.db.get_conversation_messages(session.conversation_id)
+    assert {row["turn_id"] for row in rows if row["role"] == "assistant"} == {identity}
+    assert next(row for row in rows if "report" in row["content"])["turn_id"] == identity
+    assert session.turn_id is None
     assert session.cs.turn_priority == "user"
 
 
@@ -180,3 +191,47 @@ def test_exhausted_restart_budget_still_completes_the_turn(tmp_path):
     assert not session.restart_turn
     assert session.cs.turn_priority == "user"
     assert len(seen) == 1  # the capped final drive completes the logical turn
+
+def test_next_logical_turn_gets_a_new_identity(tmp_path):
+    rt, session = _runtime(tmp_path, [response(content="First."), response(content="Second.")])
+    rt.handle_action("s", "send_text", "first")
+    rt.handle_action("s", "send_text", "second")
+    rows = rt.db.get_conversation_messages(session.conversation_id)
+    identities = [row["turn_id"] for row in rows if row["role"] == "assistant"]
+    assert len(identities) == 2 and all(identities)
+    assert identities[0] != identities[1]
+    assert session.turn_id is None
+
+def test_cancel_retires_identity_and_completes_once(tmp_path, monkeypatch):
+    import runtime.conversation_runtime as crt
+    rt, session = _runtime(tmp_path)
+    identity = []
+    class CancelledLoop:
+        def drive(self, *args):
+            identity.append(session.turn_id)
+            session.cancel_event.set()
+            raise RuntimeError("interrupted model")
+    monkeypatch.setattr(crt._cfg, "build_loop", lambda *args: CancelledLoop())
+    seen, unsubs = _capture(SESSION_TURN_COMPLETED)
+    try:
+        rt.handle_action("s", "send_text", "go")
+    finally:
+        for unsubscribe in unsubs:
+            unsubscribe()
+    assert session.turn_id is None
+    assert len(seen) == 1
+    assert seen[0][1]["cancelled"] is True
+    assert seen[0][1]["turn_id"] == identity[0]
+
+
+def test_tool_statuses_carry_current_turn_identity():
+    from types import SimpleNamespace
+    from runtime.runtime_config import tool_callbacks
+    emitted = []
+    rt = SimpleNamespace(sessions={"s": SimpleNamespace(turn_id="a")},
+                         on_tool_start=None, on_tool_result=None,
+                         emit_event=lambda channel, payload: emitted.append(payload))
+    started, finished = tool_callbacks(rt, "s")
+    started("show_files", "call", {})
+    finished("show_files", "call")
+    assert [payload["turn_id"] for payload in emitted] == ["a", "a"]

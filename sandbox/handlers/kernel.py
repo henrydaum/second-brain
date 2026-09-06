@@ -713,6 +713,7 @@ def _session_get(ctx, args: dict) -> Result:
         "conversation_id": getattr(session, "conversation_id", None),
         "phase": getattr(machine, "phase", None),
         "busy": bool(getattr(session, "busy", False)),
+        "turn_id": getattr(session, "turn_id", None),
         "attended": bool(runtime.is_attended(key))
         if hasattr(runtime, "is_attended") else None,
         # Which agent profile is actually driving *this* session, and which

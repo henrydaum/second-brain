@@ -96,6 +96,8 @@ def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # the key back off before a model ever sees it.
         if msg.get("author"):
             row["author"] = msg["author"]
+        if msg.get("turn_id"):
+            row["turn_id"] = msg["turn_id"]
         history.append(row)
     return heal_orphans(history)
 
@@ -124,7 +126,8 @@ def save_history_message(db, conversation_id: int, msg: dict[str, Any]) -> None:
     role, content = msg.get("role"), msg.get("content") or ""
     if role == "assistant" and msg.get("tool_calls"):
         content = json.dumps({"content": msg.get("content"), "tool_calls": msg["tool_calls"]})
-    db.save_message(conversation_id, role, content, tool_call_id=msg.get("tool_call_id"), tool_name=msg.get("name"), attachments=msg.get("attachments"), author=msg.get("author"))
+    extra = {"turn_id": msg["turn_id"]} if msg.get("turn_id") else {}
+    db.save_message(conversation_id, role, content, tool_call_id=msg.get("tool_call_id"), tool_name=msg.get("name"), attachments=msg.get("attachments"), author=msg.get("author"), **extra)
 
 
 def save_state_marker(db, conversation_id: int, state: dict[str, Any]) -> None:

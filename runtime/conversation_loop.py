@@ -184,12 +184,12 @@ def _for_provider(msg: dict[str, Any]) -> dict[str, Any]:
     no-attachments path would send a key no provider schema knows straight to
     the API.
     """
-    if not msg.get("attachments") and "author" not in msg:
+    if not msg.get("attachments") and "author" not in msg and "turn_id" not in msg:
         return msg
     from attachments.attachment import with_pointers
 
     out = {key: value for key, value in msg.items()
-           if key not in ("attachments", "author")}
+           if key not in ("attachments", "author", "turn_id")}
     if msg.get("attachments"):
         out["content"] = with_pointers(msg.get("content") or "", msg["attachments"])
     return out
@@ -562,6 +562,8 @@ class ConversationLoop:
         """Internal helper to append one agent-side enact to the ledger."""
         session = self._session()
         data = {"llm": getattr(self._last_llm_used or self.llm, "model_name", None)}
+        if turn_id := getattr(session, "turn_id", None):
+            data["turn_id"] = turn_id
         # Doorway-forced acts (queued agent actions, doorman-required tools)
         # carry their origin so the audit trail distinguishes model-chosen
         # moves from script-forced ones.
@@ -1704,6 +1706,8 @@ class ConversationLoop:
         cancel notice and a drained mid-turn message from the person read
         identically. A UI built on the bus has the problem a UI built on the
         table has."""
+        if turn_id := getattr(self._session(), "turn_id", None):
+            msg["turn_id"] = turn_id
         history.append(msg)
         new_messages.append(msg)
         if db is not None and conversation_id is not None:
@@ -1715,6 +1719,8 @@ class ConversationLoop:
             "content": msg.get("content") or "",
             "actor_id": "user" if role == "user" else "agent",
         }
+        if msg.get("turn_id"):
+            payload["turn_id"] = msg["turn_id"]
         if msg.get("author"):
             payload["author"] = msg["author"]
         if msg.get("name"):

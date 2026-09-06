@@ -225,6 +225,9 @@ def sandbox_sink(db):
             session_key, conversation_id, user_id = identity_of(context)
             data = {"chain": chain.render(), "level": decision.level,
                     "reason": decision.reason}
+            session = (getattr(getattr(context, "runtime", None), "sessions", None) or {}).get(session_key)
+            if turn_id := getattr(session, "turn_id", None):
+                data["turn_id"] = turn_id
             if (named := FILE_ARGS.get(request.type)) is not None:
                 args = request.args or {}
                 if paths := [args[k] for k in named if args.get(k)]:
