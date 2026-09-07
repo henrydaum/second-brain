@@ -28,10 +28,13 @@ def rig(tmp_path):
     root = store_worktree()
     if root is None:
         pytest.skip("store checkout unavailable")
+    for name in list(sys.modules):
+        if name == "image_test" or name.startswith("image_test."):
+            sys.modules.pop(name, None)
     scripts = tmp_path / "installed" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("art_kit.py", "canvas_render.py"):
-        shutil.copyfile(root / "scripts" / name, scripts / name)
+    for source in [root / "scripts/art_kit.py", *sorted((root / "scripts").glob("canvas_*.py"))]:
+        shutil.copyfile(source, scripts / source.name)
     package = types.ModuleType("image_test")
     package.__path__ = [str(scripts)]
     sys.modules[package.__name__] = package
@@ -74,10 +77,14 @@ def rig(tmp_path):
     sdk.services = types.SimpleNamespace(call=lambda service_name, method, *a, **k: getattr(service, method)(sdk, *a, **k))
     calls = []
     def run(path, **kwargs):
+        if not Path(path).is_absolute():
+            path = scripts / path
         calls.append(Path(path).name)
         module = load("image_test." + Path(path).stem, path)
         return module.main(sdk, **kwargs)
     sdk.scripts = types.SimpleNamespace(run=run)
+    sdk.ok = lambda data, **extra: {"ok": True, "data": data, **extra}
+    sdk.fail = lambda error: {"ok": False, "error": error}
     service.start(sdk)
     return types.SimpleNamespace(sdk=sdk, service=service, renderer=renderer, kit=kit,
                                  scripts=scripts, calls=calls, root=root)
