@@ -13,11 +13,11 @@ The three layer kinds:
 - ``object`` — reads the prior layer's output, returns an RGBA image
   alpha-composited on top. Use for text, shapes, overlays.
 
-The ``script`` parameter names a file in the scripts/ directory (e.g.
-``"canvas_load_image"``, ``"canvas_blur"``). The framework prepends
-``"canvas_"`` and appends ``".py"`` — so ``"blur"`` resolves to
-``canvas_blur.py``. Controls are the keyword arguments passed to that
-script's ``main()`` at render time.
+The ``script`` parameter is the filename of a script in the scripts/ directory,
+without the ``.py`` extension (e.g. ``"canvas_load_image"``, ``"canvas_blur"``).
+The ``canvas_`` prefix is a convention for layer scripts — follow it, but the
+renderer only appends ``".py"`` and calls ``sdk.scripts.run``. Controls are the
+keyword arguments passed to that script's ``main()`` at render time.
 
 A background layer is required before any filters or objects. Always call
 ``render_canvas`` after adding layers to see the result.
@@ -32,10 +32,11 @@ class AddLayer(BaseTool):
         "Add a layer to a canvas. 'kind' is 'background' (produces a new "
         "image from scratch — only layer 0 may be a background), 'filter' "
         "(transforms the prior layer's output), or 'object' (alpha-composites "
-        "on top of the prior layer). 'script' is the name of a script in "
-        "workspace/scripts/ (e.g. 'canvas_load_image', 'canvas_blur'). "
-        "'controls' are keyword arguments passed to that script at render "
-        "time."
+        "on top of the prior layer). 'script' is the filename of a script in "
+        "the scripts/ directory without the .py extension (e.g. "
+        "'canvas_load_image', 'canvas_blur'). The 'canvas_' prefix is a "
+        "convention for layer scripts. 'controls' are keyword arguments "
+        "passed to that script at render time."
     )
     parameters = {
         "type": "object",
@@ -46,7 +47,7 @@ class AddLayer(BaseTool):
             },
             "script": {
                 "type": "string",
-                "description": "Script name (e.g. 'canvas_load_image', 'canvas_blur').",
+                "description": "Script filename without .py (e.g. 'canvas_load_image', 'canvas_blur'). The 'canvas_' prefix is a convention for layer scripts.",
             },
             "kind": {
                 "type": "string",
