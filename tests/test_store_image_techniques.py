@@ -29,17 +29,17 @@ def catalog(rig):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_every_shipped_technique_renders_and_caches(rig, photo, name):
-    script = "canvas_" + name
-    controls = dict(catalog(rig).CATALOG[script]["example"])
+    script = "technique_" + name
+    controls = dict(catalog(rig).discover(rig.sdk)["techniques"][script]["example"])
     if name == "load_image": controls["path"] = photo
     if name in ("crop", "shape"): controls.update(left=2, top=1, right=10, bottom=7)
     if name == "resize": controls.update(width=6, height=4)
     if name == "line": controls.update(points=[[1, 1], [10, 6]], width=1)
     if name == "text": controls.update(content="Hi\nX", x=1, y=0, size=6)
-    spec = catalog(rig).prepare(script, controls)
+    spec = catalog(rig).prepare(rig.sdk, script, controls)
     cid = rig.service.create(rig.sdk, width=12, height=8)
     if spec["kind"] != "background":
-        rig.service.add_layer(rig.sdk, cid, "canvas_load_image", "background", {"path": photo})
+        rig.service.add_layer(rig.sdk, cid, "technique_load_image", "background", {"path": photo})
     rig.service.add_layer(rig.sdk, cid, script, spec["kind"], controls)
     result = rig.renderer.main(rig.sdk, cid, seed=0)
     image = rig.kit.read_image(rig.sdk, result["path"])
@@ -53,14 +53,14 @@ def test_crop_rotate_resize_composes_and_resumes_at_new_dimensions(rig, photo):
     from PIL import Image
     s, sdk = rig.service, rig.sdk
     cid = s.create(sdk)
-    s.add_layer(sdk, cid, "canvas_load_image", "background", {"path": photo})
-    s.add_layer(sdk, cid, "canvas_crop", "filter", {"left": 2, "top": 1, "right": 10, "bottom": 7})
-    s.add_layer(sdk, cid, "canvas_rotate", "filter", {"angle": 90})
+    s.add_layer(sdk, cid, "technique_load_image", "background", {"path": photo})
+    s.add_layer(sdk, cid, "technique_crop", "filter", {"left": 2, "top": 1, "right": 10, "bottom": 7})
+    s.add_layer(sdk, cid, "technique_rotate", "filter", {"angle": 90})
     first = rig.renderer.main(sdk, cid)
     expected = rig.kit.read_image(sdk, photo).crop((2, 1, 10, 7)).transpose(Image.Transpose.ROTATE_90)
     assert rig.kit.read_image(sdk, first["path"]).tobytes() == expected.tobytes()
     assert (first["width"], first["height"]) == (6, 8)
-    s.add_layer(sdk, cid, "canvas_resize", "filter", {"width": 3, "height": 4})
+    s.add_layer(sdk, cid, "technique_resize", "filter", {"width": 3, "height": 4})
     second = rig.renderer.main(sdk, cid)
     assert second["cached_layers"] == 3
     assert (second["width"], second["height"]) == (3, 4)
@@ -69,14 +69,14 @@ def test_crop_rotate_resize_composes_and_resumes_at_new_dimensions(rig, photo):
 
 
 @pytest.mark.parametrize("script,controls", [
-    ("canvas_gamma", {"gamma": 0}), ("canvas_saturation", {"factor": True}),
-    ("canvas_blur", {"radius": float("nan")}), ("canvas_blur", {"strength": 5}),
-    ("canvas_crop", {"right": 0, "bottom": 4}), ("canvas_resize", {"width": 1.5, "height": 3}),
-    ("canvas_line", {"points": [[0, 1, 2], [3, 4]]}), ("canvas_load_image", {"path": ""}),
-    ("canvas_sharpen", {"threshold": 256}),
+    ("technique_gamma", {"gamma": 0}), ("technique_saturation", {"factor": True}),
+    ("technique_blur", {"radius": float("nan")}), ("technique_blur", {"strength": 5}),
+    ("technique_crop", {"right": 0, "bottom": 4}), ("technique_resize", {"width": 1.5, "height": 3}),
+    ("technique_line", {"points": [[0, 1, 2], [3, 4]]}), ("technique_load_image", {"path": ""}),
+    ("technique_sharpen", {"threshold": 256}),
 ])
 def test_invalid_controls_are_rejected(rig, script, controls):
-    with pytest.raises(ValueError): catalog(rig).prepare(script, controls)
+    with pytest.raises(ValueError): catalog(rig).prepare(rig.sdk, script, controls)
 
 
 def test_catalog_discovery_and_fine_adjustment_workflow(rig, photo):
@@ -84,13 +84,13 @@ def test_catalog_discovery_and_fine_adjustment_workflow(rig, photo):
     add = load("image_add_tool", rig.root / "tools/tool_add_layer.py").AddLayer()
     manage = load("image_manage_tool", rig.root / "tools/tool_manage_layers.py").ManageLayers()
     search = load("image_search_tool", rig.root / "tools/tool_search_techniques.py").SearchTechniques()
-    assert any(row["script"] == "canvas_sharpen" for row in search.run(sdk, query="sharpness"))
+    assert any(row["script"] == "technique_sharpen" for row in search.run(sdk, query="sharpness"))
     assert len(search.run(sdk)) == len(NAMES)
-    assert search.run(sdk, script="canvas_blur")["controls"]["radius"]["step"] == .25
-    added = add.run(sdk, script="canvas_load_image", controls={"path": photo})
+    assert search.run(sdk, script="technique_blur")["controls"]["radius"]["step"] == .25
+    added = add.run(sdk, script="technique_load_image", controls={"path": photo})
     cid = added["data"]["canvas_id"]
     assert added["data"]["layers"][0]["controls"]["fit"] == "native"
-    add.run(sdk, script="canvas_saturation", controls={"factor": 1.1})
+    add.run(sdk, script="technique_saturation", controls={"factor": 1.1})
     layer_id = s.get_state(sdk, cid)["layers"][1]["id"]
     inspected = manage.run(sdk, "controls", layer_id=layer_id)
     assert inspected["current"] == {"factor": 1.1}
@@ -114,12 +114,12 @@ def test_catalog_discovery_and_fine_adjustment_workflow(rig, photo):
 def test_palette_is_opt_in_live_and_undoable(rig, photo):
     s, sdk = rig.service, rig.sdk
     cid = s.create(sdk)
-    s.add_layer(sdk, cid, "canvas_load_image", "background", {"path": photo})
+    s.add_layer(sdk, cid, "technique_load_image", "background", {"path": photo})
     original = rig.renderer.main(sdk, cid)
     s.set_palette(sdk, cid, colors={"accent": "#ff0000", "primary": "#00ff00"})
     after = rig.renderer.main(sdk, cid)
     assert rig.kit.read_image(sdk, original["path"]).tobytes() == rig.kit.read_image(sdk, after["path"]).tobytes()
-    s.add_layer(sdk, cid, "canvas_solid", "object", {"color": "@accent"})
+    s.add_layer(sdk, cid, "technique_solid", "object", {"color": "@accent"})
     red = rig.renderer.main(sdk, cid)
     assert rig.kit.read_image(sdk, red["path"]).getpixel((3, 3)) == (255, 0, 0, 255)
     s.set_palette(sdk, cid, colors={"accent": "#0000ff"})
@@ -135,7 +135,7 @@ def test_palette_is_opt_in_live_and_undoable(rig, photo):
 def test_source_files_invalidate_without_manual_dependencies(rig, photo):
     from PIL import Image
     cid = rig.service.create(rig.sdk)
-    rig.service.add_layer(rig.sdk, cid, "canvas_load_image", "background", {"path": photo})
+    rig.service.add_layer(rig.sdk, cid, "technique_load_image", "background", {"path": photo})
     first = rig.renderer.main(rig.sdk, cid)
     rig.kit.write_png(rig.sdk, photo, Image.new("RGBA", (3, 2), "green"))
     second = rig.renderer.main(rig.sdk, cid)
@@ -151,9 +151,9 @@ def test_source_files_invalidate_without_manual_dependencies(rig, photo):
 ])
 def test_neutral_adjustments_preserve_pixels(rig, photo, name, controls):
     image = rig.kit.read_image(rig.sdk, photo)
-    pixels = load("image_test.canvas_pixels", rig.scripts / "canvas_pixels.py")
-    effective = catalog(rig).prepare("canvas_" + name, controls)["controls"]
-    result = getattr(pixels, name)(rig.sdk, image, effective, {"colors": {"secondary": "#000000", "accent": "#ffffff"}})
+    pixels = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+    effective = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)["controls"]
+    result = pixels.apply(rig.sdk, image, effective, {"colors": {"secondary": "#000000", "accent": "#ffffff"}})
     assert result.tobytes() == image.tobytes()
 
 
@@ -162,8 +162,8 @@ def test_blur_does_not_bleed_hidden_rgb(rig, radius):
     from PIL import Image
     image = Image.new("RGBA", (21, 9), (0, 0, 255, 0))
     for y in range(9): image.putpixel((10, y), (255, 0, 0, 128))
-    pixels = load("image_test.canvas_pixels", rig.scripts / "canvas_pixels.py")
-    result = pixels.blur(rig.sdk, image, {"radius": radius}, {})
+    pixels = load("image_test.technique_blur", rig.scripts / "technique_blur.py")
+    result = pixels.apply(rig.sdk, image, {"radius": radius}, {})
     visible = [result.getpixel((x, 4)) for x in range(21) if result.getpixel((x, 4))[3] > 0]
     assert visible
     assert all(pixel[:3] == (255, 0, 0) for pixel in visible)
@@ -177,7 +177,7 @@ def test_exif_native_import(rig, tmp_path):
     path = str(tmp_path / "oriented.jpg")
     image.save(path, exif=exif)
     cid = rig.service.create(rig.sdk)
-    rig.service.add_layer(rig.sdk, cid, "canvas_load_image", "background", {"path": path})
+    rig.service.add_layer(rig.sdk, cid, "technique_load_image", "background", {"path": path})
     result = rig.renderer.main(rig.sdk, cid)
     assert (result["width"], result["height"]) == (3, 7)
 
@@ -195,7 +195,13 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
              ("blur", "filter", {"radius": .5}),
              ("sharpen", "filter", {"amount": 20}),
              ("text", "object", {"content": "X", "size": 5, "color": "@accent"})]
-    for name, kind, controls in steps: s.add_layer(sdk, cid, "canvas_" + name, kind, controls)
+    for name, kind, controls in steps: s.add_layer(sdk, cid, "technique_" + name, kind, controls)
+    # A newly authored technique participates in the real nested sandbox recipe.
+    workspace = Path(roots["workspace"]) / "scripts"
+    workspace.mkdir(parents=True, exist_ok=True)
+    authored = workspace / "technique_custom_brightness.py"
+    authored.write_text((rig.scripts / "canvas_technique_template.py").read_text())
+    s.add_layer(sdk, cid, authored.stem, "filter", {"factor": 0})
     adapter = types.SimpleNamespace(exports=s.exports)
     for name in s.exports:
         setattr(adapter, name, lambda *a, _name=name, **k: getattr(s, _name)(sdk, *a, **k))
@@ -208,6 +214,8 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
                         kwargs={"canvas_id": cid, "seed": 0}, chain=Chain(root="user"))
         assert result.ok, result.error
         assert (result.data["width"], result.data["height"]) == (6, 8)
+        rendered = rig.kit.read_image(sdk, result.data["path"])
+        assert rendered.getpixel((3, 3))[:3] == (0, 0, 0)
     finally:
         bridge.configure(previous)
         sb.shutdown()
@@ -218,8 +226,81 @@ def test_manifest_ships_every_technique_and_dependency(rig):
     manifest = json.loads((rig.root / "bundles/bundle_image_editing.json").read_text())
     files = set(manifest["files"])
     assert "tools/tool_search_techniques.py" in files
-    for name in NAMES: assert f"scripts/canvas_{name}.py" in files
+    for name in NAMES: assert f"scripts/technique_{name}.py" in files
     for path in files:
         report = validate_file(rig.root / path)
         assert report.ok, report.render()
         assert set(report.declarations.get("dependencies_files", [])) <= files
+
+
+def test_discovery_reads_live_metadata_without_executing_code(rig):
+    sdk = rig.sdk
+    directory = Path(sdk.paths.get("workspace")) / "scripts"
+    directory.mkdir(parents=True)
+    source = (rig.scripts / "canvas_technique_template.py").read_text()
+    path = directory / "technique_custom.py"
+    path.write_text(source + "\nraise RuntimeError('must not run during discovery')\n")
+    (directory / "technique_directory.py").mkdir()
+    (directory / "ordinary_script.py").write_text(source)
+    cat = catalog(rig)
+    spec = cat.main(sdk, script=path.stem)
+    assert spec["origin"] == "workspace" and spec["source_path"] == str(path)
+    assert spec["controls"]["factor"]["default"] == 1
+    assert len(cat.main(sdk)) == len(NAMES) + 1
+    path.write_text(source.replace("'default': 1", "'default': 2"))
+    assert cat.prepare(sdk, path.stem)["controls"]["factor"] == 2
+    path.unlink()
+    with pytest.raises(ValueError, match="unknown technique"):
+        cat.main(sdk, script=path.stem)
+
+
+def test_invalid_override_is_reported_and_cannot_fall_back(rig):
+    sdk = rig.sdk
+    directory = Path(sdk.paths.get("workspace")) / "scripts"
+    directory.mkdir(parents=True)
+    path = directory / "technique_blur.py"
+    path.write_text("TECHNIQUE = dict(title='not literal')")
+    cat = catalog(rig)
+    rows = cat.main(sdk)
+    failure = next(row for row in rows if row["script"] == path.stem)
+    assert failure["error"] and failure["origin"] == "workspace"
+    with pytest.raises(ValueError): cat.prepare(sdk, path.stem, {"radius": 2})
+    path.unlink()
+    assert cat.main(sdk, script=path.stem)["origin"] == "installed"
+
+
+@pytest.mark.parametrize("replace,with_text", [
+    ("'minimum': 0", "'minimum': 5"),
+    ("def main(sdk, kind, input_path, output_path, width, height, seed, palette, controls):", "def main(sdk):"),
+    ("TECHNIQUE =", "NOT_A_TECHNIQUE ="),
+])
+def test_bad_author_declarations_have_actionable_diagnostics(rig, replace, with_text):
+    path = rig.scripts / "technique_broken.py"
+    path.write_text((rig.scripts / "canvas_technique_template.py").read_text().replace(replace, with_text))
+    errors = catalog(rig).discover(rig.sdk)["errors"]
+    assert errors[path.stem]["source_path"] == str(path)
+    assert errors[path.stem]["error"]
+
+
+def test_legacy_recipe_names_resolve_to_individual_files(rig, photo):
+    cat = catalog(rig)
+    assert cat.prepare(rig.sdk, "canvas_blur")["script"] == "technique_blur"
+    cid = rig.service.create(rig.sdk)
+    rig.service.add_layer(rig.sdk, cid, "canvas_load_image", "background", {"path": photo})
+    rig.service.add_layer(rig.sdk, cid, "canvas_brightness", "filter", {"factor": 1})
+    result = rig.renderer.main(rig.sdk, cid)
+    assert rig.kit.read_image(rig.sdk, result["path"]).tobytes() == rig.kit.read_image(rig.sdk, photo).tobytes()
+    assert "technique_brightness.py" in rig.calls
+    duplicate = rig.scripts / "technique_duplicate.py"
+    duplicate.write_text((rig.scripts / "technique_blur.py").read_text())
+    with pytest.raises(ValueError, match="ambiguous"):
+        cat.prepare(rig.sdk, "canvas_blur")
+
+
+def test_authoring_guide_returns_valid_template(rig):
+    search = load("image_search_tool", rig.root / "tools/tool_search_techniques.py").SearchTechniques()
+    guide = search.run(rig.sdk, guide=True)
+    path = rig.scripts / "technique_from_template.py"
+    path.write_text(guide["template"])
+    assert guide["workflow"]
+    assert search.run(rig.sdk, script=path.stem)["controls"]["factor"]["default"] == 1

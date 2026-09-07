@@ -33,7 +33,7 @@ def rig(tmp_path):
             sys.modules.pop(name, None)
     scripts = tmp_path / "installed" / "scripts"
     scripts.mkdir(parents=True)
-    for source in [root / "scripts/art_kit.py", *sorted((root / "scripts").glob("canvas_*.py"))]:
+    for source in [root / "scripts/art_kit.py", *sorted((root / "scripts").glob("canvas_*.py")), *sorted((root / "scripts").glob("technique_*.py"))]:
         shutil.copyfile(source, scripts / source.name)
     package = types.ModuleType("image_test")
     package.__path__ = [str(scripts)]
@@ -55,6 +55,9 @@ def rig(tmp_path):
         def query(self, sql, args=()):
             return [dict(row) for row in db.execute(sql, args)]
     class FS:
+        def list(self, path, pattern="*", details=False):
+            paths = list(Path(path).glob(pattern))
+            return [{"path": str(p), "is_dir": p.is_dir()} for p in paths] if details else [str(p) for p in paths]
         def exists(self, p): return Path(p).exists()
         def read(self, p): return Path(p).read_text(encoding="utf-8")
         def read_bytes(self, p): return Path(p).read_bytes()
