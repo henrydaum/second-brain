@@ -708,11 +708,28 @@ class SubagentRegistry:
         Never raises: a barrier that breaks a turn is worse than one that
         misses a report.
         """
+        waiting = bool(self.pending_for(str(getattr(session, "key", "") or "")))
+        if waiting:
+            self._emit_activity(session, "waiting")
         try:
             return self._barrier(session)
         except Exception:
             logger.exception("the subagent barrier failed")
             return BarrierOutcome.NONE
+        finally:
+            if waiting:
+                self._emit_activity(session, "thinking")
+
+    @staticmethod
+    def _emit_activity(session, phase: str) -> None:
+        """Announce only the barrier interval; it is presentation, not state."""
+        from events.event_bus import bus
+        from events.event_channels import SESSION_TURN_ACTIVITY
+        bus.emit(SESSION_TURN_ACTIVITY, {
+            "session_key": getattr(session, "key", None),
+            "turn_id": getattr(session, "turn_id", None),
+            "phase": phase,
+        })
 
     @staticmethod
     def _has_user_input(session) -> bool:

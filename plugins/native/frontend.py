@@ -42,6 +42,7 @@ from events.event_channels import (
     FORM_REQUESTED,
     NOTIFICATION_PUSHED,
     SESSION_CONVERSATION_CHANGED,
+    SESSION_TURN_ACTIVITY,
     SESSION_TURN_CHANGED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
@@ -389,6 +390,10 @@ class BaseFrontend:
         """Default no-op; rich frontends override to show a typing indicator."""
         return
 
+    def render_turn_activity(self, session_key: str, payload: dict) -> None:
+        """Default no-op; rich frontends may distinguish waits from thinking."""
+        return
+
     def render_tool_status(self, session_key: str, payload: dict) -> None:
         """Default no-op; frontends with status affordances override."""
         return
@@ -480,6 +485,7 @@ class BaseFrontend:
             bus.subscribe(SESSION_CONVERSATION_CHANGED, self.on_bus_session_conversation_changed),
             bus.subscribe(CONVERSATION_CHANGED, self.on_bus_conversation_catalog_changed),
             bus.subscribe(SESSION_TURN_CHANGED, self.on_bus_session_turn_changed),
+            bus.subscribe(SESSION_TURN_ACTIVITY, self.on_bus_session_turn_activity),
         ]
         self._bound = True
 
@@ -1037,6 +1043,17 @@ class BaseFrontend:
             self._route_typing(payload.get("session_key"), True)
         elif to_actor == "user":
             self._route_typing(payload.get("session_key"), False)
+
+    def on_bus_session_turn_activity(self, payload: dict) -> None:
+        """Route a transient activity change within an agent-owned turn."""
+        payload = payload or {}
+        key = payload.get("session_key")
+        if not key or key not in self._live_session_keys():
+            return
+        try:
+            self.render_turn_activity(key, dict(payload))
+        except Exception:
+            logger.exception(f"render_turn_activity failed for '{self.name}'")
 
     def _route_typing(self, session_key: str | None, on: bool) -> None:
         """Route a turn-lifecycle typing change to ``render_typing``."""

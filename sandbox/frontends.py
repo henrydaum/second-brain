@@ -51,7 +51,7 @@ _DESK_LOCK = threading.Lock()
 # ``call_tool`` is a supported way for a client to run a tool and its result
 # arrives here too.
 KINDS = ("messages", "attachments", "form_field", "approval", "approval_settled",
-         "buttons", "error", "typing", "tool_status", "stream_delta",
+         "buttons", "error", "typing", "turn_activity", "tool_status", "stream_delta",
          "notification", "callable_output")
 
 

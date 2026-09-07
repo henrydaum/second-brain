@@ -485,6 +485,25 @@ def test_the_barrier_queues_uncollected_reports_and_asks_for_a_redrive():
     assert all("Background agent" in m["payload"] for m in session.pending_user_inputs)
 
 
+def test_the_barrier_announces_waiting_then_thinking():
+    from events.event_bus import bus
+    from events.event_channels import SESSION_TURN_ACTIVITY
+
+    registry, _ = registry_for()
+    session = FakeSession("repl", 7)
+    session.turn_id = "parent-turn"
+    settle(registry, registry.spawn("job", owner="repl",
+                                    owner_conversation_id=7))
+    seen = []
+    unsubscribe = bus.subscribe(SESSION_TURN_ACTIVITY, seen.append)
+    try:
+        assert registry.barrier(session) is BarrierOutcome.REPORTS_DELIVERED
+    finally:
+        unsubscribe()
+    assert [(event["turn_id"], event["phase"]) for event in seen] == [
+        ("parent-turn", "waiting"), ("parent-turn", "thinking")]
+
+
 def test_the_barrier_abstains_on_the_redriven_half():
     """Firing twice would hold every turn open forever."""
     registry, runtime = registry_for()

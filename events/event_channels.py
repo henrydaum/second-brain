@@ -344,6 +344,11 @@ Payload:
     conversation_id: int | None
     actor_id:        str — "agent" """
 
+SESSION_TURN_ACTIVITY = "session_turn_activity"
+"""Transient activity inside one logical agent turn.
+Payload: ``{session_key, turn_id, phase}``, where phase is currently
+``waiting`` (blocked on child agents) or ``thinking`` (the barrier released)."""
+
 SESSION_TURN_COMPLETED = "session_turn_completed"
 """One driven agent turn finished. Emitted per drive from the runtime's
 single drive site (interim drives of a restarted turn — e.g. escalation —

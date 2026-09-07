@@ -253,6 +253,9 @@ class _TypingFrontend(BaseFrontend):
     def render_typing(self, session_key, on):
         self.calls.append((session_key, on))
 
+    def render_turn_activity(self, session_key, payload):
+        self.calls.append((session_key, payload["phase"]))
+
     def _live_session_keys(self):
         return ["mine"]
 
@@ -266,6 +269,13 @@ def test_priority_handoffs_toggle_typing_for_owned_session():
     f.on_bus_session_turn_changed(_changed("mine", "agent"))
     f.on_bus_session_turn_changed(_changed("mine", "user", from_actor="agent"))
     assert f.calls == [("mine", True), ("mine", False)]
+
+
+def test_turn_activity_routes_only_for_the_owned_session():
+    f = _TypingFrontend()
+    f.on_bus_session_turn_activity({"session_key": "other", "phase": "waiting"})
+    f.on_bus_session_turn_activity({"session_key": "mine", "phase": "waiting"})
+    assert f.calls == [("mine", "waiting")]
 
 
 def test_foreign_session_ignored():

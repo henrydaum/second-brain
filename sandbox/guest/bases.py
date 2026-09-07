@@ -442,7 +442,7 @@ class BaseFrontend(BasePlugin):
 
         ``messages`` (list[str] of markdown) · ``attachments`` (list of paths)
         · ``form_field`` · ``approval`` · ``approval_settled`` · ``buttons`` ·
-        ``error`` · ``typing`` (bool) · ``tool_status`` · ``stream_delta`` ·
+        ``error`` · ``typing`` (bool) · ``turn_activity`` · ``tool_status`` · ``stream_delta`` ·
         ``notification`` · ``callable_output`` (list[str] of markdown).
 
         Handle the kinds your transport can show and ignore the rest — a

@@ -369,7 +369,7 @@ def test_the_render_kinds_are_the_documented_ones():
     """The guest documents these and the adapter emits them; a typo on either
     side would silently show a person nothing."""
     assert set(KINDS) == {"messages", "attachments", "form_field", "approval",
-                          "approval_settled", "buttons", "error", "typing",
+                          "approval_settled", "buttons", "error", "typing", "turn_activity",
                           "tool_status", "stream_delta", "notification",
                           "callable_output"}
 
