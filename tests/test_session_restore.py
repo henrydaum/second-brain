@@ -43,6 +43,8 @@ def test_second_session_cannot_recover_or_overwrite_live_conversation(tmp_path):
     result = rt.load_history("phone", session.conversation_id)
     assert not result.ok
     assert result.error["code"] == "conversation_in_use"
+    assert result.error["message"].startswith(
+        "This conversation is bound to another session.")
     assert rt.get_session("phone") is other
     assert rt.get_session("s") is session
     assert rt._approval_requests[req.id] is req

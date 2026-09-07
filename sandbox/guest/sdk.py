@@ -1571,7 +1571,7 @@ class _Ledger(_Namespace):
 
     def read(self, limit: int = 50, *, conversation_id: int | None = None,
              origin: str = "", session_key: str = "",
-             action_types=None, since_id: int | None = None):
+             action_types=None, since_id: int | None = None, before_id: int | None = None):
         """Read recent rows, newest first. Query it targeted, never linearly.
 
         Every argument narrows in SQL, which is what makes "targeted" possible
@@ -1585,13 +1585,16 @@ class _Ledger(_Namespace):
             # and, later, only what has happened since
             sdk.ledger.read(conversation_id=7, since_id=rows[0]["id"])
 
+            # The next older page (exclusive cursor).
+            sdk.ledger.read(conversation_id=7, before_id=rows[-1]["id"])
+
         Naming a conversation somebody else owns is refused.
         """
         return self._ask(LEDGER_READ, limit=limit,
                          conversation_id=conversation_id, origin=origin,
                          session_key=session_key,
                          action_types=list(action_types or []),
-                         since_id=since_id)
+                         since_id=since_id, before_id=before_id)
 
 
 class _Notifications(_Namespace):

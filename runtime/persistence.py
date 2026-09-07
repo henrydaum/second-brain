@@ -195,7 +195,7 @@ def _check_conversation_binding(runtime, session_key, conversation_id):
     for key, session in runtime.sessions.items():
         if key != session_key and session.conversation_id == conversation_id:
             raise ConversationInUse(
-                "This conversation is already open in another session. "
+                "This conversation is bound to another session. "
                 "Close it there before opening it here.")
 
 

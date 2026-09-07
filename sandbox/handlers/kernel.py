@@ -3878,6 +3878,12 @@ def _ledger_read(ctx, args: dict) -> Result:
         if bad is not None:
             return bad
 
+    before_id = None
+    if args.get("before_id") not in (None, ""):
+        before_id, bad = int_arg(args, "before_id", 0, lo=0)
+        if bad is not None:
+            return bad
+
     raw_types = args.get("action_types")
     if isinstance(raw_types, str):
         raw_types = [raw_types]
@@ -3889,7 +3895,7 @@ def _ledger_read(ctx, args: dict) -> Result:
     return Result(data=_rows(db.get_ledger_rows(
         conversation_id=conversation_id, origin=origin,
         session_key=session_key, action_types=action_types,
-        since_id=since_id, limit=limit)))
+        since_id=since_id, before_id=before_id, limit=limit)))
 
 
 # How often the wait below looks up to see whether the caller still wants an

@@ -744,3 +744,23 @@ def test_an_ordinary_command_still_records_no_files(tmp_path):
 
     assert set(json.loads(db.get_ledger_rows()[0]["data_json"])) == {
         "chain", "level", "reason"}
+
+
+def test_ledger_read_pages_backwards_without_skipping_new_rows(tmp_path):
+    from sandbox.handlers.kernel import _ledger_read
+
+    db = _db(tmp_path)
+    for i in range(125):
+        db.record_action(origin="sandbox", action_type="fs.write", ok=True,
+                         conversation_id=1, data={"paths": [f"/{i}"]})
+    ctx = _ledger_ctx(db)
+    args = {"conversation_id": 1, "action_types": ["fs.write"], "limit": 50}
+    first = _ledger_read(ctx, args).data
+    db.record_action(origin="sandbox", action_type="fs.write", ok=True,
+                     conversation_id=1, data={"paths": ["/new"]})
+    second = _ledger_read(ctx, {**args, "before_id": first[-1]["id"]}).data
+    third = _ledger_read(ctx, {**args, "before_id": second[-1]["id"]}).data
+    assert len(first + second + third) == 125
+    assert len({row["id"] for row in first + second + third}) == 125
+    assert len(_ledger_read(ctx, {**args, "since_id": first[0]["id"]}).data) == 1
+    assert not _ledger_read(ctx, {**args, "before_id": "invalid"}).ok

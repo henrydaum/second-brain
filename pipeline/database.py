@@ -1577,7 +1577,7 @@ class Database:
 		return total
 
 	def get_ledger_rows(self, conversation_id=None, origin=None, session_key=None,
-						action_types=None, since_id=None, limit=100) -> list[dict]:
+						action_types=None, since_id=None, limit=100, before_id=None) -> list[dict]:
 		"""Read recent ledger rows, newest first. For tests and inspection UX.
 
 		Every filter is applied in SQL rather than by the caller, because the
@@ -1602,6 +1602,8 @@ class Database:
 			params.extend(str(t) for t in action_types)
 		if since_id is not None:
 			clauses.append("id > ?"); params.append(int(since_id))
+		if before_id is not None:
+			clauses.append("id < ?"); params.append(int(before_id))
 		where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 		with self.lock:
 			cur = self.conn.execute(
