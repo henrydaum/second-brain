@@ -137,6 +137,36 @@ def create_conversation(
 
 
 def load_conversation(
+    runtime, session_key: str, conversation_id: int, *,
+    agent_profile: str | None = None,
+    notification_mode: str | None = None,
+    system_prompt_extras: dict[str, Any] | None = None,
+) -> RuntimeSession:
+    """Bind atomically, retaining live state instead of recovering it as a crash."""
+    with runtime._sessions_lock:
+        existing = runtime.sessions.get(session_key)
+        if existing is not None and existing.conversation_id == conversation_id:
+            return existing
+        _check_conversation_binding(runtime, session_key, conversation_id)
+        return _load_conversation(
+            runtime, session_key, conversation_id, agent_profile=agent_profile,
+            notification_mode=notification_mode,
+            system_prompt_extras=system_prompt_extras)
+
+
+class ConversationInUse(RuntimeError):
+    """A different live session already owns this conversation's mutable state."""
+
+
+def _check_conversation_binding(runtime, session_key, conversation_id):
+    for key, session in runtime.sessions.items():
+        if key != session_key and session.conversation_id == conversation_id:
+            raise ConversationInUse(
+                "This conversation is already open in another session. "
+                "Close it there before opening it here.")
+
+
+def _load_conversation(
     runtime,
     session_key: str,
     conversation_id: int,
@@ -230,6 +260,19 @@ def load_conversation(
 
 
 def load_history(runtime, session_key: str, conversation_id: int):
+    # Check before closing the current session, and keep the claim atomic with
+    # hydration. A rejected switch must leave the caller's conversation intact.
+    from runtime.session import RuntimeResult
+
+    with runtime._sessions_lock:
+        try:
+            _check_conversation_binding(runtime, session_key, conversation_id)
+        except ConversationInUse as exc:
+            return RuntimeResult(False, error={"code": "conversation_in_use", "message": str(exc)})
+        return _load_history(runtime, session_key, conversation_id)
+
+
+def _load_history(runtime, session_key: str, conversation_id: int):
     """Switch a session into a previous conversation.
 
     Returns a :class:`RuntimeResult` with a short status line. The recent-
@@ -251,7 +294,9 @@ def load_history(runtime, session_key: str, conversation_id: int):
         # which is exactly the hand-off this is here to prevent.
         user_id = old.user_id
         frontend_name = old.frontend_name
-        close_session(runtime, session_key)
+        if not close_session(runtime, session_key):
+            return RuntimeResult(False, error={
+                "code": "busy", "message": "Cancel the running turn before switching conversations."})
         runtime.set_session_user(session_key, user_id)
         get_or_create_session(runtime, session_key).frontend_name = frontend_name
     session = load_conversation(runtime, session_key, conversation_id)
@@ -278,6 +323,8 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
     """Handle reset conversation."""
     with runtime._sessions_lock:
         prior = runtime.sessions.get(session_key)
+        if prior is not None and prior.busy:
+            raise RuntimeError("Cancel the running turn before resetting the conversation.")
         existed = prior is not None
         session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
@@ -428,6 +475,10 @@ def inject_user_message(
 def close_session(runtime, session_key: str) -> bool:
     """Close session."""
     with runtime._sessions_lock:
+        existing = runtime.sessions.get(session_key)
+        if existing is not None and existing.busy:
+            # Keep the live driver reachable until it has actually stopped.
+            return False
         closed = runtime.sessions.pop(session_key, None)
         existed = closed is not None
     # Don't leave active_session_key dangling at a closed session: is_attended()

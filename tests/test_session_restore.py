@@ -7,6 +7,115 @@ from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUES
 from state_machine.serialization import latest_state, save_state_marker
 
 
+def test_reopening_live_approval_preserves_request_and_cancel(tmp_path):
+    rt, session = _session(tmp_path)
+    session.busy = True
+    session.cs.set_priority("agent")
+    req = rt.request_input("s", "Permission", "config.write", type="boolean")
+    before = rt.db.get_conversation_messages(session.conversation_id)
+
+    assert rt.load_conversation("s", session.conversation_id) is session
+    assert rt.load_history("s", session.conversation_id).ok
+    assert rt.db.get_conversation_messages(session.conversation_id) == before
+    assert rt._approval_requests[req.id] is req
+    assert session.busy
+    assert session.cs.phase == PHASE_APPROVING_REQUEST
+    assert rt.answer_request("s", req.id, True).ok
+    assert session.cs.turn_priority == "agent"
+    assert rt.handle_action("s", "cancel").data["cancelled"]
+    assert session.cancel_event.is_set()
+
+
+def test_second_session_cannot_recover_or_overwrite_live_conversation(tmp_path):
+    import pytest
+    from runtime.persistence import ConversationInUse
+
+    rt, session = _session(tmp_path)
+    session.busy = True
+    session.cs.set_priority("agent")
+    req = rt.request_input("s", "Permission", "config.write", type="boolean")
+    other_id = rt.create_conversation("Other")
+    other = rt.load_conversation("phone", other_id)
+    before = rt.db.get_conversation_messages(session.conversation_id)
+
+    with pytest.raises(ConversationInUse):
+        rt.load_conversation("second", session.conversation_id)
+    result = rt.load_history("phone", session.conversation_id)
+    assert not result.ok
+    assert result.error["code"] == "conversation_in_use"
+    assert rt.get_session("phone") is other
+    assert rt.get_session("s") is session
+    assert rt._approval_requests[req.id] is req
+    assert rt.db.get_conversation_messages(session.conversation_id) == before
+
+
+def test_concurrent_loads_claim_only_one_live_session(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from runtime.persistence import ConversationInUse
+
+    rt = plain_runtime(_db(tmp_path))
+    cid = rt.create_conversation("Shared")
+    barrier = Barrier(2)
+
+    def load(key):
+        barrier.wait(timeout=5)
+        try:
+            return rt.load_conversation(key, cid)
+        except ConversationInUse:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(load, ["desktop", "phone"]))
+    assert sum(result is not None for result in results) == 1
+    assert sum(s.conversation_id == cid for s in rt.sessions.values()) == 1
+
+
+def test_reopen_during_running_turn_keeps_cancellation_and_commands(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from runtime import runtime_config
+
+    entered, stopped = Event(), Event()
+    calls = []
+    rt = plain_runtime(_db(tmp_path), commands={
+        "ping": CallableSpec("ping", lambda *_: "pong"),
+    })
+    session = rt.load_conversation("desktop", rt.create_conversation("Live"))
+
+    class BlockingLoop:
+        def drive(self, cs, *args):
+            calls.append(True)
+            with session.interruptible() as slot:
+                assert slot.arm(stopped.set)
+                entered.set()
+                assert stopped.wait(5)
+            cs.set_priority("user")
+            return None, [], []
+
+    monkeypatch.setattr(runtime_config, "build_loop", lambda *_: BlockingLoop())
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        turn = pool.submit(rt.handle_action, "desktop", "send_text", "hello")
+        try:
+            assert entered.wait(5)
+            assert rt.load_conversation("desktop", session.conversation_id) is session
+            assert not rt.load_history("phone", session.conversation_id).ok
+            assert not rt.close_session("desktop")
+            assert not rt.load_history("desktop", rt.create_conversation("Other")).ok
+            import pytest
+            with pytest.raises(RuntimeError, match="Cancel the running turn"):
+                rt.reset_conversation("desktop")
+            assert rt.get_session("desktop") is session
+            assert rt.handle_action("desktop", "cancel").data["cancelled"]
+            turn.result(timeout=5)
+        finally:
+            stopped.set()
+
+    assert calls == [True]
+    assert not session.busy
+    assert rt.handle_action("desktop", "call_command", {"name": "ping", "args": {}}).ok
+
+
 def _db(tmp_path):
     return Database(str(tmp_path / "restart.db"))
 
