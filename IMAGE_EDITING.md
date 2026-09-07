@@ -1,8 +1,9 @@
-# Image editing foundations
+# Image editing suite
 
 The bundle keeps the Art version's ordered recipe and prefix cache. The canvas
 service owns state and undo/redo; scripts own pixels, and the existing sandbox
-owns their execution. No kernel changes or technique catalogue are required.
+owns their execution. The bundle includes 21 classic editing techniques, their
+shared helpers, and a searchable catalogue. No kernel changes are required.
 
 ## What changed from Art
 
@@ -20,23 +21,122 @@ owns their execution. No kernel changes or technique catalogue are required.
 | Cache | Includes source/helper contents, dimensions, palette values, seed, compositing properties and declared file inputs. |
 | Fonts | Portable regular default; custom fonts are explicitly read through the SDK. No dependency on the old application's fonts folder. |
 
-## Agent workflow
+## Start here: discover, edit, render
 
-1. `manage_layers(action="create", width=1600, height=900)` creates and selects a canvas.
-2. `add_layer(script="my_layer", kind="object", controls={...}, properties={...})` adds a step.
-3. `manage_layers(action="inspect")` exposes indices, stable IDs and current controls.
-4. `manage_layers(action="update", chain_index=0, properties={"opacity": 0.5})` edits one step.
-5. `render_canvas()` renders or reuses the longest matching prefix.
+`search_techniques()` lists the suite. Search ordinary words with
+`search_techniques(query="sharpness")`, or get the exact controls and a usable
+example with `search_techniques(script="canvas_sharpen")`. The catalogue returns
+control types, defaults, bounds, units and suggested increments. Increments are
+not quantization: saturation 1.125 is valid even though its suggested step is 0.05.
+`search_techniques(recipe="photo")` and `recipe="composition"` return complete
+worked sequences of tool calls without changing any canvas.
 
-Use `set_control` to patch one control; `update` with `controls` replaces the
-whole control dictionary. `duplicate`, `move`, `delete`, `undo` and `redo` work on
-indices. Reinspect after reordering. `list` and `select` support multiple canvases.
-`set_dimensions` replays the recipe at the new size; pixel resampling and cropping
-belong in scripts, using the helpers below.
+For an uploaded photo, use the actual local attachment path:
 
-`render_canvas(seed=0)` is deterministic, including zero. `force_new_seed=True`
-chooses another seed. `force=True` bypasses all cached steps while keeping the
-seed. `out` copies the result to an explicit PNG export path.
+```python
+add_layer(script="canvas_load_image", controls={"path": "<actual attachment path>"})
+render_canvas()
+add_layer(script="canvas_crop", controls={"left": 100, "top": 50, "right": 900, "bottom": 650})
+add_layer(script="canvas_saturation", controls={"factor": 1.1})
+add_layer(script="canvas_sharpen", controls={"radius": 1.5, "amount": 60, "threshold": 3})
+render_canvas()
+```
+
+The crop coordinates above are an example for a sufficiently large image: read
+the first render's dimensions and choose a useful rectangle. Import applies EXIF
+orientation and preserves native pixels by default. It does not upload the photo
+to any external service. `kind="object"` imports an additional image as an overlay.
+Use `fit="contain"`, `"cover"` or `"stretch"` to fit that import to the current size.
+
+A blank design starts with `manage_layers(action="create", width=800, height=500)`.
+Then add `canvas_solid` or `canvas_gradient` and object steps such as `canvas_text`.
+`create` makes a new canvas; `inspect`, `list` and `select` let you resume existing work.
+
+### The 21 techniques
+
+| Script suffix (all use `canvas_`) | Main adjustable controls |
+| --- | --- |
+| load_image | path, fit |
+| crop | left, top, right, bottom (exclusive edges) |
+| resize | width, height, fit |
+| rotate | angle (positive counterclockwise), expand |
+| flip | horizontal, vertical |
+| brightness | factor (1 unchanged) |
+| contrast | factor (1 unchanged) |
+| saturation | factor (0 grayscale, 1 unchanged) |
+| exposure | stops (0 unchanged; +1 doubles linear light) |
+| gamma | gamma (1 unchanged; above 1 brightens midtones) |
+| blur | radius in pixels |
+| sharpen | radius, amount in percent, threshold |
+| grayscale | no controls; mix using layer opacity |
+| invert | no controls; mix using layer opacity |
+| solid | color |
+| gradient | start, end, angle |
+| line | points, width, color |
+| shape | shape (rectangle/ellipse), box, fill, stroke, stroke_width |
+| text | content, x, y, size, color, font_path, max_width, align |
+| duotone | shadows, highlights, amount |
+| vignette | amount, radius |
+
+### Fine adjustments and history
+
+Inspect first: `manage_layers(action="inspect")` exposes indices and stable IDs.
+`manage_layers(action="controls", layer_id="...")` returns current values and their
+specifications. Change one control with `set_control` and `name`/`value`, or patch
+several with `set_controls` and `controls={...}`. These validate shipped controls
+before editing and use one undo step. Use the existing layer rather than stacking
+a second filter just to change its strength.
+
+`update` changes compositing properties; its `controls` field replaces the entire
+control dictionary (defaults fill omitted values). `duplicate`, `move`, `delete`,
+`undo` and `redo` support iteration. `layer_id` targets a stable identity; otherwise
+reinspect indices after reordering. `controls` lookup describes shipped techniques;
+custom scripts still expose their current values through `inspect`.
+
+### Geometry and order
+
+Crop and resize change actual output dimensions. Expanded rotation and native
+photo import can also change them. Each following step receives that current
+image's dimensions, including when rendering resumes from a cached prefix.
+Coordinates are pixels measured from its top-left corner. Masks must match the
+input dimensions of the step where they are used. Dimension-changing steps need
+full opacity and no mask, since differently sized images cannot be interpolated.
+
+Canvas state width/height describe the **starting** empty surface; they do not
+change when a crop is added. `render_canvas` reports final dimensions.
+`set_dimensions` replays the recipe from a new starting surface; it does not
+resample a native source photo. Use `canvas_resize` to resize pixels.
+
+Usually do geometry early, tonal edits next, sharpen near the end, and draw text
+or annotations last so they remain crisp. Render and inspect before placing
+objects after a crop or rotation. This is a recipe: a later filter affects every
+visible step beneath it, including earlier text and objects.
+
+### Palette behaviour
+
+Photos are never forced into a palette. Brightness, saturation, exposure and
+other ordinary adjustments preserve alpha and use the photo's own colours.
+Literal colours (CSS names, hex RGB/RGBA, or `transparent`) stay fixed.
+`@primary`, `@secondary`, `@tertiary`, `@accent`, `@background` are live references
+for fills, gradients, lines, shapes, text and explicit duotone mapping.
+
+`manage_layers(action="palettes")` lists presets. Set canvas-specific overrides:
+
+```python
+manage_layers(action="set_palette", colors={"primary": "#182844", "accent": "#ffd9a0"})
+```
+
+The supplied dictionary replaces prior overrides; `{}` restores preset values.
+Changing preset ID also clears overrides. Palette changes are undoable and survive
+restart. Duotone interpolates RGB between its two colours but preserves photo alpha;
+alpha components of its shadow/highlight colours are ignored.
+
+### Rendering and export
+
+`render_canvas(seed=0)` is deterministic, including zero. Ordinary classic edits do
+not use randomness. `force=True` bypasses the cache while keeping the seed; `out`
+copies the result to an explicit PNG export path. Always render, inspect and refine
+before considering an edit finished.
 
 ## Layer authoring contract
 
@@ -61,8 +161,8 @@ receive the preceding flattened RGBA image, even when the recipe starts empty.
 An object must output only its overlay. Returning the input with the object
 already drawn would composite the input twice. Object images can be smaller
 than the canvas; `offset: [x, y]` places them and clips outside the canvas.
-Filters and backgrounds must return the exact canvas dimensions and use normal
-blend mode with zero offset.
+Filters and backgrounds use normal blend mode and zero offset. They may change
+dimensions only with full opacity and no mask. Later steps receive the new dimensions.
 
 Layer properties:
 
@@ -71,7 +171,7 @@ Layer properties:
 - `blend_mode`: `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, or `difference` (objects).
 - `mask`: optional image path at canvas size. Luminance multiplied by alpha controls coverage; white reveals and black hides.
 - `offset`: integer `[x, y]` (objects).
-- `dependencies`: paths of **every external file read by the script**, including source images and fonts. Contents are hashed; mask paths are included automatically.
+- `dependencies`: paths of every external file read by a **custom** script. Shipped techniques automatically derive image/font dependencies from their current controls; mask paths are always included. Contents are hashed, so replacing an image at the same path invalidates its cached import.
 
 Scripts must be deterministic for their inputs. Relative Python helpers are
 hashed recursively. Dynamic imports, network responses, environment settings
@@ -101,5 +201,7 @@ decoder safeguards and sandbox memory/time limits still apply. This is not a
 tiled, out-of-core renderer. Render caches remain under workspace/canvas_renders;
 they can be removed to reclaim disk space without deleting canvas recipes.
 
-No production techniques ship in this change. Tests create minimal scripts in
-temporary directories, including actual nested sandbox execution.
+This is classic deterministic editing, not generative AI. Discovery is a small
+local catalogue with keyword matching; no embedding service, indexing job or model
+is needed. Tests cover every shipped script and composite workflows through the
+actual sandbox, not just standalone pixel calls.

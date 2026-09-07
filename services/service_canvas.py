@@ -74,6 +74,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import math
+import re
 import secrets
 import time
 from typing import Any
@@ -145,11 +146,13 @@ class Canvas:
         palette_id: str = DEFAULT_PALETTE,
         layers: list[dict] | None = None,
         render_seed: int | None = None,
+        palette_colors: dict | None = None,
     ):
         self.canvas_id = canvas_id or _new_id()
         width, height = _clamp_dimension(width), _clamp_dimension(height)
         self.width, self.height = width, height
         self.palette_id = palette_id
+        self.palette_colors = deepcopy(palette_colors or {})
         self.layers: list[dict] = deepcopy(layers or [])
         self.render_seed = render_seed
         self.undo_stack: list[dict] = []
@@ -163,6 +166,7 @@ class Canvas:
             "width": self.width,
             "height": self.height,
             "palette_id": self.palette_id,
+            "palette_colors": deepcopy(self.palette_colors),
             "layers": deepcopy(self.layers),
             "render_seed": self.render_seed,
             "undo_stack": deepcopy(self.undo_stack),
@@ -178,6 +182,7 @@ class Canvas:
             width=data.get("width", DEFAULT_SIZE),
             height=data.get("height", DEFAULT_SIZE),
             palette_id=data.get("palette_id", DEFAULT_PALETTE),
+            palette_colors=data.get("palette_colors", {}),
             layers=data.get("layers"),
             render_seed=data.get("render_seed"),
         )
@@ -197,6 +202,7 @@ class Canvas:
                 "width": self.width,
                 "height": self.height,
                 "palette_id": self.palette_id,
+                "palette_colors": deepcopy(self.palette_colors),
                 "layers": deepcopy(self.layers),
             },
             "render_seed": self.render_seed,
@@ -209,6 +215,7 @@ class Canvas:
             "width": self.width,
             "height": self.height,
             "palette_id": self.palette_id,
+            "palette_colors": deepcopy(self.palette_colors),
             "layers": deepcopy(self.layers),
             "render_seed": self.render_seed,
         }
@@ -223,9 +230,7 @@ class Canvas:
 
     def apply_palette(self, palette_id: str) -> None:
         self.palette_id = palette_id
-        for step in self.layers:
-            if "palette" in (step.get("controls") or {}):
-                step["controls"]["palette"] = palette_id
+        self.palette_colors = {}
 
     def apply_control(self, chain_index: int, name: str, value: Any) -> None:
         if not (0 <= chain_index < len(self.layers)):
@@ -295,16 +300,38 @@ class CanvasService(BaseService):
     )
 
     agent_prompt = (
-        "Image editing: manage_layers create/inspect/select manages canvases; add_layer "
-        "adds recipe steps, render_canvas produces PNG. Empty canvases are transparent. "
-        "Layer scripts export main(sdk, kind, input_path, output_path, width, height, seed, "
-        "palette, controls). Objects write an overlay; filters write the full replacement. "
-        "Read scripts/art_kit.py for reusable image helpers. Scripts importing it declare "
-        "box='image_editing', dependencies_files=['scripts/art_kit.py'] and use "
-        "from .art_kit import read_image, write_png. Declare every external image/font/file "
-        "read in the layer's dependencies so cache invalidation tracks its contents. "
-        "Use manage_layers update for visibility, opacity, masks and blending; inspect "
-        "before editing indices. No technique catalogue ships yet."
+        "## Image editing\n"
+        "Use the installed classic techniques; no code authoring or generative AI is needed. "
+        "search_techniques() lists them; search_techniques(script='canvas_blur') returns "
+        "controls, defaults, ranges, suggested increments and an add_layer example. "
+        "search_techniques(recipe='photo') gives a worked sequence. Available: load_image, crop, resize, rotate, flip, brightness, contrast, saturation, "
+        "exposure, gamma, blur, sharpen, grayscale, invert, solid, gradient, line, shape, text, "
+        "duotone, vignette (script names have canvas_ prefix).\n"
+        "Start a photo edit with add_layer(script='canvas_load_image', controls={'path': "
+        "'<actual attachment path>'}); kind defaults to background and native preserves pixels. "
+        "For a blank composition use manage_layers create with width/height, then solid/gradient "
+        "or object layers. create always makes a NEW canvas; inspect/select resumes an existing one. "
+        "Use kind='object' with load_image for an additional photo. Background replaces only the "
+        "first background and preserves the rest of the recipe.\n"
+        "Crop, resize and expanded rotate change the rendered dimensions; later coordinates use "
+        "that new image size. Render to inspect dimensions before positioning text/shapes. "
+        "set_dimensions changes the starting canvas and replays the recipe; canvas_resize actually "
+        "resamples pixels. Prefer geometry early, tonal edits next, sharpening near the end, "
+        "and text/annotations last so they stay crisp.\n"
+        "Fine-tune existing layers with manage_layers set_control (name/value), set_controls "
+        "(a controls patch), or update (layer properties). controls shows the current values "
+        "and their specifications. Use layer_id or inspect indices after reordering. "
+        "Do not stack another copy just to change strength; undo/redo restore prior settings. "
+        "Object layers output overlays; filters output replacements. Opacity/masks soften "
+        "same-size steps; dimension-changing steps require full opacity and no mask.\n"
+        "Photos retain their colours by default. @primary, @secondary, @tertiary, @accent and "
+        "@background are live palette references for drawing/fills/duotone; literal hex colours "
+        "stay fixed. manage_layers palettes lists presets; set_palette accepts colors role-to-hex "
+        "overrides. Duotone is an explicit colour-mapping choice, not a required finish. "
+        "Image/font controls in shipped techniques are tracked automatically for caching. "
+        "Custom scripts still require explicit file dependencies.\n"
+        "Finish by calling render_canvas, inspecting the image, and adjusting the existing "
+        "controls if necessary. Preserve the seed for comparisons. Export with render_canvas(out=...)."
     )
 
     exports = [
@@ -616,17 +643,25 @@ class CanvasService(BaseService):
         self._persist(sdk, c)
         return c.to_dict()
 
-    def set_palette(self, sdk, canvas_id, palette_id):
+    def set_palette(self, sdk, canvas_id, palette_id=None, colors=None):
         """Change the canvas-wide palette."""
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
-        if not palette_id:
-            raise ValueError("palette_id is required")
+        palette_id = palette_id or c.palette_id
+        if colors is not None:
+            if not isinstance(colors, dict) or any(
+                    not isinstance(k, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]*", k) or
+                    not isinstance(v, str) or not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", v)
+                    for k, v in colors.items()):
+                raise ValueError("colors must map palette role names to hex RGB/RGBA colours")
         if palette_id not in _PALETTES:
             raise ValueError("unknown palette")
         c.push_undo()
-        c.apply_palette(str(palette_id))
+        if palette_id != c.palette_id:
+            c.apply_palette(str(palette_id))
+        if colors is not None:
+            c.palette_colors = deepcopy(colors)
         self._persist(sdk, c)
         return c.to_dict()
 
@@ -674,6 +709,7 @@ class CanvasService(BaseService):
         c.width = snapshot["width"]
         c.height = snapshot["height"]
         c.palette_id = snapshot["palette_id"]
+        c.palette_colors = deepcopy(snapshot.get("palette_colors", {}))
         c.render_seed = snapshot["render_seed"]
         self._persist(sdk, c)
         return c.to_dict()
@@ -691,6 +727,7 @@ class CanvasService(BaseService):
         c.width = snapshot["width"]
         c.height = snapshot["height"]
         c.palette_id = snapshot["palette_id"]
+        c.palette_colors = deepcopy(snapshot.get("palette_colors", {}))
         c.render_seed = snapshot["render_seed"]
         self._persist(sdk, c)
         return c.to_dict()

@@ -887,10 +887,19 @@ def text(image, xy, content, size=48, weight="regular", italic=False,
     draw = ImageDraw.Draw(image)
     body = _wrap_text(content, font, max_width) if max_width else str(content).split("\n")
     rendered = "\n".join(body)
+    spacing = int(size * (line_spacing - 1.0))
+    if "\n" in rendered and anchor[1] in "tb":
+        # Pillow supports ascender/baseline anchors for multiline strings,
+        # but rejects top/bottom anchors. Translate the requested ink edge.
+        edge = anchor[1]
+        anchor = anchor[0] + "a"
+        bounds = draw.multiline_textbbox((0, 0), rendered, font=font,
+                                         anchor=anchor, align=align, spacing=spacing)
+        xy = (xy[0], xy[1] - bounds[1 if edge == "t" else 3])
     draw.multiline_text(
         xy, rendered, font=font, fill=color or "#000000",
         anchor=anchor, align=align,
-        spacing=int(size * (line_spacing - 1.0)),
+        spacing=spacing,
     )
 
 

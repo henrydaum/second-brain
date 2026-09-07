@@ -29,7 +29,7 @@ from guest.bases import BaseTool
 class AddLayer(BaseTool):
     name = "add_layer"
     requires_services = ["canvas"]
-    dependencies_files = ["services/service_canvas.py"]
+    dependencies_files = ["services/service_canvas.py", "scripts/canvas_catalog.py"]
     description = (
         "Add a layer to a canvas. 'kind' is 'background' (produces a new "
         "image from scratch — only layer 0 may be a background), 'filter' "
@@ -38,7 +38,10 @@ class AddLayer(BaseTool):
         "the scripts/ directory without the .py extension (e.g. "
         "'canvas_load_image', 'canvas_blur'). The 'canvas_' prefix is a "
         "convention for layer scripts. 'controls' are keyword arguments "
-        "passed to that script at render time."
+        "passed to that script at render time. Omit kind for shipped techniques; "
+        "search_techniques returns their exact controls and examples. Photo import: "
+        "script='canvas_load_image', controls={'path': '<attachment path>'}. "
+        "Default native fit preserves the photo dimensions. Adding does not render."
     )
     parameters = {
         "type": "object",
@@ -66,10 +69,16 @@ class AddLayer(BaseTool):
                 "description": "A few words on what you are adding, shown to the user.",
             },
         },
-        "required": ["script", "kind"],
+        "required": ["script"],
     }
 
-    def run(self, sdk, script, kind, canvas_id=None, controls=None, properties=None):
+    def run(self, sdk, script, kind=None, canvas_id=None, controls=None, properties=None):
+        prepared = sdk.scripts.run("canvas_catalog.py", action="prepare", script=script,
+                                   kind=kind, controls=controls)
+        script, kind, controls = prepared["script"], prepared["kind"], prepared["controls"]
+        for path in prepared["dependencies"]:
+            if not sdk.fs.exists(path):
+                return sdk.fail(f"Input file does not exist: {path}")
         # Resolve canvas.
         if canvas_id:
             state = sdk.services.call("canvas", "get_state", canvas_id)
@@ -97,4 +106,5 @@ class AddLayer(BaseTool):
             f"{0 if kind == 'background' else len(layers) - 1}. "
             f"Canvas {canvas_id} now has {len(layers)} layer(s)."
         )
-        return sdk.ok(state, llm_summary=summary)
+        layer = layers[0 if kind == "background" else -1]
+        return sdk.ok(state, llm_summary=summary + f" Layer id: {layer['id']}. Controls: {controls}. Call render_canvas to see it.")

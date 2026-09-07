@@ -81,14 +81,15 @@ class RenderCanvas(BaseTool):
         hit_note = " (cache hit)" if cache_hit else ""
         summary = (
             f"Rendered {total} layer(s) "
-            f"({state['width']}×{state['height']}, seed={seed}). "
+            f"({result['width']}×{result['height']}, seed={seed}). "
             f"{cached}/{total} cached{hit_note}. "
             f"Output: {path}"
         )
 
         return sdk.ok(
             {"path": path, "seed": seed, "canvas_id": canvas_id,
-             "cache_hit": cache_hit, "cached_layers": cached},
+             "cache_hit": cache_hit, "cached_layers": cached,
+             "width": result["width"], "height": result["height"]},
             llm_summary=summary,
             attachments=[path],
         )
