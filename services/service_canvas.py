@@ -48,7 +48,8 @@ Layer model
     - ``object`` — reads the prior layer's output, returns an RGBA image that
       is alpha-composited on top. Text, shapes, sprites, overlays.
 
-    Layer 0 must always be a background. ``move_layer`` enforces this.
+    A background is optional, but when present stays at index zero.
+    Empty canvases render transparent. Deleting index zero preserves later steps.
 
 Persistence
     Canvas state is written to ``canvas_states`` in SQLite on every mutation.
@@ -70,6 +71,9 @@ Exports
 
 from __future__ import annotations
 
+from copy import deepcopy
+import json
+import math
 import secrets
 import time
 from typing import Any
@@ -77,8 +81,6 @@ from typing import Any
 from guest.bases import BaseService
 
 DEFAULT_SIZE = 1024
-MIN_SIZE = 16
-MAX_SIZE = 8192
 UNDO_LIMIT = 50
 DEFAULT_PALETTE = "default"
 
@@ -89,7 +91,9 @@ def _new_id() -> str:
 
 
 def _clamp_dimension(dim: int) -> int:
-    return max(MIN_SIZE, min(MAX_SIZE, int(dim)))
+    if type(dim) is not int or dim < 1:
+        raise ValueError("dimensions must be positive integers")
+    return dim
 
 
 # ── palette catalogue ──────────────────────────────────────────────────────
@@ -143,10 +147,10 @@ class Canvas:
         render_seed: int | None = None,
     ):
         self.canvas_id = canvas_id or _new_id()
-        self.width = _clamp_dimension(width)
-        self.height = _clamp_dimension(height)
+        width, height = _clamp_dimension(width), _clamp_dimension(height)
+        self.width, self.height = width, height
         self.palette_id = palette_id
-        self.layers: list[dict] = list(layers or [])
+        self.layers: list[dict] = deepcopy(layers or [])
         self.render_seed = render_seed
         self.undo_stack: list[dict] = []
         self.redo_stack: list[dict] = []
@@ -159,10 +163,10 @@ class Canvas:
             "width": self.width,
             "height": self.height,
             "palette_id": self.palette_id,
-            "layers": [dict(step) for step in self.layers],
+            "layers": deepcopy(self.layers),
             "render_seed": self.render_seed,
-            "undo_stack": list(self.undo_stack),
-            "redo_stack": list(self.redo_stack),
+            "undo_stack": deepcopy(self.undo_stack),
+            "redo_stack": deepcopy(self.redo_stack),
         }
 
     @classmethod
@@ -177,8 +181,8 @@ class Canvas:
             layers=data.get("layers"),
             render_seed=data.get("render_seed"),
         )
-        c.undo_stack = list(data.get("undo_stack") or [])
-        c.redo_stack = list(data.get("redo_stack") or [])
+        c.undo_stack = deepcopy(data.get("undo_stack") or [])
+        c.redo_stack = deepcopy(data.get("redo_stack") or [])
         # Backfill ids for layers that predate the id field.
         for step in c.layers:
             if isinstance(step, dict) and not step.get("id"):
@@ -193,7 +197,7 @@ class Canvas:
                 "width": self.width,
                 "height": self.height,
                 "palette_id": self.palette_id,
-                "layers": [dict(step) for step in self.layers],
+                "layers": deepcopy(self.layers),
             },
             "render_seed": self.render_seed,
         }
@@ -205,7 +209,7 @@ class Canvas:
             "width": self.width,
             "height": self.height,
             "palette_id": self.palette_id,
-            "layers": [dict(step) for step in self.layers],
+            "layers": deepcopy(self.layers),
             "render_seed": self.render_seed,
         }
 
@@ -247,7 +251,9 @@ class Canvas:
         n = len(self.layers)
         if not (0 <= from_index < n) or not (0 <= to_index < n):
             raise ValueError(f"index out of range (len={n})")
-        if from_index != to_index and (from_index == 0 or to_index == 0):
+        proposed = list(self.layers)
+        proposed.insert(to_index, proposed.pop(from_index))
+        if any(layer["kind"] == "background" for layer in proposed[1:]):
             raise ValueError(
                 "layer 0 must be a background; reorder rejected"
             )
@@ -258,8 +264,10 @@ class Canvas:
         """Append a layer, or replace layer 0 if it is a background."""
         kind = entry.get("kind")
         if kind == "background":
-            if self.layers:
-                self.layers[0] = dict(entry)
+            if self.layers and self.layers[0]["kind"] == "background":
+                self.layers[0] = deepcopy(entry)
+            elif self.layers:
+                self.layers.insert(0, deepcopy(entry))
             else:
                 self.layers = [dict(entry)]
         elif kind in ("filter", "object"):
@@ -268,8 +276,8 @@ class Canvas:
             raise ValueError(f"unknown layer kind: {kind!r}")
 
     def set_dimensions(self, width: int, height: int) -> None:
-        self.width = _clamp_dimension(width)
-        self.height = _clamp_dimension(height)
+        width, height = _clamp_dimension(width), _clamp_dimension(height)
+        self.width, self.height = width, height
 
     def reset(self) -> None:
         self.layers = []
@@ -282,8 +290,21 @@ class Canvas:
 class CanvasService(BaseService):
     name = "canvas"
     description = (
-        "Canvas state machine for image manipulation and generative art. "
+        "Canvas state machine for general image editing. "
         "Holds a layer chain per canvas; rendering is handled by scripts."
+    )
+
+    agent_prompt = (
+        "Image editing: manage_layers create/inspect/select manages canvases; add_layer "
+        "adds recipe steps, render_canvas produces PNG. Empty canvases are transparent. "
+        "Layer scripts export main(sdk, kind, input_path, output_path, width, height, seed, "
+        "palette, controls). Objects write an overlay; filters write the full replacement. "
+        "Read scripts/art_kit.py for reusable image helpers. Scripts importing it declare "
+        "box='image_editing', dependencies_files=['scripts/art_kit.py'] and use "
+        "from .art_kit import read_image, write_png. Declare every external image/font/file "
+        "read in the layer's dependencies so cache invalidation tracks its contents. "
+        "Use manage_layers update for visibility, opacity, masks and blending; inspect "
+        "before editing indices. No technique catalogue ships yet."
     )
 
     exports = [
@@ -291,6 +312,8 @@ class CanvasService(BaseService):
         "get_state",
         "get_or_create",
         "add_layer",
+        "update_layer",
+        "duplicate_layer",
         "remove_layer",
         "move_layer",
         "set_control",
@@ -310,15 +333,15 @@ class CanvasService(BaseService):
 
     def start(self, sdk):
         self._canvases: dict[str, Canvas] = {}
-        self._session_to_canvas: dict[str, str] = {}
         _ensure_palettes(sdk)
         self._ensure_schema(sdk)
+        sdk.db.define("CREATE TABLE IF NOT EXISTS canvas_bindings "
+                      "(session_key TEXT PRIMARY KEY, canvas_id TEXT NOT NULL)")
         sdk.log("canvas: started")
         return True
 
     def stop(self, sdk):
         self._canvases = {}
-        self._session_to_canvas = {}
         sdk.log("canvas: stopped")
 
     # ── schema ─────────────────────────────────────────────────────────
@@ -334,22 +357,27 @@ class CanvasService(BaseService):
             """
         )
 
+    def _binding(self, sdk, key):
+        rows = sdk.db.query("SELECT canvas_id FROM canvas_bindings WHERE session_key = ?", [key])
+        return rows[0]["canvas_id"] if rows else None
+
+    def _bind(self, sdk, key, canvas_id):
+        sdk.db.write("INSERT INTO canvas_bindings (session_key, canvas_id) VALUES (?, ?) "
+                     "ON CONFLICT(session_key) DO UPDATE SET canvas_id=excluded.canvas_id",
+                     [key, canvas_id])
+
     def _persist(self, sdk, canvas: Canvas) -> None:
         import json
 
         now = time.time()
         payload = json.dumps(canvas.to_dict(), separators=(",", ":"))
-        try:
-            sdk.db.write(
-                "INSERT INTO canvas_states (canvas_id, state_json, updated_at) "
-                "VALUES (?, ?, ?) "
-                "ON CONFLICT(canvas_id) DO UPDATE SET "
-                "  state_json = excluded.state_json, "
-                "  updated_at = excluded.updated_at",
-                [canvas.canvas_id, payload, now],
-            )
-        except Exception:
-            sdk.log(f"canvas: persist failed for {canvas.canvas_id}")
+        sdk.db.write(
+            "INSERT INTO canvas_states (canvas_id, state_json, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(canvas_id) DO UPDATE SET "
+            "state_json=excluded.state_json, updated_at=excluded.updated_at",
+            [canvas.canvas_id, payload, now],
+        )
+        self._canvases[canvas.canvas_id] = deepcopy(canvas)
 
     def _load(self, sdk, canvas_id: str) -> Canvas | None:
         import json
@@ -372,24 +400,27 @@ class CanvasService(BaseService):
         """Get an in-memory canvas, lazy-loading from the DB."""
         c = self._canvases.get(canvas_id)
         if c is not None:
-            return c
+            return deepcopy(c)
         loaded = self._load(sdk, canvas_id)
         if loaded is not None:
             self._canvases[loaded.canvas_id] = loaded
-        return loaded
+        return deepcopy(loaded)
 
     # ── exports ────────────────────────────────────────────────────────
 
     def create(self, sdk, width=DEFAULT_SIZE, height=DEFAULT_SIZE,
                palette_id=DEFAULT_PALETTE, canvas_id=None):
         """Allocate a fresh canvas. Returns the canvas_id."""
+        if palette_id not in _PALETTES:
+            raise ValueError("unknown palette")
         c = Canvas(
             canvas_id=canvas_id,
             width=width,
             height=height,
             palette_id=palette_id,
         )
-        self._canvases[c.canvas_id] = c
+        if self._get(sdk, c.canvas_id) is not None:
+            raise ValueError("canvas_id already exists")
         self._persist(sdk, c)
         sdk.log(f"canvas: created {c.canvas_id} ({c.width}x{c.height})")
         return c.canvas_id
@@ -405,15 +436,14 @@ class CanvasService(BaseService):
                       palette_id=DEFAULT_PALETTE):
         """Return the session's canvas, creating it if needed."""
         session_key = self._session_key(sdk)
-        cid = self._session_to_canvas.get(session_key)
+        cid = self._binding(sdk, session_key)
         if cid:
             c = self._get(sdk, cid)
             if c is not None:
                 return c.to_dict()
-            self._session_to_canvas.pop(session_key, None)
         cid = self.create(sdk, width=width, height=height,
                           palette_id=palette_id)
-        self._session_to_canvas[session_key] = cid
+        self._bind(sdk, session_key, cid)
         return self._get(sdk, cid).to_dict()
 
     def for_session(self, sdk, canvas_id=None):
@@ -424,7 +454,7 @@ class CanvasService(BaseService):
         """
         session_key = self._session_key(sdk)
         if canvas_id is None:
-            cid = self._session_to_canvas.get(session_key)
+            cid = self._binding(sdk, session_key)
             if cid is None:
                 return None
             c = self._get(sdk, cid)
@@ -432,10 +462,10 @@ class CanvasService(BaseService):
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
-        self._session_to_canvas[session_key] = canvas_id
+        self._bind(sdk, session_key, canvas_id)
         return c.to_dict()
 
-    def add_layer(self, sdk, canvas_id, script, kind, controls=None):
+    def add_layer(self, sdk, canvas_id, script, kind, controls=None, **properties):
         """Append a layer, or replace the background if kind='background'.
 
         ``script`` is the name of a script in the scripts/ directory (e.g.
@@ -453,26 +483,101 @@ class CanvasService(BaseService):
             )
         if not script or not isinstance(script, str):
             raise ValueError("add_layer requires a 'script' name")
+        if controls is not None and not isinstance(controls, dict):
+            raise ValueError("controls must be an object")
         c.push_undo()
         entry = {
             "id": _new_id(),
             "script": str(script),
             "kind": kind,
-            "controls": dict(controls or {}),
+            "controls": deepcopy(controls if controls is not None else {}),
         }
+        entry.update(self._properties(properties))
+        self._validate_entry(entry)
         c.push_layer(entry)
+        self._persist(sdk, c)
+        return c.to_dict()
+
+    @staticmethod
+    def _validate_entry(entry):
+        script = entry["script"]
+        if any(char in script for char in ("/", "\\", ":")) or not script.strip():
+            raise ValueError("script must be a filename without directories")
+        if entry["kind"] != "object" and (
+                tuple(entry.get("offset", (0, 0))) != (0, 0) or
+                entry.get("blend_mode", "normal") != "normal"):
+            raise ValueError("filters/backgrounds require zero offset and normal blending")
+        json.dumps(entry, allow_nan=False)
+
+    @staticmethod
+    def _properties(properties):
+        allowed = {"name", "visible", "opacity", "blend_mode", "mask", "offset", "dependencies"}
+        if set(properties) - allowed:
+            raise ValueError("unknown layer properties")
+        p = deepcopy(properties)
+        if "name" in p and not isinstance(p["name"], str):
+            raise ValueError("name must be a string")
+        if "visible" in p and type(p["visible"]) is not bool:
+            raise ValueError("visible must be boolean")
+        if "opacity" in p and (type(p["opacity"]) not in (int, float) or
+                not math.isfinite(p["opacity"]) or not 0 <= p["opacity"] <= 1):
+            raise ValueError("opacity must be between 0 and 1")
+        if p.get("blend_mode", "normal") not in ("normal", "multiply", "screen", "overlay", "darken", "lighten", "difference"):
+            raise ValueError("unsupported blend_mode")
+        if "offset" in p and (not isinstance(p["offset"], (list, tuple)) or
+                len(p["offset"]) != 2 or any(type(v) is not int for v in p["offset"])):
+            raise ValueError("offset must contain two integers")
+        if "dependencies" in p and (not isinstance(p["dependencies"], list) or
+                any(not isinstance(v, str) or not v for v in p["dependencies"])):
+            raise ValueError("dependencies must be file paths")
+        if "mask" in p and p["mask"] is not None and not isinstance(p["mask"], str):
+            raise ValueError("mask must be a file path or null")
+        json.dumps(p, allow_nan=False)
+        return p
+
+    def update_layer(self, sdk, canvas_id, chain_index, **changes):
+        """Update controls/script or compositing properties in one undo step."""
+        c = self._get(sdk, canvas_id)
+        if c is None or type(chain_index) is not int or not 0 <= chain_index < len(c.layers):
+            raise ValueError("unknown canvas or layer index")
+        entry = deepcopy(c.layers[chain_index])
+        for key in ("script", "controls"):
+            if key in changes:
+                value = changes.pop(key)
+                if key == "script" and (not isinstance(value, str) or not value):
+                    raise ValueError("script must be a nonempty name")
+                if key == "controls" and not isinstance(value, dict):
+                    raise ValueError("controls must be an object")
+                entry[key] = deepcopy(value)
+        entry.update(self._properties(changes))
+        self._validate_entry(entry)
+        c.push_undo()
+        c.layers[chain_index] = entry
+        self._persist(sdk, c)
+        return c.to_dict()
+
+    def duplicate_layer(self, sdk, canvas_id, chain_index):
+        c = self._get(sdk, canvas_id)
+        if c is None or type(chain_index) is not int or not 0 <= chain_index < len(c.layers):
+            raise ValueError("unknown canvas or layer index")
+        entry = deepcopy(c.layers[chain_index])
+        if entry["kind"] == "background":
+            raise ValueError("duplicate backgrounds as object scripts instead")
+        entry["id"] = _new_id()
+        c.push_undo()
+        c.layers.insert(chain_index + 1, entry)
         self._persist(sdk, c)
         return c.to_dict()
 
     def remove_layer(self, sdk, canvas_id, chain_index):
         """Delete the layer at ``chain_index``.
 
-        Deleting layer 0 clears the entire canvas.
+        Deleting a layer preserves all other layers.
         """
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
-        if not isinstance(chain_index, int):
+        if type(chain_index) is not int:
             raise ValueError("chain_index must be an integer")
         if chain_index < 0 or chain_index >= len(c.layers):
             raise ValueError(
@@ -480,10 +585,7 @@ class CanvasService(BaseService):
                 f"(len={len(c.layers)})"
             )
         c.push_undo()
-        if chain_index == 0:
-            c.reset()
-        else:
-            c.delete_entry(chain_index)
+        c.delete_entry(chain_index)
         self._persist(sdk, c)
         return c.to_dict()
 
@@ -492,7 +594,7 @@ class CanvasService(BaseService):
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
-        if not isinstance(from_index, int) or not isinstance(to_index, int):
+        if type(from_index) is not int or type(to_index) is not int:
             raise ValueError("from_index and to_index must be integers")
         c.push_undo()
         c.move_entry(from_index, to_index)
@@ -504,12 +606,13 @@ class CanvasService(BaseService):
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
-        if not isinstance(chain_index, int):
+        if type(chain_index) is not int:
             raise ValueError("chain_index must be an integer")
         if not name:
             raise ValueError("name is required")
         c.push_undo()
-        c.apply_control(chain_index, str(name), value)
+        json.dumps(value, allow_nan=False)
+        c.apply_control(chain_index, str(name), deepcopy(value))
         self._persist(sdk, c)
         return c.to_dict()
 
@@ -520,13 +623,15 @@ class CanvasService(BaseService):
             raise ValueError(f"unknown canvas: {canvas_id!r}")
         if not palette_id:
             raise ValueError("palette_id is required")
+        if palette_id not in _PALETTES:
+            raise ValueError("unknown palette")
         c.push_undo()
         c.apply_palette(str(palette_id))
         self._persist(sdk, c)
         return c.to_dict()
 
     def set_dimensions(self, sdk, canvas_id, width, height):
-        """Resize the canvas. Each dimension is clamped to 16..8192."""
+        """Resize the canvas. Dimensions must be positive integers; no artificial size cap."""
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
@@ -540,7 +645,9 @@ class CanvasService(BaseService):
         c = self._get(sdk, canvas_id)
         if c is None:
             raise ValueError(f"unknown canvas: {canvas_id!r}")
-        c.render_seed = int(seed)
+        if type(seed) is not int:
+            raise ValueError("seed must be an integer")
+        c.render_seed = seed
         self._persist(sdk, c)
         return c.render_seed
 
@@ -563,7 +670,7 @@ class CanvasService(BaseService):
             raise ValueError("nothing to undo")
         c.redo_stack.append(c._snapshot_state())
         snapshot = c.undo_stack.pop()
-        c.layers = [dict(step) for step in snapshot["layers"]]
+        c.layers = deepcopy(snapshot["layers"])
         c.width = snapshot["width"]
         c.height = snapshot["height"]
         c.palette_id = snapshot["palette_id"]
@@ -580,7 +687,7 @@ class CanvasService(BaseService):
             raise ValueError("nothing to redo")
         c.undo_stack.append(c._snapshot_state())
         snapshot = c.redo_stack.pop()
-        c.layers = [dict(step) for step in snapshot["layers"]]
+        c.layers = deepcopy(snapshot["layers"])
         c.width = snapshot["width"]
         c.height = snapshot["height"]
         c.palette_id = snapshot["palette_id"]
@@ -597,26 +704,14 @@ class CanvasService(BaseService):
 
     def delete_canvas(self, sdk, canvas_id):
         """Drop a canvas from memory and persistence."""
+        sdk.db.write("DELETE FROM canvas_states WHERE canvas_id = ?", [canvas_id])
         self._canvases.pop(canvas_id, None)
-        try:
-            sdk.db.write(
-                "DELETE FROM canvas_states WHERE canvas_id = ?",
-                [canvas_id],
-            )
-        except Exception:
-            pass
-        # Unbind any session pointing at this canvas.
-        to_unbind = [
-            k for k, v in self._session_to_canvas.items()
-            if v == canvas_id
-        ]
-        for k in to_unbind:
-            self._session_to_canvas.pop(k, None)
+        sdk.db.write("DELETE FROM canvas_bindings WHERE canvas_id = ?", [canvas_id])
         return True
 
     def list_palettes(self, sdk):
         """Return the palette catalogue."""
-        return list(_PALETTES.values())
+        return deepcopy(list(_PALETTES.values()))
 
     # ── internal ───────────────────────────────────────────────────────
 
@@ -624,4 +719,7 @@ class CanvasService(BaseService):
     def _session_key(sdk) -> str:
         """Derive a session key from the current session."""
         session = sdk.session.get() or {}
-        return session.get("session_key") or "local"
+        key = session.get("key")
+        if not key:
+            raise ValueError("no active session; use an explicit canvas_id")
+        return json.dumps([session.get("user_id"), key, session.get("conversation_id")])

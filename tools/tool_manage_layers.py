@@ -1,37 +1,19 @@
-"""Edit the canvas layer chain — delete, reorder, tweak, and undo.
-
-All mutations snapshot before changing, so undo/redo work. Layer 0 is always
-the background and cannot be moved; deleting it clears the entire canvas.
-
-Actions:
-- ``delete`` — remove the layer at chain_index. Deleting layer 0 (the
-  background) clears the entire canvas.
-- ``move`` — reorder from from_index to to_index. Layer 0 is anchored.
-- ``set_control`` — update one control parameter on one layer. E.g. change a
-  blur radius from 5.0 to 12.0 without removing and re-adding the layer.
-- ``set_palette`` — change the canvas-wide palette. All layers that reference
-  palette colors will use the new palette on the next render.
-- ``set_dimensions`` — resize the canvas (width, height, clamped 16..8192).
-- ``clear`` — wipe the entire layer chain. Palette and dimensions stay.
-- ``undo`` / ``redo`` — step through the last 50 mutations.
-
-Always call ``render_canvas`` after mutations to see the result.
-"""
-
+"""Inspect and mutate image recipes. All successful edits are undoable."""
 from guest.bases import BaseTool
 
 
 class ManageLayers(BaseTool):
     name = "manage_layers"
+    requires_services = ["canvas"]
+    dependencies_files = ["services/service_canvas.py"]
     description = (
-        "Edit the canvas layer chain. action=delete removes the layer at "
-        "chain_index (0 is the background — deleting it clears the canvas). "
-        "action=move reorders from from_index to to_index; layer 0 must stay "
-        "a background. action=set_control updates one control on one layer "
-        "(chain_index, name, value). action=set_palette changes the "
-        "canvas-wide palette. action=set_dimensions resizes the canvas "
-        "(width, height, clamped 16..8192). action=clear wipes the layer "
-        "chain. action=undo/redo step through history."
+        "Inspect or edit an image recipe. create makes and selects an empty transparent canvas; "
+        "inspect lists canvas state, list lists canvases, select switches canvas_id. "
+        "delete removes only one layer; move reorders (optional background stays first). "
+        "update changes a layer's properties (script, controls, name, visible, opacity 0..1, "
+        "blend_mode, mask path, offset [x,y], dependencies file paths). duplicate copies a layer. "
+        "set_control changes one control. set_dimensions accepts any positive integer width/height "
+        "and replays the recipe at that size. set_palette, clear, undo and redo are supported."
     )
     parameters = {
         "type": "object",
@@ -43,10 +25,12 @@ class ManageLayers(BaseTool):
             "action": {
                 "type": "string",
                 "enum": [
+                    "create", "inspect", "list", "select", "update", "duplicate",
                     "delete", "move", "set_control", "set_palette",
                     "set_dimensions", "clear", "undo", "redo",
                 ],
             },
+            "properties": {"type": "object", "description": "Layer fields for update; controls replaces the control dictionary."},
             "chain_index": {
                 "type": "integer",
                 "description": "Target layer index for delete or set_control.",
@@ -67,6 +51,17 @@ class ManageLayers(BaseTool):
     }
 
     def run(self, sdk, action, canvas_id=None, **kwargs):
+        if action == "list":
+            return sdk.services.call("canvas", "list_canvases")
+        if action == "create":
+            cid = sdk.services.call("canvas", "create", width=kwargs.get("width", 1024),
+                                    height=kwargs.get("height", 1024),
+                                    palette_id=kwargs.get("palette_id", "default"))
+            return self._view(sdk.services.call("canvas", "for_session", cid))
+        if action == "select":
+            if not canvas_id:
+                return sdk.fail("select requires canvas_id")
+            return self._view(sdk.services.call("canvas", "for_session", canvas_id))
         if canvas_id:
             state = sdk.services.call("canvas", "get_state", canvas_id)
         else:
@@ -76,6 +71,13 @@ class ManageLayers(BaseTool):
         cid = state["canvas_id"]
 
         try:
+            if action == "inspect":
+                return {k: v for k, v in state.items() if k not in ("undo_stack", "redo_stack")}
+            if action == "update":
+                return self._view(sdk.services.call("canvas", "update_layer", cid,
+                                         kwargs.get("chain_index"), **kwargs.get("properties", {})))
+            if action == "duplicate":
+                return self._view(sdk.services.call("canvas", "duplicate_layer", cid, kwargs.get("chain_index")))
             if action == "delete":
                 idx = int(kwargs.get("chain_index", -1))
                 state = sdk.services.call("canvas", "remove_layer", cid, idx)
@@ -101,8 +103,8 @@ class ManageLayers(BaseTool):
                 return sdk.ok(state, llm_summary=f"Palette set to {pid}.")
 
             if action == "set_dimensions":
-                w = int(kwargs.get("width", 1024))
-                h = int(kwargs.get("height", 1024))
+                w = kwargs.get("width", state["width"])
+                h = kwargs.get("height", state["height"])
                 state = sdk.services.call("canvas", "set_dimensions", cid, w, h)
                 return sdk.ok(state, llm_summary=f"Resized to {w}×{h}.")
 
@@ -122,3 +124,6 @@ class ManageLayers(BaseTool):
 
         except Exception as exc:
             return sdk.fail(str(exc))
+    @staticmethod
+    def _view(state):
+        return {k: v for k, v in state.items() if k not in ("undo_stack", "redo_stack")}

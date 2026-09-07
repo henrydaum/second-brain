@@ -1,13 +1,11 @@
 """Curated toolkit for canvas layer scripts — math, color, noise, composition.
 
 This is a plain Python module imported by layer scripts at render time:
-``from art_kit import lerp, palette_color, fbm_grid, ...``. It is not a script
-itself — there is no ``main(sdk)`` entry point. The sandbox's ``extra_roots``
-support puts the scripts directory on ``sys.path``, so layer scripts import
-this for free.
+``from .art_kit import lerp, fbm_grid, ...`` with ``box = "image_editing"``. It is not a script
+itself — there is no ``main(sdk)`` entry point. Helpers and their callers must declare the same box and use relative imports.
 
-Everything here is pure computation: no file I/O, no global mutation, no SDK
-calls. All randomness takes a caller-supplied seed or ``random.Random`` so
+Pixel and math helpers are pure computation. read_image, write_png and
+load_font mediate file I/O through the SDK. All randomness takes a caller-supplied seed or ``random.Random`` so
 layer scripts stay deterministic from the canvas seed.
 
 What's inside
@@ -25,7 +23,7 @@ What's inside
     **L-systems** — ``lindenmayer``, ``turtle_segments``
     **Waves** — ``wave_field`` (multi-source interference)
     **Attractors** — ``attractor_points`` (de Jong, Clifford)
-    **Text** — ``text``, ``text_bbox`` (Jost font at any weight/size)
+    **Text** — ``text``, ``text_bbox`` (portable default font; explicit font objects supported)
     **Voronoi** — ``voronoi_nearest``
     **Masks** — ``radial_falloff``
     **Numpy helpers** — ``centered_grid``, ``bilinear_sample``
@@ -34,7 +32,7 @@ Writing a new layer script
     Start with a background or filter template. Import what you need from
     ``art_kit``. Define ``main(sdk, kind, input_path, output_path, width,
     height, seed, palette, controls)``. Read the input image with PIL, do your
-    work, write the result to ``output_path``. That's it — no registration, no
+    work, write the result to ``output_path`` through ``write_png``. That's it — no registration, no
     dispatch table, no core edit. Drop the file in scripts/ and it's available
     as a layer.
 """
@@ -45,10 +43,11 @@ import colorsys
 import functools
 import math
 import random
-from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import ImageDraw, ImageFont
+
+box = "image_editing"
 
 # Inlined from plugins.tools.helpers.color_theory to avoid import path issue.
 def _oklch_to_rgb(l, c, h):
@@ -834,39 +833,16 @@ def attractor_points(name, n, seed, params=None):
 
 
 # ---------------------------------------------------------------------------
-# Text rendering (Jost).
+# Text rendering with portable defaults and explicit fonts.
 # ---------------------------------------------------------------------------
 
-_FONTS_DIR = Path(__file__).resolve().parents[3] / "fonts"
-
-_FONT_FILES = {
-    ("light", False):   "Jost-300-Light.ttf",
-    ("light", True):    "Jost-300-LightItalic.ttf",
-    ("regular", False): "Jost-400-Book.ttf",
-    ("regular", True):  "Jost-400-BookItalic.ttf",
-    ("bold", False):    "Jost-700-Bold.ttf",
-    ("bold", True):     "Jost-700-BoldItalic.ttf",
-    ("black", False):   "Jost-900-Black.ttf",
-    ("black", True):    "Jost-900-BlackItalic.ttf",
-}
-
-_FONT_CACHE: dict[tuple[str, bool, int], ImageFont.FreeTypeFont] = {}
 
 
-def _load_font(weight: str, italic: bool, size: int) -> ImageFont.FreeTypeFont:
-    key = (weight, bool(italic), int(size))
-    cached = _FONT_CACHE.get(key)
-    if cached is not None:
-        return cached
-    filename = _FONT_FILES.get((weight, bool(italic)))
-    if filename is None:
-        raise ValueError(
-            f"unknown font variant: weight={weight!r}, italic={italic!r}. "
-            f"weight must be one of: light, regular, bold, black"
-        )
-    font = ImageFont.truetype(str(_FONTS_DIR / filename), int(size))
-    _FONT_CACHE[key] = font
-    return font
+def _load_font(weight: str, italic: bool, size: int):
+    """Portable regular font; provide a loaded font for other faces/styles."""
+    if weight != "regular" or italic:
+        raise ValueError("provide font=load_font(sdk, path, size) for custom weights or italic")
+    return ImageFont.load_default(size=int(size))
 
 
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: float) -> list[str]:
@@ -891,23 +867,23 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: float) -> lis
 
 
 def text(image, xy, content, size=48, weight="regular", italic=False,
-         color=None, anchor="lt", align="left", max_width=None, line_spacing=1.15):
-    """Draw `content` onto `image` in Jost at the given position.
+         color=None, anchor="lt", align="left", max_width=None, line_spacing=1.15, font=None):
+    """Draw `content` onto `image` at the given position.
 
     Args:
       image:       PIL Image (RGBA recommended). Drawn into in place.
       xy:          (x, y) anchor point. Meaning depends on `anchor`.
       content:     str. `\\n` introduces a hard line break.
       size:        Font size in pixels.
-      weight:      "light" | "regular" | "bold" | "black".
-      italic:      Bool.
+      weight:      "regular" for the default; use font= for other styles.
+      italic:      Custom italic styles require font=.
       color:       Hex string or RGB(A) tuple. Defaults to black.
       anchor:      PIL text anchor (e.g. "lt", "mm", "rb"). See PIL docs.
       align:       "left" | "center" | "right". Only matters with multi-line.
       max_width:   If set, word-wrap to this pixel width.
       line_spacing: Multiplier on font size between lines.
     """
-    font = _load_font(weight, italic, size)
+    font = font or _load_font(weight, italic, size)
     draw = ImageDraw.Draw(image)
     body = _wrap_text(content, font, max_width) if max_width else str(content).split("\n")
     rendered = "\n".join(body)
@@ -919,7 +895,7 @@ def text(image, xy, content, size=48, weight="regular", italic=False,
 
 
 def text_bbox(content, size=48, weight="regular", italic=False,
-              max_width=None, line_spacing=1.15):
+              max_width=None, line_spacing=1.15, font=None):
     """Return the ``(width, height)`` in pixels that ``content`` will occupy
     when drawn with the same arguments via ``text``.
 
@@ -929,7 +905,7 @@ def text_bbox(content, size=48, weight="regular", italic=False,
     a font size that fits a target box (binary search ``size`` against a
     target width).
     """
-    font = _load_font(weight, italic, size)
+    font = font or _load_font(weight, italic, size)
     body = _wrap_text(content, font, max_width) if max_width else str(content).split("\n")
     if not body:
         return (0, 0)
@@ -999,3 +975,132 @@ def build_namespace(canvas_palette):
         pi=math.pi,
         tau=math.tau,
     )
+
+
+# Image editing primitives. Disk access always goes through the SDK.
+def read_image(sdk, path, size=None):
+    """Decode an image, apply EXIF orientation, and preserve alpha as RGBA."""
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    with Image.open(BytesIO(sdk.fs.read_bytes(path))) as source:
+        image = ImageOps.exif_transpose(source).convert("RGBA")
+        image.load()
+    if size is not None and image.size != tuple(size):
+        raise ValueError(f"image size {image.size} does not match {tuple(size)}")
+    return image
+
+
+def write_png(sdk, path, image):
+    """Encode lossless RGBA PNG through the SDK, creating parent directories."""
+    from io import BytesIO
+    buffer = BytesIO()
+    image.convert("RGBA").save(buffer, format="PNG", compress_level=1)
+    sdk.fs.write_bytes(path, buffer.getvalue())
+    return path
+
+
+def load_font(sdk, path, size=48):
+    """Read a custom font through the SDK; declare path as a layer dependency."""
+    from io import BytesIO
+    return ImageFont.truetype(BytesIO(sdk.fs.read_bytes(path)), size)
+
+
+def composite(base, layer, opacity=1.0, blend_mode="normal", mask=None,
+              offset=(0, 0), replace=False):
+    """Straight-alpha RGBA composition, or premultiplied filter interpolation.
+
+    Masks use luminance multiplied by their alpha; white reveals, black hides.
+    Object offsets clip at canvas edges. Filters must match the canvas size.
+    Neither input is modified. RGB blending uses encoded sRGB values.
+    """
+    import numpy as np
+    from PIL import Image
+    if not 0 <= opacity <= 1:
+        raise ValueError("opacity must be between zero and one")
+    base = base.convert("RGBA")
+    layer = layer.convert("RGBA")
+    if replace and (layer.size != base.size or tuple(offset) != (0, 0) or blend_mode != "normal"):
+        raise ValueError("filters require canvas size, zero offset and normal blend mode")
+    if layer.size != base.size or tuple(offset) != (0, 0):
+        placed = Image.new("RGBA", base.size)
+        placed.paste(layer, tuple(offset))
+        layer = placed
+    if mask is None and opacity == 1 and blend_mode == "normal":
+        return layer.copy() if replace else Image.alpha_composite(base, layer)
+    dst = np.asarray(base, dtype=np.float32) / 255
+    src = np.asarray(layer, dtype=np.float32) / 255
+    weight = float(opacity)
+    if mask is not None:
+        if mask.size != base.size:
+            raise ValueError("mask must match canvas dimensions")
+        weight = weight * (np.asarray(mask.convert("L"), dtype=np.float32) / 255)[..., None]
+        if "A" in mask.getbands():
+            weight = weight * (np.asarray(mask.getchannel("A"), dtype=np.float32) / 255)[..., None]
+    cb, ab = dst[..., :3], dst[..., 3:]
+    cs, source_alpha = src[..., :3], src[..., 3:]
+    if replace:
+        alpha = ab * (1 - weight) + source_alpha * weight
+        premult = cb * ab * (1 - weight) + cs * source_alpha * weight
+    else:
+        modes = {
+            "normal": lambda: cs,
+            "multiply": lambda: cb * cs,
+            "screen": lambda: cb + cs - cb * cs,
+            "overlay": lambda: np.where(cb <= .5, 2 * cb * cs, 1 - 2 * (1 - cb) * (1 - cs)),
+            "darken": lambda: np.minimum(cb, cs),
+            "lighten": lambda: np.maximum(cb, cs),
+            "difference": lambda: np.abs(cb - cs),
+        }
+        if blend_mode not in modes:
+            raise ValueError("unsupported blend mode")
+        a = source_alpha * weight
+        alpha = a + ab * (1 - a)
+        premult = (1 - a) * cb * ab + (1 - ab) * cs * a + ab * a * modes[blend_mode]()
+    rgb = np.divide(premult, alpha, out=np.zeros_like(premult), where=alpha > 0)
+    result = np.concatenate((rgb, alpha), axis=2)
+    return Image.fromarray(np.uint8(np.clip(result * 255 + .5, 0, 255)))
+
+
+def resize_image(image, size, fit="stretch"):
+    """Resize with premultiplied alpha; contain pads transparent, cover crops.
+
+    size is (width, height). Sampling transparent edges must not introduce
+    dark fringes. Canvas resizing itself replays recipes; this resizes pixels.
+    """
+    from PIL import Image, ImageOps
+    if len(size) != 2 or any(type(v) is not int or v < 1 for v in size):
+        raise ValueError("size must contain positive integer dimensions")
+    image = image.convert("RGBA").convert("RGBa")
+    if fit == "stretch":
+        return image.resize(tuple(size), Image.Resampling.LANCZOS).convert("RGBA")
+    if fit == "cover":
+        return ImageOps.fit(image, tuple(size), method=Image.Resampling.LANCZOS).convert("RGBA")
+    if fit == "contain":
+        image = ImageOps.contain(image, tuple(size), method=Image.Resampling.LANCZOS).convert("RGBA")
+        result = Image.new("RGBA", tuple(size))
+        result.paste(image, ((size[0] - image.width) // 2, (size[1] - image.height) // 2))
+        return result
+    raise ValueError("fit must be stretch, contain or cover")
+
+
+def crop_image(image, box):
+    """Crop (left, top, right, bottom); areas outside the image are transparent."""
+    if len(box) != 4 or any(type(v) is not int for v in box) or box[2] <= box[0] or box[3] <= box[1]:
+        raise ValueError("crop box must be four integers with positive area")
+    return image.convert("RGBA").crop(tuple(box))
+
+
+def transform_image(image, size, inverse_matrix):
+    """Affine transform with transparent fill and premultiplied alpha.
+
+    Six coefficients map destination pixels to source: x'=a*x+b*y+c,
+    y'=d*x+e*y+f. Supports translation, scaling, rotation and skew.
+    """
+    from PIL import Image
+    if len(size) != 2 or any(type(v) is not int or v < 1 for v in size):
+        raise ValueError("size must contain positive integer dimensions")
+    if len(inverse_matrix) != 6 or any(not math.isfinite(v) for v in inverse_matrix):
+        raise ValueError("inverse_matrix must contain six finite numbers")
+    return image.convert("RGBA").convert("RGBa").transform(
+        tuple(size), Image.Transform.AFFINE, tuple(inverse_matrix),
+        resample=Image.Resampling.BICUBIC, fillcolor=(0, 0, 0, 0)).convert("RGBA")

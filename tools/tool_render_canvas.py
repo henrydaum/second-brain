@@ -20,6 +20,9 @@ from guest.bases import BaseTool
 
 class RenderCanvas(BaseTool):
     name = "render_canvas"
+    requires_services = ["canvas"]
+    dependencies_files = ["services/service_canvas.py", "scripts/canvas_render.py", "scripts/art_kit.py"]
+    dependencies_pip = ["Pillow>=10.1", "numpy"]
     description = (
         "Render the canvas layer chain to a PNG image. Call this after "
         "adding or editing layers. Returns the rendered image so the user "
@@ -33,6 +36,9 @@ class RenderCanvas(BaseTool):
                 "type": "string",
                 "description": "Canvas to render. Omit to use the session's current canvas.",
             },
+            "seed": {"type": "integer", "description": "Explicit reproducible seed (including zero)."},
+            "out": {"type": "string", "description": "Optional PNG export path."},
+            "force": {"type": "boolean", "description": "Recompute all steps, bypassing cached outputs."},
             "force_new_seed": {
                 "type": "boolean",
                 "description": "Mint a fresh random seed for generative layers. Default false.",
@@ -44,7 +50,7 @@ class RenderCanvas(BaseTool):
         },
     }
 
-    def run(self, sdk, canvas_id=None, force_new_seed=False):
+    def run(self, sdk, canvas_id=None, force_new_seed=False, seed=None, out=None, force=False):
         # Resolve the canvas.
         if canvas_id:
             state = sdk.services.call("canvas", "get_state", canvas_id)
@@ -58,26 +64,14 @@ class RenderCanvas(BaseTool):
         canvas_id = state["canvas_id"]
 
         layers = state.get("layers") or []
-        if not layers:
-            return sdk.fail(
-                "Canvas has no layers. Add a background layer first."
-            )
-
         # Render.
         result = sdk.scripts.run(
             "canvas_render.py",
             canvas_id=canvas_id,
-            force_new_seed=bool(force_new_seed),
+            force_new_seed=bool(force_new_seed), seed=seed, out=out, force=force,
         )
         if not result.get("path"):
             return sdk.fail("Render produced no output path.")
-
-        # Persist the seed so the next render reuses the cache.
-        try:
-            sdk.services.call("canvas", "set_render_seed", canvas_id,
-                              result["seed"])
-        except Exception:
-            pass
 
         path = result["path"]
         seed = result.get("seed", "?")

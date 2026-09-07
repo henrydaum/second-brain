@@ -83,3 +83,8 @@ Use `--dry-run` to inspect the generated tree without committing, `--update`
 to replace a changed existing file, and `--no-pip` to write an explicit empty
 dependency list. Direct pull requests against `store` are also valid; keep the
 same layout and run whole-store validation before submitting them.
+
+## Image editing
+
+See [the image editing contract](IMAGE_EDITING.md) for the canvas/layer model,
+cache behavior, scripting workflow, reusable pixel helpers and current limits.

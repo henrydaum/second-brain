@@ -1,6 +1,6 @@
 {
     "name": "Image Editing",
-    "description": "A canvas-based image editing and generative art toolkit. Add layers (backgrounds, filters, objects), tweak controls, undo/redo, and render to PNG. Includes art_kit — a library of math, color, noise, composition, and 3D primitives layer scripts can import for free.",
+    "description": "General image editing foundations: transparent RGBA canvases at any positive pixel dimensions, editable recipe layers, masks, opacity and blend modes, undo/redo, PNG rendering and prefix caching. Includes reusable art_kit helpers; technique scripts are authored separately.",
     "files": [
         "scripts/canvas_render.py",
         "scripts/art_kit.py",
