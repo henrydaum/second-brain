@@ -25,7 +25,7 @@ shared helpers, and a searchable catalogue. No kernel changes are required.
 
 `search_techniques()` lists the suite. Search ordinary words with
 `search_techniques(query="sharpness")`, or get the exact controls and a usable
-example with `search_techniques(script="canvas_sharpen")`. The catalogue returns
+example with `search_techniques(script="technique_sharpen")`. The catalogue returns
 control types, defaults, bounds, units and suggested increments. Increments are
 not quantization: saturation 1.125 is valid even though its suggested step is 0.05.
 `search_techniques(recipe="photo")` and `recipe="composition"` return complete
@@ -34,11 +34,11 @@ worked sequences of tool calls without changing any canvas.
 For an uploaded photo, use the actual local attachment path:
 
 ```python
-add_layer(script="canvas_load_image", controls={"path": "<actual attachment path>"})
+add_layer(script="technique_load_image", controls={"path": "<actual attachment path>"})
 render_canvas()
-add_layer(script="canvas_crop", controls={"left": 100, "top": 50, "right": 900, "bottom": 650})
-add_layer(script="canvas_saturation", controls={"factor": 1.1})
-add_layer(script="canvas_sharpen", controls={"radius": 1.5, "amount": 60, "threshold": 3})
+add_layer(script="technique_crop", controls={"left": 100, "top": 50, "right": 900, "bottom": 650})
+add_layer(script="technique_saturation", controls={"factor": 1.1})
+add_layer(script="technique_sharpen", controls={"radius": 1.5, "amount": 60, "threshold": 3})
 render_canvas()
 ```
 
@@ -49,12 +49,12 @@ to any external service. `kind="object"` imports an additional image as an overl
 Use `fit="contain"`, `"cover"` or `"stretch"` to fit that import to the current size.
 
 A blank design starts with `manage_layers(action="create", width=800, height=500)`.
-Then add `canvas_solid` or `canvas_gradient` and object steps such as `canvas_text`.
+Then add `technique_solid` or `technique_gradient` and object steps such as `technique_text`.
 `create` makes a new canvas; `inspect`, `list` and `select` let you resume existing work.
 
 ### The 21 techniques
 
-| Script suffix (all use `canvas_`) | Main adjustable controls |
+| Script suffix (all use `technique_`) | Main adjustable controls |
 | --- | --- |
 | load_image | path, fit |
 | crop | left, top, right, bottom (exclusive edges) |
@@ -105,7 +105,7 @@ full opacity and no mask, since differently sized images cannot be interpolated.
 Canvas state width/height describe the **starting** empty surface; they do not
 change when a crop is added. `render_canvas` reports final dimensions.
 `set_dimensions` replays the recipe from a new starting surface; it does not
-resample a native source photo. Use `canvas_resize` to resize pixels.
+resample a native source photo. Use `technique_resize` to resize pixels.
 
 Usually do geometry early, tonal edits next, sharpen near the end, and draw text
 or annotations last so they remain crisp. Render and inspect before placing
@@ -205,3 +205,30 @@ This is classic deterministic editing, not generative AI. Discovery is a small
 local catalogue with keyword matching; no embedding service, indexing job or model
 is needed. Tests cover every shipped script and composite workflows through the
 actual sandbox, not just standalone pixel calls.
+
+## Authoring and auditing techniques
+
+Each `scripts/technique_*.py` is an audit unit: literal `TECHNIQUE` metadata,
+control schemas and examples, the effect's `apply` function, and the sandbox
+`main` entry point. Shared pixel, colour, compositing and IO utilities live in
+`art_kit.py`. `canvas_catalog.py` discovers and validates declarations; it does
+not implement effects or maintain a registration list.
+
+Call `search_techniques(guide=True)` for the shipped template and workflow.
+Copy it to `workspace/scripts/technique_your_name.py`, edit metadata and `apply`,
+validate with `sdk.plugins.validate(path)`, then search for the new name, add it
+as a layer and render. No central file edit or restart is required. New controls
+are available through the existing inspection and fine-adjustment tools.
+
+Discovery parses metadata with AST without importing or executing techniques.
+It searches workspace, installed and bundled script directories in that order;
+the first file of a given name wins. Search includes its origin and source path.
+Invalid declarations are reported, including invalid workspace overrides, rather
+than silently falling back. Renames, edits and deletions appear on the next lookup.
+The renderer executes the resolved script through the existing sandbox runner.
+
+Each shipped technique declares its former `canvas_*` name as an alias so saved
+recipes continue working. New recipes use `technique_*`. Ambiguous aliases are
+rejected. The template has no aliases; add them only when deliberately renaming
+a technique. Scripts without the prefix remain usable with an explicit layer
+kind, but do not participate in technique discovery or control schemas.

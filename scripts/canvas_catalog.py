@@ -1,124 +1,16 @@
-"""Classic editing catalogue: discoverable controls shared by tools and scripts.
+"""Discover technique_*.py and read their literal TECHNIQUE declarations.
 
-No model, embeddings or pixel imports. Numeric steps are suggested adjustment
-increments, not quantization: callers may use any finite value in the range.
+Discovery never imports or executes a technique. Workspace wins over installed,
+then bundled, matching script resolution. A malformed override is reported rather
+than silently falling back to a different implementation. Each lookup reads current
+files; new, edited and removed techniques need no registration or restart.
 """
+import ast
 from copy import deepcopy
 import math
 import re
 
 box = "image_editing"
-
-
-def number(default, minimum, maximum, step, description, unit=""):
-    return dict(type="number", default=default, minimum=minimum, maximum=maximum,
-                step=step, description=description, unit=unit)
-
-
-def integer(default, minimum, description, maximum=None, unit="px"):
-    field = dict(type="integer", step=1, description=description, unit=unit)
-    if minimum is not None:
-        field["minimum"] = minimum
-    if default is not None:
-        field["default"] = default
-    if maximum is not None:
-        field["maximum"] = maximum
-    return field
-
-
-def choice(default, options, description):
-    return dict(type="string", default=default, enum=options, description=description)
-
-
-def color(default, description):
-    return dict(type="string", format="color", default=default, description=description)
-
-
-def entry(title, kind, description, controls, example, tags="", kinds=None):
-    return dict(title=title, kind=kind, kinds=kinds or [kind], description=description,
-                controls=controls, example=example, tags=tags)
-
-
-CATALOG = {
-    "canvas_load_image": entry("Load photo or image", "background",
-        "Read an attachment/local path with EXIF orientation and alpha. Native preserves original pixels and dimensions. Use object to overlay a second image.",
-        {"path": {"type": "string", "format": "file", "description": "Existing attachment/local image path, not a URL."},
-         "fit": choice("native", ["native", "contain", "cover", "stretch"], "Native keeps source size; others fit current canvas dimensions.")},
-        {"path": "<attachment-path>", "fit": "native"}, "upload import open picture photograph overlay", ["background", "object"]),
-    "canvas_crop": entry("Crop", "filter",
-        "Extract a pixel rectangle. Right/bottom are exclusive. Output dimensions become right-left by bottom-top; outside-source pixels are transparent.",
-        {"left": integer(0, None, "Left edge."), "top": integer(0, None, "Top edge."),
-         "right": integer(None, None, "Exclusive right edge."), "bottom": integer(None, None, "Exclusive bottom edge.")},
-        {"left": 100, "top": 50, "right": 900, "bottom": 650}, "trim cut reframe geometry"),
-    "canvas_resize": entry("Resize image", "filter",
-        "Resample the accumulated image to exact dimensions with alpha-safe Lanczos sampling. Geometry steps change subsequent layer coordinates.",
-        {"width": integer(None, 1, "Output width."), "height": integer(None, 1, "Output height."),
-         "fit": choice("stretch", ["stretch", "contain", "cover"], "Stretch changes aspect; contain pads transparent; cover crops centrally.")},
-        {"width": 1200, "height": 800, "fit": "contain"}, "scale dimensions thumbnail geometry"),
-    "canvas_rotate": entry("Rotate / straighten", "filter",
-        "Rotate counterclockwise around the centre. Expand retains the whole image and changes dimensions; corners are transparent. Quarter turns preserve pixels exactly.",
-        {"angle": number(0, -360, 360, .1, "Positive is counterclockwise.", "degrees"),
-         "expand": {"type": "boolean", "default": True, "description": "Expand bounds; false keeps and clips to current dimensions."}},
-        {"angle": -2.5, "expand": True}, "rotation straighten orientation geometry"),
-    "canvas_flip": entry("Flip / mirror", "filter", "Mirror horizontally and/or vertically without resampling.",
-        {"horizontal": {"type": "boolean", "default": True, "description": "Mirror left to right."},
-         "vertical": {"type": "boolean", "default": False, "description": "Mirror top to bottom."}},
-        {"horizontal": True}, "mirror reverse"),
-    "canvas_brightness": entry("Brightness", "filter", "Multiply encoded RGB; alpha is unchanged. Zero is black, one is unchanged.",
-        {"factor": number(1, 0, 4, .05, "Brightness multiplier.")}, {"factor": 1.1}, "light dark brighten dim"),
-    "canvas_contrast": entry("Contrast", "filter", "Adjust around alpha-weighted mean luminance; transparent hidden RGB does not bias the pivot. One is unchanged.",
-        {"factor": number(1, 0, 4, .05, "Contrast multiplier.")}, {"factor": 1.15}, "punch flat tonal"),
-    "canvas_saturation": entry("Saturation", "filter", "Zero is grayscale, one preserves colour, above one boosts colour. Alpha is unchanged.",
-        {"factor": number(1, 0, 4, .05, "Colour intensity multiplier.")}, {"factor": 1.2}, "color colour vivid muted desaturate"),
-    "canvas_exposure": entry("Exposure", "filter", "Multiply linear-light RGB by 2**stops, then encode sRGB. Alpha is unchanged; highlights may clip.",
-        {"stops": number(0, -8, 8, .1, "Positive brightens; +1 doubles linear light.", "EV")}, {"stops": .4}, "light photographic ev"),
-    "canvas_gamma": entry("Gamma / midtones", "filter", "Apply RGB ** (1/gamma). Above one brightens midtones; endpoints and alpha stay fixed.",
-        {"gamma": number(1, .1, 5, .05, "Midtone gamma.")}, {"gamma": 1.15}, "midtone tonal light"),
-    "canvas_blur": entry("Gaussian blur", "filter", "Blur premultiplied colour and alpha together to avoid dark or coloured fringes at transparent edges.",
-        {"radius": number(3, 0, 200, .25, "Gaussian radius; zero is unchanged.", "px")}, {"radius": 2.5}, "soften defocus gaussian smooth"),
-    "canvas_sharpen": entry("Sharpen", "filter", "Unsharp mask using an alpha-weighted blur. Preserves alpha and avoids hidden-colour fringes.",
-        {"radius": number(2, 0, 100, .25, "Detail radius.", "px"),
-         "amount": number(100, 0, 500, 5, "Detail gain; zero is unchanged.", "%"),
-         "threshold": integer(3, 0, "Ignore RGB differences below this threshold.", maximum=255, unit="levels")},
-        {"radius": 1.5, "amount": 80, "threshold": 3}, "sharpness crisp detail unsharp"),
-    "canvas_grayscale": entry("Grayscale", "filter", "Convert RGB to luminance while preserving alpha.", {}, {}, "black white monochrome greyscale"),
-    "canvas_invert": entry("Invert", "filter", "Invert RGB, preserving alpha. Use layer opacity to mix the effect.", {}, {}, "negative reverse colors"),
-    "canvas_solid": entry("Solid fill", "background", "Fill with a literal colour or a live @palette-role. Transparent is allowed.",
-        {"color": color("@background", "Fill colour: CSS name, #RGB, #RRGGBB, #RRGGBBAA, transparent or @role.")},
-        {"color": "#f5f2e8"}, "background color colour fill transparent", ["background", "object"]),
-    "canvas_gradient": entry("Linear gradient", "background", "Two-colour alpha-safe gradient. Zero degrees goes left to right; 90 goes top to bottom.",
-        {"start": color("@primary", "Starting colour."), "end": color("@accent", "Ending colour."),
-         "angle": number(0, -360, 360, 1, "Gradient direction.", "degrees")},
-        {"start": "@primary", "end": "@accent", "angle": 90}, "ramp background fade color", ["background", "object"]),
-    "canvas_line": entry("Line / polyline", "object", "Draw an antialiased line through pixel coordinates. Produces an overlay, so layer opacity and blend mode work normally.",
-        {"points": {"type": "array", "minItems": 2, "description": "[[x,y], ...] in current image pixels.",
-                    "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}},
-         "width": number(3, .1, 1000, .5, "Stroke width.", "px"), "color": color("@primary", "Stroke colour.")},
-        {"points": [[40, 40], [240, 140]], "width": 3, "color": "@accent"}, "draw stroke path annotation"),
-    "canvas_shape": entry("Rectangle / ellipse", "object", "Draw an antialiased rectangle or ellipse within an explicit pixel box. Transparent fill makes an outline.",
-        {"shape": choice("rectangle", ["rectangle", "ellipse"], "Shape."),
-         "left": integer(0, None, "Left edge."), "top": integer(0, None, "Top edge."),
-         "right": integer(None, None, "Exclusive right edge."), "bottom": integer(None, None, "Exclusive bottom edge."),
-         "fill": color("@primary", "Fill colour or transparent."), "stroke": color("transparent", "Outline colour."),
-         "stroke_width": number(1, 0, 1000, .5, "Outline width; zero disables it.", "px")},
-        {"left": 20, "top": 20, "right": 220, "bottom": 120, "fill": "transparent", "stroke": "@accent", "stroke_width": 3}, "draw box circle oval outline annotation"),
-    "canvas_text": entry("Text", "object", "Draw text on a transparent overlay. Explicit font_path supports custom faces/Unicode coverage; the portable default is regular Latin text.",
-        {"content": {"type": "string", "description": "Text; newline creates a line break."},
-         "x": integer(0, None, "Left position."), "y": integer(0, None, "Top position."),
-         "size": integer(48, 1, "Font size."), "color": color("@primary", "Text colour."),
-         "font_path": {"type": "string", "format": "file", "default": "", "description": "Optional TTF/OTF path; tracked automatically."},
-         "max_width": integer(0, 0, "Wrap width; zero disables wrapping."),
-         "align": choice("left", ["left", "center", "right"], "Alignment of lines within the text block.")},
-        {"content": "Summer 2026", "x": 40, "y": 40, "size": 36, "color": "#ffffff"}, "label caption typography annotation"),
-    "canvas_duotone": entry("Duotone / palette map", "filter", "Explicitly map luminance between two palette or literal colours, then mix with the original. Preserves source alpha.",
-        {"shadows": color("@secondary", "Dark tone."), "highlights": color("@accent", "Light tone."),
-         "amount": number(.5, 0, 1, .05, "Strength; zero is unchanged, one fully mapped.")},
-        {"shadows": "#182844", "highlights": "#ffd9a0", "amount": .35}, "grade tint palette color map"),
-    "canvas_vignette": entry("Vignette", "filter", "Darken edges with an elliptical falloff centred in the image. Alpha is unchanged.",
-        {"amount": number(.35, 0, 1, .05, "Edge darkening."),
-         "radius": number(.5, 0, 1, .05, "Start falloff at this fraction of the centre-to-corner distance.")},
-        {"amount": .25, "radius": .5}, "edges focus darkening lens"),
-}
 
 
 def _check(value, schema, label):
@@ -148,54 +40,196 @@ def _check(value, schema, label):
         raise ValueError(f"{label} needs a colour or @palette-role")
 
 
-def prepare(script, controls=None, kind=None):
-    """Normalize shipped controls without quantizing; custom scripts remain usable."""
-    if not isinstance(script, str) or not script:
-        raise ValueError("script is required")
-    script = script.removesuffix(".py")
-    spec = CATALOG.get(script)
+def validate_controls(spec, controls=None, kind=None):
+    """Validate one declaration's inputs, retaining arbitrary fractional values."""
     controls = {} if controls is None else deepcopy(controls)
     if not isinstance(controls, dict):
         raise ValueError("controls must be an object")
-    if spec is None:
-        if kind not in ("background", "filter", "object"):
-            raise ValueError("unknown technique; search_techniques lists names. Custom scripts require kind.")
-        return dict(script=script, kind=kind, controls=controls, dependencies=[], custom=True)
     kind = kind or spec["kind"]
-    if kind not in spec["kinds"]:
-        raise ValueError(f"{script} supports kinds {spec['kinds']}")
+    if kind not in spec.get("kinds", [spec["kind"]]):
+        raise ValueError(f"supported layer kinds: {spec.get('kinds', [spec['kind']])}")
     unknown = set(controls) - set(spec["controls"])
     if unknown:
-        raise ValueError(f"{script}: unknown controls {sorted(unknown)}; expected {list(spec['controls'])}")
+        raise ValueError(f"unknown controls {sorted(unknown)}; expected {list(spec['controls'])}")
     for name, schema in spec["controls"].items():
         if name not in controls:
             if "default" not in schema:
-                raise ValueError(f"{script}: required control {name}: {schema['description']}")
+                raise ValueError(f"required control {name}: {schema.get('description', '')}")
             controls[name] = deepcopy(schema["default"])
         _check(controls[name], schema, name)
-    if script in ("canvas_crop", "canvas_shape"):
-        if controls["right"] <= controls["left"] or controls["bottom"] <= controls["top"]:
-            raise ValueError("right must exceed left and bottom must exceed top")
+    for rule in spec.get("constraints", []):
+        if controls[rule["greater"]] <= controls[rule["than"]]:
+            raise ValueError(f"{rule['greater']} must exceed {rule['than']}")
+    return controls
+
+
+def _schema(schema, name):
+    if not isinstance(schema, dict) or schema.get("type") not in ("number", "integer", "string", "boolean", "array"):
+        raise ValueError(f"{name}: supported control type is required")
+    for bound in ("minimum", "maximum", "step"):
+        if bound in schema and (type(schema[bound]) not in (int, float) or not math.isfinite(schema[bound])):
+            raise ValueError(f"{name}.{bound} must be finite numeric data")
+    if "minimum" in schema and "maximum" in schema and schema["minimum"] > schema["maximum"]:
+        raise ValueError(f"{name}: minimum exceeds maximum")
+    if schema.get("step", 1) <= 0:
+        raise ValueError(f"{name}: step must be positive")
+    if "enum" in schema and (not isinstance(schema["enum"], list) or not schema["enum"]):
+        raise ValueError(f"{name}: enum must be a nonempty list")
+    if schema.get("format") not in (None, "file", "color"):
+        raise ValueError(f"{name}: unsupported format")
+    if "format" in schema and schema["type"] != "string":
+        raise ValueError(f"{name}: file/color controls must be strings")
+    if schema["type"] == "array":
+        for key in ("minItems", "maxItems"):
+            if key in schema and (type(schema[key]) is not int or schema[key] < 0):
+                raise ValueError(f"{name}.{key} must be a nonnegative integer")
+        if schema.get("minItems", 0) > schema.get("maxItems", math.inf):
+            raise ValueError(f"{name}: minItems exceeds maxItems")
+        _schema(schema.get("items"), name + "[]")
+    if "default" in schema:
+        _check(schema["default"], schema, name)
+
+
+def _declaration(source):
+    tree = ast.parse(source)
+    values = []
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(t, ast.Name) and t.id == "TECHNIQUE" for t in targets):
+            values.append(ast.literal_eval(node.value))
+    if len(values) != 1 or not isinstance(values[0], dict):
+        raise ValueError("exactly one literal TECHNIQUE dictionary is required")
+    mains = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"]
+    if len(mains) != 1:
+        raise ValueError("one main(sdk, ...) function is required")
+    args = mains[0].args
+    if not args.args or args.args[0].arg != "sdk" or args.posonlyargs:
+        raise ValueError("main must start with sdk and accept named layer arguments")
+    required = {"kind", "input_path", "output_path", "width", "height", "seed", "palette", "controls"}
+    if args.kwarg is None and not required <= {a.arg for a in args.args + args.kwonlyargs}:
+        raise ValueError("main must accept the complete layer contract")
+    spec = values[0]
+    for key in ("title", "description"):
+        if not isinstance(spec.get(key), str) or not spec[key].strip():
+            raise ValueError(f"TECHNIQUE.{key} must be a nonempty string")
+    if spec.get("kind") not in ("background", "filter", "object"):
+        raise ValueError("TECHNIQUE.kind must be background, filter or object")
+    kinds = spec.get("kinds", [spec["kind"]])
+    if not isinstance(kinds, list) or spec["kind"] not in kinds or any(k not in ("background", "filter", "object") for k in kinds):
+        raise ValueError("TECHNIQUE.kinds must include its default kind")
+    if not isinstance(spec.get("controls"), dict):
+        raise ValueError("TECHNIQUE.controls must be a dictionary")
+    for name, schema in spec["controls"].items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("control names must be nonempty strings")
+        _schema(schema, name)
+    if not isinstance(spec.get("tags", ""), str):
+        raise ValueError("TECHNIQUE.tags must be a string of search words")
+    aliases = spec.get("aliases", [])
+    if not isinstance(aliases, list) or any(not isinstance(a, str) or not re.fullmatch(r"[a-zA-Z0-9_]+", a) for a in aliases):
+        raise ValueError("TECHNIQUE.aliases must be a list of filename stems")
+    constraints = spec.get("constraints", [])
+    if not isinstance(constraints, list):
+        raise ValueError("TECHNIQUE.constraints must be a list")
+    for rule in constraints:
+        if not isinstance(rule, dict) or set(rule) != {"greater", "than"} or any(
+                name not in spec["controls"] or spec["controls"][name]["type"] not in ("number", "integer")
+                for name in rule.values()):
+            raise ValueError("constraints must compare numeric controls using greater/than")
+    if not isinstance(spec.get("example"), dict):
+        raise ValueError("TECHNIQUE.example must contain example controls")
+    validate_controls(spec, spec["example"])
+    return spec
+
+
+def discover(sdk):
+    """Return valid declarations and diagnostics, with no technique code executed."""
+    techniques, errors, seen = {}, {}, set()
+    for origin in ("workspace", "installed", "bundled"):
+        directory = sdk.path.join(sdk.paths.get(origin), "scripts")
+        if not sdk.fs.exists(directory):
+            continue
+        entries = sdk.fs.list(directory, pattern="technique_*.py", details=True)
+        for entry in sorted(entries, key=lambda entry: entry["path"]):
+            if entry["is_dir"]:
+                continue
+            path = entry["path"]
+            name = sdk.path.name(path).removesuffix(".py")
+            if name in seen:
+                continue
+            seen.add(name)
+            # Read failures, including permission denials, remain real failures.
+            source = sdk.fs.read(path)
+            try:
+                if not re.fullmatch(r"technique_[a-zA-Z0-9_]+", name):
+                    raise ValueError("technique filenames must use letters, digits and underscores")
+                spec = _declaration(source)
+                techniques[name] = dict(spec, script=name, source_path=path, origin=origin)
+            except (ValueError, SyntaxError, TypeError, KeyError) as exc:
+                errors[name] = {"script": name, "source_path": path, "origin": origin, "error": str(exc)}
+    return {"techniques": techniques, "errors": errors}
+
+
+def _lookup(inventory, name):
+    if name in inventory["errors"]:
+        raise ValueError(f"{name}: {inventory['errors'][name]['error']}")
+    if name in inventory["techniques"]:
+        return inventory["techniques"][name]
+    matches = [spec for spec in inventory["techniques"].values() if name in spec.get("aliases", [])]
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous technique alias {name}; use a technique_ filename")
+    return matches[0] if matches else None
+
+
+def prepare(sdk, script, controls=None, kind=None, inventory=None):
+    """Resolve a technique or legacy alias, then validate and derive file inputs."""
+    if not isinstance(script, str) or not script:
+        raise ValueError("script is required")
+    name = script.removesuffix(".py")
+    if not re.fullmatch(r"[a-zA-Z0-9_]+", name):
+        raise ValueError("script must be a filename without directories")
+    inventory = discover(sdk) if inventory is None else inventory
+    spec = _lookup(inventory, name)
+    if spec is None:
+        if name.startswith("technique_") or kind not in ("background", "filter", "object"):
+            raise ValueError(f"unknown technique {name}; search_techniques lists discovered files and errors")
+        if controls is not None and not isinstance(controls, dict):
+            raise ValueError("controls must be an object")
+        return dict(script=name, kind=kind, controls=deepcopy(controls or {}), dependencies=[], custom=True)
+    controls = validate_controls(spec, controls, kind)
     files = [controls[name] for name, schema in spec["controls"].items()
              if schema.get("format") == "file" and controls[name]]
-    return dict(script=script, kind=kind, controls=controls, dependencies=files, custom=False)
+    return dict(script=spec["script"], source_path=spec["source_path"], kind=kind or spec["kind"],
+                controls=controls, dependencies=files, custom=False)
 
 
 def main(sdk, action="search", query="", script=None, controls=None, kind=None, recipe=None):
+    if action == "guide":
+        for root in ("workspace", "installed", "bundled"):
+            path = sdk.path.join(sdk.paths.get(root), "scripts", "canvas_technique_template.py")
+            if sdk.fs.exists(path):
+                return {"template_path": path, "template": sdk.fs.read(path),
+                        "workflow": ["Save a copy as workspace/scripts/technique_your_name.py.",
+                                     "Edit its literal TECHNIQUE metadata and its apply function together.",
+                                     "Use art_kit for shared image, colour and pixel utilities.",
+                                     "Validate using sdk.plugins.validate(path).",
+                                     "search_techniques(script='technique_your_name') discovers it immediately.",
+                                     "add_layer(script='technique_your_name', controls={...}), then render_canvas."]}
+        raise ValueError("technique template is missing; update the Image Editing bundle")
     if recipe:
         recipes = {
             "photo": [
-                {"tool": "add_layer", "args": {"script": "canvas_load_image", "controls": {"path": "<actual attachment path>"}}},
+                {"tool": "add_layer", "args": {"script": "technique_load_image", "controls": {"path": "<actual attachment path>"}}},
                 {"tool": "render_canvas", "args": {}, "note": "Inspect the native dimensions and choose a crop if needed."},
-                {"tool": "add_layer", "args": {"script": "canvas_saturation", "controls": {"factor": 1.1}}},
-                {"tool": "add_layer", "args": {"script": "canvas_sharpen", "controls": {"radius": 1.5, "amount": 60, "threshold": 3}}},
+                {"tool": "add_layer", "args": {"script": "technique_saturation", "controls": {"factor": 1.1}}},
+                {"tool": "add_layer", "args": {"script": "technique_sharpen", "controls": {"radius": 1.5, "amount": 60, "threshold": 3}}},
                 {"tool": "render_canvas", "args": {}, "note": "Inspect, then fine-tune the existing layer's controls; do not stack another adjustment."},
             ],
             "composition": [
                 {"tool": "manage_layers", "args": {"action": "create", "width": 800, "height": 500}},
                 {"tool": "manage_layers", "args": {"action": "set_palette", "colors": {"primary": "#182844", "accent": "#ffd9a0"}}},
-                {"tool": "add_layer", "args": {"script": "canvas_gradient", "controls": {"start": "@primary", "end": "@accent", "angle": 30}}},
-                {"tool": "add_layer", "args": {"script": "canvas_text", "controls": {"content": "Hello", "x": 60, "y": 60, "size": 48, "color": "#ffffff"}}},
+                {"tool": "add_layer", "args": {"script": "technique_gradient", "controls": {"start": "@primary", "end": "@accent", "angle": 30}}},
+                {"tool": "add_layer", "args": {"script": "technique_text", "controls": {"content": "Hello", "x": 60, "y": 60, "size": 48, "color": "#ffffff"}}},
                 {"tool": "render_canvas", "args": {}},
             ],
         }
@@ -204,22 +238,23 @@ def main(sdk, action="search", query="", script=None, controls=None, kind=None, 
         return {"recipe": recipe, "steps": recipes[recipe],
                 "note": "Examples are starting points. Use actual input paths and tailor edits to the request; no changes have been made by this lookup."}
     if action == "prepare":
-        return prepare(script, controls, kind)
+        return prepare(sdk, script, controls, kind)
+    inventory = discover(sdk)
     if script:
-        name = script.removesuffix(".py")
-        if name not in CATALOG:
-            raise ValueError(f"unknown shipped technique: {script}; omit script to list available techniques")
-        spec = deepcopy(CATALOG[name])
-        spec["script"] = name
-        spec["example"] = {"script": name, "kind": spec["kind"], "controls": spec["example"]}
+        spec = _lookup(inventory, script.removesuffix(".py"))
+        if spec is None:
+            raise ValueError(f"unknown technique: {script}; omit script to list discovered files")
+        spec = deepcopy(spec)
+        spec["example"] = {"script": spec["script"], "kind": spec["kind"], "controls": spec["example"]}
         return spec
     words = re.findall(r"[a-z0-9]+", query.lower())
     ranked = []
-    for name, spec in CATALOG.items():
-        text = " ".join([name, spec["title"], spec["description"], spec["tags"]]).lower()
+    for name, spec in inventory["techniques"].items():
+        text = " ".join([name, spec["title"], spec["description"], spec.get("tags", ""), *spec.get("aliases", [])]).lower()
         score = sum(word in text for word in words)
         if not words or score:
             ranked.append((score, name, spec))
     ranked.sort(key=lambda row: (-row[0], row[1]))
-    return [{"script": name, "kind": spec["kind"], "description": spec["description"]}
-            for _, name, spec in ranked[:(8 if words else len(ranked))]]
+    return [{"script": name, "kind": spec["kind"], "description": spec["description"],
+             "source_path": spec["source_path"], "origin": spec["origin"]}
+            for _, name, spec in ranked[:(8 if words else len(ranked))]] + list(inventory["errors"].values())

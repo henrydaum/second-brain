@@ -13,7 +13,7 @@ class ManageLayers(BaseTool):
         "update changes a layer's properties (script, controls, name, visible, opacity 0..1, "
         "blend_mode, mask path, offset [x,y], dependencies file paths). duplicate copies a layer. "
         "set_control changes one control. set_dimensions accepts any positive integer width/height "
-        "and replays the recipe at that size. Use canvas_resize to resample pixels. "
+        "and replays the recipe at that size. Use technique_resize to resample pixels. "
         "controls shows current values and their specifications; set_controls patches several "
         "controls in one undo step. layer_id can replace chain_index for stable targeting. "
         "palettes lists presets; set_palette accepts colors (role-to-hex overrides). "

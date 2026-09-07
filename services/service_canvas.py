@@ -14,13 +14,13 @@ Quick start
     Add a background::
 
         sdk.services.call("canvas", "add_layer", canvas_id,
-                          "canvas_solid", "background",
+                          "technique_solid", "background",
                           {"color": "#1a1a2e"})
 
     Add a filter::
 
         sdk.services.call("canvas", "add_layer", canvas_id,
-                          "canvas_blur", "filter", {"radius": 8.0})
+                          "technique_blur", "filter", {"radius": 8.0})
 
     Inspect the chain::
 
@@ -33,7 +33,7 @@ Layer model
 
         {
             "id": "stable-unique-id",     # survives reorders and deletes
-            "script": "canvas_blur",      # name of a script in scripts/
+            "script": "technique_blur",      # name of a script in scripts/
             "kind": "filter",             # "background" | "filter" | "object"
             "controls": {"radius": 5.0},  # kwargs passed to the script
         }
@@ -302,12 +302,14 @@ class CanvasService(BaseService):
     agent_prompt = (
         "## Image editing\n"
         "Use the installed classic techniques; no code authoring or generative AI is needed. "
-        "search_techniques() lists them; search_techniques(script='canvas_blur') returns "
+        "search_techniques() lists them; search_techniques(script='technique_blur') returns "
         "controls, defaults, ranges, suggested increments and an add_layer example. "
-        "search_techniques(recipe='photo') gives a worked sequence. Available: load_image, crop, resize, rotate, flip, brightness, contrast, saturation, "
-        "exposure, gamma, blur, sharpen, grayscale, invert, solid, gradient, line, shape, text, "
-        "duotone, vignette (script names have canvas_ prefix).\n"
-        "Start a photo edit with add_layer(script='canvas_load_image', controls={'path': "
+        "search_techniques(recipe='photo') gives a worked sequence. "
+        "Techniques are discovered from technique_*.py files; each owns literal TECHNIQUE "
+        "metadata, controls and its implementation. To create one, call "
+        "search_techniques(guide=True), copy the template into workspace/scripts, and edit it. "
+        "Use art_kit for shared utilities. Search reports source paths and invalid declarations.\n"
+        "Start a photo edit with add_layer(script='technique_load_image', controls={'path': "
         "'<actual attachment path>'}); kind defaults to background and native preserves pixels. "
         "For a blank composition use manage_layers create with width/height, then solid/gradient "
         "or object layers. create always makes a NEW canvas; inspect/select resumes an existing one. "
@@ -315,7 +317,7 @@ class CanvasService(BaseService):
         "first background and preserves the rest of the recipe.\n"
         "Crop, resize and expanded rotate change the rendered dimensions; later coordinates use "
         "that new image size. Render to inspect dimensions before positioning text/shapes. "
-        "set_dimensions changes the starting canvas and replays the recipe; canvas_resize actually "
+        "set_dimensions changes the starting canvas and replays the recipe; technique_resize actually "
         "resamples pixels. Prefer geometry early, tonal edits next, sharpening near the end, "
         "and text/annotations last so they stay crisp.\n"
         "Fine-tune existing layers with manage_layers set_control (name/value), set_controls "

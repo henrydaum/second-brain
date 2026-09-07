@@ -26,15 +26,17 @@ What's inside
     **Text** — ``text``, ``text_bbox`` (portable default font; explicit font objects supported)
     **Voronoi** — ``voronoi_nearest``
     **Masks** — ``radial_falloff``
+    **Pixels** ? ``rgba``, ``map_rgb``, ``gaussian_blur_array``,
+        ``antialiased_overlay``, ``composite``, ``resize_image``, ``crop_image``,
+        ``transform_image``; RGBA input, transparent edges preserved
     **Numpy helpers** — ``centered_grid``, ``bilinear_sample``
 
-Writing a new layer script
-    Start with a background or filter template. Import what you need from
-    ``art_kit``. Define ``main(sdk, kind, input_path, output_path, width,
-    height, seed, palette, controls)``. Read the input image with PIL, do your
-    work, write the result to ``output_path`` through ``write_png``. That's it — no registration, no
-    dispatch table, no core edit. Drop the file in scripts/ and it's available
-    as a layer.
+Writing a new technique
+    Copy ``canvas_technique_template.py`` to ``scripts/technique_your_name.py``.
+    Keep literal ``TECHNIQUE`` metadata and the effect in that file, and import
+    shared utilities from this module. ``search_techniques(guide=True)`` returns
+    the template and workflow. Read inputs with ``read_image`` and write RGBA
+    PNGs with ``write_png``; both use SDK file IO. No registration or core edit.
 """
 
 from __future__ import annotations
@@ -1113,3 +1115,109 @@ def transform_image(image, size, inverse_matrix):
     return image.convert("RGBA").convert("RGBa").transform(
         tuple(size), Image.Transform.AFFINE, tuple(inverse_matrix),
         resample=Image.Resampling.BICUBIC, fillcolor=(0, 0, 0, 0)).convert("RGBA")
+
+
+# Shared alpha-safe pixel primitives used by individual techniques.
+
+def rgba(value, palette):
+    """Literal CSS/hex colour or a live @role, never an implicit photo recolour."""
+    from PIL import ImageColor
+    if value.startswith("@"):
+        role = value[1:]
+        colors = palette.get("colors", {})
+        if role not in colors:
+            raise ValueError(f"unknown palette role {value}; available: {list(colors)}")
+        value = colors[role]
+    if value == "transparent":
+        return (0, 0, 0, 0)
+    return ImageColor.getcolor(value, "RGBA")
+
+
+def map_rgb(image, operation):
+    """Apply operation to float RGB in [0, 1], clamp, and preserve RGBA alpha."""
+    import numpy as np
+    from PIL import Image
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255
+    output = np.uint8(np.clip(operation(rgb) * 255 + .5, 0, 255))
+    result = Image.fromarray(output).convert("RGBA")
+    result.putalpha(image.getchannel("A"))
+    return result
+
+
+def gaussian_blur_array(image, radius):
+    """Return straight float RGBA in [0, 1], blurred with premultiplied alpha.
+
+    Input is an RGBA image; radius is nonnegative pixels. Floating-point
+    premultiplication avoids 8-bit alpha rounding before filtering.
+    """
+    import numpy as np
+    if radius == 0:
+        return np.asarray(image, dtype=np.float32) / 255
+    arr = np.asarray(image, dtype=np.float32) / 255
+    arr[..., :3] *= arr[..., 3:]
+    blurred = np.empty_like(arr)
+    for channel in range(4):
+        blurred[..., channel] = _gaussian_plane(arr[..., channel], radius)
+    alpha = blurred[..., 3:]
+    blurred[..., :3] = np.divide(blurred[..., :3], alpha,
+                                 out=np.zeros_like(blurred[..., :3]), where=alpha > 1e-8)
+    return blurred
+
+
+def _gaussian_plane(plane, radius):
+    """Separable Gaussian convolution in float, with replicated border pixels.
+
+    Small radii use the sampled kernel directly; large radii use three box
+    passes matched to its variance so cost does not grow with kernel area.
+    """
+    import numpy as np
+    if radius <= 2:
+        extent = max(1, math.ceil(radius * 3))
+        positions = np.arange(-extent, extent + 1, dtype=np.float32)
+        kernel = np.exp(-positions ** 2 / (2 * radius ** 2))
+        kernel /= kernel.sum()
+        for axis in (0, 1):
+            pads = [(0, 0), (0, 0)]
+            pads[axis] = (extent, extent)
+            padded = np.pad(plane, pads, mode="edge")
+            result = np.zeros_like(plane)
+            for i, weight in enumerate(kernel):
+                slices = [slice(None), slice(None)]
+                slices[axis] = slice(i, i + plane.shape[axis])
+                result += padded[tuple(slices)] * weight
+            plane = result
+        return plane
+    lower = int(math.sqrt(4 * radius * radius + 1))
+    if lower % 2 == 0:
+        lower -= 1
+    # Blend adjacent odd box widths to match variance continuously. Choosing
+    # only integer widths would make small radius edits do nothing, then jump.
+    low_variance = (lower * lower - 1) / 12
+    high_variance = ((lower + 2) ** 2 - 1) / 12
+    mix = (radius * radius / 3 - low_variance) / (high_variance - low_variance)
+    for _ in range(3):
+        for axis in (0, 1):
+            plane = _box_plane(plane, axis, lower) * (1 - mix) + _box_plane(plane, axis, lower + 2) * mix
+    return plane
+
+
+def _box_plane(plane, axis, width):
+    import numpy as np
+    extent = width // 2
+    pads = [(0, 0), (0, 0)]
+    pads[axis] = (extent, extent)
+    sums = np.cumsum(np.pad(plane, pads, mode="edge"), axis=axis, dtype=np.float64)
+    pads[axis] = (1, 0)
+    sums = np.pad(sums, pads)
+    first, last = [slice(None), slice(None)], [slice(None), slice(None)]
+    first[axis], last[axis] = slice(width, None), slice(None, -width)
+    return ((sums[tuple(first)] - sums[tuple(last)]) / width).astype(np.float32)
+
+
+def antialiased_overlay(size, paint):
+    """Supersampling for deterministic antialiasing of shape boundaries."""
+    from PIL import Image, ImageDraw
+    scale = 2
+    overlay = Image.new("RGBA", (size[0] * scale, size[1] * scale))
+    paint(ImageDraw.Draw(overlay), scale)
+    return resize_image(overlay, size)

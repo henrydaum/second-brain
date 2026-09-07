@@ -14,7 +14,7 @@ The three layer kinds:
   alpha-composited on top. Use for text, shapes, overlays.
 
 The ``script`` parameter is the filename of a script in the scripts/ directory,
-without the ``.py`` extension (e.g. ``"canvas_load_image"``, ``"canvas_blur"``).
+without the ``.py`` extension (e.g. ``"technique_load_image"``, ``"technique_blur"``).
 The ``canvas_`` prefix is a convention for layer scripts — follow it, but the
 renderer only appends ``".py"`` and calls ``sdk.scripts.run``. Controls are the
 keyword arguments passed to that script's ``main()`` at render time.
@@ -36,11 +36,11 @@ class AddLayer(BaseTool):
         "(transforms the prior layer's output), or 'object' (alpha-composites "
         "on top of the prior layer). 'script' is the filename of a script in "
         "the scripts/ directory without the .py extension (e.g. "
-        "'canvas_load_image', 'canvas_blur'). The 'canvas_' prefix is a "
+        "'technique_load_image', 'technique_blur'). The 'canvas_' prefix is a "
         "convention for layer scripts. 'controls' are keyword arguments "
         "passed to that script at render time. Omit kind for shipped techniques; "
         "search_techniques returns their exact controls and examples. Photo import: "
-        "script='canvas_load_image', controls={'path': '<attachment path>'}. "
+        "script='technique_load_image', controls={'path': '<attachment path>'}. "
         "Default native fit preserves the photo dimensions. Adding does not render."
     )
     parameters = {
@@ -52,7 +52,7 @@ class AddLayer(BaseTool):
             },
             "script": {
                 "type": "string",
-                "description": "Script filename without .py (e.g. 'canvas_load_image', 'canvas_blur'). The 'canvas_' prefix is a convention for layer scripts.",
+                "description": "Script filename without .py (e.g. 'technique_load_image', 'technique_blur'). The 'canvas_' prefix is a convention for layer scripts.",
             },
             "kind": {
                 "type": "string",

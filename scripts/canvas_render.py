@@ -13,7 +13,7 @@ import json
 import secrets
 from io import BytesIO
 from .art_kit import read_image, write_png, composite
-from .canvas_catalog import prepare
+from .canvas_catalog import discover, prepare
 
 box = "image_editing"
 dependencies_files = ["scripts/art_kit.py", "scripts/canvas_catalog.py"]
@@ -97,6 +97,7 @@ def main(sdk, canvas_id, out=None, seed=None, force_new_seed=False, force=False)
     key = _digest(["rgba-recipe-v3", size, palette, seed, _source_hash(sdk, renderer)])
     paths, scripts, prepared = [], [], []
     paths.append(sdk.path.join(root, key + ".png"))
+    inventory = discover(sdk)
     for index, layer in enumerate(layers):
         kind = layer["kind"]
         if kind not in ("background", "filter", "object") or (kind == "background" and index != 0):
@@ -104,8 +105,8 @@ def main(sdk, canvas_id, out=None, seed=None, force_new_seed=False, force=False)
         script = None
         controls = layer.get("controls", {})
         if layer.get("visible", True):
-            script = _resolve(sdk, layer["script"])
-            technique = prepare(layer["script"], controls, kind)
+            technique = prepare(sdk, layer["script"], controls, kind, inventory=inventory)
+            script = technique.get("source_path") or _resolve(sdk, technique["script"])
             controls = technique["controls"]
             inputs = list(layer.get("dependencies", [])) + technique["dependencies"]
             if layer.get("mask"):
