@@ -143,6 +143,33 @@ class ConversationRuntime:
             self.active_session_key = session_key
             prior_conv = self._persisted_active_conv_by_user.get(self.session_user_id(session_key))
 
+        with session.lock:
+            if self.sessions.get(session_key) is not session:
+                return RuntimeResult(False, error={"code": "session_changed", "message": "The conversation changed. Retry your action."})
+            out = self._prepare_action(session, action_type, payload, user_driven=user_driven)
+            driver_token = session.driver_token if out.data.get("_drive_agent_turn") else None
+        try:
+            return self._finish_action(session, out, driver_token, user_driven, prior_conv if user_driven else None)
+        finally:
+            if driver_token is not None:
+                with session.lock:
+                    if session.driver_token is driver_token:
+                        session.driver_token = None
+                        session.busy = False
+                        session.turn_id = None
+                        session.restart_turn = False
+                        session.turn_security_mode = None
+                        session.cancel_event.clear()
+                        session.cs.set_priority("user")
+                        _persist.persist_marker(self, session)
+
+    def _prepare_action(self, session, action_type, payload, *, user_driven):
+        """Check and mutate under the same lock, then reserve the turn driver."""
+        session_key = session.key
+        if action_type in {"answer_approval", "cancel"} and isinstance(payload, dict) and payload.get("request_id"):
+            if payload["request_id"] != _approvals.current_request_id(session, action_type):
+                return RuntimeResult(False, error={
+                    "code": "invalid_input", "message": "That request is no longer active."})
         # Cron-handoff guard: a non-user-driven send_text must never be
         # interpreted as form input. If the user is mid-form, refuse the turn.
         if (not user_driven
@@ -157,7 +184,7 @@ class ConversationRuntime:
         # Answering with nothing at all would be worse than either channel —
         # somebody pressed a control and is owed a reply, even when the reply is
         # that there was nothing to do.
-        if action_type == "cancel" and not session.busy and session.cs.phase == BASE_PHASE:
+        if action_type == "cancel" and not session.in_flight and session.cs.phase == BASE_PHASE:
             self.notify(title="Nothing to cancel",
                         body="No turn was running.",
                         source="runtime", session_key=session_key,
@@ -167,8 +194,8 @@ class ConversationRuntime:
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
         # proceed. Everything else is told to wait or cancel first.
-        if session.busy or session.cs.phase in BUSY_PHASES:
-            if action_type == "cancel" and session.cs.phase != PHASE_APPROVING_REQUEST:
+        if session.in_flight or session.cs.phase in BUSY_PHASES:
+            if action_type == "cancel" and (session.in_flight or session.cs.phase != PHASE_APPROVING_REQUEST):
                 # Cancel means "stop everything" — drop queued messages too,
                 # and take the background agents this turn started with it
                 # (and anything *they* started). Stopping the agent while its
@@ -187,6 +214,12 @@ class ConversationRuntime:
                     # ``ConversationLoop._record_cancellation``.
                     session.pending_user_inputs.clear()
                 session.cancel_event.set()
+                # Dismiss the pending question as well as stopping the driver.
+                # Set cancellation first: resolving the request wakes its tool.
+                while session.cs.phase == PHASE_APPROVING_REQUEST:
+                    dismissed = self._dispatch(session, "cancel", {"actor_id": "user"})
+                    if not dismissed.ok:
+                        break
                 # The flag first, then the stoppers: everything that wakes up
                 # must find the turn already cancelled, or it carries on doing
                 # the work it was just interrupted out of.
@@ -311,12 +344,25 @@ class ConversationRuntime:
             if starting:
                 _persist.ensure_conversation(self, session)
             _cfg.refresh_specs(self, session)
+            previous_dispatch = session.dispatch_thread
+            session.dispatch_thread = previous_dispatch or threading.get_ident()
             try:
                 out = self._dispatch(session, action_type, payload)
             finally:
+                session.dispatch_thread = previous_dispatch
                 if action_type not in {"load_history", "new_conversation"}:
                     _persist.persist_marker(self, session)
 
+        if out.data.get("_drive_agent_turn"):
+            session.driver_token = object()
+            session.cancel_event.clear()
+        return out
+
+    def _finish_action(self, session, out, driver_token, user_driven, prior_conv):
+        """Run slow work without the state lock; retain ownership through cleanup."""
+        if driver_token is not None:
+            with session.lock:
+                _persist.persist_marker(self, session)
         # The agent turn runs *outside* the session lock on purpose. A tool
         # inside the turn may call ``runtime.request_input(...)`` and block
         # synchronously waiting for the user — the user's answer arrives via
@@ -371,6 +417,10 @@ class ConversationRuntime:
             # drives bound keeps a pathological ping-pong finite.
             with session.lock:
                 if not session.pending_user_inputs:
+                    if session.driver_token is driver_token:
+                        session.driver_token = None
+                        session.cancel_event.clear()
+                        _persist.persist_marker(self, session)
                     break
                 if session.cs.phase != BASE_PHASE or session.cs.turn_priority != "user":
                     # Turn ended into a form/approval — a user send_text is
@@ -419,7 +469,7 @@ class ConversationRuntime:
 
         text = _disp.text_of(payload)
         inbound_attachments = _disp.attachments_of(payload)
-        actor_id = _disp.actor_id_of(payload)
+        actor_id = _disp.actor_id_of(payload) or "user"
 
         # Callers that bypass SendAttachment (e.g. iterate_agent_turn) can
         # pass attachments straight on the payload — push them onto
@@ -508,7 +558,8 @@ class ConversationRuntime:
         session.turn_id = session.turn_id or uuid4().hex
         turn_id = session.turn_id
         session.busy = True
-        session.cancel_event.clear()
+        if session.driver_token is None:
+            session.cancel_event.clear()
         _persist.persist_marker(self, session)  # busy=True snapshot for crash recovery
         from events.event_channels import SESSION_TURN_STARTED
         old_phase, old_priority = session.cs.phase, session.cs.turn_priority
@@ -586,6 +637,8 @@ class ConversationRuntime:
             # Read before the clear below — this is the only record of whether
             # the turn was actually interrupted (used for the no-reply label).
             was_cancelled = session.cancel_event.is_set()
+            if was_cancelled:
+                session.restart_turn = False
             session.busy = False
             # Safety net: EndTurn should already have handed priority back, but
             # if drive() raised partway through, force the user back into
@@ -593,7 +646,8 @@ class ConversationRuntime:
             # keeps agent priority on purpose: the re-driven loop ends the turn.
             if session.cs.turn_priority != "user" and not session.restart_turn:
                 session.cs.set_priority("user")
-            session.cancel_event.clear()
+            if session.driver_token is None:
+                session.cancel_event.clear()
             hooks = getattr(self, "hooks", None)
             if hooks is not None and not session.restart_turn:
                 # turn_finish observers fire once per LOGICAL turn: a pending
@@ -759,19 +813,18 @@ class ConversationRuntime:
         the database and the conversation id — because a compaction with no
         marker row is an in-memory shrink the next reload silently undoes.
 
-        Refused while ``session.busy``: that flag is set only around the agent
-        turn, so it is exactly "a drive owns this history list right now", and
-        compacting underneath one would rewrite a list it is iterating. A
-        command's own phase does not set it, so this does not refuse itself.
+        Refused while a turn owns the session, including startup and completion
+        hooks. A command's own phase does not reserve a turn, so this does not
+        refuse itself.
         """
         from runtime.compaction import Compaction, compact_history
 
         session = self.sessions.get(session_key)
         if session is None:
             return Compaction(False, "no active session").as_dict()
-        if session.busy:
-            return Compaction(False, "the agent is mid-turn").as_dict()
         with session.lock:
+            if getattr(session, "in_flight", session.busy):
+                return Compaction(False, "the agent is mid-turn").as_dict()
             outcome = compact_history(
                 self, session_key, session.history,
                 db=self.db, conversation_id=session.conversation_id,
@@ -805,6 +858,31 @@ class ConversationRuntime:
         return _persist.close_session(self, session_key)
 
     def delete_conversation(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
+        """Delete an accessible, idle conversation; refuse active work."""
+        try:
+            with _persist.idle_bindings(self, conversation_id=conversation_id):
+                return self._delete_conversation(session_key, conversation_id, override=override)
+        except _persist.SessionBusy:
+            return False
+
+    def clear_conversation(self, session_key: str, conversation_id: int) -> bool:
+        """Clear an idle conversation and refresh its actual live owner."""
+        if not self.assert_conversation_access(session_key, conversation_id):
+            return False
+        with _persist.idle_bindings(self, conversation_id=conversation_id) as holders:
+            self.db.clear_conversation_messages(conversation_id)
+            title = (self.db.get_conversation(conversation_id) or {}).get("title") or ""
+            if title and not title.endswith(" (cleared)"):
+                self.db.update_conversation_title(conversation_id, f"{title} (cleared)")
+            for session in holders:
+                key, uid, frontend = session.key, session.user_id, session.frontend_name
+                self.close_session(key)
+                self.set_session_user(key, uid)
+                self.get_session(key).frontend_name = frontend
+                self.load_conversation(key, conversation_id)
+        return True
+
+    def _delete_conversation(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
         """Delete a conversation the session's effective user owns. Returns False
         (refused) on a cross-user attempt; raw deletes go through ``db`` directly.
 
@@ -1126,6 +1204,17 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def set_session_user(self, session_key: str, user_id: int | None) -> None:
+        """Bind identity, refusing changes while another operation owns it."""
+        # Reasserting the same identity is common on reconnect, including in
+        # the middle of a turn. Changing it must never rebind a running driver.
+        with self._sessions_lock:
+            session = self.sessions.get(session_key)
+            if session is not None and session.user_id == user_id:
+                return
+        with _persist.idle_bindings(self, session_key=session_key):
+            self._set_session_user(session_key, user_id)
+
+    def _set_session_user(self, session_key: str, user_id: int | None) -> None:
         """Frontend hook: bind the user behind ``session_key`` (None ⇒ base user).
 
         Creates the session if it doesn't exist yet, so a frontend can bind
@@ -1363,7 +1452,7 @@ class ConversationRuntime:
                 "phase": s.cs.phase,
                 "turn_priority": s.cs.turn_priority,
                 "conversation_id": s.conversation_id,
-                "busy": s.busy,
+                "busy": s.in_flight,
                 "plugin_state": list((s.plugin_state or {}).keys()),
                 "system_prompt_extras": list(s.system_prompt_extras.keys()),
                 "session_tools": [t.name for t in s.extra_tool_instances],

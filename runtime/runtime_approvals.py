@@ -68,6 +68,12 @@ def request_input(
             type=type, enum=enum, enum_labels=enum_labels, default=default,
         )
         req.metadata.update({"session_key": session_key, "conversation_id": session.conversation_id})
+        if session.in_flight and session.cancel_event.is_set():
+            # A tool may reach its approval doorway just after cancellation.
+            # It must receive a denial, not publish a new unanswered dialog.
+            req.metadata["cancelled"] = True
+            req.resolve(None)
+            return req
         if detail:
             req.metadata["detail"] = detail
         runtime._approval_requests[req.id] = req

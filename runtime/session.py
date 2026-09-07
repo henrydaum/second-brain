@@ -177,6 +177,11 @@ class RuntimeSession:
     history: list[dict[str, Any]] = field(default_factory=list)
     conversation_id: int | None = None
     busy: bool = False
+    # Ownership spans admission, hooks, re-drives and completion callbacks.
+    # busy alone covers only one call to _drive_agent_turn.
+    driver_token: object | None = field(default=None, kw_only=True, repr=False)
+    dispatch_thread: int | None = field(default=None, kw_only=True, repr=False)
+
     # Logical turn identity survives re-drives, not process recovery.
     turn_id: str | None = field(default=None, kw_only=True)
     active_agent_profile: str = "default"
@@ -393,6 +398,10 @@ class RuntimeSession:
             for _ in range(depth):
                 self.lock.acquire()
 
+    @property
+    def in_flight(self) -> bool:
+        return self.busy or self.driver_token is not None
+
     def to_marker(self) -> dict[str, Any]:
         """Handle to marker."""
         state = self.cs.to_dict()
@@ -405,7 +414,7 @@ class RuntimeSession:
             "system_prompt_extras": self.system_prompt_extras,
             "plugin_state": self.plugin_state,
             "compaction_state_namespaces": sorted(self.compaction_state_namespaces),
-            "busy": self.busy,
+            "busy": self.in_flight,
         })
         return state
 

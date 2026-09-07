@@ -643,18 +643,12 @@ def _conv_clear(ctx, args: dict) -> Result:
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
 
-    db.clear_conversation_messages(cid)
-    conversation = db.get_conversation(cid) or {}
-    title = (conversation.get("title") or "").strip()
-    if title and not title.endswith(" (cleared)"):
-        db.update_conversation_title(cid, f"{title} (cleared)")
+    from runtime.persistence import SessionBusy
+    try:
+        return Result(data=runtime.clear_conversation(key, cid))
+    except SessionBusy as exc:
+        return Result.failure(str(exc), code="busy")
 
-    if session is not None and getattr(session, "conversation_id", None) == cid:
-        uid = runtime.session_user_id(key)
-        runtime.close_session(key)
-        runtime.set_session_user(key, uid)
-        runtime.load_conversation(key, cid)
-    return Result(data=True)
 
 
 def _conv_delete(ctx, args: dict) -> Result:
@@ -712,7 +706,7 @@ def _session_get(ctx, args: dict) -> Result:
         "key": key,
         "conversation_id": getattr(session, "conversation_id", None),
         "phase": getattr(machine, "phase", None),
-        "busy": bool(getattr(session, "busy", False)),
+        "busy": bool(getattr(session, "in_flight", getattr(session, "busy", False))),
         "turn_id": getattr(session, "turn_id", None),
         "attended": bool(runtime.is_attended(key))
         if hasattr(runtime, "is_attended") else None,

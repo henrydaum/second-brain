@@ -54,7 +54,7 @@ ALLOWED_MESSAGE_WRITERS = {
     # Forwarding, not producing: the closing-race follow-up merges a second
     # dispatch's result into the first, and that dispatch's own reply is the
     # agent's. It moves every field alike, ``callable_output`` included.
-    ("runtime.conversation_runtime", "handle_action"),
+    ("runtime.conversation_runtime", "_finish_action"),
 }
 
 

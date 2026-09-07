@@ -16,7 +16,9 @@ from __future__ import annotations
 
 
 import logging
+import threading
 import uuid
+from contextlib import contextmanager
 from typing import Any
 
 from events.event_bus import bus
@@ -40,6 +42,36 @@ from runtime.notifications import (
 )
 
 logger = logging.getLogger("Runtime.persistence")
+
+
+class SessionBusy(RuntimeError):
+    """A lifecycle mutation would detach work that still owns the session."""
+
+
+@contextmanager
+def idle_bindings(runtime, *, session_key=None, conversation_id=None):
+    """Hold bindings and idle state atomically for destructive lifecycle edits.
+
+    Never wait for a session lock while holding the registry lock: dispatch
+    takes these in the opposite order when a command switches conversations.
+    A concurrent mutation is refused so its caller can retry.
+    """
+    locked = []
+    with runtime._sessions_lock:
+        try:
+            holders = [s for s in runtime.sessions.values()
+                       if (s.key == session_key if session_key is not None
+                           else getattr(s, "conversation_id", None) == conversation_id)]
+            for session in holders:
+                if not session.lock.acquire(blocking=False):
+                    raise SessionBusy("Cancel the running turn before changing the conversation.")
+                locked.append(session)
+                if (session.in_flight or session.dispatch_thread not in (None, threading.get_ident())):
+                    raise SessionBusy("Cancel the running turn before changing the conversation.")
+            yield holders
+        finally:
+            for session in reversed(locked):
+                session.lock.release()
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -148,10 +180,11 @@ def load_conversation(
         if existing is not None and existing.conversation_id == conversation_id:
             return existing
         _check_conversation_binding(runtime, session_key, conversation_id)
-        return _load_conversation(
-            runtime, session_key, conversation_id, agent_profile=agent_profile,
-            notification_mode=notification_mode,
-            system_prompt_extras=system_prompt_extras)
+        with idle_bindings(runtime, session_key=session_key):
+            return _load_conversation(
+                runtime, session_key, conversation_id, agent_profile=agent_profile,
+                notification_mode=notification_mode,
+                system_prompt_extras=system_prompt_extras)
 
 
 class ConversationInUse(RuntimeError):
@@ -321,10 +354,8 @@ def _load_history(runtime, session_key: str, conversation_id: int):
 
 def reset_conversation(runtime, session_key: str) -> RuntimeSession:
     """Handle reset conversation."""
-    with runtime._sessions_lock:
+    with idle_bindings(runtime, session_key=session_key):
         prior = runtime.sessions.get(session_key)
-        if prior is not None and prior.busy:
-            raise RuntimeError("Cancel the running turn before resetting the conversation.")
         existed = prior is not None
         session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
@@ -395,16 +426,17 @@ def iterate_agent_turn(
     payload = {"text": prompt, "actor_id": actor_id}
     if attachments:
         payload["attachments"] = list(attachments)
+    session = runtime.get_session(session_key)
     out = runtime.handle_action(session_key, "send_text", payload, user_driven=False)
-    session = runtime.sessions.get(session_key)
-    if out.ok and session and runtime.db and session.conversation_id:
+    if out.ok and not out.data.get("queued") and runtime.db and session.conversation_id:
         # Hold the session lock so the post-turn full-history write is
         # atomic with respect to any concurrent action targeting the
         # same session_key.
         with session.lock:
-            if not session.has_compaction_checkpoint:
-                runtime.db.replace_conversation_messages(session.conversation_id, list(session.history))
-            persist_marker(runtime, session)
+            if runtime.sessions.get(session_key) is session and not session.in_flight:
+                if not session.has_compaction_checkpoint:
+                    runtime.db.replace_conversation_messages(session.conversation_id, list(session.history))
+                persist_marker(runtime, session)
     final_text = "\n".join(m for m in out.messages if m).strip()
     # SESSION_TURN_COMPLETED is emitted per drive by _drive_agent_turn (the
     # single site both foreground and background turns flow through); this
@@ -473,12 +505,17 @@ def inject_user_message(
 # ──────────────────────────────────────────────────────────────────────
 
 def close_session(runtime, session_key: str) -> bool:
-    """Close session."""
+    """Close an idle session; return False if absent or still owned by work."""
+    try:
+        with idle_bindings(runtime, session_key=session_key):
+            return _close_session(runtime, session_key)
+    except SessionBusy:
+        return False
+
+
+def _close_session(runtime, session_key: str) -> bool:
+    """Remove a session after idle_bindings has secured its state and binding."""
     with runtime._sessions_lock:
-        existing = runtime.sessions.get(session_key)
-        if existing is not None and existing.busy:
-            # Keep the live driver reachable until it has actually stopped.
-            return False
         closed = runtime.sessions.pop(session_key, None)
         existed = closed is not None
     # Don't leave active_session_key dangling at a closed session: is_attended()
@@ -559,7 +596,9 @@ def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[dict], 
     notices: list[dict] = []
     changed = False
 
-    if marker.get("busy"):
+    if marker.get("busy") or (marker.get("turn_priority") == "agent"
+                              and marker.get("phase", BASE_PHASE) == BASE_PHASE
+                              and not phases):
         notices.append({
             "title": "Turn interrupted",
             "body": "An earlier agent turn in this conversation was interrupted "
@@ -617,7 +656,8 @@ def persist_marker(runtime, session: RuntimeSession) -> None:
     Two-marker turns (``busy=True`` before, ``busy=False`` after) are how
     we recover from crashes mid-turn — see ``runtime_dispatch``.
     """
-    if runtime.db and session.conversation_id:
+    if (runtime.db and session.conversation_id
+            and runtime.sessions.get(session.key) is session):
         save_state_marker(runtime.db, session.conversation_id, session.to_marker())
 
 
