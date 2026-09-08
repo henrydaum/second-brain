@@ -28,6 +28,11 @@ shared helpers, and a searchable catalogue. No kernel changes are required.
 example with `search_techniques(script="technique_sharpen")`. The catalogue returns
 control types, defaults, bounds, units and suggested increments. Increments are
 not quantization: saturation 1.125 is valid even though its suggested step is 0.05.
+Numeric controls accept numeric strings such as `"25"` and `"3.5"`; integer
+controls accept integer strings such as `"25"` without truncating fractions.
+Boolean controls accept `true`/`false` strings, while booleans are never accepted
+as numbers. Normalization also applies to array items, and saved controls use
+the resulting typed values. Invalid values report the control and received input.
 `search_techniques(recipe="photo")` and `recipe="composition"` return complete
 worked sequences of tool calls without changing any canvas.
 

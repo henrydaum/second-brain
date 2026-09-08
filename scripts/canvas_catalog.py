@@ -13,31 +13,50 @@ import re
 box = "image_editing"
 
 
-def _check(value, schema, label):
+def _check(value, schema, label, coerce=False):
     kind = schema["type"]
+    original = value
+    if coerce and isinstance(value, str):
+        text = value.strip()
+        if kind in ("number", "integer"):
+            try:
+                value = int(text)
+            except ValueError:
+                if kind == "number":
+                    try:
+                        value = float(text)
+                    except ValueError:
+                        pass
+        elif kind == "boolean" and text.lower() in ("true", "false"):
+            value = text.lower() == "true"
     valid = {"number": type(value) in (int, float), "integer": type(value) is int,
              "string": isinstance(value, str), "boolean": type(value) is bool,
              "array": isinstance(value, (list, tuple))}[kind]
     if not valid:
-        raise ValueError(f"{label} must be {kind}")
+        hint = {"number": "Use a number such as 3.5 (numeric strings are accepted).",
+                "integer": "Use a whole integer such as 25; fractions are not rounded.",
+                "boolean": "Use true or false, not 0/1 or yes/no."}.get(kind, "")
+        raise ValueError(f"{label} must be {kind}; received {original!r} "
+                         f"({type(original).__name__}). {hint}".rstrip())
     if kind in ("number", "integer"):
         if not math.isfinite(value):
-            raise ValueError(f"{label} must be finite")
+            raise ValueError(f"{label} must be finite; received {original!r}")
         if schema.get("minimum") is not None and value < schema["minimum"]:
-            raise ValueError(f"{label} must be >= {schema['minimum']}")
+            raise ValueError(f"{label} must be >= {schema['minimum']}; received {original!r}")
         if schema.get("maximum") is not None and value > schema["maximum"]:
-            raise ValueError(f"{label} must be <= {schema['maximum']}")
+            raise ValueError(f"{label} must be <= {schema['maximum']}; received {original!r}")
     if "enum" in schema and value not in schema["enum"]:
         raise ValueError(f"{label} must be one of {schema['enum']}")
     if kind == "array":
         if len(value) < schema.get("minItems", 0) or len(value) > schema.get("maxItems", len(value)):
             raise ValueError(f"{label} has invalid length")
-        for item in value:
-            _check(item, schema["items"], label + "[]")
+        value = [_check(item, schema["items"], f"{label}[{index}]", coerce=coerce)
+                 for index, item in enumerate(value)]
     if schema.get("format") == "file" and not value.strip() and "default" not in schema:
         raise ValueError(f"{label} needs a file path")
     if schema.get("format") == "color" and not value.strip():
         raise ValueError(f"{label} needs a colour or @palette-role")
+    return value
 
 
 def validate_controls(spec, controls=None, kind=None):
@@ -56,7 +75,7 @@ def validate_controls(spec, controls=None, kind=None):
             if "default" not in schema:
                 raise ValueError(f"required control {name}: {schema.get('description', '')}")
             controls[name] = deepcopy(schema["default"])
-        _check(controls[name], schema, name)
+        controls[name] = _check(controls[name], schema, name, coerce=True)
     for rule in spec.get("constraints", []):
         if controls[rule["greater"]] <= controls[rule["than"]]:
             raise ValueError(f"{rule['greater']} must exceed {rule['than']}")
