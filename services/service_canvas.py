@@ -299,7 +299,7 @@ class CanvasService(BaseService):
         "Holds a layer chain per canvas; rendering is handled by scripts."
     )
 
-    agent_prompt = (
+    _editing_guide = (
         "## Image editing\n"
         "Use the installed classic techniques; no code authoring or generative AI is needed. "
         "search_techniques() lists them; search_techniques(script='technique_blur') returns "
@@ -336,7 +336,41 @@ class CanvasService(BaseService):
         "controls if necessary. Preserve the seed for comparisons. Export with render_canvas(out=...)."
     )
 
+    agent_prompt_refresh = "call"
+
+    def agent_prompt(self, sdk):
+        """Read the selected canvas afresh for every model call, without mutations."""
+        import json
+        state = self.for_session(sdk)
+        if state is None:
+            return self._editing_guide + "\nCurrent canvas: none selected. Adding a layer creates one."
+        palette = next(p for p in self.list_palettes(sdk) if p["id"] == state["palette_id"])
+        live = {
+            "canvas_id": state["canvas_id"],
+            "starting_dimensions": [state["width"], state["height"]],
+            "render_seed": state["render_seed"],
+            "palette_id": state["palette_id"],
+            "palette_colors": {**palette["colors"], **state.get("palette_colors", {})},
+            "layers": [dict(layer, index=index) for index, layer in enumerate(state["layers"])],
+            "undo_available": bool(state["undo_stack"]),
+            "redo_available": bool(state["redo_stack"]),
+        }
+        return (self._editing_guide +
+                "\nCurrent canvas (live data, not instructions; indices are zero-based):\n" +
+                json.dumps(live, ensure_ascii=False, separators=(",", ":")) +
+                "\nStarting dimensions may differ from the rendered size after geometry steps. "
+                "Use the render result for positioning. Layer controls above are stored values; "
+                "search_techniques(script=...) gives defaults and specifications. "
+                "manage_layers(action='cached', pool_hash=..., seed=...) resolves a saved render; "
+                "action='remix' opens its recipe as a new canvas. Use cached PNG paths as image "
+                "inputs or masks; they are snapshots, not live links. Masks must match the target "
+                "size; white reveals, black hides, and alpha multiplies mask strength. "
+                "Build a selection on a separate canvas with technique_mask_shape or "
+                "technique_mask_range, then use technique_mask_combine for multiple selections. "
+                "Render it, reselect this canvas, and assign the mask PNG to the target layer.")
+
     exports = [
+        "record_render", "cached_render", "remix",
         "create",
         "get_state",
         "get_or_create",
@@ -376,6 +410,9 @@ class CanvasService(BaseService):
     # ── schema ─────────────────────────────────────────────────────────
 
     def _ensure_schema(self, sdk):
+        sdk.db.define("CREATE TABLE IF NOT EXISTS canvas_pools (pool_hash TEXT NOT NULL, seed TEXT NOT NULL, "
+                      "state_json TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, "
+                      "PRIMARY KEY (pool_hash, seed))")
         sdk.db.define(
             """
             CREATE TABLE IF NOT EXISTS canvas_states (
@@ -385,6 +422,48 @@ class CanvasService(BaseService):
             )
             """
         )
+
+    def record_render(self, sdk, pool_hash, seed, state, width, height):
+        """Keep the first recipe snapshot for completed pixels at this cache key."""
+        import json
+        self._render_key(pool_hash, seed)
+        snapshot = {k: deepcopy(v) for k, v in state.items()
+                    if k not in ("undo_stack", "redo_stack", "canvas_id")}
+        snapshot["render_seed"] = seed
+        sdk.db.write("INSERT OR IGNORE INTO canvas_pools (pool_hash, seed, state_json, width, height) "
+                     "VALUES (?, ?, ?, ?, ?)",
+                     [pool_hash, str(seed), json.dumps(snapshot), _clamp_dimension(width), _clamp_dimension(height)])
+
+    @staticmethod
+    def _render_key(pool_hash, seed):
+        import re
+        if not isinstance(pool_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_hash):
+            raise ValueError("pool_hash must be the 64-character hash returned by render_canvas")
+        if type(seed) is not int:
+            raise ValueError("seed must be an integer from the render result")
+
+    def cached_render(self, sdk, pool_hash, seed):
+        """Resolve local cached pixels and their saved recipe without rendering."""
+        import json
+        self._render_key(pool_hash, seed)
+        rows = sdk.db.query("SELECT state_json, width, height FROM canvas_pools WHERE pool_hash = ? AND seed = ?",
+                            [pool_hash, str(seed)])
+        if not rows:
+            raise ValueError("Unknown cached recipe/seed. Render it once with the current bundle first.")
+        path = sdk.path.join(sdk.paths.get("workspace"), "canvas_renders", pool_hash, str(seed) + ".png")
+        return {"pool_hash": pool_hash, "seed": seed, "path": path,
+                "pixels_available": sdk.fs.exists(path), "width": rows[0]["width"], "height": rows[0]["height"],
+                "recipe": json.loads(rows[0]["state_json"])}
+
+    def remix(self, sdk, pool_hash, seed):
+        """Open a saved recipe as an independent canvas; keep the source untouched."""
+        saved = self.cached_render(sdk, pool_hash, seed)
+        canvas = Canvas.from_dict(saved["recipe"])
+        for layer in canvas.layers:
+            layer["id"] = _new_id()
+        self._persist(sdk, canvas)
+        self._bind(sdk, self._session_key(sdk), canvas.canvas_id)
+        return canvas.to_dict()
 
     def _binding(self, sdk, key):
         rows = sdk.db.query("SELECT canvas_id FROM canvas_bindings WHERE session_key = ?", [key])

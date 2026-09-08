@@ -2,7 +2,7 @@
 
 The bundle keeps the Art version's ordered recipe and prefix cache. The canvas
 service owns state and undo/redo; scripts own pixels, and the existing sandbox
-owns their execution. The bundle includes 21 classic editing techniques, their
+owns their execution. The bundle includes 31 classic editing techniques, their
 shared helpers, and a searchable catalogue. No kernel changes are required.
 
 ## What changed from Art
@@ -57,7 +57,7 @@ A blank design starts with `manage_layers(action="create", width=800, height=500
 Then add `technique_solid` or `technique_gradient` and object steps such as `technique_text`.
 `create` makes a new canvas; `inspect`, `list` and `select` let you resume existing work.
 
-### The 21 techniques
+### The 31 techniques
 
 | Script suffix (all use `technique_`) | Main adjustable controls |
 | --- | --- |
@@ -82,6 +82,13 @@ Then add `technique_solid` or `technique_gradient` and object steps such as `tec
 | text | content, x, y, size, color, font_path, max_width, align |
 | duotone | shadows, highlights, amount |
 | vignette | amount, radius |
+| levels | black, white, gamma |
+| color_balance | red, green, blue signed offsets |
+| threshold | threshold, shadows, highlights |
+| posterize | levels per channel |
+| pixelate | block_size |
+| median | radius |
+| pad | width, height, x, y, color |
 
 ### Fine adjustments and history
 
@@ -232,8 +239,61 @@ Invalid declarations are reported, including invalid workspace overrides, rather
 than silently falling back. Renames, edits and deletions appear on the next lookup.
 The renderer executes the resolved script through the existing sandbox runner.
 
-Each shipped technique declares its former `canvas_*` name as an alias so saved
+The original 21 techniques declare their former `canvas_*` name as an alias so saved
 recipes continue working. New recipes use `technique_*`. Ambiguous aliases are
 rejected. The template has no aliases; add them only when deliberately renaming
 a technique. Scripts without the prefix remain usable with an explicit layer
 kind, but do not participate in technique discovery or control schemas.
+
+## Render folders and additional editing steps
+
+Renders use `workspace/canvas_renders/<recipe-hash>/<seed>.png`, matching Art's
+seed-pool organization. Each intermediate recipe prefix gets its own folder;
+identical inputs share cached results across canvases. Controls, file contents,
+helpers and palette values affect the recipe hash; seed selects a PNG within it.
+Old flat cache files are left untouched and may be deleted to reclaim space.
+They are not reused by this renderer version; recipes themselves are unaffected.
+
+Levels adjusts black/white points and midtones. Color balance corrects casts with
+signed RGB offsets. Median removes speckles; use a small radius before sharpening.
+Threshold and posterize create graphic colour reductions; threshold colours can
+reference the palette. Pixelate uses block averaging with transparency preserved.
+Padding extends or crops the canvas without resampling; place it early if later
+layers should use its new coordinates. Like resize, pad needs full layer opacity
+and no mask when it changes dimensions. Render and adjust existing layer controls.
+
+## Live canvas context and selections
+
+The canvas service uses `agent_prompt_refresh = "call"`: its prompt is rebuilt
+before every LLM request, including repeated calls within the same turn. It
+includes the selected canvas ID, starting size, seed, effective palette, ordered
+layers with IDs and stored controls, mask/compositing settings, and undo/redo
+availability. Reading it never creates or selects a canvas. Rendered dimensions
+still come from the render result, since geometry steps can change the size.
+
+`render_canvas` now returns `pool_hash` with `seed`. A successful render records
+its editable recipe in the service database. `manage_layers(action="cached",
+pool_hash=..., seed=...)` resolves the PNG, dimensions, and recipe.
+`manage_layers(action="remix", pool_hash=..., seed=...)` creates and selects an
+independent canvas from that snapshot. The source canvas is untouched. If cache
+pixels are removed, the saved recipe remains remixable. External input files and
+technique implementations are referenced, not archived: rerendering a remix uses
+their current contents. Existing renders need to be rendered again once to record
+a snapshot. These are local references, not publicly hosted URLs or QR links.
+
+Selections are ordinary canvases: keep the photo's canvas ID, create a mask
+canvas at the photo's *rendered* size, and use:
+
+- `technique_mask_shape`: rectangle, ellipse, or polygon; feather and invert.
+- `technique_mask_range`: import the photo, then select luminance or colour range.
+- `technique_mask_combine`: union, intersection, subtraction, or replacement with
+  another cached mask path. File contents participate in cache invalidation.
+
+Render the selection and keep its PNG path (or pool hash and seed). Select the
+photo canvas again, then set the target layer's `mask` property to that path via
+`manage_layers(action="update", layer_id=..., properties={"mask": ...})`.
+White reveals the edit, black hides it; masks have opaque grayscale output so
+inversion works outside the original selection too. Sizes must match exactly.
+These references are frozen PNG snapshots: editing the mask recipe produces a new
+path, and the agent explicitly updates the target layer to use it. There are no
+live cross-canvas dependencies, cycles, or additional tools.

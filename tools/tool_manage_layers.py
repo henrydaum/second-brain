@@ -9,6 +9,8 @@ class ManageLayers(BaseTool):
     description = (
         "Inspect or edit an image recipe. create makes and selects an empty transparent canvas; "
         "inspect lists canvas state, list lists canvases, select switches canvas_id. "
+        "cached resolves a pool_hash and seed to a PNG and saved recipe; remix opens that recipe "
+        "as a new selected canvas. Cached pixels can be reused as image inputs or mask paths. "
         "delete removes only one layer; move reorders (optional background stays first). "
         "update changes a layer's properties (script, controls, name, visible, opacity 0..1, "
         "blend_mode, mask path, offset [x,y], dependencies file paths). duplicate copies a layer. "
@@ -22,13 +24,15 @@ class ManageLayers(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
+            "pool_hash": {"type": "string", "description": "Cached recipe hash returned by render_canvas."},
+            "seed": {"type": "integer", "description": "Seed returned by render_canvas, for cached/remix."},
             "canvas_id": {
                 "type": "string",
                 "description": "Canvas to edit. Omit for the session canvas.",
             },
             "action": {
                 "type": "string",
-                "enum": [
+                "enum": ["cached", "remix",
                     "create", "inspect", "list", "select", "update", "duplicate", "controls", "set_controls", "palettes",
                     "delete", "move", "set_control", "set_palette",
                     "set_dimensions", "clear", "undo", "redo",
@@ -58,6 +62,12 @@ class ManageLayers(BaseTool):
     }
 
     def run(self, sdk, action, canvas_id=None, **kwargs):
+        if action in ("cached", "remix"):
+            try:
+                return sdk.services.call("canvas", "cached_render" if action == "cached" else "remix",
+                                         kwargs.get("pool_hash"), kwargs.get("seed"))
+            except ValueError as exc:
+                return sdk.fail(str(exc))
         if action == "palettes":
             return sdk.services.call("canvas", "list_palettes")
         if action == "list":

@@ -88,7 +88,7 @@ class RenderCanvas(BaseTool):
 
         return sdk.ok(
             {"path": path, "seed": seed, "canvas_id": canvas_id,
-             "cache_hit": cache_hit, "cached_layers": cached,
+             "pool_hash": result["pool_hash"], "cache_hit": cache_hit, "cached_layers": cached,
              "width": result["width"], "height": result["height"]},
             llm_summary=summary,
             attachments=[path],

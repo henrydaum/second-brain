@@ -27,15 +27,15 @@ def _check(value, schema, label, coerce=False):
                         value = float(text)
                     except ValueError:
                         pass
-        elif kind == "boolean" and text.lower() in ("true", "false"):
-            value = text.lower() == "true"
+        elif kind == "boolean" and text.lower() in ("true", "false", "yes", "no", "1", "0"):
+            value = text.lower() in ("true", "yes", "1")
     valid = {"number": type(value) in (int, float), "integer": type(value) is int,
              "string": isinstance(value, str), "boolean": type(value) is bool,
              "array": isinstance(value, (list, tuple))}[kind]
     if not valid:
         hint = {"number": "Use a number such as 3.5 (numeric strings are accepted).",
                 "integer": "Use a whole integer such as 25; fractions are not rounded.",
-                "boolean": "Use true or false, not 0/1 or yes/no."}.get(kind, "")
+                "boolean": "Use true or false (also accepts strings yes/no and 1/0)."}.get(kind, "")
         raise ValueError(f"{label} must be {kind}; received {original!r} "
                          f"({type(original).__name__}). {hint}".rstrip())
     if kind in ("number", "integer"):
@@ -56,44 +56,7 @@ def _check(value, schema, label, coerce=False):
         raise ValueError(f"{label} needs a file path")
     if schema.get("format") == "color" and not value.strip():
         raise ValueError(f"{label} needs a colour or @palette-role")
-
-
-def _coerce_string(value: str, schema: dict):
-    """Coerce a string control to its schema-typed form, or return ``None``.
-
-    The upstream tool path sometimes hands numeric and boolean controls in as
-    strings — the call site looked fine but lost typing during transport, and
-    the artist would rather have ``"25"`` quietly turn into ``25`` than be
-    told to retry a perfectly reasonable value. Returns ``None`` when the
-    string cannot be interpreted cleanly or the schema expects a non-coercible
-    type, so the validator's own error message can take over.
-
-    Only intended for primitive scalar controls. Paths (``format: file``) and
-    palette / hex colour strings (``format: color``) are left alone so an
-    actual typo still surfaces as a clean error rather than being hidden.
-    """
-    if schema.get("format") in ("file", "color"):
-        return None
-    kind = schema.get("type")
-    s = value.strip()
-    if kind == "boolean":
-        low = s.lower()
-        if low in ("true", "1", "yes"):
-            return True
-        if low in ("false", "0", "no"):
-            return False
-        return None
-    if kind in ("number", "integer"):
-        try:
-            n = float(s) if "." in s else int(s)
-        except (TypeError, ValueError):
-            return None
-        if isinstance(n, float) and not math.isfinite(n):
-            return None
-        if kind == "integer":
-            return int(n)
-        return n
-    return None
+    return value
 
 
 def validate_controls(spec, controls=None, kind=None):
@@ -112,18 +75,7 @@ def validate_controls(spec, controls=None, kind=None):
             if "default" not in schema:
                 raise ValueError(f"required control {name}: {schema.get('description', '')}")
             controls[name] = deepcopy(schema["default"])
-            continue
-        value = controls[name]
-        # The front-end path can hand an int / float / bool across the wire as
-        # a JSON string. Coerce before validating so an honest ``radius: 25``
-        # is not rejected with a misleading ``must be number`` error; if the
-        # string cannot be interpreted, the validator's error will say so.
-        if isinstance(value, str):
-            coerced = _coerce_string(value, schema)
-            if coerced is not None:
-                controls[name] = coerced
-                value = coerced
-        _check(value, schema, name)
+        controls[name] = _check(controls[name], schema, name, coerce=True)
     for rule in spec.get("constraints", []):
         if controls[rule["greater"]] <= controls[rule["than"]]:
             raise ValueError(f"{rule['greater']} must exceed {rule['than']}")

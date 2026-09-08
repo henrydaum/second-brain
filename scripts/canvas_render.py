@@ -94,9 +94,9 @@ def main(sdk, canvas_id, out=None, seed=None, force_new_seed=False, force=False)
     root = sdk.path.join(sdk.paths.get("workspace"), "canvas_renders")
     # Renderer and library changes invalidate even the empty-canvas cache.
     renderer = _resolve(sdk, "canvas_render")
-    key = _digest(["rgba-recipe-v3", size, palette, seed, _source_hash(sdk, renderer)])
+    key = _digest(["rgba-recipe-v4", size, palette, _source_hash(sdk, renderer)])
     paths, scripts, prepared = [], [], []
-    paths.append(sdk.path.join(root, key + ".png"))
+    paths.append(sdk.path.join(root, key, str(seed) + ".png"))
     inventory = discover(sdk)
     for index, layer in enumerate(layers):
         kind = layer["kind"]
@@ -117,7 +117,7 @@ def main(sdk, canvas_id, out=None, seed=None, force_new_seed=False, force=False)
             key = _digest([key, pixels, _source_hash(sdk, script), files])
         scripts.append(script)
         prepared.append(controls)
-        paths.append(sdk.path.join(root, key + ".png"))
+        paths.append(sdk.path.join(root, key, str(seed) + ".png"))
     cached = -1
     if not force:
         for count in range(len(layers), -1, -1):
@@ -166,6 +166,10 @@ def main(sdk, canvas_id, out=None, seed=None, force_new_seed=False, force=False)
     final_size = read_image(sdk, final_path).size
     if out and out != final_path:
         sdk.fs.write_bytes(out, sdk.fs.read_bytes(final_path))
+    # Save recipe identity alongside completed cached pixels. Explicit palette
+    # values keep remixes independent of later preset changes.
+    snapshot = dict(state, palette_colors=palette["colors"])
+    sdk.services.call("canvas", "record_render", key, seed, snapshot, final_size[0], final_size[1])
     sdk.services.call("canvas", "set_render_seed", canvas_id, seed)
     return {"path": out or final_path, "seed": seed, "pool_hash": key,
             "cache_hit": cache_hit,

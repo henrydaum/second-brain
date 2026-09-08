@@ -1044,9 +1044,7 @@ def composite(base, layer, opacity=1.0, blend_mode="normal", mask=None,
     if mask is not None:
         if mask.size != base.size:
             raise ValueError("mask must match canvas dimensions")
-        weight = weight * (np.asarray(mask.convert("L"), dtype=np.float32) / 255)[..., None]
-        if "A" in mask.getbands():
-            weight = weight * (np.asarray(mask.getchannel("A"), dtype=np.float32) / 255)[..., None]
+        weight = weight * mask_coverage(mask)[..., None]
     cb, ab = dst[..., :3], dst[..., 3:]
     cs, source_alpha = src[..., :3], src[..., 3:]
     if replace:
@@ -1221,3 +1219,29 @@ def antialiased_overlay(size, paint):
     overlay = Image.new("RGBA", (size[0] * scale, size[1] * scale))
     paint(ImageDraw.Draw(overlay), scale)
     return resize_image(overlay, size)
+
+
+def mask_coverage(image):
+    """Return float selection coverage: luminance times alpha, in [0, 1]."""
+    import numpy as np
+    coverage = np.asarray(image.convert("L"), dtype=np.float32) / 255
+    if "A" in image.getbands():
+        coverage = coverage * (np.asarray(image.getchannel("A"), dtype=np.float32) / 255)
+    return coverage
+
+
+def selection_image(coverage, feather=0, invert=False):
+    """Encode coverage as opaque grayscale RGBA; optionally feather and invert.
+
+    Opaque output makes inversion select the previously black outside region.
+    The result can be reused by any layer's existing mask property.
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+    mask = Image.fromarray(np.uint8(np.clip(coverage * 255 + .5, 0, 255)))
+    if feather:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather))
+    if invert:
+        from PIL import ImageOps
+        mask = ImageOps.invert(mask)
+    return mask.convert("RGBA")
