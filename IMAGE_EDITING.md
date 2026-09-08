@@ -2,7 +2,7 @@
 
 The bundle keeps the Art version's ordered recipe and prefix cache. The canvas
 service owns state and undo/redo; scripts own pixels, and the existing sandbox
-owns their execution. The bundle includes 44 classic editing techniques, their
+owns their execution. The bundle includes 53 classic editing techniques, their
 shared helpers, and a searchable catalogue. No kernel changes are required.
 
 ## What changed from Art
@@ -57,7 +57,7 @@ A blank design starts with `manage_layers(action="create", width=800, height=500
 Then add `technique_solid` or `technique_gradient` and object steps such as `technique_text`.
 `create` makes a new canvas; `inspect`, `list` and `select` let you resume existing work.
 
-### The 44 techniques
+### The 53 techniques
 
 | Script suffix (all use `technique_`) | Main adjustable controls |
 | --- | --- |
@@ -336,3 +336,49 @@ neutral grayscale map. Reselect the photo and supply that cached PNG as the
 displacement `path`. Maps are snapshots with automatic file fingerprinting, not
 live dependencies. Colour, alpha, interpolation and sampling primitives remain
 in `art_kit`; no extra tools or kernel changes are needed.
+
+## Glitch and psychedelic effects
+
+`search_techniques(recipe="glitch")` gives a photo-based recipe;
+`recipe="trippy"` starts with a procedural texture. Both batch their edits before
+rendering. Keep the render seed fixed while adjusting existing layer controls.
+
+| Technique (all use `technique_`) | Controls that avoid guessed pixel positions |
+| --- | --- |
+| chromatic_aberration | Separation as a fraction of the shorter image side; radial or horizontal. |
+| fisheye | Bulge/pinch strength and relative radius, centred by default. |
+| feedback_tunnel | Finite recursive copies: depth, scale, twist and opacity. |
+| ascii | Character columns, glyph ramp, sampled colour or palette foreground. |
+| scanlines | Line count across the image, strength, band fraction and phase. |
+| glitch_slice | Seeded bands; count, fractional height and fractional horizontal shift. |
+| pixel_sort | Horizontal/vertical runs selected by luminance range; ascending/descending. |
+| kaleidoscope | Repeated angular wedges, zoom, angle and normalized centre. |
+| swirl | Turns and relative radius, with smooth falloff around a normalized centre. |
+
+For radial effects, centre coordinates range from 0 to 1; 0.5 is the image centre.
+Radius uses half the shorter image side, so circular effects remain round on a
+portrait or panorama. These are geometric controls, not feature detection. Do
+not guess eye positions or freehand natural objects: prefer formulas, symmetry,
+grids, seeded patterns, and imported source photos for natural-looking elements.
+
+### Filter order, masks, opacity, and previews
+
+A filter reads **only the accumulated earlier layers** and returns a full image
+replacement at that step. Later objects cannot affect its luminance calculations.
+Put halftone before text to retain clean text; put it after text to halftone both.
+Halftone `paper` is the light output colour between dots, not a region selector.
+Choose `@background` to match the palette background if desired.
+
+Any layer can use `properties={"opacity":0.55,"mask":"<same-size mask PNG>"}`.
+These are layer properties, not entries in a technique's `controls`. Change them
+with `manage_layers(action="update", layer_id=..., properties=...)`. Numeric
+strings for opacity are accepted; booleans, nonfinite and out-of-range values are
+rejected with the received value. Dimension-changing steps still need full
+opacity and no mask. Use a mask to halftone a maze while preserving an orb, or put
+the orb in a later object layer.
+
+Add/manage/inspect do not render or attach images. Only `render_canvas` attaches
+the PNG. It reports `attachment_path` and `image_sha256` for the exact encoded
+bytes; exports use those same bytes. Even when an export filename is reused,
+the attachment points to the recipe/seed cache path, keeping revisions distinct.
+The pool hash identifies recipe inputs; `image_sha256` identifies the PNG bytes.

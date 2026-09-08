@@ -7,13 +7,15 @@ class ManageLayers(BaseTool):
     requires_services = ["canvas"]
     dependencies_files = ["services/service_canvas.py", "scripts/canvas_catalog.py"]
     description = (
-        "Inspect or edit an image recipe. create makes and selects an empty transparent canvas; "
+        "Inspect or edit an image recipe without rendering or attaching images. create makes and selects an empty transparent canvas; "
         "inspect lists canvas state, list lists canvases, select switches canvas_id. "
         "cached resolves a pool_hash and seed to a PNG and saved recipe; remix opens that recipe "
         "as a new selected canvas. Cached pixels can be reused as image inputs or mask paths. "
         "delete removes only one layer; move reorders (optional background stays first). "
         "update changes a layer's properties (script, controls, name, visible, opacity 0..1, "
-        "blend_mode, mask path, offset [x,y], dependencies file paths). duplicate copies a layer. "
+        "blend_mode, mask path, offset [x,y], dependencies file paths). Masks work on all techniques; "
+        "set properties={'mask':'<same-size PNG>','opacity':0.55}. These are layer properties, "
+        "not controls. Filters only affect earlier layers. duplicate copies a layer. "
         "set_control changes one control. set_dimensions accepts any positive integer width/height "
         "and replays the recipe at that size. Use technique_resize to resample pixels. "
         "controls shows current values and their specifications; set_controls patches several "

@@ -36,12 +36,15 @@ class AddLayer(BaseTool):
         "(transforms the prior layer's output), or 'object' (alpha-composites "
         "on top of the prior layer). 'script' is the filename of a script in "
         "the scripts/ directory without the .py extension (e.g. "
-        "'technique_load_image', 'technique_blur'). The 'canvas_' prefix is a "
+        "'technique_load_image', 'technique_blur'). The 'technique_' prefix is a "
         "convention for layer scripts. 'controls' are keyword arguments "
         "passed to that script at render time. Omit kind for shipped techniques; "
         "search_techniques returns their exact controls and examples. Photo import: "
         "script='technique_load_image', controls={'path': '<attachment path>'}. "
-        "Default native fit preserves the photo dimensions. Adding does not render."
+        "Default native fit preserves the photo dimensions. Adding does not render or attach images. "
+        "Filters replace the accumulated earlier image; later layers are unaffected. "
+        "Opacity and mask belong in properties={'opacity':0.55,'mask':'<PNG>'}, not controls. "
+        "Use relative controls, formulas and procedural layouts instead of guessing feature positions."
     )
     parameters = {
         "type": "object",
@@ -52,7 +55,7 @@ class AddLayer(BaseTool):
             },
             "script": {
                 "type": "string",
-                "description": "Script filename without .py (e.g. 'technique_load_image', 'technique_blur'). The 'canvas_' prefix is a convention for layer scripts.",
+                "description": "Script filename without .py (e.g. 'technique_load_image', 'technique_blur'). The 'technique_' prefix is a convention for layer scripts.",
             },
             "kind": {
                 "type": "string",

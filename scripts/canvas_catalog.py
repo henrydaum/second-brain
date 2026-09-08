@@ -237,6 +237,21 @@ def main(sdk, action="search", query="", script=None, controls=None, kind=None, 
         raise ValueError("technique template is missing; update the Image Editing bundle")
     if recipe:
         recipes = {
+            "glitch": [
+                {"tool":"add_layer", "args":{"script":"technique_load_image", "controls":{"path":"<actual attachment path>"}}},
+                {"tool":"add_layer", "args":{"script":"technique_chromatic_aberration", "controls":{"amount":.015,"mode":"horizontal"}}},
+                {"tool":"add_layer", "args":{"script":"technique_glitch_slice", "controls":{"slices":12,"height":.025,"shift":.06}}},
+                {"tool":"add_layer", "args":{"script":"technique_scanlines", "controls":{"lines":100,"strength":.25}}},
+                {"tool":"render_canvas", "args":{"seed":7}, "note":"Inspect once, then adjust existing layers. Keep the seed to preserve the band pattern."},
+            ],
+            "trippy": [
+                {"tool":"manage_layers", "args":{"action":"create","width":800,"height":800}},
+                {"tool":"add_layer", "args":{"script":"technique_texture", "controls":{"scale":100,"octaves":4,"contrast":2}}},
+                {"tool":"add_layer", "args":{"script":"technique_kaleidoscope", "controls":{"segments":8,"zoom":1.2}}},
+                {"tool":"add_layer", "args":{"script":"technique_feedback_tunnel", "controls":{"depth":8,"scale":.8,"twist":12}}},
+                {"tool":"add_layer", "args":{"script":"technique_chromatic_aberration", "controls":{"amount":.01}}},
+                {"tool":"render_canvas", "args":{"seed":7}, "note":"Procedural composition: tune palette, scale, twist and repetition; no guessed pixel positions."},
+            ],
             "photo": [
                 {"tool": "add_layer", "args": {"script": "technique_load_image", "controls": {"path": "<actual attachment path>"}}},
                 {"tool": "render_canvas", "args": {}, "note": "Inspect the native dimensions and choose a crop if needed."},
@@ -253,7 +268,7 @@ def main(sdk, action="search", query="", script=None, controls=None, kind=None, 
             ],
         }
         if recipe not in recipes:
-            raise ValueError("recipe must be photo or composition")
+            raise ValueError("recipe must be one of: " + ", ".join(recipes))
         return {"recipe": recipe, "steps": recipes[recipe],
                 "note": "Examples are starting points. Use actual input paths and tailor edits to the request; no changes have been made by this lookup."}
     if action == "prepare":
@@ -264,6 +279,12 @@ def main(sdk, action="search", query="", script=None, controls=None, kind=None, 
         if spec is None:
             raise ValueError(f"unknown technique: {script}; omit script to list discovered files")
         spec = deepcopy(spec)
+        spec["layer_usage"] = {
+            "filter": "Reads only earlier layers and returns a full replacement image; later layers are drawn afterward.",
+            "object": "Produces an overlay composited on earlier layers; later filters may transform it.",
+            "background": "Produces the starting image; must be the first layer.",
+        }[spec["kind"]]
+        spec["layer_properties"] = "Use properties.opacity (0..1) and properties.mask (same-size PNG) on add/update; these are not technique controls."
         spec["example"] = {"script": spec["script"], "kind": spec["kind"], "controls": spec["example"]}
         return spec
     words = re.findall(r"[a-z0-9]+", query.lower())

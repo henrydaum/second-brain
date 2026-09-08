@@ -301,10 +301,26 @@ class CanvasService(BaseService):
 
     _editing_guide = (
         "## Image editing\n"
+        "Prefer things computers do precisely: formulas, procedural textures, symmetry, grids, "
+        "repetition, seeded randomness and image-relative controls. Avoid freehand imitation or "
+        "guessing pixel locations of eyes, faces or other features. For natural photo elements, "
+        "use an available source image and import it, then apply programmatic edits. Normalized "
+        "centres are geometric positions, not detected landmarks; render to verify placement.\n"
+        "Layers execute in ascending index order. A filter receives ONLY accumulated earlier "
+        "layers and returns a complete replacement for that intermediate image. Later object "
+        "layers are drawn afterward and cannot influence the filter. Put halftone before text "
+        "to keep text clean, or after text to halftone it too. Same-size filter opacity blends "
+        "the filtered output with its input. Limit any edit with properties.mask (a same-size "
+        "PNG, white reveals/black hides); masks and opacity are layer properties, not technique "
+        "controls. Add with properties={'opacity':0.55,'mask':'<mask PNG>'}; update existing layers "
+        "through manage_layers(action='update', properties=...).\n"
+        "Add/manage/inspect return state only. Batch edits and call render_canvas when ready to "
+        "inspect; it alone attaches an image. Use its attachment_path and image_sha256 to identify "
+        "the exact preview, rather than an older attachment or reused export filename.\n"
         "Use the installed classic techniques; no code authoring or generative AI is needed. "
         "search_techniques() lists them; search_techniques(script='technique_blur') returns "
         "controls, defaults, ranges, suggested increments and an add_layer example. "
-        "search_techniques(recipe='photo') gives a worked sequence. "
+        "search_techniques(recipe='glitch') or recipe='trippy' gives procedural workflows; recipe='photo' gives photo editing. "
         "Techniques are discovered from technique_*.py files; each owns literal TECHNIQUE "
         "metadata, controls and its implementation. To create one, call "
         "search_techniques(guide=True), copy the template into workspace/scripts, and edit it. "
@@ -627,9 +643,18 @@ class CanvasService(BaseService):
             raise ValueError("name must be a string")
         if "visible" in p and type(p["visible"]) is not bool:
             raise ValueError("visible must be boolean")
-        if "opacity" in p and (type(p["opacity"]) not in (int, float) or
-                not math.isfinite(p["opacity"]) or not 0 <= p["opacity"] <= 1):
-            raise ValueError("opacity must be between 0 and 1")
+        if "opacity" in p:
+            original = p["opacity"]
+            if isinstance(original, str):
+                try:
+                    p["opacity"] = float(original.strip())
+                except ValueError:
+                    pass
+            if (type(p["opacity"]) not in (int, float) or
+                    not math.isfinite(p["opacity"]) or not 0 <= p["opacity"] <= 1):
+                raise ValueError(f"properties.opacity must be a number between 0 and 1; received {original!r} "
+                                 f"({type(original).__name__}). Filters support opacity too. "
+                                 "Pass properties={'opacity': 0.55}, not a technique control.")
         if p.get("blend_mode", "normal") not in ("normal", "multiply", "screen", "overlay", "darken", "lighten", "difference"):
             raise ValueError("unsupported blend_mode")
         if "offset" in p and (not isinstance(p["offset"], (list, tuple)) or

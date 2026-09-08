@@ -1301,3 +1301,18 @@ def colorize_field(field, low, high, alpha=None):
     if alpha is not None:
         result[..., 3] *= alpha
     return Image.fromarray(np.uint8(np.clip(result * 255 + .5, 0, 255)))
+
+
+def radial_coordinates(size, center_x=.5, center_y=.5):
+    """Return x/y grids, radius and angle about an image-relative centre.
+
+    Centres use [0,1] across the pixel centres. Radius is in units of half
+    the shorter image side, so circles remain round on non-square images.
+    """
+    import numpy as np
+    width, height = size
+    yy, xx = np.indices((height, width), dtype=np.float32)
+    cx, cy = center_x * (width - 1), center_y * (height - 1)
+    unit = max(1, min(width, height) / 2)
+    dx, dy = (xx - cx) / unit, (yy - cy) / unit
+    return xx, yy, np.hypot(dx, dy), np.arctan2(dy, dx), cx, cy, unit

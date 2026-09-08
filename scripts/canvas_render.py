@@ -164,14 +164,17 @@ def main(sdk, canvas_id, out=None, seed=None, force_new_seed=False, force=False)
                 sdk.fs.delete(temp)
     final_path = paths[-1]
     final_size = read_image(sdk, final_path).size
+    encoded = sdk.fs.read_bytes(final_path)
+    image_sha256 = hashlib.sha256(encoded).hexdigest()
     if out and out != final_path:
-        sdk.fs.write_bytes(out, sdk.fs.read_bytes(final_path))
+        sdk.fs.write_bytes(out, encoded)
     # Save recipe identity alongside completed cached pixels. Explicit palette
     # values keep remixes independent of later preset changes.
     snapshot = dict(state, palette_colors=palette["colors"])
     sdk.services.call("canvas", "record_render", key, seed, snapshot, final_size[0], final_size[1])
     sdk.services.call("canvas", "set_render_seed", canvas_id, seed)
-    return {"path": out or final_path, "seed": seed, "pool_hash": key,
+    return {"path": out or final_path, "attachment_path": final_path, "image_sha256": image_sha256,
+            "seed": seed, "pool_hash": key,
             "cache_hit": cache_hit,
             "cached_layers": start, "total_layers": len(layers),
             "width": final_size[0], "height": final_size[1]}

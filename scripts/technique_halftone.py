@@ -9,7 +9,9 @@ TECHNIQUE = {'title': 'Halftone dots',
  'kind': 'filter',
  'kinds': ['filter'],
  'description': 'Render luminance as antialiased dark dots on a light field. Cell-averaged '
-                'luminance sets dot radius; source transparency is preserved.',
+                'luminance sets dot radius; source transparency is preserved. Reads only earlier layers. '
+                'Paper is the light output colour between dots, not a selection mask; choose '
+                '@background to match the canvas palette. Use the layer mask to restrict the effect.',
  'controls': {'cell_size': {'type': 'integer',
                             'default': 8,
                             'description': 'Approximate dot-cell size in pixels.',

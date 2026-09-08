@@ -74,6 +74,7 @@ class RenderCanvas(BaseTool):
             return sdk.fail("Render produced no output path.")
 
         path = result["path"]
+        attachment_path = result["attachment_path"]
         seed = result.get("seed", "?")
         cache_hit = result.get("cache_hit", False)
         cached = result.get("cached_layers", 0)
@@ -83,13 +84,14 @@ class RenderCanvas(BaseTool):
             f"Rendered {total} layer(s) "
             f"({result['width']}×{result['height']}, seed={seed}). "
             f"{cached}/{total} cached{hit_note}. "
-            f"Output: {path}"
+            f"Output: {path}. Attached: {attachment_path}. SHA-256: {result['image_sha256']}"
         )
 
         return sdk.ok(
-            {"path": path, "seed": seed, "canvas_id": canvas_id,
+            {"path": path, "attachment_path": attachment_path, "image_sha256": result["image_sha256"],
+             "seed": seed, "canvas_id": canvas_id,
              "pool_hash": result["pool_hash"], "cache_hit": cache_hit, "cached_layers": cached,
              "width": result["width"], "height": result["height"]},
             llm_summary=summary,
-            attachments=[path],
+            attachments=[attachment_path],
         )
