@@ -210,6 +210,17 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
     bridge.configure(sb)
     sb.plugin_roots = list(roots.values())
     try:
+        tool_dir = rig.scripts.parent / "tools"
+        tool_dir.mkdir(exist_ok=True)
+        tool = tool_dir / "tool_add_layer.py"
+        tool.write_text((rig.root / "tools/tool_add_layer.py").read_text())
+        for radius in (3.5, "25"):
+            added = sb.run(str(tool), "AddLayer",
+                           kwargs={"canvas_id": cid, "script": "canvas_blur",
+                                   "controls": {"radius": radius}}, chain=Chain(root="user"))
+            assert added.ok, added.error
+            stored = s.get_state(sdk, cid)["layers"][-1]["controls"]["radius"]
+            assert type(stored) in (int, float) and stored == float(radius)
         result = sb.run(str(rig.scripts / "canvas_render.py"), "main",
                         kwargs={"canvas_id": cid, "seed": 0}, chain=Chain(root="user"))
         assert result.ok, result.error
@@ -304,3 +315,40 @@ def test_authoring_guide_returns_valid_template(rig):
     path.write_text(guide["template"])
     assert guide["workflow"]
     assert search.run(rig.sdk, script=path.stem)["controls"]["factor"]["default"] == 1
+
+
+@pytest.mark.parametrize("radius", [3.5, "3.5", "25", 25])
+def test_add_layer_normalizes_numeric_controls(rig, radius):
+    add = load("image_add_tool", rig.root / "tools/tool_add_layer.py").AddLayer()
+    result = add.run(rig.sdk, script="canvas_blur", controls={"radius": radius})
+    assert result["ok"]
+    value = result["data"]["layers"][0]["controls"]["radius"]
+    assert type(value) in (int, float) and value == float(radius)
+    manage = load("image_manage_tool", rig.root / "tools/tool_manage_layers.py").ManageLayers()
+    assert manage.run(rig.sdk, "set_control", chain_index=0, name="radius", value="2.5")["ok"]
+    manage.run(rig.sdk, "set_controls", chain_index=0, controls={"radius": "4"})
+    state = rig.service.for_session(rig.sdk)
+    assert state["layers"][0]["controls"]["radius"] == 4
+
+
+def test_control_coercion_is_recursive_and_preserves_text(rig):
+    cat = catalog(rig)
+    controls = {"points": [["1", "2.5"], ["3", "4"]], "width": "2"}
+    result = cat.prepare(rig.sdk, "technique_line", controls)["controls"]
+    assert result["points"] == [[1, 2.5], [3, 4]]
+    assert controls["points"][0][0] == "1"
+    assert cat.prepare(rig.sdk, "technique_rotate", {"expand": "false"})["controls"]["expand"] is False
+    assert cat.prepare(rig.sdk, "technique_crop", {"right": "25", "bottom": "10"})["controls"]["right"] == 25
+    assert cat.prepare(rig.sdk, "technique_text", {"content": "25"})["controls"]["content"] == "25"
+
+
+@pytest.mark.parametrize("value", [True, False, "true", "false", "wide", "", "NaN", "Infinity", "-1"])
+def test_bad_numeric_controls_explain_received_value(rig, value):
+    with pytest.raises(ValueError) as failure:
+        catalog(rig).prepare(rig.sdk, "canvas_blur", {"radius": value})
+    assert "radius" in str(failure.value) and repr(value) in str(failure.value)
+
+
+def test_fractional_integer_controls_are_not_truncated(rig):
+    with pytest.raises(ValueError, match="fractions are not rounded"):
+        catalog(rig).prepare(rig.sdk, "technique_crop", {"right": "2.5", "bottom": 10})
