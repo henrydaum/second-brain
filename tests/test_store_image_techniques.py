@@ -205,7 +205,12 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
     adapter = types.SimpleNamespace(exports=s.exports)
     for name in s.exports:
         setattr(adapter, name, lambda *a, _name=name, **k: getattr(s, _name)(sdk, *a, **k))
-    sb = Sandbox(context=types.SimpleNamespace(services={"canvas": adapter}), approve=lambda *a, **k: True)
+    asked = []
+    def approve_library_launch(chain, request, decision):
+        asked.append((request.type, decision.reason))
+        # Pillow/numpy launches legitimately ask; workspace IO never should.
+        return request.type == "script.run" and "which imports" in decision.reason
+    sb = Sandbox(context=types.SimpleNamespace(services={"canvas": adapter}), approve=approve_library_launch)
     previous = bridge._SANDBOX
     bridge.configure(sb)
     sb.plugin_roots = list(roots.values())
@@ -227,6 +232,7 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
         assert (result.data["width"], result.data["height"]) == (6, 8)
         rendered = rig.kit.read_image(sdk, result.data["path"])
         assert rendered.getpixel((3, 3))[:3] == (0, 0, 0)
+        assert all(kind == "script.run" and "which imports" in reason for kind, reason in asked)
     finally:
         bridge.configure(previous)
         sb.shutdown()

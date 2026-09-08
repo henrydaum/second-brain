@@ -406,6 +406,43 @@ def test_a_tool_runs_a_script_through_the_sdk(sb, tree, monkeypatch):
     assert result.data == 30
 
 
+@pytest.mark.parametrize("recursive", [False, True])
+def test_shared_box_scripts_have_distinct_callers_but_real_cycles_are_refused(sb, tree, recursive):
+    """A shared import namespace is not an execution identity."""
+    outer = tree / "scripts" / "outer.py"
+    inner = tree / "scripts" / "inner.py"
+    helper = tree / "scripts" / "helper.py"
+    helper.write_text('box = "shared_pixels"\nVALUE = 42\n', encoding="utf-8")
+    outer.write_text('box = "shared_pixels"\n'
+                     'def main(sdk):\n'
+                     '    return sdk.scripts.run("inner.py")\n', encoding="utf-8")
+    inner.write_text('box = "shared_pixels"\n'
+                     'from .helper import VALUE\n'
+                     'def main(sdk):\n' +
+                     ('    return sdk.scripts.run("outer.py")\n' if recursive else
+                      '    path = sdk.fs.temp(suffix=".png")\n'
+                      '    sdk.fs.write_bytes(path, bytes([VALUE]))\n'
+                      '    value = sdk.fs.read_bytes(path)\n'
+                      '    sdk.fs.delete(path)\n'
+                      '    return list(value)\n'), encoding="utf-8")
+    asked = []
+    def refuse(chain, request, decision):
+        asked.append((chain, decision))
+        return False
+    sb.interpreter.set_approver(refuse)
+    result = sb.run(str(outer), "main", chain=Chain(root="user"))
+    if recursive:
+        assert not result.ok
+        assert len(asked) == 1
+        chain, decision = asked[0]
+        assert chain.links == ("outer", "inner", "outer")
+        assert "call cycle" in decision.reason
+    else:
+        assert result.ok, result.error
+        assert result.data == [42]
+        assert asked == []
+
+
 def test_lockdown_shape_runs_contained_code_but_refuses_foreign_launch(
         sb, tree, monkeypatch):
     """An approver that always says no still permits the contained path."""

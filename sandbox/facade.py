@@ -502,7 +502,10 @@ class Sandbox:
                 f"{opts['name']} declares a persistent lifetime; open it as a "
                 f"resident box rather than running it")
 
-        run_name = opts["name"]
+        # A box names the shared import namespace, not the code being called.
+        # Sibling scripts may share a box and call one another; recording the
+        # box twice would make every nested effect look like recursion.
+        run_name = name or Path(source).stem
         execution = Execution(name=run_name,
                               chain=(chain or Chain()).push(run_name),
                               context=context)
