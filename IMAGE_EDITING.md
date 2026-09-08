@@ -2,7 +2,7 @@
 
 The bundle keeps the Art version's ordered recipe and prefix cache. The canvas
 service owns state and undo/redo; scripts own pixels, and the existing sandbox
-owns their execution. The bundle includes 31 classic editing techniques, their
+owns their execution. The bundle includes 44 classic editing techniques, their
 shared helpers, and a searchable catalogue. No kernel changes are required.
 
 ## What changed from Art
@@ -57,7 +57,7 @@ A blank design starts with `manage_layers(action="create", width=800, height=500
 Then add `technique_solid` or `technique_gradient` and object steps such as `technique_text`.
 `create` makes a new canvas; `inspect`, `list` and `select` let you resume existing work.
 
-### The 31 techniques
+### The 44 techniques
 
 | Script suffix (all use `technique_`) | Main adjustable controls |
 | --- | --- |
@@ -297,3 +297,42 @@ inversion works outside the original selection too. Sizes must match exactly.
 These references are frozen PNG snapshots: editing the mask recipe produces a new
 path, and the agent explicitly updates the target layer to use it. There are no
 live cross-canvas dependencies, cycles, or additional tools.
+
+## Photo corrections, geometry and effects batch
+
+All names below use the `technique_` prefix. Use `search_techniques(script=...)`
+for their full controls; each script owns its metadata and implementation.
+
+| Technique | Controls and intended use |
+| --- | --- |
+| curves | Piecewise-linear normalized points; RGB or individual channel. Points span x=0 to x=1. |
+| white_balance | Relative temperature and tint using linear-light gains, not absolute Kelvin. |
+| shadows_highlights | Signed corrections for dark and bright regions; zero is unchanged. |
+| vibrance | Saturation adjustment weighted toward muted colours; no skin detection. |
+| affine | Translation, scale, counterclockwise rotation, shear; fixed output canvas. |
+| perspective | Four normalized source corners in perimeter order; optional output width/height. |
+| drop_shadow | Alpha silhouette, offset, blur, colour and opacity; clips to canvas bounds. |
+| outline | Outer alpha outline using a square neighbourhood, colour and opacity. |
+| color_key | RGB target, tolerance, soft transition and strength; removes colour to transparency. |
+| dither | Deterministic two-colour Bayer pattern with adjustable strength. |
+| halftone | Luminance-controlled dot grid, cell size, ink and paper colours. |
+| displace | Same-size PNG map; red/green steer x/y sampling, 128 is neutral, alpha scales strength. |
+| texture | Seeded fractal value noise with scale, octaves, contrast and two palette-aware colours. |
+
+For a photo, start with geometry, then white balance, curves and tonal corrections;
+sharpen near the end and put annotations last. Straightening already uses
+`technique_rotate` with a small angle; expanded rotation followed by crop retains
+control of the output bounds. Affine preserves the current size. Perspective can
+change it and therefore requires full opacity and no mask when doing so.
+
+For a cutout, use `color_key` only for a suitable flat-colour background. It is
+classic chroma key, not subject recognition. Pad with transparency before adding
+an outline or shadow, so there is room around the alpha silhouette. A fully opaque
+photo has no internal alpha boundary for these effects to follow.
+
+For texture-driven displacement, render a separate texture canvas at the target
+image's rendered dimensions, using `low='#000000'` and `high='#ffffff'` for a
+neutral grayscale map. Reselect the photo and supply that cached PNG as the
+displacement `path`. Maps are snapshots with automatic file fingerprinting, not
+live dependencies. Colour, alpha, interpolation and sampling primitives remain
+in `art_kit`; no extra tools or kernel changes are needed.

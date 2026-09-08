@@ -1245,3 +1245,59 @@ def selection_image(coverage, feather=0, invert=False):
         from PIL import ImageOps
         mask = ImageOps.invert(mask)
     return mask.convert("RGBA")
+
+
+def srgb_to_linear(rgb):
+    """Decode normalized sRGB values to linear light."""
+    import numpy as np
+    return np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(rgb):
+    """Encode nonnegative linear light; caller decides how to clamp highlights."""
+    import numpy as np
+    rgb = np.maximum(rgb, 0)
+    return np.where(rgb <= .0031308, rgb * 12.92, 1.055 * rgb ** (1 / 2.4) - .055)
+
+
+def sample_rgba(image, x, y, edge="transparent"):
+    """Bilinear inverse-coordinate sampling in premultiplied float RGBA.
+
+    x/y are source pixel-center indices (zero is the first pixel). Coordinates
+    beyond the source either sample transparency or clamp to edge pixels.
+    """
+    import numpy as np
+    from PIL import Image
+    data = np.asarray(image.convert("RGBA"), dtype=np.float32) / 255
+    data[..., :3] *= data[..., 3:]
+    if edge == "transparent":
+        data = np.pad(data, ((1, 1), (1, 1), (0, 0)))
+        result = bilinear_sample(data, x + 1, y + 1)
+    elif edge == "clamp":
+        result = bilinear_sample(data, x, y)
+    else:
+        raise ValueError("edge must be transparent or clamp")
+    alpha = result[..., 3:]
+    result[..., :3] = np.divide(result[..., :3], alpha, out=np.zeros_like(result[..., :3]), where=alpha > 1e-8)
+    return Image.fromarray(np.uint8(np.clip(result * 255 + .5, 0, 255)))
+
+
+def colorize_field(field, low, high, alpha=None):
+    """Map a scalar [0,1] field between RGBA tuples; optionally multiply coverage.
+
+    Interpolate premultiplied colours so a transparent endpoint has no colour
+    fringe. alpha, when supplied, is normalized source coverage of matching size.
+    """
+    import numpy as np
+    from PIL import Image
+    low = np.asarray(low, dtype=np.float32) / 255
+    high = np.asarray(high, dtype=np.float32) / 255
+    low[:3] *= low[3]
+    high[:3] *= high[3]
+    weight = np.clip(field, 0, 1)[..., None]
+    result = low * (1 - weight) + high * weight
+    a = result[..., 3:]
+    result[..., :3] = np.divide(result[..., :3], a, out=np.zeros_like(result[..., :3]), where=a > 1e-8)
+    if alpha is not None:
+        result[..., 3] *= alpha
+    return Image.fromarray(np.uint8(np.clip(result * 255 + .5, 0, 255)))
