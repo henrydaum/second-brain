@@ -858,12 +858,52 @@ class ConversationRuntime:
         return _persist.close_session(self, session_key)
 
     def delete_conversation(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
-        """Delete an accessible, idle conversation; refuse active work."""
+        """Delete an accessible, idle conversation; refuse active work.
+
+        A frontend approval is resolved while ``handle_action`` still owns the
+        session lock.  The approved sandbox Request resumes on another thread,
+        so a non-blocking idle check used to mistake that short hand-off for an
+        agent turn and return ``False`` whenever the deleted conversation was
+        the one on screen.  Wait for that dispatch hand-off only for the
+        caller's own binding; real turns remain an immediate refusal.
+
+        Deleting the caller's active conversation also performs the server-side
+        equivalent of New Chat first.  Merely nulling ``conversation_id`` would
+        leave the old history and state attached to the session, ready to leak
+        into the next lazily-created conversation.
+        """
         try:
-            with _persist.idle_bindings(self, conversation_id=conversation_id):
-                return self._delete_conversation(session_key, conversation_id, override=override)
+            with _persist.idle_bindings(self, conversation_id=conversation_id) as holders:
+                return self._delete_idle_conversation(
+                    session_key, conversation_id, holders, override=override)
         except _persist.SessionBusy:
-            return False
+            session = self.sessions.get(session_key)
+            if (session is None
+                    or session.conversation_id != conversation_id
+                    or session.in_flight
+                    or session.dispatch_thread is None):
+                return False
+            # Do not hold the registry lock while waiting.  The approval action
+            # must finish its dispatch and release this lock before the resumed
+            # Request can safely replace the active session.
+            with session.lock:
+                if session.in_flight or session.conversation_id != conversation_id:
+                    return False
+                return self._delete_idle_conversation(
+                    session_key, conversation_id, [session], override=override)
+
+    def _delete_idle_conversation(self, session_key: str, conversation_id: int,
+                                  holders, *, override: bool = False) -> bool:
+        """Delete after holder locks are secured, then reset the caller."""
+        reset_caller = any(session.key == session_key for session in holders)
+        deleted = self._delete_conversation(
+            session_key, conversation_id, override=override)
+        if deleted and reset_caller:
+            # _delete_conversation detached the old object and announced the
+            # deletion; replace that empty-but-stale object with a genuinely
+            # fresh New Chat session before returning to the frontend.
+            _persist.reset_conversation(self, session_key)
+        return deleted
 
     def clear_conversation(self, session_key: str, conversation_id: int) -> bool:
         """Clear an idle conversation and refresh its actual live owner."""

@@ -62,6 +62,23 @@ class OverflowBackend(BaseLLMBackend):
         raise RuntimeError("This model's maximum context length is 8192 tokens")
 '''
 
+RATE_LIMITED_BACKEND = '''
+"""A backend whose provider account has exhausted its token plan."""
+
+supports_streaming = False
+display_name = "Rate limited"
+
+from guest.llm import BaseLLMBackend
+
+
+class RateLimitedBackend(BaseLLMBackend):
+    def chat(self, sdk, request):
+        raise RuntimeError(
+            '{"type":"rate_limit_error","message":'
+            '"Token Plan usage limit reached: purchase Credits for more usage."}'
+        )
+'''
+
 
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
@@ -331,6 +348,19 @@ def test_a_context_overflow_raises_so_compaction_can_catch_it(tree):
             messages=[{"role": "user", "content": "x"}]))
 
     assert raised.value.code == "context_limit"
+
+
+def test_a_token_plan_limit_is_not_misclassified_as_context_overflow(tree):
+    """Billing limits must surface without compacting or retrying the turn."""
+    _write(tree, RATE_LIMITED_BACKEND, stem="llm_rate_limited")
+    llm.refresh(_config(tree, backend="RateLimitedBackend"))
+
+    response = llm.brain("gpt-test").chat(llm.LLMRequest(
+        messages=[{"role": "user", "content": "x"}]))
+
+    assert response.is_error
+    assert response.error_code == "provider_error"
+    assert "Token Plan usage limit reached" in response.error
 
 
 def test_an_uninstalled_backend_fails_honestly(tree):

@@ -216,6 +216,24 @@ def test_delete_conversation_detaches_live_sessions(tmp_path):
     assert rt.sessions["A"].conversation_id is None  # detached, not dangling
 
 
+def test_delete_active_conversation_resets_session_like_new_chat(tmp_path):
+    db = Database(str(tmp_path / "delete-active.db"))
+    rt = plain_runtime(db)
+    rt.set_session_user("web", DEFAULT_USER_ID)
+    cid = db.create_conversation(title="active", user_id=DEFAULT_USER_ID)
+    session = rt.load_conversation("web", cid)
+    session.history.append({"role": "user", "content": "do not carry me"})
+
+    assert rt.delete_conversation("web", cid) is True
+
+    fresh = rt.sessions["web"]
+    assert db.get_conversation(cid) is None
+    assert fresh is not session
+    assert fresh.conversation_id is None
+    assert fresh.history == []
+    assert fresh.user_id == DEFAULT_USER_ID
+
+
 def test_handle_action_self_heals_stale_binding_from_raw_delete(tmp_path):
     """The write-path backstop detaches a stale binding even when the deletion
     bypassed ``runtime.delete_conversation`` entirely.

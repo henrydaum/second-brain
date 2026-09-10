@@ -60,7 +60,9 @@ _LIMIT_RELATED_TERMS = ("limit", "limits", "length", "maximum", "max",
 # Retrying these after compaction would compact for nothing and fail again.
 _NON_CONTEXT_LIMIT_HINTS = (
     "not support model", "not supported model", "current token plan",
-    "token plan not support",
+    "token plan not support", "token plan usage limit", "usage limit reached",
+    "rate_limit_error", "rate limit", "purchase credits", "insufficient quota",
+    "billing",
 )
 
 

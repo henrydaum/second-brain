@@ -60,6 +60,31 @@ def test_turn_ownership_covers_hooks(runtime, monkeypatch, boundary):
     assert [m["content"] for m in session.history if m["role"] == "user"] == ["first", "second"]
 
 
+def test_approved_delete_waits_for_active_session_dispatch(runtime):
+    """A resumed SDK request may race the approval action releasing its lock."""
+    session = runtime.get_session("shared")
+    cid = session.conversation_id
+    entered, release = Event(), Event()
+
+    def approval_dispatch():
+        with session.lock:
+            session.dispatch_thread = __import__("threading").get_ident()
+            entered.set()
+            assert release.wait(5)
+            session.dispatch_thread = None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        approval = pool.submit(approval_dispatch)
+        assert entered.wait(5)
+        deletion = pool.submit(runtime.delete_conversation, "shared", cid)
+        release.set()
+        approval.result(timeout=5)
+        assert deletion.result(timeout=5) is True
+
+    assert runtime.db.get_conversation(cid) is None
+    assert runtime.sessions["shared"].conversation_id is None
+
+
 def test_cancel_before_driver_starts_is_not_cleared(runtime, monkeypatch):
     entered, release = Event(), Event()
     session = runtime.get_session("shared")
