@@ -8,7 +8,7 @@ import pytest
 from tests.test_store_image_editing import rig, load
 
 
-NAMES = "load_image crop resize rotate flip brightness contrast saturation exposure gamma blur sharpen grayscale invert solid gradient line shape text duotone vignette".split()
+NAMES = "load_image crop resize rotate flip brightness contrast saturation exposure gamma blur sharpen grayscale invert solid gradient line shape text duotone vignette levels color_balance threshold posterize pixelate median pad mask_shape mask_range mask_combine curves white_balance shadows_highlights vibrance affine perspective drop_shadow outline color_key dither halftone displace texture chromatic_aberration fisheye swirl kaleidoscope feedback_tunnel scanlines glitch_slice pixel_sort ascii".split()
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def catalog(rig):
 def test_every_shipped_technique_renders_and_caches(rig, photo, name):
     script = "technique_" + name
     controls = dict(catalog(rig).discover(rig.sdk)["techniques"][script]["example"])
-    if name == "load_image": controls["path"] = photo
+    if name in ("load_image", "mask_combine", "displace"): controls["path"] = photo
     if name in ("crop", "shape"): controls.update(left=2, top=1, right=10, bottom=7)
     if name == "resize": controls.update(width=6, height=4)
     if name == "line": controls.update(points=[[1, 1], [10, 6]], width=1)
@@ -188,12 +188,41 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
     roots = retarget_trees(monkeypatch, tmp_path)
     s, sdk = rig.service, rig.sdk
     cid = s.create(sdk)
+    texture_path = str(Path(roots["workspace"]) / "test_texture.png")
     steps = [("load_image", "background", {"path": photo}),
              ("crop", "filter", {"left": 2, "top": 1, "right": 10, "bottom": 7}),
              ("rotate", "filter", {"angle": 90}),
              ("saturation", "filter", {"factor": 1.15}),
              ("blur", "filter", {"radius": .5}),
              ("sharpen", "filter", {"amount": 20}),
+             ("levels", "filter", {"black": 5, "white": 250}),
+             ("color_balance", "filter", {"red": .05}),
+             ("median", "filter", {"radius": 1}),
+             ("pixelate", "filter", {"block_size": 2}),
+             ("posterize", "filter", {"levels": 4}),
+             ("threshold", "filter", {"threshold": 100}),
+             ("pad", "filter", {"width": 6, "height": 8}),
+             ("curves", "filter", {"points": [[0,0],[.5,.6],[1,1]]}),
+             ("white_balance", "filter", {"temperature": 10}),
+             ("shadows_highlights", "filter", {"shadows": .2}),
+             ("vibrance", "filter", {"amount": .3}),
+             ("affine", "filter", {"scale_x": .9}),
+             ("perspective", "filter", {"corners": [[.05,0],[1,0],[1,1],[0,1]]}),
+             ("drop_shadow", "filter", {"radius": 1, "x": 1, "y": 1}),
+             ("outline", "filter", {"radius": 1}),
+             ("color_key", "filter", {"amount": .3}),
+             ("dither", "filter", {"strength": .5}),
+             ("halftone", "filter", {"cell_size": 2}),
+             ("displace", "filter", {"path": texture_path, "x": 1, "y": 1}),
+             ("chromatic_aberration", "filter", {"amount":.02}),
+             ("fisheye", "filter", {"strength":.3}),
+             ("swirl", "filter", {"turns":.2}),
+             ("kaleidoscope", "filter", {"segments":4}),
+             ("feedback_tunnel", "filter", {"depth":3}),
+             ("scanlines", "filter", {"lines":4}),
+             ("glitch_slice", "filter", {"slices":3}),
+             ("pixel_sort", "filter", {"low":0,"high":1}),
+             ("ascii", "filter", {"columns":3}),
              ("text", "object", {"content": "X", "size": 5, "color": "@accent"})]
     for name, kind, controls in steps: s.add_layer(sdk, cid, "technique_" + name, kind, controls)
     # A newly authored technique participates in the real nested sandbox recipe.
@@ -215,6 +244,11 @@ def test_entire_shipped_recipe_runs_in_sandbox(rig, photo, tmp_path, monkeypatch
     bridge.configure(sb)
     sb.plugin_roots = list(roots.values())
     try:
+        texture = sb.run(str(rig.scripts / "technique_texture.py"), "main",
+                         kwargs={"kind": "background", "input_path": None, "output_path": texture_path,
+                                 "width": 6, "height": 8, "seed": 7,
+                                 "palette": s.list_palettes(sdk)[0], "controls": {"scale": 4}}, chain=Chain(root="user"))
+        assert texture.ok, texture.error
         tool_dir = rig.scripts.parent / "tools"
         tool_dir.mkdir(exist_ok=True)
         tool = tool_dir / "tool_add_layer.py"
@@ -358,3 +392,334 @@ def test_bad_numeric_controls_explain_received_value(rig, value):
 def test_fractional_integer_controls_are_not_truncated(rig):
     with pytest.raises(ValueError, match="fractions are not rounded"):
         catalog(rig).prepare(rig.sdk, "technique_crop", {"right": "2.5", "bottom": 10})
+
+
+def test_new_tonal_techniques_preserve_alpha_and_expected_values(rig):
+    from PIL import Image
+    image = Image.new("RGBA", (1, 1), (64, 128, 192, 127))
+    def apply(name, controls):
+        spec = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        return module.apply(rig.sdk, image, spec["controls"], {"colors": {"accent": "#ff0000"}})
+    assert apply("levels", {}).tobytes() == image.tobytes()
+    assert apply("color_balance", {}).tobytes() == image.tobytes()
+    assert apply("posterize", {"levels": 2}).getpixel((0, 0)) == (0, 255, 255, 127)
+    assert apply("threshold", {"threshold": 100, "highlights": "@accent"}).getpixel((0, 0)) == (255, 0, 0, 127)
+    assert apply("threshold", {"threshold": 100, "highlights": "transparent"}).getpixel((0, 0))[3] == 0
+    assert apply("levels", {"black": 64, "white": 192}).getpixel((0, 0)) == (0, 128, 255, 127)
+    with pytest.raises(ValueError): apply("levels", {"black": 100, "white": 50})
+
+
+def test_pixelate_and_median_preserve_transparent_edges(rig):
+    from PIL import Image
+    image = Image.new("RGBA", (3, 3), (0, 0, 255, 0))
+    for x in (0, 1):
+        for y in range(3): image.putpixel((x, y), (255, 0, 0, 255))
+    for name, controls in [("pixelate", {"block_size": 3}), ("median", {"radius": 1})]:
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        result = module.apply(rig.sdk, image, controls, {})
+        assert result.size == image.size
+        assert all(p[:3] == (255, 0, 0) for p in [result.getpixel((x, y)) for y in range(result.height) for x in range(result.width)] if p[3])
+
+
+def test_padding_places_pixels_without_resampling(rig):
+    from PIL import Image
+    module = load("image_test.technique_pad", rig.scripts / "technique_pad.py")
+    image = Image.new("RGBA", (2, 2), (255, 0, 0, 128))
+    result = module.apply(rig.sdk, image, {"width": 5, "height": 4, "x": 2, "y": 1, "color": "transparent"}, {})
+    assert result.getpixel((0, 0)) == (0, 0, 0, 0)
+    assert result.crop((2, 1, 4, 3)).tobytes() == image.tobytes()
+    cropped = module.apply(rig.sdk, image, {"width": 1, "height": 1, "x": -1, "y": -1, "color": "transparent"}, {})
+    assert cropped.getpixel((0, 0)) == (255, 0, 0, 128)
+
+
+def test_render_folders_group_seeds_and_share_recipe_prefixes(rig):
+    s, sdk = rig.service, rig.sdk
+    cid = s.create(sdk, width=3, height=2)
+    s.add_layer(sdk, cid, "technique_solid", "background", {"color": "red"})
+    first = rig.renderer.main(sdk, cid, seed=1)
+    second = rig.renderer.main(sdk, cid, seed=2)
+    assert Path(first["path"]).parent == Path(second["path"]).parent
+    assert Path(first["path"]).name == "1.png"
+    assert Path(second["path"]).name == "2.png"
+    assert rig.renderer.main(sdk, cid, seed=1)["cache_hit"]
+    s.add_layer(sdk, cid, "technique_levels", "filter", {})
+    longer = rig.renderer.main(sdk, cid, seed=1)
+    assert longer["cached_layers"] == 1
+    assert Path(longer["path"]).parent != Path(first["path"]).parent
+    other = s.create(sdk, width=3, height=2)
+    s.add_layer(sdk, other, "technique_solid", "background", {"color": "red"})
+    assert rig.renderer.main(sdk, other, seed=1)["path"] == first["path"]
+
+
+def test_live_canvas_prompt_refreshes_within_turn_and_is_read_only(rig):
+    from types import SimpleNamespace
+    from tests.test_system_prompt import _sections_with
+    sdk, service = rig.sdk, rig.service
+    assert service.agent_prompt_refresh == "call"
+    before = service.list_canvases(sdk)
+    assert "none selected" in service.agent_prompt(sdk)
+    assert service.list_canvases(sdk) == before
+    cid = service.get_or_create(sdk, width=7, height=9)["canvas_id"]
+    service.add_layer(sdk, cid, "technique_blur", "filter", {"radius": 2})
+    plugin = SimpleNamespace(name="canvas", description="", parameters={},
+                             agent_prompt=lambda ctx: service.agent_prompt(sdk),
+                             agent_prompt_refresh=service.agent_prompt_refresh)
+    _, first = _sections_with([plugin])
+    service.set_control(sdk, cid, 0, "radius", 8)
+    service.set_palette(sdk, cid, colors={"accent": "#123456"})
+    _, second = _sections_with([plugin])
+    assert '"radius":2' in first["content"]
+    assert '"radius":8' in second["content"] and "#123456" in second["content"]
+    assert cid in second["content"] and '"starting_dimensions":[7,9]' in second["content"]
+    state = service.get_state(sdk, cid)
+    service.agent_prompt(sdk)
+    assert service.get_state(sdk, cid) == state
+    sdk.session.get = lambda: {"key": "other", "user_id": "other", "conversation_id": "other"}
+    assert "none selected" in service.agent_prompt(sdk)
+    assert cid not in service.agent_prompt(sdk)
+
+
+def test_cached_recipe_can_be_remixed_after_edits_and_restart(rig, photo):
+    sdk, service = rig.sdk, rig.service
+    cid = service.get_or_create(sdk)["canvas_id"]
+    service.add_layer(sdk, cid, "technique_load_image", "background", {"path": photo})
+    result = rig.renderer.main(sdk, cid, seed=17)
+    service.add_layer(sdk, cid, "technique_blur", "filter", {"radius": 3})
+    service.stop(sdk)
+    service.start(sdk)
+    tool = load("image_manage_tool", rig.root / "tools/tool_manage_layers.py").ManageLayers()
+    saved = tool.run(sdk, "cached", pool_hash=result["pool_hash"], seed=17)
+    assert saved["pixels_available"] and saved["path"] == result["path"]
+    assert len(saved["recipe"]["layers"]) == 1
+    restored = tool.run(sdk, "remix", pool_hash=result["pool_hash"], seed=17)
+    assert restored["canvas_id"] != cid and len(restored["layers"]) == 1
+    assert len(service.get_state(sdk, cid)["layers"]) == 2
+    assert restored["render_seed"] == 17 and not restored["undo_stack"]
+    assert service.for_session(sdk)["canvas_id"] == restored["canvas_id"]
+    # Evicting pixels does not delete the saved editable recipe.
+    Path(result["path"]).unlink()
+    assert not service.cached_render(sdk, result["pool_hash"], 17)["pixels_available"]
+    assert service.remix(sdk, result["pool_hash"], 17)["layers"]
+    with pytest.raises(ValueError): service.cached_render(sdk, "../bad", 17)
+
+
+def test_mask_coverage_inversion_and_combination(rig, tmp_path):
+    import numpy as np
+    from PIL import Image
+    source = Image.new("RGBA", (2, 1), (255, 255, 255, 0))
+    source.putpixel((0, 0), (255, 255, 255, 128))
+    def apply(name, image, controls):
+        prepared = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        return module.apply(rig.sdk, image, prepared["controls"], {"colors": {"accent": "#ffffff"}})
+    mask = apply("mask_range", source, {})
+    assert mask.getpixel((0, 0)) == (128, 128, 128, 255)
+    assert mask.getpixel((1, 0)) == (0, 0, 0, 255)
+    inverted = apply("mask_range", source, {"invert": True})
+    assert inverted.getpixel((1, 0)) == (255, 255, 255, 255)
+    path = str(tmp_path / "selection.png")
+    rig.kit.write_png(rig.sdk, path, inverted)
+    combined = apply("mask_combine", mask, {"path": path, "operation": "union"})
+    assert combined.getpixel((1, 0)) == (255, 255, 255, 255)
+    subtracted = apply("mask_combine", mask, {"path": path, "operation": "subtract"})
+    assert subtracted.getpixel((0, 0)) == (1, 1, 1, 255)
+    with pytest.raises(ValueError, match="matching dimensions"):
+        apply("mask_combine", Image.new("RGBA", (3, 2)), {"path": path})
+    # A real masked edit changes only selected coverage.
+    base = Image.new("RGBA", (2, 1), "black")
+    edit = Image.new("RGBA", (2, 1), "white")
+    result = rig.kit.composite(base, edit, mask=mask, replace=True)
+    assert result.getpixel((0, 0)) == (128, 128, 128, 255)
+    assert result.getpixel((1, 0)) == (0, 0, 0, 255)
+
+
+@pytest.mark.parametrize("name,controls", [
+    ("curves", {}), ("white_balance", {}), ("shadows_highlights", {}),
+    ("vibrance", {}), ("affine", {}), ("perspective", {}),
+    ("drop_shadow", {"opacity": 0}), ("outline", {"radius": 0}),
+    ("color_key", {"amount": 0}),
+])
+def test_new_batch_neutral_controls_preserve_pixels(rig, photo, name, controls):
+    image = rig.kit.read_image(rig.sdk, photo)
+    controls = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)["controls"]
+    module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+    assert module.apply(rig.sdk, image, controls, {}).tobytes() == image.tobytes()
+
+
+def test_new_corrections_and_geometry(rig):
+    from PIL import Image
+    def apply(name, image, controls):
+        controls = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)["controls"]
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        return module.apply(rig.sdk, image, controls, {})
+    gray = Image.new("RGBA", (2, 2), (100, 100, 100, 77))
+    warm = apply("white_balance", gray, {"temperature": 50}).getpixel((0, 0))
+    assert warm[0] > warm[1] > warm[2] and warm[3] == 77
+    bright = apply("shadows_highlights", gray, {"shadows": 1}).getpixel((0, 0))
+    assert bright[0] > 100 and bright[3] == 77
+    assert apply("vibrance", gray, {"amount": 1}).tobytes() == gray.tobytes()
+    curve = apply("curves", gray, {"points": [[0, 0], [1, .5]], "channel": "red"})
+    assert curve.getpixel((0, 0)) == (50, 100, 100, 77)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        apply("curves", gray, {"points": [[0,0],[.5,.5],[.5,.8],[1,1]]})
+    with pytest.raises(ValueError, match="singular"):
+        apply("affine", gray, {"shear_x": 1, "shear_y": 1})
+    with pytest.raises(ValueError, match="convex"):
+        apply("perspective", gray, {"corners": [[0,0],[1,1],[1,0],[0,1]]})
+    moved = apply("affine", Image.new("RGBA", (3, 2), "red"), {"x": 1})
+    assert moved.getpixel((0, 0))[3] == 0
+    assert moved.getpixel((1, 0)) == (255, 0, 0, 255)
+    resized = apply("perspective", gray, {"width": 5, "height": 7})
+    assert resized.size == (5, 7)
+
+
+def test_alpha_effects_and_sampling_do_not_leak_hidden_colour(rig, tmp_path):
+    import numpy as np
+    from PIL import Image
+    def apply(name, image, controls):
+        controls = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)["controls"]
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        return module.apply(rig.sdk, image, controls, {})
+    image = Image.new("RGBA", (5, 3))
+    image.putpixel((1, 1), (255, 0, 0, 255))
+    shadow = apply("drop_shadow", image, {"radius": 0, "x": 2, "y": 0, "opacity": 1})
+    assert shadow.getpixel((1, 1)) == (255, 0, 0, 255)
+    assert shadow.getpixel((3, 1)) == (0, 0, 0, 255)
+    outline = apply("outline", image, {"radius": 1, "color": "blue"})
+    assert outline.getpixel((1, 1)) == (255, 0, 0, 255)
+    assert outline.getpixel((2, 1)) == (0, 0, 255, 255)
+    keyed = apply("color_key", image, {"color": "red", "tolerance": 0, "softness": 0})
+    assert keyed.getpixel((1, 1))[3] == 0
+    edge = Image.new("RGBA", (2, 1), (0, 0, 255, 0))
+    edge.putpixel((0, 0), (255, 0, 0, 128))
+    sampled = rig.kit.sample_rgba(edge, np.array([[.5, -3]]), np.array([[0., 0.]]))
+    assert sampled.getpixel((0, 0)) == (255, 0, 0, 64)
+    assert sampled.getpixel((1, 0)) == (0, 0, 0, 0)
+    path = str(tmp_path / "neutral_map.png")
+    rig.kit.write_png(rig.sdk, path, Image.new("RGBA", edge.size, (128, 128, 128, 255)))
+    assert apply("displace", edge, {"path": path}).tobytes() == edge.tobytes()
+    with pytest.raises(ValueError, match="match"):
+        apply("displace", image, {"path": path})
+
+
+def test_pattern_endpoints_alpha_and_texture_seed(rig):
+    from PIL import Image
+    def apply(name, image, controls, seed=0):
+        controls = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)["controls"]
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        palette = {"colors": {"primary": "black", "accent": "white"}}
+        return module.apply(rig.sdk, image, controls, palette, **({"seed": seed} if name == "texture" else {}))
+    image = Image.new("RGBA", (16, 16), (128, 128, 128, 117))
+    dither = apply("dither", image, {})
+    assert set(dither.getchannel("A").getextrema()) == {117}
+    assert dither.getpixel((0, 0))[:3] == (255, 255, 255)
+    assert dither.getpixel((0, 1))[:3] == (0, 0, 0)
+    for color in ("black", "white"):
+        solid = Image.new("RGBA", image.size, color)
+        assert apply("halftone", solid, {}).tobytes() == solid.tobytes()
+    texture = apply("texture", image, {"scale": 4}, seed=7)
+    assert texture.tobytes() == apply("texture", image, {"scale": 4}, seed=7).tobytes()
+    assert texture.tobytes() != apply("texture", image, {"scale": 4}, seed=8).tobytes()
+
+
+@pytest.mark.parametrize("name,controls", [
+    ("chromatic_aberration", {"amount": 0}), ("fisheye", {"strength": 0}),
+    ("swirl", {"turns": 0}), ("feedback_tunnel", {"depth": 0}),
+    ("scanlines", {"strength": 0}), ("glitch_slice", {"slices": 0}),
+])
+def test_glitch_neutral_settings_preserve_pixels(rig, photo, name, controls):
+    image = rig.kit.read_image(rig.sdk, photo)
+    spec = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)
+    module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+    assert module.apply(rig.sdk, image, spec["controls"], {}).tobytes() == image.tobytes()
+
+
+def test_glitch_seed_sorting_and_scanline_density(rig, photo):
+    from PIL import Image
+    def apply(name, image, controls, **kwargs):
+        controls = catalog(rig).prepare(rig.sdk, "technique_" + name, controls)["controls"]
+        module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+        return module.apply(rig.sdk, image, controls, {}, **kwargs)
+    image = rig.kit.read_image(rig.sdk, photo)
+    first = apply("glitch_slice", image, {"shift": .4}, seed=12)
+    assert first.tobytes() == apply("glitch_slice", image, {"shift": .4}, seed=12).tobytes()
+    assert first.tobytes() != apply("glitch_slice", image, {"shift": .4}, seed=13).tobytes()
+    row = Image.new("RGBA", (5, 1))
+    pixels = [(200,200,200,255), (50,50,50,100), (255,0,0,0), (180,180,180,255), (10,10,10,255)]
+    for x, pixel in enumerate(pixels): row.putpixel((x,0), pixel)
+    sorted_row = apply("pixel_sort", row, {"low":0,"high":1})
+    assert [sorted_row.getpixel((x,0)) for x in range(5)] == [pixels[1],pixels[0],pixels[2],pixels[4],pixels[3]]
+    white = Image.new("RGBA", (3, 2), (255,255,255,100))
+    scan = apply("scanlines", white, {"lines":1000,"strength":1,"width":.5})
+    assert scan.getpixel((0,0)) == (128,128,128,100)
+    with pytest.raises(ValueError, match="low"):
+        apply("pixel_sort", row, {"low":.9,"high":.1})
+    with pytest.raises(ValueError, match="ASCII"):
+        apply("ascii", row, {"characters":"x"})
+
+
+@pytest.mark.parametrize("name", ["fisheye", "swirl", "kaleidoscope", "feedback_tunnel", "glitch_slice", "chromatic_aberration"])
+def test_glitch_warps_do_not_expose_hidden_rgb(rig, name):
+    from PIL import Image
+    image = Image.new("RGBA", (21, 13), (0,0,255,0))
+    for y in range(3,10):
+        for x in range(6,15): image.putpixel((x,y), (255,0,0,128))
+    controls = catalog(rig).prepare(rig.sdk, "technique_" + name)["controls"]
+    module = load("image_test.technique_" + name, rig.scripts / ("technique_" + name + ".py"))
+    result = module.apply(rig.sdk, image, controls, {})
+    assert result.size == image.size
+    assert result.getchannel("A").getextrema()[1] > 0
+    for y in range(result.height):
+        for x in range(result.width):
+            pixel = result.getpixel((x,y))
+            if pixel[3]: assert pixel[2] == 0
+
+
+def test_edit_tools_return_no_attachments_and_render_identifies_exact_png(rig, photo, tmp_path):
+    import hashlib
+    add = load("image_add_tool", rig.root / "tools/tool_add_layer.py").AddLayer()
+    manage = load("image_manage_tool", rig.root / "tools/tool_manage_layers.py").ManageLayers()
+    render = load("image_render_tool", rig.root / "tools/tool_render_canvas.py").RenderCanvas()
+    result = add.run(rig.sdk, script="technique_load_image", controls={"path":photo})
+    assert not result.get("attachments") and not result.get("attachment_paths")
+    for opacity in (.55, "0.55"):
+        result = add.run(rig.sdk, script="technique_scanlines", properties={"opacity":opacity})
+        assert result["ok"] and result["data"]["layers"][-1]["opacity"] == .55
+        assert not result.get("attachments") and not result.get("attachment_paths")
+    inspected = manage.run(rig.sdk, "inspect")
+    changed = manage.run(rig.sdk, "update", chain_index=1, properties={"opacity":"0.4"})
+    assert not inspected.get("attachments") and not changed.get("attachments")
+    bad = add.run(rig.sdk, script="technique_scanlines", properties={"opacity":"half"})
+    assert not bad["ok"] and "'half'" in bad["error"] and "properties.opacity" in bad["error"]
+    exported = str(tmp_path / "export.png")
+    rendered = render.run(rig.sdk, out=exported)
+    data = rendered["data"]
+    assert rendered["attachments"] == [data["attachment_path"]]
+    assert data["attachment_path"] != exported and data["path"] == exported
+    encoded = Path(data["attachment_path"]).read_bytes()
+    assert hashlib.sha256(encoded).hexdigest() == data["image_sha256"]
+    assert encoded == Path(exported).read_bytes()
+
+
+def test_later_object_does_not_participate_in_earlier_halftone(rig):
+    s, sdk = rig.service, rig.sdk
+    cid = s.create(sdk, width=8, height=8)
+    s.add_layer(sdk, cid, "technique_solid", "background", {"color":"black"})
+    s.add_layer(sdk, cid, "technique_halftone", "filter", {"ink":"black","paper":"white"})
+    first = rig.renderer.main(sdk, cid, seed=0)
+    s.add_layer(sdk, cid, "technique_solid", "object", {"color":"white"})
+    later = rig.renderer.main(sdk, cid, seed=0)
+    assert later["cached_layers"] == 2
+    assert rig.kit.read_image(sdk, first["path"]).getpixel((0,0)) == (0,0,0,255)
+    assert rig.kit.read_image(sdk, later["path"]).getpixel((0,0)) == (255,255,255,255)
+
+
+@pytest.mark.parametrize("recipe", ["glitch", "trippy"])
+def test_glitch_worked_recipes_use_valid_controls(rig, recipe):
+    cat = catalog(rig)
+    worked = cat.main(rig.sdk, recipe=recipe)
+    for step in worked["steps"]:
+        if step["tool"] == "add_layer":
+            cat.prepare(rig.sdk, **step["args"])
+    assert worked["steps"][-1]["tool"] == "render_canvas"
