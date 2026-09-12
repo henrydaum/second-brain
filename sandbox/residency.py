@@ -68,7 +68,8 @@ RENDER_METHODS = {"messages": "render_messages",
                   "tool_status": "render_tool_status",
                   "stream_delta": "render_stream_delta",
                   "notification": "render_notification",
-                  "callable_output": "render_callable_output"}
+                  "callable_output": "render_callable_output",
+                  "conversation": "render_conversation_banner"}
 
 
 def _sync_hooks(service) -> None:
@@ -564,9 +565,9 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
     manager already gives it, calling ``poll`` over and over. Between polls is
     when a render lands.
 
-    **Nine render methods become one call.** ``BaseFrontend`` hands subclasses
-    nine typed methods; the box gets one ``render(kind, payload)``. Nine wire
-    methods for one concept is surface with no payoff, and it lets a guest
+    **Render methods become one call.** ``BaseFrontend`` hands subclasses typed
+    methods; the box gets one ``render(kind, payload)``. Multiple wire methods
+    for one concept is surface with no payoff, and this lets a guest
     handle the kinds its transport can show and ignore the rest.
     """
     from .frontends import park, project_payload, unpark

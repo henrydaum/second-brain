@@ -371,7 +371,7 @@ def test_the_render_kinds_are_the_documented_ones():
     assert set(KINDS) == {"messages", "attachments", "form_field", "approval",
                           "approval_settled", "buttons", "error", "typing", "turn_activity",
                           "tool_status", "stream_delta", "notification",
-                          "callable_output"}
+                              "callable_output", "conversation"}
 
 
 def test_both_halves_of_the_render_wire_name_the_same_kinds():

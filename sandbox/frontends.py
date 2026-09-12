@@ -22,7 +22,7 @@ anything — it is resident, and its authority is its identity rather than a
 moment.
 
 **Rendering is a projection.** ``BaseFrontend`` hands its subclasses live
-kernel objects; a box can only be handed data, so the twelve ``render_*``
+kernel objects; a box can only be handed data, so the thirteen ``render_*``
 methods collapse to one ``render(kind, payload)`` call here — and a guest that
 only understands ``messages`` is still a working frontend.
 """
@@ -52,7 +52,7 @@ _DESK_LOCK = threading.Lock()
 # arrives here too.
 KINDS = ("messages", "attachments", "form_field", "approval", "approval_settled",
          "buttons", "error", "typing", "turn_activity", "tool_status", "stream_delta",
-         "notification", "callable_output")
+         "notification", "callable_output", "conversation")
 
 
 def park(adapter) -> str:
