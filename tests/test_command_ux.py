@@ -151,6 +151,24 @@ def test_starting_a_new_conversation_ends_the_old_one(tmp_path):
     assert seen[0]["session_key"] == "s"
 
 
+def test_starting_a_new_conversation_announces_an_unbound_session(tmp_path):
+    db = Database(str(tmp_path / "unbound.db"))
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.load_conversation("s", db.create_conversation("Old"))
+    seen = []
+    unsub = bus.subscribe(SESSION_CONVERSATION_CHANGED, seen.append)
+    try:
+        rt.reset_conversation("s")
+    finally:
+        unsub()
+
+    assert seen == [{
+        "session_key": "s",
+        "conversation_id": None,
+        "title": "New Conversation",
+    }]
+
+
 def test_closing_a_session_ends_the_conversation_it_held(tmp_path):
     cid, seen = _ended(tmp_path, "close",
                        lambda rt, _cid: rt.close_session("s"))

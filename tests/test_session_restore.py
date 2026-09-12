@@ -44,14 +44,14 @@ def test_second_session_cannot_recover_or_overwrite_live_conversation(tmp_path):
     assert not result.ok
     assert result.error["code"] == "conversation_in_use"
     assert result.error["message"].startswith(
-        "This conversation is bound to another session.")
+        "This conversation is active in another session.")
     assert rt.get_session("phone") is other
     assert rt.get_session("s") is session
     assert rt._approval_requests[req.id] is req
     assert rt.db.get_conversation_messages(session.conversation_id) == before
 
 
-def test_concurrent_loads_claim_only_one_live_session(tmp_path):
+def test_concurrent_loads_leave_only_one_live_holder(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
     from runtime.persistence import ConversationInUse
@@ -69,8 +69,35 @@ def test_concurrent_loads_claim_only_one_live_session(tmp_path):
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(load, ["desktop", "phone"]))
-    assert sum(result is not None for result in results) == 1
+    assert sum(result is not None for result in results) >= 1
     assert sum(s.conversation_id == cid for s in rt.sessions.values()) == 1
+
+
+def test_loading_an_idle_held_conversation_transfers_it(tmp_path):
+    from events.event_channels import NOTIFICATION_PUSHED, SESSION_CONVERSATION_CHANGED
+
+    rt = plain_runtime(_db(tmp_path))
+    cid = rt.create_conversation("Shared")
+    rt.load_conversation("desktop", cid)
+    notices, changes = [], []
+    unsub_notice = bus.subscribe(NOTIFICATION_PUSHED, notices.append)
+    unsub_change = bus.subscribe(SESSION_CONVERSATION_CHANGED, changes.append)
+    try:
+        result = rt.load_history("phone", cid)
+    finally:
+        unsub_change()
+        unsub_notice()
+
+    assert result.ok
+    assert rt.sessions["desktop"].conversation_id is None
+    assert rt.sessions["phone"].conversation_id == cid
+    assert any(p["session_key"] == "desktop"
+               and p["conversation_id"] is None for p in changes)
+    transferred = [p for p in notices
+                   if p.get("session_key") == "phone"
+                   and p.get("title") == "Conversation transferred"]
+    assert len(transferred) == 1
+    assert transferred[0]["conversation_id"] == cid
 
 
 def test_reopen_during_running_turn_keeps_cancellation_and_commands(tmp_path, monkeypatch):

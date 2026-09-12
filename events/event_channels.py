@@ -426,13 +426,14 @@ Payload:
     value:       str | None  (None on removal)"""
 
 SESSION_CONVERSATION_CHANGED = "session_conversation_changed"
-"""A live session switched to (or created) a conversation, or the one it is
-showing was retitled. Frontends with a persistent surface (pinned banner,
-window title, sidebar highlight) subscribe to mirror "where am I?" without
-polling. Emitted unconditionally.
+"""A live session switched to (or created) a conversation, the one it is
+showing was retitled, or it was reset to the unbound New Conversation state.
+Frontends with a persistent surface (pinned banner, window title, sidebar
+highlight) subscribe to mirror "where am I?" without polling. Emitted
+unconditionally.
 Payload:
     session_key:     str
-    conversation_id: int
+    conversation_id: int | None â€” None when the session was reset to New Conversation
     title:           str"""
 
 SESSION_CONVERSATION_ENDED = "session_conversation_ended"

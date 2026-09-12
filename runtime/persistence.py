@@ -179,24 +179,44 @@ def load_conversation(
         existing = runtime.sessions.get(session_key)
         if existing is not None and existing.conversation_id == conversation_id:
             return existing
-        _check_conversation_binding(runtime, session_key, conversation_id)
+        if existing is not None and existing.conversation_id is not None:
+            # Direct callers must switch through load_history so their current
+            # binding is closed cleanly. Do not evict the target's holder only
+            # to discover this conflict during hydration.
+            raise SessionConflict(
+                session_key, existing.conversation_id, conversation_id)
+        displaced = _release_conversation_binding(
+            runtime, session_key, conversation_id)
         with idle_bindings(runtime, session_key=session_key):
-            return _load_conversation(
+            session = _load_conversation(
                 runtime, session_key, conversation_id, agent_profile=agent_profile,
                 notification_mode=notification_mode,
                 system_prompt_extras=system_prompt_extras)
+        if displaced:
+            runtime.notify(
+                title="Conversation transferred",
+                body="This conversation was released from another session and opened here.",
+                source="runtime", session_key=session_key,
+                conversation_id=conversation_id, persist=False)
+        return session
 
 
 class ConversationInUse(RuntimeError):
     """A different live session already owns this conversation's mutable state."""
 
 
-def _check_conversation_binding(runtime, session_key, conversation_id):
+def _release_conversation_binding(runtime, session_key, conversation_id):
+    """Reset an idle prior holder so ``session_key`` can claim the conversation."""
     for key, session in runtime.sessions.items():
         if key != session_key and session.conversation_id == conversation_id:
-            raise ConversationInUse(
-                "This conversation is bound to another session. "
-                "Close it there before opening it here.")
+            try:
+                reset_conversation(runtime, key)
+            except SessionBusy as exc:
+                raise ConversationInUse(
+                    "This conversation is active in another session. "
+                    "Cancel the running turn there before opening it here.") from exc
+            return True
+    return False
 
 
 def _load_conversation(
@@ -293,15 +313,28 @@ def _load_conversation(
 
 
 def load_history(runtime, session_key: str, conversation_id: int):
-    # Check before closing the current session, and keep the claim atomic with
-    # hydration. A rejected switch must leave the caller's conversation intact.
+    # Release an idle holder before closing the current session, and keep the
+    # claim atomic with hydration. A refused switch leaves the caller intact.
     from runtime.session import RuntimeResult
 
     with runtime._sessions_lock:
         try:
-            _check_conversation_binding(runtime, session_key, conversation_id)
+            # ``load_conversation`` performs the handoff after the caller's old
+            # session has been closed. Probe busy ownership now so a refusal
+            # cannot strand the caller on New Conversation.
+            holder = next((s for key, s in runtime.sessions.items()
+                           if key != session_key
+                           and s.conversation_id == conversation_id), None)
+            if holder is not None:
+                with idle_bindings(runtime, session_key=holder.key):
+                    pass
         except ConversationInUse as exc:
             return RuntimeResult(False, error={"code": "conversation_in_use", "message": str(exc)})
+        except SessionBusy:
+            return RuntimeResult(False, error={
+                "code": "conversation_in_use",
+                "message": "This conversation is active in another session. "
+                           "Cancel the running turn there before opening it here."})
         return _load_history(runtime, session_key, conversation_id)
 
 
@@ -375,6 +408,11 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
             runtime, session_key,
             getattr(prior, "conversation_id", None), "switched")
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
+        bus.emit(SESSION_CONVERSATION_CHANGED, {
+            "session_key": session_key,
+            "conversation_id": None,
+            "title": "New Conversation",
+        })
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
         "agent_profile": session.active_agent_profile,
