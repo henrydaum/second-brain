@@ -24,6 +24,12 @@ Second Brain performs higher than OpenClaw and Hermes on [harness-bench](https:/
 
 The full evaluation framework I used is [available on GitHub](https://github.com/henrydaum/second-brain-evals), and the full results are available [here](https://github.com/henrydaum/second-brain-eval-results). I did this testing because I was curious how Second Brain would stack up against other agents. This provides the real results, but with a few small caveats, which you can read in the links provided.
 
+# What you get
+
+<img width="2560" height="1326" alt="Captura de pantalla 2026-09-10 202738" src="https://github.com/user-attachments/assets/cd23560e-717c-4727-aa46-33bcb3ef9f70" />
+
+<img width="2560" height="1330" alt="Captura de pantalla 2026-09-10 202430" src="https://github.com/user-attachments/assets/1466ada6-0b2e-4563-b195-feb9caf21981" />
+
 # How Second Brain works, in infographic form
 
 ## 1. Attachment Parsing
@@ -55,10 +61,6 @@ The full evaluation framework I used is [available on GitHub](https://github.com
 
 ## 10. Sandbox & SDK
 <img width="960" height="720" alt="10  Sandbox   SDK" src="https://github.com/user-attachments/assets/aed96e0d-e4ac-4d1e-9a62-625f2d5f2b6b" />
-
-# Video demo
-
-https://github.com/user-attachments/assets/26124782-12e3-41d1-8e8f-43256887acc3
 
 # Install
 
