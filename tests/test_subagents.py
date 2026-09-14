@@ -46,6 +46,9 @@ class FakeDB:
     def save_message(self, cid, role, content, **kwargs):
         self.messages.append((cid, role, content))
 
+    def clear_conversation_messages(self, cid):
+        self.messages = [row for row in self.messages if row[0] != cid]
+
 
 class FakeRuntime:
     """Drives whatever ``turn`` returns, and records what was asked of it."""
@@ -64,6 +67,7 @@ class FakeRuntime:
         self.pushed: list[str] = []
         self.opened: list[str] = []
         self.closed: list[str] = []
+        self.cleared: list[int] = []
 
     def create_conversation(self, title, *, kind="user", category=None,
                             user_id=1):
@@ -84,6 +88,16 @@ class FakeRuntime:
 
     def close_session(self, key):
         self.closed.append(key)
+        return True
+
+    def clear_conversation(self, key, cid, *, mark_title=True):
+        if cid not in self.db.conversations:
+            return False
+        session = self.sessions.get(key)
+        if session is not None and session.busy:
+            return False
+        self.db.clear_conversation_messages(cid)
+        self.cleared.append(cid)
         return True
 
     def push_message(self, key, text, **kw):
@@ -951,6 +965,120 @@ def test_a_recurring_job_pins_its_conversation_so_one_transcript_accumulates():
     cid, = runtime.db.conversations
     assert patched["nightly"]["payload"]["conversation_id"] == cid
     assert patched["nightly"]["payload"]["prompt"] == "brief"
+
+
+def test_two_firings_reuse_one_conversation_even_before_persistence_returns():
+    """The in-process binding closes the async persistence race."""
+    from events.event_bus import bus
+    from events.event_channels import SUBAGENT_SPAWN
+
+    release = threading.Event()
+
+    class Keeper:
+        def get_job(self, name):
+            release.wait(5)
+            return {"payload": {"prompt": "brief", "custom": "kept"}}
+
+        def update_job(self, name, patch):
+            self.patch = patch
+
+    registry, runtime = registry_for()
+    keeper = Keeper()
+    runtime.services["timekeeper"] = keeper
+    registry.start()
+    event = {"prompt": "brief",
+             "_timekeeper": {"job_name": "nightly", "one_time": False}}
+    try:
+        bus.emit(SUBAGENT_SPAWN, event)
+        assert eventually(lambda: len(runtime.db.conversations) == 1)
+        assert eventually(lambda: all(h.finished
+                                      for h in registry._handles.values()))
+        bus.emit(SUBAGENT_SPAWN, event)
+        assert eventually(lambda: len(registry._handles) == 2 and all(
+            h.finished for h in registry._handles.values()))
+    finally:
+        release.set()
+        assert eventually(lambda: hasattr(keeper, "patch"))
+        registry.stop()
+
+    assert len(runtime.db.conversations) == 1
+    assert keeper.patch["payload"]["custom"] == "kept"
+
+
+def test_clear_before_run_keeps_the_bound_conversation():
+    from events.event_bus import bus
+    from events.event_channels import SUBAGENT_SPAWN
+
+    registry, runtime = registry_for()
+    cid = runtime.create_conversation("Daily", category="Scheduled")
+    runtime.db.messages.append((cid, "assistant", "yesterday"))
+    registry.start()
+    try:
+        bus.emit(SUBAGENT_SPAWN, {
+            "prompt": "brief", "conversation_id": cid,
+            "clear_before_run": True,
+            "_timekeeper": {"job_name": "daily", "one_time": False},
+        })
+        assert eventually(lambda: all(h.finished
+                                      for h in registry._handles.values()))
+    finally:
+        registry.stop()
+
+    assert runtime.cleared == [cid]
+    assert list(runtime.db.conversations) == [cid]
+    assert runtime.db.messages == []
+
+
+def test_a_failed_binding_write_is_reported_to_the_user():
+    from events.event_bus import bus
+    from events.event_channels import SUBAGENT_SPAWN
+
+    class BrokenKeeper:
+        def get_job(self, name):
+            raise RuntimeError("disk unavailable")
+
+    registry, runtime = registry_for()
+    runtime.services["timekeeper"] = BrokenKeeper()
+    registry.start()
+    try:
+        bus.emit(SUBAGENT_SPAWN, {
+            "prompt": "brief",
+            "_timekeeper": {"job_name": "daily", "one_time": False},
+        })
+        assert eventually(lambda: any("was not saved" in p
+                                      for p in runtime.pushed))
+    finally:
+        registry.stop()
+
+
+def test_a_job_removed_during_spawn_is_not_updated_or_left_cached():
+    from events.event_bus import bus
+    from events.event_channels import SUBAGENT_SPAWN
+
+    class RemovedKeeper:
+        updated = False
+
+        def get_job(self, name):
+            return None
+
+        def update_job(self, name, patch):
+            self.updated = True
+
+    registry, runtime = registry_for()
+    keeper = RemovedKeeper()
+    runtime.services["timekeeper"] = keeper
+    registry.start()
+    try:
+        bus.emit(SUBAGENT_SPAWN, {
+            "prompt": "brief",
+            "_timekeeper": {"job_name": "gone", "one_time": False},
+        })
+        assert eventually(lambda: "gone" not in
+                          registry._scheduled_conversations)
+    finally:
+        registry.stop()
+
+    assert keeper.updated is False
 
 
 def test_pinning_the_conversation_never_holds_the_publisher_s_thread():

@@ -910,14 +910,19 @@ class ConversationRuntime:
             _persist.reset_conversation(self, session_key)
         return deleted
 
-    def clear_conversation(self, session_key: str, conversation_id: int) -> bool:
-        """Clear an idle conversation and refresh its actual live owner."""
+    def clear_conversation(self, session_key: str, conversation_id: int,
+                           *, mark_title: bool = True) -> bool:
+        """Clear an idle conversation and refresh its actual live owner.
+
+        ``mark_title`` is false for a scheduled job's pre-run reset: that is a
+        recurring execution policy, not a user-visible rename operation.
+        """
         if not self.assert_conversation_access(session_key, conversation_id):
             return False
         with _persist.idle_bindings(self, conversation_id=conversation_id) as holders:
             self.db.clear_conversation_messages(conversation_id)
             title = (self.db.get_conversation(conversation_id) or {}).get("title") or ""
-            if title and not title.endswith(" (cleared)"):
+            if mark_title and title and not title.endswith(" (cleared)"):
                 self.db.update_conversation_title(conversation_id, f"{title} (cleared)")
             for session in holders:
                 key, uid, frontend = session.key, session.user_id, session.frontend_name

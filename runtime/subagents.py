@@ -181,6 +181,10 @@ class SubagentRegistry:
         self._handles: dict[str, Handle] = {}
         self._lock = threading.RLock()
         self._barrier_wakes: dict[str, threading.Event] = {}
+        # A schedule must acquire its conversation before the asynchronous
+        # service write completes. This cache closes that window and also
+        # prevents simultaneous first firings from allocating twice.
+        self._scheduled_conversations: dict[str, int] = {}
         self._pool: ThreadPoolExecutor | None = None
         self._unsubscribe = None
 
@@ -841,33 +845,69 @@ class SubagentRegistry:
     def _on_event(self, payload) -> None:
         """A Timekeeper job fired. Start the child it describes."""
         payload = payload or {}
+        keeper_meta = payload.get("_timekeeper") or {}
+        job_name = str(keeper_meta.get("job_name") or "").strip()
+        one_time = bool(keeper_meta.get("one_time"))
         try:
-            handle = self.spawn(
-                payload.get("prompt") or "",
-                title=payload.get("title") or "Scheduled subagent",
-                attachments=payload.get("attachments"),
-                conversation_id=payload.get("conversation_id"),
-                owner=(payload.get("report_session_key") or "").strip() or None,
-                owner_conversation_id=payload.get("report_conversation_id"),
-                category=self._scheduled_category(payload),
-                # A scheduled child talks to the user directly; that push is
-                # the only place its work would otherwise surface.
-                notification_mode=None,
-                # Nothing is inherited here: a scheduled spawn has no spawner
-                # session to inherit from, so an unnamed profile is ``default``.
-                profile=payload.get("profile"),
-            )
+            with self._lock:
+                requested_cid = payload.get("conversation_id")
+                if job_name and not one_time:
+                    requested_cid = self._scheduled_conversations.get(
+                        job_name, requested_cid)
+                requested_cid = self._valid_conversation_id(requested_cid)
+                self._guard_scheduled_conversation(requested_cid)
+                if requested_cid is not None and payload.get("clear_before_run"):
+                    key = f"{SESSION_PREFIX}{requested_cid}"
+                    if not self.runtime.clear_conversation(
+                            key, requested_cid, mark_title=False):
+                        raise PermissionError(
+                            f"conversation #{requested_cid} could not be cleared")
+                handle = self.spawn(
+                    payload.get("prompt") or "",
+                    title=payload.get("title") or "Scheduled subagent",
+                    attachments=payload.get("attachments"),
+                    conversation_id=requested_cid,
+                    owner=(payload.get("report_session_key") or "").strip() or None,
+                    owner_conversation_id=payload.get("report_conversation_id"),
+                    category=self._scheduled_category(payload),
+                    notification_mode=None,
+                    profile=payload.get("profile"),
+                )
+                if job_name and not one_time:
+                    self._scheduled_conversations[job_name] = handle.conversation_id
         except Exception as exc:
             logger.error("scheduled subagent did not start: %s", exc)
             self._notify("Scheduled agent did not start", str(exc),
                          level="error")
             return
         # Off this thread, always. See ``_remember_conversation``.
-        threading.Thread(
-            target=self._remember_conversation,
-            args=(payload, handle.conversation_id),
-            daemon=True, name="subagent-pin-conversation",
-        ).start()
+        if job_name and not one_time:
+            threading.Thread(
+                target=self._remember_conversation,
+                args=(payload, handle.conversation_id),
+                daemon=True, name="subagent-pin-conversation",
+            ).start()
+
+    def _valid_conversation_id(self, value) -> int | None:
+        """Return a live scheduled conversation id, never a stale binding."""
+        try:
+            cid = int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+        db = getattr(self.runtime, "db", None)
+        return cid if cid is not None and db and db.get_conversation(cid) else None
+
+    def _guard_scheduled_conversation(self, cid: int | None) -> None:
+        """Refuse to erase or concurrently drive a conversation in use."""
+        if cid is None:
+            return
+        if cid == getattr(self.runtime, "active_conversation_id", None):
+            raise PermissionError(
+                "a scheduled agent cannot run in the active conversation")
+        if any(h.conversation_id == cid and not h.finished
+               for h in self._handles.values()):
+            raise PermissionError(
+                f"a subagent is already running in conversation #{cid}")
 
     @staticmethod
     def _scheduled_category(payload) -> str:
@@ -903,9 +943,28 @@ class SubagentRegistry:
             return
         try:
             job = keeper.get_job(job_name)
-            if job is not None:
-                keeper.update_job(job_name, {"payload": {
-                    **(job.get("payload") or {}), "conversation_id": cid}})
+            if job is None:
+                # It was removed while the first run was starting. Do not
+                # resurrect it, and do not let a later job reusing the same
+                # name inherit this conversation from the race cache.
+                with self._lock:
+                    if self._scheduled_conversations.get(job_name) == cid:
+                        self._scheduled_conversations.pop(job_name, None)
+                return
+            keeper.update_job(job_name, {"payload": {
+                **(job.get("payload") or {}), "conversation_id": cid}})
+            # Future Timekeeper events now carry the durable id. Keeping the
+            # temporary entry forever would make delete-and-recreate under
+            # the same job name inherit an unrelated old conversation.
+            with self._lock:
+                if self._scheduled_conversations.get(job_name) == cid:
+                    self._scheduled_conversations.pop(job_name, None)
         except Exception:
             logger.exception("could not pin the conversation for job %s",
                              job_name)
+            self._notify(
+                "Scheduled conversation was not saved",
+                f"Job '{job_name}' will keep running in this conversation "
+                "until restart, but its conversation binding could not be saved.",
+                level="error",
+            )

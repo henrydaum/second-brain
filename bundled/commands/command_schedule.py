@@ -51,6 +51,11 @@ SUBAGENT_SCHEMA = {
         "prompt": {"type": "string",
                    "description": "Complete, self-contained instructions. "
                                   "Nobody will answer a follow-up question."},
+        "clear_before_run": {
+            "type": "boolean",
+            "default": False,
+            "description": "Clear this conversation's messages before each run.",
+        },
     },
 }
 
@@ -371,6 +376,13 @@ def _describe(sdk, name: str, job: dict) -> str:
     ]
     if payload.get("title"):
         rows.append(("Title", str(payload.pop("title"))))
+    if job.get("channel") == SUBAGENT_CHANNEL:
+        rows.append(("Clear before each run",
+                     "Yes" if payload.pop("clear_before_run", False)
+                     else "No"))
+    # Kernel-managed: useful to the dispatcher, noise (and an attractive
+    # foot-gun) in a form or detail card.
+    payload.pop("conversation_id", None)
     # The prompt reads as prose, so it is quoted; whatever else the payload
     # carries follows it as one compact line.
     prompt = _truncate(str(payload.pop("prompt", "") or ""), 500)

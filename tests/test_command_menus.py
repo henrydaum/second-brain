@@ -197,6 +197,7 @@ def test_choosing_the_agent_never_asks_which_task():
     assert "target" not in names
     assert names[:3] == ["kind", "new_job_name", "cron"]
     assert "prompt" in names and "title" in names
+    assert "clear_before_run" in names
 
 
 def test_choosing_a_task_asks_which_one_before_going_further():
@@ -228,6 +229,20 @@ def test_a_scheduled_agent_with_no_prompt_is_refused_at_creation():
     assert missing == ["prompt"]
     assert module._missing_required(
         module.SUBAGENT_SCHEMA, {"prompt": "do the thing"}) == []
+
+
+def test_schedule_details_show_clear_policy_but_hide_internal_binding():
+    module = _load("command_schedule")
+    sdk = _TaskSdk([])
+    job = {"channel": module.SUBAGENT_CHANNEL, "cron": "0 12 * * *",
+           "enabled": True, "payload": {"prompt": "brief",
+                                          "clear_before_run": True,
+                                          "conversation_id": 42}}
+
+    detail = module._describe(sdk, "daily", job)
+
+    assert "Clear before each run" in detail and "Yes" in detail
+    assert "conversation_id" not in detail and "42" not in detail
 
 
 # ──────────────────────────────────────────────────────────────────────
