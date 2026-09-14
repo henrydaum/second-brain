@@ -14,6 +14,7 @@ socket. The cases that are *about* the socket use one on an ephemeral port.
 
 import json
 import socket
+import threading
 import time
 
 import pytest
@@ -484,7 +485,7 @@ class Web(BaseFrontend):
 
 
 @pytest.fixture
-def serving(tmp_path):
+def serving(tmp_path, request):
     """A sandboxed frontend holding the real singleton's port."""
     import threading
 
@@ -493,19 +494,104 @@ def serving(tmp_path):
     from sandbox.http_server import SERVER
 
     path = tmp_path / "frontend_web.py"
-    path.write_text(SERVING_FRONTEND, encoding="utf-8")
+    source = SERVING_FRONTEND.replace("poll_interval = 0.01",
+                                     f"poll_interval = {getattr(request, 'param', 0.01)}")
+    path.write_text(source, encoding="utf-8")
     module = adapt(path)
     assert module is not None, "the frontend did not adapt"
     made = module.SandboxedWeb()
+    made._poll_waiting = threading.Event()
+    original_wait = made._poll_wake.wait
+
+    def wait(timeout=None):
+        made._poll_waiting.set()
+        return original_wait(timeout)
+
+    made._poll_wake.wait = wait
     thread = threading.Thread(target=made.start, daemon=True)
+    made._poll_thread = thread
     thread.start()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not SERVER.port:
         time.sleep(0.01)
     yield made, SERVER
     made.stop()
+    thread.join(2)
     SERVER.stop()
     unload_box("frontend_web")
+
+
+@pytest.mark.parametrize("serving", [5.0], indirect=True)
+def test_http_input_and_shutdown_wake_an_idle_frontend(serving):
+    made, server = serving
+    assert made._poll_waiting.wait(2), "frontend never entered its idle wait"
+    with socket.create_connection(("127.0.0.1", server.port), timeout=1) as conn:
+        conn.sendall(b"GET /say HTTP/1.1\r\nHost: h\r\n\r\n")
+        reply = b""
+        while b'"method": "GET"' not in reply:
+            chunk = conn.recv(4096)
+            assert chunk, reply
+            reply += chunk
+    assert b"200 OK" in reply
+    made._poll_waiting.clear()
+    made._poll_wake.set()
+    assert made._poll_waiting.wait(2)
+    made.stop()
+    made._poll_thread.join(1)
+    assert not made._poll_thread.is_alive()
+
+
+def test_arrival_during_empty_poll_is_not_lost(server):
+    from sandbox.guest.requests import Result
+    from sandbox.http_server import _Response
+    from sandbox.residency import _drive_polls
+
+    wake, stopping, handled = threading.Event(), threading.Event(), threading.Event()
+    assert server.claim("poller", 0, source=[], wake=wake)
+
+    class Box:
+        alive = True
+        calls = 0
+
+        def call(self, method):
+            self.calls += 1
+            if self.calls == 1:
+                assert server.drain() == []
+                # The arrival occurs after the guest checked its inbox, but
+                # before the host begins waiting for the next poll.
+                server._accept(_request(), _Response(lambda data: None, lambda: None))
+                return Result(data=False)
+            assert len(server.drain()) == 1
+            handled.set()
+            stopping.set()
+            return Result(data=True)
+
+    worker = threading.Thread(target=_drive_polls, kwargs=dict(
+        family="frontend", name="test", box=Box(), stopping=stopping,
+        interval=5, max_failures=1, wake=wake), daemon=True)
+    worker.start()
+    try:
+        assert handled.wait(1), "arrival was erased between poll and wait"
+    finally:
+        stopping.set()
+        wake.set()
+        worker.join(2)
+
+
+def test_released_frontend_cannot_receive_successors_wakeups(server):
+    from sandbox.http_server import _Response
+
+    old, new = threading.Event(), threading.Event()
+    assert server.claim("old", 0, source=[], wake=old)
+    assert not server.claim("new", 0, wake=new)
+    server.release("old")
+    assert old.is_set()
+    old.clear()
+    assert server.claim("new", 0, source=[], wake=new)
+    server.release("old")
+    server._accept(_request(), _Response(lambda data: None, lambda: None))
+    assert new.is_set()
+    assert not old.is_set()
 
 
 def test_a_sandboxed_frontend_serves_a_real_request(serving):

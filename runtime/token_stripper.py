@@ -94,10 +94,13 @@ class ModelTextFilter:
     }
 
     _ALL_TAGS = _THINK_OPEN + _THINK_CLOSE + _DROP_OPEN + _DROP_CLOSE + _DROPPED
+    _TAG_PREFIXES = frozenset(tag[:i] for tag in _ALL_TAGS
+                              for i in range(1, len(tag)))
+    _MAX_PREFIX_LENGTH = max(map(len, _TAG_PREFIXES))
 
     def __init__(self):
         self._tail = ""
-        self._buffer = ""
+        self._buffer: list[str] = []
         self._closers: tuple[str, ...] | None = None   # None = not in a region
         self._emitted = False
         #: Text from a matched pair whose opener arrived *after* prose, held
@@ -119,6 +122,8 @@ class ModelTextFilter:
 
     @classmethod
     def _find_first(cls, text: str, tags: tuple[str, ...]) -> tuple[int | None, str | None]:
+        if "<" not in text:
+            return None, None
         best_idx, best_tag = None, None
         for tag in tags:
             idx = text.find(tag)
@@ -129,12 +134,13 @@ class ModelTextFilter:
     @classmethod
     def _partial_tag_tail(cls, text: str) -> str:
         """Longest suffix of *text* that is a proper prefix of some tag."""
-        max_len = min(len(text), max(len(t) for t in cls._ALL_TAGS) - 1)
-        for length in range(max_len, 0, -1):
-            suffix = text[-length:]
-            if any(tag.startswith(suffix) for tag in cls._ALL_TAGS):
-                return suffix
-        return ""
+        # Every tag begins with its only '<', so only the last opener can
+        # begin a partial suffix. Ordinary fragments need no tag scan.
+        start = text.rfind("<", max(0, len(text) - cls._MAX_PREFIX_LENGTH))
+        if start < 0:
+            return ""
+        suffix = text[start:]
+        return suffix if suffix in cls._TAG_PREFIXES else ""
 
     # ── the machine ───────────────────────────────────────────────────
 
@@ -151,7 +157,7 @@ class ModelTextFilter:
                     # Hold the region's text: if no closer ever comes, the
                     # pair was never matched and this is the model's prose.
                     keep = self._partial_tag_tail(text)
-                    self._buffer += text[:len(text) - len(keep)] if keep else text
+                    self._buffer.append(text[:len(text) - len(keep)] if keep else text)
                     self._tail = keep
                     text = ""
                 else:
@@ -170,9 +176,9 @@ class ModelTextFilter:
                     # through the accumulate branch above, which is every
                     # whole-response call (``filter_text``) and no streamed
                     # one — exactly the split the two must not have.
-                    self._pending = (self._buffer + text[:idx]
+                    self._pending = ("".join(self._buffer) + text[:idx]
                                      if self._mid_prose else "")
-                    self._buffer = ""
+                    self._buffer.clear()
                     self._mid_prose = False
                     text = text[idx + len(closer):]
                     self._closers = None
@@ -219,8 +225,9 @@ class ModelTextFilter:
         region was the answer. All three come back out; only leftover markup
         is scrubbed.
         """
-        released = self._pending + self._buffer + self._tail
-        self._pending = self._buffer = self._tail = ""
+        released = self._pending + "".join(self._buffer) + self._tail
+        self._pending = self._tail = ""
+        self._buffer.clear()
         self._closers = None
         self._mid_prose = False
         if not released:

@@ -197,6 +197,7 @@ def _drive_polls(
     interval: float,
     max_failures: int,
     done=None,
+    wake=None,
 ):
     """Drive one resident plugin's kernel-owned poll loop.
 
@@ -207,6 +208,12 @@ def _drive_polls(
     """
     failures = 0
     while not stopping.is_set() and not (callable(done) and done()):
+        # Clear before checking for work, never between poll and wait: an
+        # arrival or completion during the poll must survive into the wait.
+        if wake is not None:
+            wake.clear()
+            if stopping.is_set() or (callable(done) and done()):
+                break
         if not box.alive:
             logger.error("%s %s stopped: its box is no longer running",
                          family, name)
@@ -216,7 +223,7 @@ def _drive_polls(
             failures = 0
             # Truthy means work remains: drain it before sleeping.
             if not outcome.data:
-                stopping.wait(interval)
+                (wake if wake is not None else stopping).wait(interval)
             continue
 
         failures += 1
@@ -617,6 +624,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         self._token = ""
         forget_prompt(self)
         self._stopping = threading.Event()
+        self._poll_wake = threading.Event()
         self._shutdown_event = shutdown_event
         # Same two fields the service adapter carries, for the same ``_listen``.
         # The validator lets a frontend declare ``subscribed_channels`` — it is
@@ -685,7 +693,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
             from .http_server import SERVER
 
             wanted = _http_port(self)
-            if SERVER.claim(self._token, wanted):
+            if SERVER.claim(self._token, wanted, wake=self._poll_wake):
                 logger.info("frontend %s is serving on 127.0.0.1:%s", name,
                             SERVER.port)
             else:
@@ -730,6 +738,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
             interval=interval,
             max_failures=max_failures,
             done=self._done,
+            wake=self._poll_wake,
         )
         if not asked:
             # The guest cannot say this — its box is the thing that died — so
@@ -753,6 +762,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str,
         on unregister, and either may be first.
         """
         self._stopping.set()
+        self._poll_wake.set()
         # Before the box closes, so a late delivery cannot arrive at a shut
         # box. ``deliver`` tolerates that anyway, but a subscription outliving
         # the thing it delivers into is the kind of leak ``_deafen`` exists to

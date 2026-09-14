@@ -621,7 +621,7 @@ class Sandbox:
     # Detached Requests, for a frontend acting as one of its sessions.
     # ──────────────────────────────────────────────────────────────
 
-    def act(self, request, chain: Chain, context, owner: str) -> str:
+    def act(self, request, chain: Chain, context, owner: str, *, on_done=None) -> str:
         """Send one Request on its own thread. Returns a handle to collect by.
 
         The thread is the whole point. The caller is a resident frontend
@@ -650,6 +650,13 @@ class Sandbox:
             with self._lock:
                 act.result = result
                 act.finished_at = time.monotonic()
+            # Publish the answer before waking its frontend. Never call guest
+            # code here: the frontend may still hold its box's call lock.
+            if on_done is not None:
+                try:
+                    on_done()
+                except Exception:
+                    logger.exception("detached %s completion callback failed", act.type)
 
         with self._lock:
             self._acts[act.id] = act

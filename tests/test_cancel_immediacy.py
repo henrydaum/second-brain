@@ -583,8 +583,6 @@ def test_cancelling_a_child_interrupts_the_work_it_was_doing():
     flag would be set on nothing and the child's script would run on to its
     own ceiling with nobody waiting for it.
     """
-    import threading as _threading
-
     from runtime.subagents import RUNNING, SESSION_PREFIX, Handle, SubagentRegistry
 
     child = _session(f"{SESSION_PREFIX}7")
@@ -597,10 +595,7 @@ def test_cancelling_a_child_interrupts_the_work_it_was_doing():
             interrupted.append(session.key)
             return 0
 
-    registry = SubagentRegistry.__new__(SubagentRegistry)
-    registry._lock = _threading.RLock()
-    registry._handles = {}
-    registry.runtime = _Runtime()
+    registry = SubagentRegistry(runtime=_Runtime())
     registry._handles["h"] = Handle(
         id="h", conversation_id=7, owner="repl", title="c", timeout=30,
         state=RUNNING)
@@ -613,17 +608,12 @@ def test_cancelling_a_child_interrupts_the_work_it_was_doing():
 def test_cancelling_a_child_whose_session_is_gone_does_not_raise():
     """Fail quiet, not loud: a cancel that raises leaves the rest of the
     children running."""
-    import threading as _threading
-
     from runtime.subagents import RUNNING, Handle, SubagentRegistry
 
     class _Runtime:
         sessions = {}
 
-    registry = SubagentRegistry.__new__(SubagentRegistry)
-    registry._lock = _threading.RLock()
-    registry._handles = {}
-    registry.runtime = _Runtime()
+    registry = SubagentRegistry(runtime=_Runtime())
     registry._handles["h"] = Handle(
         id="h", conversation_id=7, owner="repl", title="c", timeout=30,
         state=RUNNING)

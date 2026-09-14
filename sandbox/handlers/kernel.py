@@ -3374,11 +3374,12 @@ def _frontend_act(ctx, args: dict) -> Result:
             and attended_now(chain, runtime=getattr(adapter, "runtime", None))):
         chain = Chain(root="user:command").push("mode")
 
+    wake = getattr(adapter, "_poll_wake", None)
     return Result(data=sandbox.act(
         Request(request_type, inner),
         chain,
         sandbox.interpreter.context_for_session(session_key),
-        owner=name))
+        owner=name, on_done=wake.set if wake is not None else None))
 
 
 def _frontend_collect(ctx, args: dict) -> Result:

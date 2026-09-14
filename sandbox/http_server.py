@@ -267,6 +267,7 @@ class HttpServer:
         self._httpd: ThreadingHTTPServer | None = None
         self._stopping = threading.Event()
         self._owner: str = ""
+        self._wake: threading.Event | None = None
         self._port: int = 0
         # Which listener is the live one, for the reason the console keeps a
         # generation: a superseded one checks on the way back and stands down.
@@ -287,11 +288,13 @@ class HttpServer:
         with self._lock:
             return self._port
 
-    def claim(self, token: str, port: int, source=None) -> bool:
+    def claim(self, token: str, port: int, source=None, *,
+              wake: threading.Event | None = None) -> bool:
         """Take the port for one frontend. False if somebody else has it.
 
         Re-claiming with the same token succeeds, so a frontend that restarts
         is not locked out by its own previous claim.
+        ``wake`` is the host's poll event, signaled when a request arrives.
         """
         if not token:
             return False
@@ -299,6 +302,7 @@ class HttpServer:
             if self._owner and self._owner != token:
                 return False
             self._owner = token
+            self._wake = wake
         return self.start(port, source)
 
     def release(self, token: str) -> None:
@@ -314,8 +318,11 @@ class HttpServer:
             if not token or self._owner != token:
                 return
             self._owner = ""
+            wake, self._wake = self._wake, None
             pending, self._pending = list(self._pending), deque()
             open_responses, self._open = dict(self._open), {}
+        if wake is not None:
+            wake.set()
         self._abandon(pending, open_responses, "frontend released the port")
 
     def _abandon(self, pending, open_responses, why: str) -> None:
@@ -422,6 +429,10 @@ class HttpServer:
                 request["id"] = request.get("id") or uuid.uuid4().hex
                 request["_response"] = response
                 self._pending.append(request)
+                # Wake the owner outside its box, so input never has to wait
+                # for the next idle poll and rendering can still use the box.
+                if self._wake is not None:
+                    self._wake.set()
                 while len(self._pending) > MAX_PENDING:
                     dropped = self._pending.popleft()
         if not owned:
@@ -434,6 +445,8 @@ class HttpServer:
         """Close the listener and forget everything. Teardown and tests."""
         self._stopping.set()
         with self._lock:
+            if self._wake is not None:
+                self._wake.set()
             self._generation += 1
             self._retire()
             pending, self._pending = list(self._pending), deque()

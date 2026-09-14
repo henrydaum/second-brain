@@ -617,6 +617,93 @@ def test_the_barrier_survives_a_broken_session():
     assert registry.barrier(Hostile()) is BarrierOutcome.NONE
 
 
+@pytest.mark.parametrize("trigger", ["completion", "input", "cancel", "child_cancel"])
+def test_barrier_wakes_without_waiting_for_poll_timeout(monkeypatch, trigger):
+    from runtime.subagents import Handle
+
+    monkeypatch.setattr("runtime.subagents.BARRIER_POLL_SECONDS", 5)
+    registry = SubagentRegistry()
+    session = FakeSession("repl", 7)
+    handle = Handle(id="child", conversation_id=8, title="child", timeout=30,
+                    owner="repl", owner_conversation_id=7)
+    registry._handles[handle.id] = handle
+    checked, returned = threading.Event(), threading.Event()
+    original = registry._has_user_input
+
+    def check(session):
+        answer = original(session)
+        checked.set()
+        return answer
+
+    monkeypatch.setattr(registry, "_has_user_input", check)
+    outcomes = []
+
+    def wait():
+        outcomes.append(registry.barrier(session))
+        returned.set()
+
+    worker = threading.Thread(target=wait, daemon=True)
+    worker.start()
+    try:
+        assert checked.wait(2)
+        if trigger == "completion":
+            registry._finish(handle, DONE, text="report")
+        elif trigger == "child_cancel":
+            registry.cancel(handle.id)
+        elif trigger == "input":
+            with session.lock:
+                session.pending_user_inputs.append({"action_type": "send_text", "payload": "hi"})
+            registry.wake(session.key)
+        else:
+            session.cancel_event.set()
+            registry.wake(session.key)
+        assert returned.wait(1), "barrier waited for the polling timeout"
+        expected = (BarrierOutcome.USER_INPUT if trigger == "input" else
+                    BarrierOutcome.NONE if trigger == "cancel" else
+                    BarrierOutcome.REPORTS_DELIVERED)
+        assert outcomes == [expected]
+        assert registry._barrier_wakes == {}
+        if trigger == "input":
+            assert not handle.collected and not handle.finished
+    finally:
+        session.cancel_event.set()
+        registry.wake(session.key)
+        worker.join(2)
+
+
+def test_completion_during_barrier_state_check_is_not_lost(monkeypatch):
+    from runtime.subagents import Handle
+
+    monkeypatch.setattr("runtime.subagents.BARRIER_POLL_SECONDS", 5)
+    registry = SubagentRegistry()
+    session = FakeSession("repl", 7)
+    handle = Handle(id="child", conversation_id=8, title="child", timeout=30,
+                    owner="repl", owner_conversation_id=7)
+    registry._handles[handle.id] = handle
+
+    def complete_after_finished_check(session):
+        registry._finish(handle, DONE, text="report")
+        return False
+
+    monkeypatch.setattr(registry, "_has_user_input", complete_after_finished_check)
+    returned = threading.Event()
+    outcomes = []
+
+    def wait():
+        outcomes.append(registry.barrier(session))
+        returned.set()
+
+    worker = threading.Thread(target=wait, daemon=True)
+    worker.start()
+    try:
+        assert returned.wait(1), "completion wake was lost before waiting"
+        assert outcomes == [BarrierOutcome.REPORTS_DELIVERED]
+    finally:
+        session.cancel_event.set()
+        registry.wake(session.key)
+        worker.join(2)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The barrier, from inside a real drive.
 #

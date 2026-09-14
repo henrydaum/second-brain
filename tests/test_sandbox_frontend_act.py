@@ -183,6 +183,16 @@ def _collect(actor, handle, tries=200):
     raise AssertionError(f"handle {handle!r} never produced an answer")
 
 
+def test_completed_act_wakes_frontend_after_publishing_answer(actor, adapter):
+    adapter._poll_wake = threading.Event()
+    handle = actor.call("kick", request_type="fs.list", args={"path": "."})
+    assert handle.ok
+    assert adapter._poll_wake.wait(2), "completed action did not wake its frontend"
+    outcome = actor.call("take", handle=handle.data)
+    assert outcome.ok and outcome.data is not None
+    assert actor.call("take", handle=handle.data).data is None
+
+
 # ──────────────────────────────────────────────────────────────────────
 # It does not wait. This is the point of the whole design.
 # ──────────────────────────────────────────────────────────────────────

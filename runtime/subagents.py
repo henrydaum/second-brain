@@ -180,6 +180,7 @@ class SubagentRegistry:
         self._config = config or {}
         self._handles: dict[str, Handle] = {}
         self._lock = threading.RLock()
+        self._barrier_wakes: dict[str, threading.Event] = {}
         self._pool: ThreadPoolExecutor | None = None
         self._unsubscribe = None
 
@@ -530,6 +531,7 @@ class SubagentRegistry:
             handle.text = text
             handle.error = error
         handle._done.set()
+        self.wake(handle.owner)
         if handle.owner is None and state == FAILED:
             # Nobody is going to collect this one, so a failure that is not
             # surfaced here is a failure nobody ever learns about.
@@ -656,6 +658,7 @@ class SubagentRegistry:
         event = getattr(session, "cancel_event", None)
         if event is not None:
             event.set()
+            self.wake(getattr(session, "key", ""))
             # A child blocks on a model call exactly like a foreground turn
             # does, so the flag alone leaves it running until the provider is
             # finished — with nobody left to read the answer. Same order as
@@ -664,6 +667,7 @@ class SubagentRegistry:
             if interrupt is not None:
                 interrupt(session)
         handle._done.set()
+        self.wake(handle.owner)
         for child in children:
             self.cancel(child)
         logger.info("subagent %s cancelled (%d descendant(s))",
@@ -737,7 +741,26 @@ class SubagentRegistry:
         with session.lock:
             return bool(getattr(session, "pending_user_inputs", None))
 
+    def wake(self, owner: str | None) -> None:
+        """Wake a parent's barrier after publishing input or child state."""
+        with self._lock:
+            wake = self._barrier_wakes.get(owner)
+            if wake is not None:
+                wake.set()
+
     def _barrier(self, session) -> BarrierOutcome:
+        owner = str(getattr(session, "key", "") or "")
+        wake = threading.Event()
+        with self._lock:
+            self._barrier_wakes[owner] = wake
+        try:
+            return self._wait_at_barrier(session, wake)
+        finally:
+            with self._lock:
+                if self._barrier_wakes.get(owner) is wake:
+                    del self._barrier_wakes[owner]
+
+    def _wait_at_barrier(self, session, wake) -> BarrierOutcome:
         """The barrier proper. See :meth:`barrier`."""
         owner = str(getattr(session, "key", "") or "")
         pending = self.pending_for(owner)
@@ -747,6 +770,9 @@ class SubagentRegistry:
         cancel_event = getattr(session, "cancel_event", None)
         delivered = []
         while pending:
+            # Clear before inspecting state. A completion/input racing with
+            # the checks below then remains set when we enter the wait.
+            wake.clear()
             if cancel_event is not None and cancel_event.is_set():
                 # The user stopped the turn. Take the children with it and let
                 # the kernel's own cancel handling proceed.
@@ -773,7 +799,11 @@ class SubagentRegistry:
                 self.forget(owner)
                 return (BarrierOutcome.REPORTS_DELIVERED if queued
                         else BarrierOutcome.USER_INPUT)
-            time.sleep(BARRIER_POLL_SECONDS)
+            # The timer remains a backstop for deadlines and callers that
+            # directly mutate a stand-in session; normal work signals wake.
+            timeout = min(BARRIER_POLL_SECONDS,
+                          max(0.0, min(h.deadline for h in pending) - time.time()))
+            wake.wait(timeout)
 
         queued = self._deliver(session, delivered)
         self.forget(owner)

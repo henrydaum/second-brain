@@ -108,6 +108,37 @@ def test_cancel_before_driver_starts_is_not_cleared(runtime, monkeypatch):
     assert not session.cancel_event.is_set()
 
 
+@pytest.mark.parametrize("action", ["send_text", "cancel"])
+def test_busy_input_publishes_state_before_waking_subagent_barrier(runtime, monkeypatch, action):
+    session = runtime.get_session("shared")
+    session.driver_token = object()
+    seen = []
+
+    def wake(key):
+        assert key == session.key
+        if action == "cancel":
+            assert session.cancel_event.is_set()
+            assert not session.pending_user_inputs
+        else:
+            assert session.pending_user_inputs[-1]["payload"] == "follow-up"
+        seen.append(key)
+
+    def cancel_children(key):
+        # Finishing a child can wake the parent before cancel_for returns.
+        assert session.cancel_event.is_set()
+        return 0
+
+    monkeypatch.setattr(runtime.subagents, "wake", wake)
+    monkeypatch.setattr(runtime.subagents, "cancel_for", cancel_children)
+    try:
+        result = runtime.handle_action(session.key, action, "follow-up")
+        assert result.ok
+        assert seen == [session.key]
+    finally:
+        session.driver_token = None
+        session.cancel_event.clear()
+
+
 def test_cancel_during_approval_stops_turn_and_wakes_request(runtime, monkeypatch):
     entered = Event()
     requests = []

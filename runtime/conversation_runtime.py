@@ -201,6 +201,10 @@ class ConversationRuntime:
                 # (and anything *they* started). Stopping the agent while its
                 # children carry on is the worst of both: the work continues,
                 # costs money, and reaches nobody.
+                # Child completion now wakes the parent immediately. Publish
+                # cancellation before stopping children so that wake cannot
+                # start another model call while cancel_for is still running.
+                session.cancel_event.set()
                 stopped = self.subagents.cancel_for(session_key)
                 with session.lock:
                     # Nothing is queued in its place. ``pending_user_inputs``
@@ -213,7 +217,7 @@ class ConversationRuntime:
                     # the loop's job, on its way out; see
                     # ``ConversationLoop._record_cancellation``.
                     session.pending_user_inputs.clear()
-                session.cancel_event.set()
+                self.subagents.wake(session_key)
                 # Dismiss the pending question as well as stopping the driver.
                 # Set cancellation first: resolving the request wakes its tool.
                 while session.cs.phase == PHASE_APPROVING_REQUEST:
@@ -294,6 +298,7 @@ class ConversationRuntime:
                         "action_type": action_type,
                         "payload": queued_payload,
                     })
+                self.subagents.wake(session_key)
                 # A notification rather than a reply, because nothing was
                 # answered: the message was accepted and nobody has read it
                 # yet. Saying "Got it — I'll read that as soon as I finish
