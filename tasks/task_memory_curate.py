@@ -33,13 +33,14 @@ result changes no action and is therefore not worth a file. That is the whole
 model, and everything below follows from it: an entry with no action in it
 cannot change anything, so it is not an entry.
 
-**The curator has two jobs, and one column says which.** ``memory_usage``
+**The curator improves used memories and reviews related ones before creating
+new ones.** ``memory_usage``
 records every entry the retrieval service offered and every one ``tool_memory``
-then opened. An entry that was *taken* earns a rewrite — it worked, so make it
-work harder. Anything the agent worked out for itself is
-not in the corpus yet and wants writing down. Offered-but-not-taken is neither,
-and saying so is cheap now that it is a recorded fact rather than something
-reconstructed by parsing tool calls out of the transcript.
+then opened. Used entries are reviewed against what actually happened. The
+curator also searches for related memories, including ones never suggested or
+used, and updates any the conversation shows are wrong or outdated. It prefers
+updating an existing memory that covers the situation, creating a new one only
+when no existing memory fits.
 
 Note what "taken" is *not*: a score. That an entry was opened says the
 situation looked close, not that the advice was good. Only reading what
@@ -116,7 +117,8 @@ point, not the limit: `grep`, `glob` and `read_file` reach the codebase,
 reaches the conversation record — earlier conversations included. Use them when
 a lesson only makes sense with what happened around it: whether this went wrong
 before, what the code actually does, whether the user has corrected this twice.
-Do not go looking when the transcript already settles it.
+Skip additional investigation when the transcript already settles the lesson,
+but still search for related memories as described in job two.
 
 ## Job one: improve what was used
 
@@ -140,17 +142,23 @@ rewrite an improvement rather than a guess. If one turned out to be wrong or
 useless, say so in it — an entry that records its own failure is worth more
 than one quietly left standing.
 
-## Job two: write down what is missing
+## Job two: Review related memories before creating new ones
 
-Whatever the agent worked out for itself is not in the corpus yet. Go through
-the conversation for actions worth repeating or avoiding that no entry covers.
+When curating a conversation, search for related memories and update any that the conversation shows are wrong or outdated.
+
+Include related memories that were never suggested or used. Use
+`lexical_search` or `semantic_search` to find them, then read relevant entries
+with `memory read` and base corrections on evidence from the conversation.
 
 Here is everything you already have:
 
 {corpus}
 
-If one of those already covers the situation, update it rather than adding a
-second — two entries about one situation is how a corpus stops being useful.
+Prefer updating an existing memory when it covers the situation. Create a new memory only when no existing memory fits.
+
+Leave entries unchanged when there is nothing to correct or improve. After
+reviewing related memories, write down actions worth repeating or avoiding
+that no existing entry covers.
 
 ## What earns an entry
 
