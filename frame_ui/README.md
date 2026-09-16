@@ -8,6 +8,9 @@ kernel" is answered before anything is built on top of it. What is worth
 keeping is `src/client.js` — the whole protocol is `POST /sdk/<request.type>`
 out and one SSE stream of render frames in, and that file is both halves.
 
+**Building on it: [BUILDING.md](BUILDING.md)** — what the protocol will not tell
+you, what the old UI already solved, and what is missing here.
+
 ## Running it
 
 Once, in this folder:
