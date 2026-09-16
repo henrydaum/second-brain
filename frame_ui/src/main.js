@@ -37,7 +37,26 @@ call("conv.list", { limit: 5 })
     const rows = Array.isArray(data) ? data : (data?.conversations ?? []);
     say("request", `ok — ${rows.length} conversation(s)`, "ok");
   })
-  .catch((error) => say("request", `${error.message} [${error.code}]`, "bad"));
+  .catch((error) => say("request", explain(error), "bad"));
+
+/**
+ * What went wrong, in terms of the thing to go and fix.
+ *
+ * A bare `unauthorized` is the least useful true statement available here:
+ * the page cannot be the cause, because it sends no credential — the dev
+ * server adds one. So a 401 is always about the server in front, and saying
+ * which is the difference between a two-second fix and an afternoon.
+ */
+function explain(error) {
+  if (error.status === 401) {
+    return "unauthorized — the dev server is not sending the API token. " +
+      "Restart it; it reads Second Brain's config.json.";
+  }
+  if (error.status === 404) {
+    return "not found — is the proxy configured? Check vite.config.js.";
+  }
+  return `${error.message}${error.code ? ` [${error.code}]` : ""}`;
+}
 
 // In: the render stream. Opening it also declares this session attended, which
 // is what lets an unsafe Request raise a dialog instead of being refused.

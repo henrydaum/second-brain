@@ -379,7 +379,7 @@ def main():
 	# notification is delivered to live sessions only. Raised before the REPL
 	# is up it would be persisted to the panel and shown to nobody — which
 	# looks exactly like not raising one.
-	web_ui.serve(config)
+	web_ui.serve(config, scaffold.frontend_runtime)
 
 	# --- 11. Main thread idles until shutdown ---
 	try:

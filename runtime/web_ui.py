@@ -14,11 +14,25 @@ Three steps, in an order that matters:
    second one would bind-fail at best and fight over the port at worst, so a
    reachable address is taken as the answer and nothing is spawned.
 2. **Start it, if nothing answered and the user wants that.**
-3. **Say where it is**, once it actually answers. The notification is the
+3. **Say where it is**, once it actually works. The notification is the
    *point* — "it is running" is not useful, "open this" is — which is why it is
-   raised on the first successful probe rather than when the process starts.
-   A process that starts and then exits on a port conflict is exactly the case
-   a start-time notice would get wrong.
+   raised on a successful probe rather than when the process starts. A process
+   that starts and then exits on a port conflict is exactly the case a
+   start-time notice would get wrong.
+
+**"Works" means the bridge, not the port**, and that distinction was learned
+the hard way. A dev server left over from before an update served its page
+perfectly while proxying without a credential, so every Request came back
+`unauthorized` — and the start-up notice cheerfully announced an address that
+could not talk to the kernel. A page answering says a process is alive; one
+authenticated Request through the same origin says the thing the user wants is
+true. So the probe asks for both, and when they disagree it says which.
+
+**Delivery waits for somewhere to deliver to.** A notification reaches live
+sessions only, so one raised before a frontend has opened its session is
+persisted to the panel and shown to nobody — which is exactly as useful as not
+raising one. The adopt path made that the *normal* case rather than a race,
+since an already-running server answers the first probe in milliseconds.
 
 Nothing here is fatal. A machine with no Node, a checkout with no
 ``node_modules``, a port already taken by something else: each is logged and
@@ -65,11 +79,55 @@ PROBE_INTERVAL = 1.0
 #: block on.
 PROBE_TIMEOUT = 2.0
 
+#: How long to wait for a frontend to open a session before announcing anyway.
+#: Generous, because the cost of waiting is a late notification and the cost of
+#: not waiting is none at all.
+AUDIENCE_TIMEOUT = 30.0
+
 _process: subprocess.Popen | None = None
 _lock = threading.Lock()
 
 
 # ── The probe ─────────────────────────────────────────────────────────
+
+def _join(url: str, path: str) -> str:
+    """``path`` against the UI's own origin."""
+    return url.rstrip("/") + path
+
+
+def bridge_ok(url: str) -> bool | None:
+    """Whether a Request made through the UI's origin is answered.
+
+    ``True`` it works, ``False`` it is *refused*, ``None`` nothing answered.
+    The three are different advice, which is why this is not a bool: refused
+    means the server in front is not adding the credential (a dev server
+    started before the token existed, most often), while no answer usually
+    means the HTTP frontend is not running.
+
+    **Only 401 and 403 count as refused.** A proxy with nothing upstream
+    answers ``502``, which is an HTTP response and therefore reaches the same
+    branch as a real refusal — so reading "any error status" as "refused" told
+    somebody whose frontend was simply switched off to go and fix their token.
+    Everything that is neither success nor an authentication failure is an
+    answer about the *route*, not about the credential.
+
+    ``conv.list`` because it is read-only, cheap, and ``ALWAYS_SAFE`` — a probe
+    must not be able to raise a dialog at somebody, and it runs at boot with
+    nobody watching, where an unsafe Request would be refused anyway.
+    """
+    request = urllib.request.Request(
+        _join(url, "/sdk/conv.list?thread=probe"),
+        data=b'{"limit": 1}',
+        headers={"Content-Type": "application/json"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT) as answer:
+            return 200 <= answer.status < 300
+    except urllib.error.HTTPError as answer:
+        return False if answer.code in (401, 403) else None
+    except Exception:
+        return None
+
 
 def reachable(url: str) -> bool:
     """Whether something is serving at ``url``.
@@ -155,23 +213,67 @@ def _spawn(url: str) -> subprocess.Popen | None:
         return None
 
 
-def _announce(url: str) -> None:
-    """The one line this whole module exists to produce."""
+def _await_audience(runtime, deadline: float) -> None:
+    """Block until some frontend has a session open, or give up.
+
+    Not a nicety: ``on_bus_notification_pushed`` delivers to live sessions and
+    drops the rest, so announcing into an empty runtime is a notification
+    nobody ever sees. Frontends open their sessions on their own threads a
+    moment after boot, which is a moment after the adopt path has already
+    finished probing.
+    """
+    while time.time() < deadline:
+        try:
+            if runtime is not None and runtime.sessions:
+                return
+        except Exception:
+            return
+        time.sleep(0.25)
+
+
+def _announce(url: str, runtime=None) -> None:
+    """The one line this whole module exists to produce — or the honest
+    alternative, when the address works and the bridge behind it does not."""
+    _await_audience(runtime, time.time() + AUDIENCE_TIMEOUT)
+
+    bridge = bridge_ok(url)
+    if bridge is True:
+        notifications.notify(
+            title=f"UI is reachable at: {url}",
+            source="web_ui",
+            level="success",
+        )
+        logger.info("UI is reachable at: %s", url)
+        return
+
+    if bridge is False:
+        body = ("The page loads, but Requests through it are refused. Its "
+                "server is not adding the API token — most often one started "
+                "before the token existed. Restart it, or turn ui_autostart "
+                "on and let the kernel start it.")
+    else:
+        body = ("The page loads, but nothing answers behind it. Is the HTTP "
+                "frontend enabled? `/frontends enable http`, then `/restart`.")
     notifications.notify(
-        title=f"UI is reachable at: {url}",
+        title=f"UI is at {url}, but not talking to Second Brain",
+        body=body,
         source="web_ui",
-        level="success",
+        level="warning",
     )
-    logger.info("UI is reachable at: %s", url)
+    logger.warning("Web UI at %s is serving but its bridge is %s.", url,
+                   "refused" if bridge is False else "unanswered")
 
 
-def _watch(url: str, autostart: bool) -> None:
+def _watch(url: str, autostart: bool, runtime=None) -> None:
     """Probe, start if needed, probe again, announce. Runs on its own thread."""
     global _process
 
     if reachable(url):
         # Already served — a survivor of a /restart, or a real deployment.
-        _announce(url)
+        # Adopted rather than replaced: killing a server this process did not
+        # start is a worse failure than using one that turns out to be stale,
+        # and ``_announce`` is where staleness gets named.
+        _announce(url, runtime)
         return
 
     if not autostart:
@@ -194,7 +296,7 @@ def _watch(url: str, autostart: bool) -> None:
                            "See %s.", _process.returncode, url, LOG_FILE)
             return
         if reachable(url):
-            _announce(url)
+            _announce(url, runtime)
             return
         time.sleep(PROBE_INTERVAL)
 
@@ -202,18 +304,21 @@ def _watch(url: str, autostart: bool) -> None:
                    url, READY_TIMEOUT, LOG_FILE)
 
 
-def serve(config: dict) -> None:
+def serve(config: dict, runtime=None) -> None:
     """Bring the web UI up, in the background. Safe to call when it cannot.
 
     Returns immediately: every part of this either waits on a socket or on
     npm, and boot must not.
+
+    ``runtime`` is read for one thing only — whether any frontend has a session
+    open yet, which is whether there is anybody to deliver a notification to.
     """
     url = str(config.get("ui_url") or "").strip()
     if not url:
         return
     threading.Thread(
         target=_watch,
-        args=(url, bool(config.get("ui_autostart", True))),
+        args=(url, bool(config.get("ui_autostart", True)), runtime),
         daemon=True,
         name="web-ui",
     ).start()

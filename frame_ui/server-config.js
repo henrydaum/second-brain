@@ -39,35 +39,67 @@ export function dataDir() {
   return path.join(xdg, "Second Brain");
 }
 
+export const configPath = () => path.join(dataDir(), "config.json");
+
 /**
- * `{url, token, source}` — where to proxy, and what to prove it with.
+ * The token, re-read when `config.json` changes.
  *
- * Read once at startup rather than watched: both values change about as often
- * as a machine moves house, and a proxy that re-targets underneath a running
- * page would be harder to reason about than restarting the dev server.
+ * **Deliberately not read once at startup**, which is what it used to do and
+ * which fails in a way nobody can diagnose from the browser. The token is
+ * minted by the kernel at boot and can move between files during an upgrade,
+ * so a dev server started at the wrong moment holds `""` for its whole life
+ * and proxies without a credential — every Request comes back `unauthorized`
+ * while the page itself loads perfectly. The value is a *fact about a file*,
+ * so it is read from the file.
+ *
+ * `mtimeMs` rather than a timer: stat is cheap, a proxied request is not
+ * frequent enough for it to matter, and an interval would still be wrong for
+ * however long it happened to be.
+ */
+let cached = { mtime: -1, config: {} };
+
+export function config() {
+  try {
+    const stamp = fs.statSync(configPath()).mtimeMs;
+    if (stamp !== cached.mtime) {
+      cached = {
+        mtime: stamp,
+        config: JSON.parse(fs.readFileSync(configPath(), "utf-8")),
+      };
+    }
+  } catch {
+    /* Missing or unparseable. Reported by the caller, with the path; not
+       fatal, because a dev server that starts and says 401 tells you more
+       than one that refuses to start. */
+  }
+  return cached.config;
+}
+
+/** The bearer credential, as of now. */
+export function token() {
+  return (process.env.VITE_SB_TOKEN || config().secret_http_token || "").trim();
+}
+
+/**
+ * `{url, configPath, found}` — where to proxy.
+ *
+ * The URL *is* read once, unlike the token: it is the proxy's `target`, which
+ * Vite resolves when the server is configured and cannot be changed under a
+ * running one. Changing `http_client_url` therefore needs a restart, and says
+ * so in `/config`.
  *
  * Environment wins when it is set, because an explicit override that is
  * silently ignored is worse than no override at all. `.env.local` ships with
  * neither, so in the ordinary case `config.json` is the only answer.
  */
 export function backend() {
-  const configPath = path.join(dataDir(), "config.json");
-  let config = {};
-  let found = false;
-  try {
-    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    found = true;
-  } catch {
-    /* Reported by the caller, with the path. Not fatal: a dev server that
-       refuses to start tells you less than one that starts and says 401. */
-  }
+  const settings = config();
   return {
     url:
       process.env.VITE_SB_URL ||
-      config.http_client_url ||
+      settings.http_client_url ||
       "http://127.0.0.1:8787",
-    token: (process.env.VITE_SB_TOKEN || config.secret_http_token || "").trim(),
-    configPath,
-    found,
+    configPath: configPath(),
+    found: Object.keys(settings).length > 0,
   };
 }

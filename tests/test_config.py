@@ -19,12 +19,40 @@ def _cfg(tmp_path):
 # ── Kernel-minimal defaults ──────────────────────────────────────────
 
 def test_kernel_defaults_are_minimal():
-    """The kernel ships REPL plus the LLM router and Timekeeper, with no jobs."""
+    """The kernel ships REPL plus the LLM router and Timekeeper, with no jobs.
+
+    ``enabled_frontends`` carries ``http`` as well, and it is not a widening of
+    "minimal": the HTTP frontend ships in the kernel tree and is the whole of
+    what a web or native app can reach, so leaving it off by default meant a
+    fresh install whose UI could not connect until somebody found the command
+    for it. It binds loopback and refuses every request without the token, so
+    what it costs an install that never opens a browser is one idle socket.
+
+    Note the default reaches existing installs not at all — ``load`` merges
+    ``DEFAULTS`` for *missing* keys, and anyone who has run the app has this
+    one. That is the intended half: a default is what a new install starts
+    from, never an opinion imposed on a configuration somebody already has.
+    """
     assert config_manager.DEFAULTS["autoload_services"] == ["timekeeper"]
-    assert config_manager.DEFAULTS["enabled_frontends"] == ["repl"]
+    assert config_manager.DEFAULTS["enabled_frontends"] == ["repl", "http"]
     assert DEFAULT_SCHEDULED_JOBS == {}
     assert config_manager.DEFAULTS["scheduled_jobs"] == {}
     assert config_manager.DEFAULTS["keep_attachments_available_across_turns"] is False
+
+
+def test_an_existing_config_does_not_gain_a_new_default(tmp_path):
+    """The other half of the claim above, stated where it can fail.
+
+    Someone who enabled only the REPL meant only the REPL. ``load`` filling a
+    key that is *present* would be the app overriding a choice, and the
+    frontend it would switch on opens a port — which is exactly the kind of
+    default nobody wants applied behind them.
+    """
+    path = _cfg(tmp_path)
+    io_config = {"enabled_frontends": ["repl"], "sync_directories": []}
+    json.dump(io_config, open(path, "w", encoding="utf-8"))
+
+    assert config_manager.load(path)["enabled_frontends"] == ["repl"]
 
 
 def test_defaults_cover_every_settings_entry():
@@ -38,7 +66,10 @@ def test_load_creates_default_config_when_missing(tmp_path):
     path = _cfg(tmp_path)
     config = config_manager.load(path)
 
-    assert config["enabled_frontends"] == ["repl"]
+    # Against DEFAULTS rather than a literal: what this test is about is
+    # that the default is *filled in*, not which frontends it names, and
+    # three copies of the list is three tests to edit for one decision.
+    assert config["enabled_frontends"] == config_manager.DEFAULTS["enabled_frontends"]
     # The file is written so subsequent loads are stable.
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert on_disk["autoload_services"] == ["timekeeper"]
@@ -51,7 +82,8 @@ def test_load_merges_missing_keys_and_persists(tmp_path):
     config = config_manager.load(path)
 
     assert config["max_workers"] == 8  # user value preserved
-    assert config["enabled_frontends"] == ["repl"]  # default filled in
+    assert (config["enabled_frontends"]
+            == config_manager.DEFAULTS["enabled_frontends"])  # default filled in
     # Schema drift is healed on disk, not just in memory.
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert "enabled_frontends" in on_disk
@@ -121,7 +153,8 @@ def test_save_strips_root_and_persists_known_keys(tmp_path):
     assert on_disk["max_workers"] == 12
     assert "_root" not in on_disk
     # Defaults are merged in so the file is always complete.
-    assert on_disk["enabled_frontends"] == ["repl"]
+    assert (on_disk["enabled_frontends"]
+            == config_manager.DEFAULTS["enabled_frontends"])
 
 
 def test_save_preserves_existing_unrelated_values(tmp_path):

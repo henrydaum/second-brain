@@ -87,8 +87,11 @@ out of that, and each of them is a bug avoided rather than a nicety:
   slash or `localhost` where the browser said `127.0.0.1` fails a preflight
   that then explains almost nothing.
 
-A 401 is therefore never the page's fault: it is an empty or stale
-`secret_http_token`, or a dev server started before the kernel minted one.
+A 401 is therefore never the page's fault: it is the dev server not adding
+the header. It reads the token from `config.json` per request rather than
+once at startup, so one minted after the server started is picked up with
+nothing to restart — but a server running code from before that change still
+needs restarting once.
 
 ## Do we still need the token at all?
 

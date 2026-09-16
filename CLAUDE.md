@@ -135,10 +135,21 @@ and `ui_autostart` says so**, then **announce on the first successful probe**.
 Announcing at spawn time would get exactly the case worth getting right wrong:
 a dev server that starts and immediately exits on a port conflict.
 
-Four details are load-bearing. The notification fires **after the frontends
-are up**, because delivery is to live sessions only — raised earlier it is
-persisted to the panel and shown to nobody, which is indistinguishable from
-not raising one. **Any HTTP answer counts as reachable**, 404 included, since
+Four details are load-bearing. The notification **waits for a frontend to
+have a session open**, because delivery is to live sessions only and the rest
+are dropped — raised earlier it is persisted to the panel and shown to nobody,
+which is indistinguishable from not raising one. Firing it after the frontends
+*start* is not enough and shipped broken: they open their sessions on their own
+threads a moment later, and the adopt path finishes probing in milliseconds, so
+being too early is the normal case rather than a race. It also announces only
+once a Request through the UI's own origin is **answered**, not merely once the
+port responds: a dev server left over from before an update serves its page
+perfectly while proxying with no credential, and announcing that address as
+working is how a user gets told to open something that cannot talk to the
+kernel. ``bridge_ok`` answers three ways, since 401 (the server in front is not
+adding the token) and 502 (nothing upstream — the HTTP frontend is off) are
+different advice, and reading any error status as a refusal sends somebody to
+fix a token that was never the problem. **Any HTTP answer counts as reachable**, 404 included, since
 the question is whether a server is there rather than whether it likes the
 request, and Vite answers before its own routes are ready. The port is
 **passed in** as `VITE_UI_PORT` from `ui_url` rather than left to the dev

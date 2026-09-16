@@ -76,9 +76,10 @@ SETTINGS_DATA = [
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. The kernel ships only the REPL; "
-     "the Telegram frontend is installable from the store. Requires app restart.",
-     ["repl"],
+     "Frontend modules to start on launch. The kernel ships the REPL and the "
+     "HTTP frontend the web UI talks to; Telegram is installable from the "
+     "store. Requires app restart.",
+     ["repl", "http"],
      {"type": "json_list"}),
 
     # --- The HTTP frontend and its client ---

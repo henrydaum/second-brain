@@ -1,11 +1,11 @@
 import { defineConfig, loadEnv } from "vite";
-import { backend } from "./server-config.js";
+import { backend, token } from "./server-config.js";
 
 export default defineConfig(({ mode }) => {
   // `loadEnv` rather than `import.meta.env`: this file runs in Node, before any
   // of that exists.
   const env = loadEnv(mode, import.meta.dirname, "VITE_");
-  const { url: target, token, configPath, found } = backend();
+  const { url: target, configPath, found } = backend();
 
   if (!found) {
     console.warn(
@@ -13,13 +13,10 @@ export default defineConfig(({ mode }) => {
         `  Falling back to ${target} with no token, which answers 401 to\n` +
         `  everything. Start Second Brain once to create it.\n`,
     );
-  } else if (!token) {
-    console.warn(
-      `\n  secret_http_token is empty in ${configPath}.\n` +
-        `  Second Brain mints one at boot — start it once, or set the value\n` +
-        `  with /config.\n`,
-    );
   } else {
+    // Not warning about an empty token here: it is re-read per request, so
+    // one that is missing right now is one that starts working the moment
+    // the kernel mints it, with nothing to restart.
     console.log(`\n  Second Brain: ${target}\n`);
   }
 
@@ -77,10 +74,19 @@ export default defineConfig(({ mode }) => {
     },
   };
 
-  /** Add the bearer header on the hop the browser cannot see. */
+  /**
+   * Add the bearer header on the hop the browser cannot see.
+   *
+   * `token()` per request, not a value captured when the server started: the
+   * kernel mints the token at boot, so a dev server that happened to start
+   * first would otherwise proxy without a credential for the rest of its
+   * life — and the symptom is a page that loads perfectly and answers
+   * `unauthorized` to everything, which looks like a bug in the app.
+   */
   function authorize(proxy) {
     proxy.on("proxyReq", (request) => {
-      if (token) request.setHeader("Authorization", `Bearer ${token}`);
+      const bearer = token();
+      if (bearer) request.setHeader("Authorization", `Bearer ${bearer}`);
     });
   }
 });
