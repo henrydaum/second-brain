@@ -2,6 +2,7 @@
 
 import logging
 import json
+import secrets
 import os
 import threading
 from pathlib import Path
@@ -374,6 +375,35 @@ def rehome_kernel_keys(config: dict) -> list:
     return sorted(moving)
 
 
+def ensure_minted_secrets(config: dict) -> list:
+    """Generate the credentials that exist only so a local client can connect.
+
+    ``secret_http_token`` is the whole of what stands between whoever can
+    reach the HTTP port and every Request the SDK has, so it is not optional —
+    but it is also not a *decision*. Nobody chooses a bearer token; they
+    either paste a random string in or they put the web UI off for another
+    week. Minting one removes the chore without removing the credential, which
+    is the only honest way to answer "do we still need this": bundling the
+    frontend changed where its code lives, not who can open a socket, and the
+    answer matters most exactly when the port stops being loopback-only.
+
+    Empty means unset, so clearing the setting is how a person asks for a new
+    one. Anything already there is left alone — including a token the old
+    ``/setup`` printed, which is what keeps a working UI working.
+
+    Returns the keys it minted, for the caller to log.
+    """
+    minted = []
+    if not str(config.get("secret_http_token") or "").strip():
+        # 32 bytes of urlsafe base64: long enough that nobody guesses it,
+        # short enough to paste if anyone ever has to.
+        config["secret_http_token"] = secrets.token_urlsafe(32)
+        minted.append("secret_http_token")
+    if minted:
+        save(config)
+    return minted
+
+
 def load_plugin_config_early(config: dict):
     """Phase 1 (before discovery): load existing plugin_config.json values
     into the runtime config so that build_services() etc. can see them.
@@ -400,6 +430,14 @@ def reconcile_plugin_config(config: dict, plugin_settings: list):
         # User-scoped settings live in each user's config blob, never in the
         # global plugin_config.json — their defaults apply lazily on read.
         if isinstance(type_info, dict) and type_info.get("scope") == "user":
+            continue
+        # A setting the kernel also declares is a kernel setting, whoever else
+        # declares it — the same rule ``save`` and ``_config_write`` apply, and
+        # this was the third path that did not. Seeding it here writes the key
+        # into plugin_config.json for ``rehome_kernel_keys`` to move back out
+        # on the next boot, forever, and the copy it seeds is stale the moment
+        # somebody edits the real one.
+        if is_kernel_setting(var_name):
             continue
         if var_name in plugin_values:
             continue

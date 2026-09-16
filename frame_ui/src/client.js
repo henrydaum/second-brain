@@ -12,14 +12,23 @@
  */
 
 /**
- * What proves we are allowed to talk to the server.
+ * **There is no token in this file, and that is deliberate.**
  *
- * The page always talks to its own origin and the dev server proxies onward
- * (see `vite.config.js`), so this token is added on a hop the browser makes to
- * `localhost`. A production build behind a gateway that adds the token upstream
- * would leave this empty and hold no credential at all.
+ * Second Brain's HTTP frontend wants `Authorization: Bearer <secret_http_token>`
+ * on everything. The page never sends one: it talks only to its own origin, and
+ * the dev server adds the header on the hop the browser cannot see
+ * (`vite.config.js`, reading `config.json` through `server-config.js`). So the
+ * credential is never in the bundle, never in a query string, and never in
+ * whatever the browser caches or a devtools tab shows a guest.
+ *
+ * It also means an `EventSource` needs no special case. It cannot set headers,
+ * which is why the usual arrangement puts the token in the query string — and
+ * a token in a URL is one that ends up in logs.
+ *
+ * A 401 here is therefore never this file's problem: it is an empty or stale
+ * `secret_http_token` in `config.json`, or a dev server started before it was
+ * minted.
  */
-const TOKEN = (import.meta.env.VITE_SB_TOKEN ?? "").trim();
 
 /**
  * Which session this browser is.
@@ -65,10 +74,7 @@ export class RequestFailed extends Error {
 export async function call(type, args = {}) {
   const response = await fetch(serverUrl(`/sdk/${type}`), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(args),
   });
   let body = null;
@@ -92,16 +98,12 @@ export async function call(type, args = {}) {
  * is what switches that authority back off.
  *
  * `EventSource`, deliberately: it reconnects on its own and sends back the last
- * `id:` it saw as `Last-Event-ID`, which the server replays from. It cannot set
- * headers, so the token goes in the query string here.
+ * `id:` it saw as `Last-Event-ID`, which the server replays from.
  *
  * Returns a function that closes the stream.
  */
 export function openStream(onFrame, onState) {
-  const url = serverUrl("/events");
-  if (TOKEN) url.searchParams.set("token", TOKEN);
-
-  const source = new EventSource(url);
+  const source = new EventSource(serverUrl("/events"));
   source.onopen = () => onState?.("open");
   source.onerror = () => onState?.("retrying");
   source.onmessage = (event) => {

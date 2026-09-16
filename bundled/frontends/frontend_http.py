@@ -226,14 +226,29 @@ class HTTP(BaseFrontend):
         "max_message_chars": None,
     }
 
+    #: **Declared here *and* in the kernel's own settings table, on purpose.**
+    #: The kernel declaration is what decides the file (``config.json``, with
+    #: everything else ``/config`` edits); this one is what decides the
+    #: *permission*. ``policy._owns_setting`` resolves ownership through the
+    #: setting registry, which discovery fills from exactly this list, and it
+    #: is the only reason ``secrets.reveal`` below is answered rather than
+    #: raising a dialog into a frontend whose chain is unattended by
+    #: construction. Deleting an entry here does not tidy a duplicate; it
+    #: silently breaks start-up. Same arrangement as the timekeeper's
+    #: ``scheduled_jobs``. Keep the text in step with ``config/config_data.py``.
     config_settings = [
         ("HTTP API token", "secret_http_token",
-         "Bearer token every request must carry. Generate a long random "
-         "string; the app sends it as 'Authorization: Bearer <token>'.", "",
+         "Bearer token every request must carry, sent as "
+         "'Authorization: Bearer <token>'. Minted at first boot if empty, so "
+         "nobody has to invent one.", "",
          {"type": "string"}),
         ("HTTP port", "http_port",
          "Port to serve on, loopback only. Expose it with a tunnel.", 8787,
          {"type": "integer"}),
+        ("Web UI backend URL", "http_client_url",
+         "Where the web app in frame_ui/ looks for Second Brain. Read by its "
+         "dev server, not by this frontend.", "http://127.0.0.1:8787",
+         {"type": "string"}),
         ("HTTP allowed origins", "http_allowed_origins",
          "Comma-separated origins allowed to call the API from a browser, or "
          "* for any. Needed whenever the app is served from anywhere but this "
@@ -289,11 +304,15 @@ class HTTP(BaseFrontend):
             # "refused to start" in the log; a frontend you can curl and be
             # told 401 by is one whose problem you can actually find.
             sdk.log(f"could not read the HTTP token ({exc}); every request "
-                    f"will be refused. Is the frontend installed?", "warning")
+                    f"will be refused.", "warning")
             self._token = ""
         if not self._token:
-            sdk.log("secret_http_token is not set; the HTTP frontend will "
-                    "refuse every request. Set it in /config.", "warning")
+            # The kernel mints one at boot, so an empty token here means that
+            # never ran — an old config.json, or a test standing this frontend
+            # up on its own. Saying which is more use than saying "set it".
+            sdk.log("secret_http_token is empty; the HTTP frontend will refuse "
+                    "every request. It is normally minted at boot; set it in "
+                    "/config if it was not.", "warning")
         self._origins = str(sdk.config.read("http_allowed_origins") or "").strip()
         self._static = str(sdk.config.read("http_static_dir") or "").strip()
         return True

@@ -14,7 +14,6 @@ Four phases, all in one pass:
      prompting for a `dist` path that does not exist yet would be a dead end.
 """
 
-import secrets
 
 from guest.bases import BaseCommand
 from guest.forms import FormStep
@@ -45,10 +44,6 @@ UI_DIR = "frame_ui"
 #: Matches ``frontend_http``'s own declared default, so the URL this wizard
 #: prints is the one the frontend will actually serve on.
 DEFAULT_HTTP_PORT = 8787
-#: 32 bytes of urlsafe base64. Long enough that nobody is guessing it, short
-#: enough to paste into a .env file without wrapping.
-TOKEN_BYTES = 32
-
 #: What each install choice actually installs, in order. A *list* rather than
 #: one name because the second choice is the first plus one — the knowledge
 #: base is what you add to a working instance, not an alternative to it, so
@@ -126,10 +121,11 @@ WEB_UI_PROMPT = (
     "Last thing: the web UI — a ChatGPT-style app you open in a browser or "
     "install to your phone's home screen. It is a much nicer place to live than "
     "the REPL.\n\n"
-    "Saying yes now turns the HTTP frontend on and generates your API token. "
-    "The app itself ships in this repo, so all that is left is an npm install "
-    "in a terminal — about two minutes, and the steps get printed at the end "
-    "along with the token."
+    "Saying yes now turns the HTTP frontend on. The app itself ships in this "
+    "repo and reads its settings straight out of your config, so all that is "
+    "left is an npm install in a terminal — two commands, printed at the end. "
+    "There is no token to copy: the kernel mints one and the UI's dev server "
+    "reads it."
 )
 
 PACKAGES_SECTION = (
@@ -416,42 +412,38 @@ class SetupCommand(BaseCommand):
         )
 
     def _save_web_ui(self, sdk):
-        """Enable the HTTP frontend, mint its token, and print what is left.
+        """Turn the HTTP frontend on and print the two commands left.
+
+        **Nothing here touches the token.** It is a kernel setting minted at
+        boot, and the UI's dev server reads it out of config.json itself — so
+        there is no value to carry across, which is the whole of why this phase
+        used to print a secret and ask for it to be pasted into a file.
 
         The remaining work is an npm install in another terminal, so this
-        returns instructions rather than doing it. The token is printed because
-        it is the one value the user has to carry across — into the UI's
-        ``.env.local`` — and telling them to go dig it out of /config would be a
-        worse answer than showing it on their own machine."""
+        returns instructions rather than doing it."""
         enabled = list(sdk.config.read("enabled_frontends") or [])
         if HTTP_FRONTEND not in enabled:
             sdk.config.write("enabled_frontends", sorted(enabled + [HTTP_FRONTEND]))
-        token = secrets.token_urlsafe(TOKEN_BYTES)
-        sdk.config.write("secret_http_token", token, scope="plugin")
-        # cmd.exe has no ``cp``, and this is the one line the user has to
-        # retype rather than read, so print the one that will work.
-        windows = str(sdk.paths.get("platform") or "").startswith("win")
-        copy_env = ("copy .env.example .env.local" if windows
-                    else "cp .env.example .env.local")
         # The app lives beside the kernel, so this is a real folder on the
         # user's disk rather than a repository to go and find. Backslash on
         # Windows, because the line is one the user retypes into a shell.
+        windows = str(sdk.paths.get("platform") or "").startswith("win")
         project = str(sdk.paths.get("project"))
         folder = project + ("\\" if windows else "/") + UI_DIR
         return (
-            "Web UI: HTTP frontend enabled, API token generated.\n"
-            f"  Your token: {token}\n"
+            "Web UI: HTTP frontend enabled.\n"
             "\n"
             "  Two minutes left. In a terminal (needs Node 20.19+ or 22.12+):\n"
             f"    cd {folder}\n"
             "    npm install\n"
-            f"    {copy_env}\n"
-            "\n"
-            "  Paste the token above into VITE_SB_TOKEN in .env.local, then:\n"
             "    npm run dev\n"
             "\n"
             "  Opens at http://localhost:5174. Restart Second Brain first so the "
-            f"HTTP frontend comes online on port {DEFAULT_HTTP_PORT}."
+            f"HTTP frontend comes online on port {DEFAULT_HTTP_PORT}.\n"
+            "\n"
+            "  To reach it from another machine later, set `http_client_url` in "
+            "/config to this one\'s address (Tailscale, say) and restart the dev "
+            "server. Nothing else moves."
         )
 
     def _skip_section(self):

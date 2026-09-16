@@ -166,59 +166,42 @@ Works on Windows, macOS and Linux. Takes about two minutes.
 
 **Before you start:** Second Brain has to be *running* while you use the UI — the UI is just a face for it. Leave it going in its terminal and open a **second terminal** for everything below. You'll also need [Node 20.19+ or 22.12+](https://nodejs.org/).
 
-### 1. Get your API token
+### 1. Turn the HTTP frontend on
 
-The UI proves it's allowed to talk to Second Brain with a token. You need one before anything else.
-
-**If you said yes to the web UI during `/setup`,** you already have it — the wizard printed it. Copy it and go to step 2.
-
-**Otherwise,** in the Second Brain REPL:
+If you said yes to the web UI during `/setup`, this is already done — skip to step 2. Otherwise, in the Second Brain REPL:
 
 ```
 /frontends enable http
-```
-
-Then run `/config`, find **`secret_http_token`**, and set it to any long random string — mash the keyboard, it just has to be hard to guess. Copy what you set. Then restart Second Brain so the frontend comes online:
-
-```
 /restart
 ```
 
-### 2. Set up the UI
+**There is no token to set.** Second Brain mints `secret_http_token` at boot and the UI reads it out of `config.json` itself, so nothing gets copied anywhere.
+
+### 2. Start the UI
 
 In your second terminal:
 
 ```bash
 cd frame_ui
 npm install
-```
-
-(`frame_ui` is in your Second Brain folder — the same one you cloned to run the server.)
-
-Now make your own config file from the example:
-
-| | |
-|---|---|
-| **Windows** | `copy .env.example .env.local` |
-| **macOS / Linux** | `cp .env.example .env.local` |
-
-Open **`.env.local`** in any editor. Find the line that reads `VITE_SB_TOKEN=` and paste your token right after the `=`, with no quotes and no spaces:
-
-```
-VITE_SB_TOKEN=the-token-you-copied
-```
-
-Leave the rest as they are — the defaults are correct. **`VITE_SB_URL`** is the one to change later: it is where the dev server looks for Second Brain, so pointing the UI at a Tailscale address is one line (`VITE_SB_URL=http://my-box.tail1234.ts.net:8787`) and nothing else. The browser never reads it — the page only ever talks to its own origin — which is what keeps CORS out of this entirely. Save and close.
-
-### 3. Start it
-
-```bash
 npm run dev
 ```
 
+(`frame_ui` is in your Second Brain folder — the same one you cloned to run the server. There is no `.env` file to make; it prints the backend it found.)
+
 Open **http://localhost:5174** in your browser. You should see the thread name, `ok` beside **Request** and `open` beside **Stream** — that is the whole bridge working.
 
-If you get a blank screen or a `401`, the token in `.env.local` doesn't match the one in `/config` — that's almost always the problem. Fix it and restart `npm run dev`.
+A `401` means the dev server started before the token existed. Restart `npm run dev`; it reads `config.json` once, at startup.
+
+### Reaching it from another machine
+
+One setting, in the REPL:
+
+```
+/config   →  http_client_url = http://my-box.tail1234.ts.net:8787
+```
+
+Restart `npm run dev` and that's the whole change. The browser never sees that value — it only ever talks to the dev server, which proxies onward and adds the credential itself — so nothing about CORS or tokens moves with it.
 
 ### Put it on your phone
 
@@ -228,7 +211,7 @@ Start the dev server so it accepts connections from other devices on your networ
 npm run dev -- --host
 ```
 
-That prints a second URL (a `192.168.x.x` address). To reach it from anywhere rather than just your home Wi-Fi, install [Tailscale](https://tailscale.com/) on both your computer and your phone, and use your machine's Tailscale address instead.
+That prints a second URL (a `192.168.x.x` address). To reach it from anywhere rather than just your home Wi-Fi, install [Tailscale](https://tailscale.com/) on both your computer and your phone, and use your machine's Tailscale address instead. Note this exposes the *dev server*, which holds the credential and adds it for whoever connects — fine on a tailnet, not something to put on a café Wi-Fi.
 
 Open that URL in your phone's browser, then add it to your home screen — on iPhone, press the three dots, then **Share**, and scroll down to **Add to Home Screen**. Click it, and you're done. It's like a real app from there.
 

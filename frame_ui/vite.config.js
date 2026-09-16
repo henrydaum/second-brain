@@ -1,10 +1,27 @@
 import { defineConfig, loadEnv } from "vite";
+import { backend } from "./server-config.js";
 
 export default defineConfig(({ mode }) => {
   // `loadEnv` rather than `import.meta.env`: this file runs in Node, before any
   // of that exists.
   const env = loadEnv(mode, import.meta.dirname, "VITE_");
-  const target = env.VITE_SB_URL || "http://127.0.0.1:8787";
+  const { url: target, token, configPath, found } = backend();
+
+  if (!found) {
+    console.warn(
+      `\n  No Second Brain config at ${configPath}.\n` +
+        `  Falling back to ${target} with no token, which answers 401 to\n` +
+        `  everything. Start Second Brain once to create it.\n`,
+    );
+  } else if (!token) {
+    console.warn(
+      `\n  secret_http_token is empty in ${configPath}.\n` +
+        `  Second Brain mints one at boot — start it once, or set the value\n` +
+        `  with /config.\n`,
+    );
+  } else {
+    console.log(`\n  Second Brain: ${target}\n`);
+  }
 
   return {
     server: {
@@ -14,33 +31,35 @@ export default defineConfig(({ mode }) => {
       /**
        * Second Brain's endpoints, served from this app's own origin.
        *
-       * **This is what keeps CORS out of the picture entirely**, and it is also
-       * what makes the backend URL a one-line change: the browser only ever
-       * talks to the dev server, and the dev server talks to whatever
-       * `VITE_SB_URL` names — loopback now, a Tailscale host later, with
-       * nothing in the page to update.
+       * **This is what keeps both CORS and the credential out of the page.**
+       * The browser only ever talks to the dev server; the dev server talks to
+       * `http_client_url` and adds the bearer header itself. So the token is
+       * never in the bundle, and moving the backend to a Tailscale host is one
+       * line in `config.json` with nothing in the page to update.
        *
-       * The alternative is `http_allowed_origins`, and it is a sharper edge
-       * than it looks: the server echoes that setting into
-       * `Access-Control-Allow-Origin` verbatim, so a trailing slash or
-       * `localhost` where the browser says `127.0.0.1` fails the match — and a
-       * failed preflight explains almost nothing.
+       * The alternative — pointing a browser straight at the server — means
+       * `http_allowed_origins`, which is a sharper edge than it looks: the
+       * server echoes that setting into `Access-Control-Allow-Origin`
+       * verbatim, so a trailing slash or `localhost` where the browser says
+       * `127.0.0.1` fails the match, and a failed preflight explains almost
+       * nothing.
        */
       proxy: {
-        "/sdk": { target, changeOrigin: true },
+        "/sdk": { target, changeOrigin: true, configure: authorize },
         // Host files, as bytes with a `Content-Type`. `Range` and `206` pass
         // through untouched, which is what lets a `<video>` seek.
-        "/files": { target, changeOrigin: true },
+        "/files": { target, changeOrigin: true, configure: authorize },
         "/events": {
           target,
           changeOrigin: true,
-          // Server-sent events must not be buffered, or the stream only
-          // arrives once it ends — which for a live render stream is never.
-          // Two things are needed: no compression on the way in, and the
-          // response headers pushed out the moment they arrive rather than
-          // held until the first body chunk. Without the flush, `EventSource`
-          // never even opens.
           configure: (proxy) => {
+            authorize(proxy);
+            // Server-sent events must not be buffered, or the stream only
+            // arrives once it ends — which for a live render stream is never.
+            // Two things are needed: no compression on the way in, and the
+            // response headers pushed out the moment they arrive rather than
+            // held until the first body chunk. Without the flush,
+            // `EventSource` never even opens.
             proxy.on("proxyReq", (request) => {
               request.setHeader("Accept-Encoding", "identity");
             });
@@ -57,4 +76,11 @@ export default defineConfig(({ mode }) => {
       },
     },
   };
+
+  /** Add the bearer header on the hop the browser cannot see. */
+  function authorize(proxy) {
+    proxy.on("proxyReq", (request) => {
+      if (token) request.setHeader("Authorization", `Bearer ${token}`);
+    });
+  }
 });

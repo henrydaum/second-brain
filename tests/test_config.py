@@ -576,6 +576,94 @@ def test_a_plugin_setting_still_reaches_plugin_config(monkeypatch):
     assert plugin_saves == [{"demo_color_config_test": "green"}]
 
 
+# ── Minting, and the settings the HTTP frontend shares with the kernel ──
+
+def test_the_http_token_is_minted_once_and_never_replaced(tmp_path, monkeypatch):
+    """Nobody should have to invent a bearer token, and nobody should lose one.
+
+    The token is required — it is the whole of what stands between whoever can
+    reach the port and every Request the SDK has — but it is not a decision.
+    So the kernel makes one. The half that matters more is the second call:
+    replacing a token on a later boot would silently break whatever is already
+    holding it.
+    """
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    config = {"secret_http_token": ""}
+
+    assert config_manager.ensure_minted_secrets(config) == ["secret_http_token"]
+    first = config["secret_http_token"]
+    assert len(first) > 30
+
+    assert config_manager.ensure_minted_secrets(config) == []
+    assert config["secret_http_token"] == first
+
+
+def test_an_existing_token_survives_minting(tmp_path, monkeypatch):
+    """A token the old ``/setup`` printed is one a running UI is still using."""
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    config = {"secret_http_token": "pasted-into-an-env-file-last-month"}
+
+    assert config_manager.ensure_minted_secrets(config) == []
+    assert config["secret_http_token"] == "pasted-into-an-env-file-last-month"
+
+
+def test_reconcile_leaves_kernel_settings_out_of_plugin_config(tmp_path, monkeypatch):
+    """The third path that did not apply the one rule about where a key lives.
+
+    ``save`` and ``_config_write`` both ask ``is_kernel_setting`` and both let
+    a kernel declaration win. ``reconcile_plugin_config`` did not, so a setting
+    declared by *both* — ``scheduled_jobs``, and now every HTTP setting — was
+    seeded into plugin_config.json after discovery, moved back out by
+    ``rehome_kernel_keys`` on the next boot, and seeded again. Churn is the
+    mild half: the seeded copy is whatever the default was, so it also
+    overwrote the real value in the runtime config on its way past.
+    """
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        str(tmp_path / "plugin_config.json"))
+    saved = []
+    monkeypatch.setattr(config_manager, "save_plugin_config",
+                        lambda values, path=None: saved.append(values))
+    config = {"secret_http_token": "the-real-one"}
+
+    config_manager.reconcile_plugin_config(config, [
+        ("HTTP API token", "secret_http_token", "", "", {"type": "string"}),
+        ("Demo", "demo_setting_config_test", "", "blue", {"type": "string"}),
+    ])
+
+    assert saved == [{"demo_setting_config_test": "blue"}]
+    assert config["secret_http_token"] == "the-real-one"
+
+
+def test_the_http_frontend_still_declares_the_settings_it_reveals():
+    """A declaration that looks like a duplicate and is a permission.
+
+    Both the kernel and ``frontend_http`` declare ``secret_http_token``. The
+    kernel declaration decides the *file*; the plugin declaration is what
+    ``policy._owns_setting`` matches, and it is the only reason the frontend's
+    ``secrets.reveal`` at start-up is answered instead of raising a dialog into
+    a chain that is unattended by construction — which fails as a frontend that
+    starts happily and answers 401 to everything.
+
+    So this is pinned as a *negative*: tidying the apparent duplication away
+    breaks start-up and nothing says so.
+    """
+    from pathlib import Path
+
+    from sandbox.validator import validate
+
+    source = (Path(__file__).resolve().parents[1]
+              / "bundled/frontends/frontend_http.py").read_text(encoding="utf-8")
+    declared = validate(source, filename="frontend_http.py").declarations
+    settings = {entry[1] for entry in
+                (declared.get("classes") or [{}])[0].get("config_settings", [])}
+
+    assert "secret_http_token" in settings, (
+        "frontend_http must keep declaring the settings it reads; the kernel "
+        "declaring them too decides the file, not the permission")
+    assert config_manager.is_kernel_setting("secret_http_token")
+    assert config_manager.is_kernel_setting("http_client_url")
+
+
 def test_no_test_can_write_the_developers_real_config():
     """The guard in ``conftest`` that makes this suite safe to run.
 

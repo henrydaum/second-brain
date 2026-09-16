@@ -75,10 +75,53 @@ package manager names it; the only code that knows it exists is
 separate one because the UI is the other half of a protocol this repo defines
 — `docs/HTTP_PROTOCOL.md` and `bundled/frontends/frontend_http.py` — and the
 two drifting apart across repos is exactly what a bundled frontend was meant to
-stop. Where Second Brain *is* stays a client-side fact (`VITE_SB_URL`, read by
-the dev server's proxy, never by the browser); there is deliberately no kernel
-setting for it, because `http_port` is what the server chooses and which
-address a client dials is not the server's to guess.
+stop. **Its settings are kernel settings, and the reason is the rule the LLM
+migration wrote down**: a capability absorbed into the kernel takes its
+settings with it, or their home is an accident of which write happened last.
+So `secret_http_token`, `http_port`, `http_allowed_origins`, `http_static_dir`
+and the new `http_client_url` are in `config/config_data.py` and live in
+`config.json`.
+
+`http_client_url` is the one that did not exist before, and it is a *kernel*
+setting although nothing in the kernel reads it — the dev server does, off
+disk, at startup. That is the honest shape of the thing: where the server
+listens is `http_port` and where a client dials is a separate fact, and the
+alternative was a `.env` file holding a second copy of an address and a copy of
+a credential. Two copies of one value is how they come to disagree, and the
+disagreement presents as a 401 that blames the wrong half.
+
+**`frontend_http` still declares all of them in its own `config_settings`, and
+that is not duplication to tidy away.** `is_kernel_setting` decides the *file*;
+the plugin declaration is what `policy._owns_setting` matches, and it is the
+only reason `secrets.reveal` at start-up is answered rather than raising a
+dialog into a chain that is unattended by construction — which fails as a
+frontend that starts happily and answers 401 to everything. Same arrangement as
+the timekeeper's `scheduled_jobs`, and pinned as a negative in
+`test_the_http_frontend_still_declares_the_settings_it_reveals`.
+
+Declaring on both sides also found the third path that never applied that rule:
+`save` and `_config_write` both let a kernel declaration win, and
+`reconcile_plugin_config` did not — so a doubly-declared key was seeded into
+plugin_config.json after discovery, moved back out by `rehome_kernel_keys` at
+the next boot, and seeded again, with the seeded copy (the *default*)
+overwriting the real value in the runtime config on its way past.
+`scheduled_jobs` had been doing this all along.
+
+**The token is minted, not chosen** (`config_manager.ensure_minted_secrets`,
+called from the composition root right after the plugin config loads). It is
+required — it is the whole of what stands between whoever can reach the port
+and every Request the SDK has, which is the answer to "do we still need this
+now the frontend is bundled": bundling moved the *code*, not the socket, and
+the question matters most exactly when the port stops being loopback-only. But
+it is not a *decision*; nobody chooses a bearer token, they either paste a
+random string in or put the web UI off for another week. Empty means unset, so
+clearing it is how a person asks for a new one, and an existing token is never
+replaced — a token the old `/setup` printed is one a running UI still holds.
+
+**The credential never reaches the browser.** The page talks only to its own
+origin and the dev server adds the header on the hop the browser cannot see, so
+nothing in the bundle is secret, `EventSource` needs no query-string token (a
+token in a URL is one that ends up in logs), and CORS never enters into it.
 
 **There is no top-level `helpers/`.** A helper exists to help a plugin, so it
 lives inside the family it helps (`<tree>/tools/helpers/x.py`) — the one nested

@@ -122,6 +122,15 @@ def main():
 	# --- 1c. Load existing plugin config into runtime config ---
 	config_manager.load_plugin_config_early(config)
 
+	# --- 1d. Mint the credentials nobody should have to invent ---
+	# The HTTP token exists so a local client can prove it is allowed to talk
+	# to this process. It is required and it is not a decision, so the kernel
+	# makes one rather than leaving a web UI that cannot connect until somebody
+	# reads a doc. Idempotent: an existing token is never replaced.
+	for _key in config_manager.ensure_minted_secrets(config):
+		logger.info("Generated %s. The web UI in frame_ui/ reads it from "
+					"config.json; nothing has to be pasted anywhere.", _key)
+
 	# --- 2. Initialize database ---
 	t0 = time.time()
 	database = Database(config["db_path"])

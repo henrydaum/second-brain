@@ -81,6 +81,55 @@ SETTINGS_DATA = [
      ["repl"],
      {"type": "json_list"}),
 
+    # --- The HTTP frontend and its client ---
+    # Kernel settings because the frontend is kernel: it ships in
+    # ``bundled/frontends`` and the web app it serves ships in ``frame_ui/``,
+    # so the rule the LLM migration wrote down applies — a capability absorbed
+    # into the kernel takes its settings with it, or their home is an accident
+    # of which write happened last. ``frontend_http`` still declares all four
+    # in its own ``config_settings`` and that is not duplication to tidy away:
+    # a *plugin* declaration is what ``policy._owns_setting`` matches, and it
+    # is the only reason the frontend may reveal its own token without a dialog
+    # nobody would be there to answer. ``is_kernel_setting`` decides the file;
+    # the plugin declaration decides the permission. Same arrangement as the
+    # timekeeper's ``scheduled_jobs``.
+    ("HTTP API token", "secret_http_token",
+     "Bearer token every HTTP request must carry. Minted at first boot if "
+     "empty, so nobody has to invent one; clear it to have a fresh one made. "
+     "This is the only thing between whoever can reach the port and the whole "
+     "SDK, which matters the moment the port stops being loopback-only.",
+     "",
+     {"type": "string"}),
+
+    ("HTTP port", "http_port",
+     "Port the HTTP frontend serves on, loopback only. Expose it with a "
+     "tunnel rather than by binding wider.",
+     8787,
+     {"type": "integer"}),
+
+    ("Web UI backend URL", "http_client_url",
+     "Where the web app in frame_ui/ looks for Second Brain. Read by its dev "
+     "server, which proxies to it — the browser never sees this value and "
+     "never holds the token, so CORS and credentials both stay out of the "
+     "page. Point it at a Tailscale address to reach this machine from "
+     "another one. Takes effect when the dev server restarts.",
+     "http://127.0.0.1:8787",
+     {"type": "string"}),
+
+    ("HTTP allowed origins", "http_allowed_origins",
+     "Comma-separated origins allowed to call the API straight from a "
+     "browser, or * for any. Only needed if something bypasses the dev "
+     "server's proxy: the value is echoed into Access-Control-Allow-Origin "
+     "verbatim, so it must match the Origin header exactly.",
+     "",
+     {"type": "string"}),
+
+    ("HTTP static directory", "http_static_dir",
+     "Serve a built web app from this directory. Leave empty to serve the "
+     "API only.",
+     "",
+     {"type": "string"}),
+
     # --- Processing ---
     ("Max Workers", "max_workers",
      "Maximum parallel worker threads for task processing. Takes effect on save.",

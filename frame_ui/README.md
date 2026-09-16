@@ -14,7 +14,6 @@ Second Brain has to be *running*, with its HTTP frontend on:
 
 ```
 /frontends enable http
-/config            # set secret_http_token to a long random string
 /restart
 ```
 
@@ -22,40 +21,62 @@ Then, in this folder:
 
 ```bash
 npm install
-cp .env.example .env.local   # copy .env.example .env.local on Windows
 npm run dev
 ```
 
-Paste the token into `VITE_SB_TOKEN` in `.env.local`. Opens at
-http://localhost:5174.
+Opens at http://localhost:5174. There is nothing to configure and no token to
+copy — `npm run dev` prints the backend it found.
 
-`/setup`'s web UI phase does the server half of this for you and prints the
-token.
+`/setup`'s web UI phase does the server half for you.
 
-## Pointing it somewhere else
+## Where the settings come from
 
-`VITE_SB_URL` is the only thing that knows where Second Brain is, and the
-browser never reads it — the dev server proxies `/sdk`, `/events` and `/files`
-there, so the page only ever talks to its own origin and CORS never comes into
-it. Change that one line to move between a loopback port and a Tailscale
-hostname:
+Both are **kernel settings in Second Brain's own `config.json`**, edited with
+`/config` like anything else, and read off disk by the dev server at startup
+(`server-config.js`). Nothing is duplicated into a `.env` file, because two
+copies of one value is how they end up disagreeing.
+
+| Setting | What it does |
+|---|---|
+| `http_client_url` | Where this UI looks for Second Brain. Default `http://127.0.0.1:8787`. |
+| `secret_http_token` | The bearer credential. Minted at first boot; you never type it. |
+
+So pointing the UI at another machine is one line and a dev-server restart:
 
 ```
-VITE_SB_URL=http://my-box.tail1234.ts.net:8787
+/config   →  http_client_url = http://my-box.tail1234.ts.net:8787
 ```
 
-There is **no kernel setting for this**. Which address the *server* listens on
-is `http_port` (loopback only, by design); which address the *client* dials is
-a fact about the client, and putting it in the server's config would be the
-server guessing on the client's behalf.
+`.env.example` exists only for the two things that are genuinely about *this
+browser* — which thread it talks to, and which port the dev server listens on —
+plus commented-out overrides for the two above, if you ever want to ignore
+`config.json`.
 
-If you ever do point a browser straight at the server instead of proxying,
-`http_allowed_origins` has to match the browser's `Origin` header exactly — no
-trailing slash, and `localhost` and `127.0.0.1` are different origins.
+## The token is never in the page
 
-## The token
+The browser sends no credential at all. It talks only to its own origin; the
+dev server proxies `/sdk`, `/events` and `/files` onward and adds
+`Authorization: Bearer …` on the hop the browser cannot see. Three things fall
+out of that, and each of them is a bug avoided rather than a nicety:
 
-`VITE_SB_TOKEN` ends up in the dev bundle. That is fine for a dev server on
-your own machine and is not fine for anything you serve to others: a build
-behind a gateway should leave it empty and have the gateway add the bearer
-header on its own hop, so no browser bundle holds the credential.
+* **Nothing in the bundle is secret**, so a build is not a credential leak
+  waiting for somewhere to be served from.
+* **`EventSource` needs no special case.** It cannot set headers, so the usual
+  arrangement puts the token in the query string — and a token in a URL is one
+  that ends up in logs.
+* **CORS never comes into it.** The alternative is `http_allowed_origins`,
+  which is echoed into `Access-Control-Allow-Origin` verbatim, so a trailing
+  slash or `localhost` where the browser said `127.0.0.1` fails a preflight
+  that then explains almost nothing.
+
+A 401 is therefore never the page's fault: it is an empty or stale
+`secret_http_token`, or a dev server started before the kernel minted one.
+
+## Do we still need the token at all?
+
+Yes, and bundling the frontend is not an argument against it — that changed
+where the *code* lives, not who can open a socket. It matters most exactly
+where this is heading: the moment the port is reachable over a tailnet, the
+token is the only thing between whatever else is on that network and
+`POST /sdk/proc.run`. What was worth removing was the *chore*, not the
+credential, which is why the kernel mints one instead of asking.

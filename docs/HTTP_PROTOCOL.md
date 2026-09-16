@@ -4,8 +4,10 @@ Everything a client can do with Second Brain. This is the whole surface — ther
 is no second API, no direct database, no kernel import. Whatever is not here,
 a client cannot do.
 
-Served by the bundled `frontend_http` frontend (`/frontends enable http`).
-Hand this document to whoever is
+Served by the bundled `frontend_http` frontend (`/frontends enable http`). Its
+settings — `secret_http_token`, `http_port`, `http_allowed_origins`,
+`http_static_dir` — are kernel settings in `config.json`, and the token is
+minted at first boot rather than chosen. Hand this document to whoever is
 building the client; `docs/http_reference_client.html` is a working example to
 check the bridge against when the client misbehaves.
 
