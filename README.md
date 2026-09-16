@@ -52,16 +52,6 @@ kernel discovers them. Helper files are payload rather than entrypoints.
 
 ## Authoring and validation
 
-### Optional macOS UI updater
-
-Install with `/packages install command_update_ui`, then run `/update_ui`.
-It locates the UI checkout from the current user's installed
-`com.secondbrain.ui.plist`, pulls its upstream with `git pull --ff-only`, and
-runs `sh deploy/macos/manage.sh update`. Progress appears on the running command;
-failures include the failed stage and command output. Deployment is allowed up
-to ten minutes. Reload the browser after success. Requires the macOS UI
-installation, Git, Node.js, and npm. It does not update or restart the kernel.
-
 New and migrated plugins use the sandbox SDK (`guest.*`). Validate a source
 file with the kernel's validator before publishing:
 
