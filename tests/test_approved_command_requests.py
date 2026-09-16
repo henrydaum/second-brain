@@ -209,10 +209,20 @@ def test_update_declares_exactly_what_its_approval_grants():
     ``/update`` is the one approval-gated command, so its declaration is the
     live example of the grant. If it drifts, a user approving the command is
     consenting to something other than what runs.
+
+    The set is spelled out rather than derived, which is why widening it fails
+    here: the command grew a web-UI step (``npm install``, and a deployment
+    where the platform has one), and that step reads file metadata to decide
+    whether there is anything to do and narrates itself while it runs. Both are
+    honest additions and both had to be stated somewhere a person would see
+    them, since ``chain.approved`` *is* this list.
     """
+    from sandbox.guest.requests import FS_STAT, UI_PROGRESS
+
     report = validate_file(Path("bundled/commands/command_update.py"))
     assert report.ok, report.render()
-    assert set(report.declarations["requests"]) == {PATH_GET, PROC_RUN}
+    assert set(report.declarations["requests"]) == {
+        PATH_GET, PROC_RUN, FS_STAT, UI_PROGRESS}
 
 
 def test_both_dialogs_speak_one_vocabulary():

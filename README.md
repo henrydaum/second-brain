@@ -177,21 +177,30 @@ If you said yes to the web UI during `/setup`, this is already done — skip to 
 
 **There is no token to set.** Second Brain mints `secret_http_token` at boot and the UI reads it out of `config.json` itself, so nothing gets copied anywhere.
 
-### 2. Start the UI
+### 2. Install the UI's dependencies
 
-In your second terminal:
+Once, in your second terminal:
 
 ```bash
 cd frame_ui
 npm install
-npm run dev
 ```
 
-(`frame_ui` is in your Second Brain folder — the same one you cloned to run the server. There is no `.env` file to make; it prints the backend it found.)
+(`frame_ui` is in your Second Brain folder — the same one you cloned to run the server. There is no `.env` file to make.)
 
-Open **http://localhost:5174** in your browser. You should see the thread name, `ok` beside **Request** and `open` beside **Stream** — that is the whole bridge working.
+From then on **Second Brain starts the UI itself** and tells you where it is:
 
-A `401` means the dev server started before the token existed. Restart `npm run dev`; it reads `config.json` once, at startup.
+```
+UI is reachable at: http://localhost:5174
+```
+
+### 3. Open it
+
+Open that address. You should see the thread name, `ok` beside **Request** and `open` beside **Stream** — that is the whole bridge working.
+
+No notification at all means the UI never came up: `web_ui.log` in your data directory is the dev server's own output, and is where that explains itself — most often a missing `npm install`. A `401` on the page means the dev server started before the token existed; `/restart`, since it reads `config.json` once, at startup.
+
+Prefer to run it yourself? Set `ui_autostart` to off in `/config` and use `npm run dev` as before. Anything already serving is left alone either way, so a dev server you keep running is adopted rather than duplicated.
 
 ### Reaching it from another machine
 
@@ -201,13 +210,14 @@ One setting, in the REPL:
 /config   →  http_client_url = http://my-box.tail1234.ts.net:8787
 ```
 
-Restart `npm run dev` and that's the whole change. The browser never sees that value — it only ever talks to the dev server, which proxies onward and adds the credential itself — so nothing about CORS or tokens moves with it.
+`/restart` and that's the whole change. The browser never sees that value — it only ever talks to the dev server, which proxies onward and adds the credential itself — so nothing about CORS or tokens moves with it.
 
 ### Put it on your phone
 
-Start the dev server so it accepts connections from other devices on your network:
+Reaching it from your phone means the dev server has to accept connections from other devices. Turn `ui_autostart` off and run it yourself with the flag that does that:
 
 ```bash
+cd frame_ui
 npm run dev -- --host
 ```
 

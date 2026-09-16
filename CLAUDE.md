@@ -123,6 +123,58 @@ origin and the dev server adds the header on the hop the browser cannot see, so
 nothing in the bundle is secret, `EventSource` needs no query-string token (a
 token in a URL is one that ends up in logs), and CORS never enters into it.
 
+**The kernel starts it, and that is why the whole thing is one notification**
+(`runtime/web_ui.py`, called from the composition root). A UI one forgotten
+`npm run dev` away from working looks exactly like a UI that is broken, and
+`frame_ui/` is the kernel's own, so starting it is the same kind of act as
+starting a frontend. Three steps in an order that matters: **probe first**
+(something may already serve — a survivor of a `/restart`, or the macOS
+deployment, which serves a build through Caddy and has no dev server at all —
+and starting a second one fights over the port), **spawn if nothing answered
+and `ui_autostart` says so**, then **announce on the first successful probe**.
+Announcing at spawn time would get exactly the case worth getting right wrong:
+a dev server that starts and immediately exits on a port conflict.
+
+Four details are load-bearing. The notification fires **after the frontends
+are up**, because delivery is to live sessions only — raised earlier it is
+persisted to the panel and shown to nobody, which is indistinguishable from
+not raising one. **Any HTTP answer counts as reachable**, 404 included, since
+the question is whether a server is there rather than whether it likes the
+request, and Vite answers before its own routes are ready. The port is
+**passed in** as `VITE_UI_PORT` from `ui_url` rather than left to the dev
+server's default, so one address is configured and both halves read it — the
+alternative is a port in `config.json` and a port in `.env.local` that agree
+until somebody changes one, and the symptom is a notification pointing at
+nothing. And stopping kills the **process group**: what the kernel holds is a
+shell and the thing on the port is its child, so killing what it holds leaves
+the dev server running — after which the next boot probes it, finds it
+reachable, and adopts an orphan from a previous life.
+
+Nothing in it is fatal. No Node, no `node_modules`, a port taken by something
+else: each is logged to `DATA_DIR/web_ui.log` and boot carries on, because the
+web UI is one way in and the REPL is another. `node_modules` in particular is
+deliberately *not* fixed by running `npm install` at boot — a first install is
+minutes long and nobody asked for one.
+
+**`ui_url` and `http_client_url` point opposite ways**, which is the one thing
+to get right when reading either: `http_client_url` is where the *app* looks
+for Second Brain, `ui_url` is where *you* look for the app. Different ports on
+a dev machine; possibly one origin behind a gateway that serves the build and
+proxies the API.
+
+**`/update` deploys the UI after it pulls**, which is what folding the store's
+`/update_ui` into the kernel bought. That command existed because the UI was a
+*second checkout*: it read the installed launch agent's plist to find it,
+checked the path it got back was absolute, and pulled it separately. A pull of
+this repo is now a pull of the UI, so all that survives is the part that was
+ever about deploying — `npm install` always (the pull moved source, not
+`node_modules`), then the platform's deployment where the script it names is
+present. `DEPLOY` says how per platform and the script's presence says whether,
+because a checkout with no deployment is the ordinary case rather than a
+misconfiguration. Both steps report rather than raise: the kernel is already
+updated by then, and a stack trace about npm in place of the commit summary is
+the less useful half of the answer.
+
 **There is no top-level `helpers/`.** A helper exists to help a plugin, so it
 lives inside the family it helps (`<tree>/tools/helpers/x.py`) — the one nested
 folder the layout allows. The root existed because parsers and backends had
@@ -2928,6 +2980,9 @@ move between built-in, sandbox, and installed trees.
 - [pipeline/sql_functions.py](pipeline/sql_functions.py) — scalar functions
   every query gets, plugin queries included. `vec_cosine` is why a sandboxed
   semantic search can rank a corpus it is never allowed to hold.
+- [runtime/web_ui.py](runtime/web_ui.py) — starting `frame_ui/` with the
+  app, and the one notification that says where it ended up. Probe, spawn,
+  announce; adopt anything already serving.
 - [prompt_cues.py](prompt_cues.py) — when a plugin's `agent_prompt` goes
   stale, and therefore which block of the prompt it rides in. The rung a
   plugin declares is the whole of both answers; the fire sites are three.

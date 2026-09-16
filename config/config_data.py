@@ -130,6 +130,25 @@ SETTINGS_DATA = [
      "",
      {"type": "string"}),
 
+    # The two directions, which are easy to confuse and are not the same
+    # address: ``http_client_url`` is where the *app* looks for Second Brain,
+    # and ``ui_url`` is where *you* look for the app. On a dev machine they
+    # differ (8787 and 5174); behind the macOS gateway they can be one origin.
+    ("Web UI address", "ui_url",
+     "Where the web app is served, and what the start-up notification points "
+     "at. The kernel starts a dev server on this port and probes it until it "
+     "answers. Empty disables both.",
+     "http://localhost:5174",
+     {"type": "string"}),
+
+    ("Start the web UI", "ui_autostart",
+     "Run `npm run dev` in frame_ui/ when Second Brain starts. Turn it off "
+     "where something else already serves the app — a real deployment, or a "
+     "dev server you keep in your own terminal. Anything already answering on "
+     "ui_url is left alone either way.",
+     True,
+     {"type": "bool"}),
+
     # --- Processing ---
     ("Max Workers", "max_workers",
      "Maximum parallel worker threads for task processing. Takes effect on save.",

@@ -10,24 +10,29 @@ out and one SSE stream of render frames in, and that file is both halves.
 
 ## Running it
 
-Second Brain has to be *running*, with its HTTP frontend on:
-
-```
-/frontends enable http
-/restart
-```
-
-Then, in this folder:
+Once, in this folder:
 
 ```bash
 npm install
-npm run dev
 ```
 
-Opens at http://localhost:5174. There is nothing to configure and no token to
-copy — `npm run dev` prints the backend it found.
+After that **Second Brain starts the dev server itself**, on the port in
+`ui_url`, and raises a notification the moment it answers:
 
-`/setup`'s web UI phase does the server half for you.
+```
+UI is reachable at: http://localhost:5174
+```
+
+It needs the HTTP frontend on (`/frontends enable http`, then `/restart`).
+`/setup`'s web UI phase does that for you.
+
+Anything already serving `ui_url` is adopted rather than replaced, so a dev
+server you keep in your own terminal still works and a `/restart` does not
+start a second one. `ui_autostart = false` turns the spawning off and keeps the
+notification. The dev server's own output goes to `web_ui.log` in your data
+directory, which is where a start-up failure explains itself.
+
+To run it by hand instead, `npm run dev` as usual.
 
 ## Where the settings come from
 
@@ -39,18 +44,31 @@ copies of one value is how they end up disagreeing.
 | Setting | What it does |
 |---|---|
 | `http_client_url` | Where this UI looks for Second Brain. Default `http://127.0.0.1:8787`. |
+| `ui_url` | Where the UI itself is served — what gets started, probed, and named in the notification. Default `http://localhost:5174`. |
+| `ui_autostart` | Whether Second Brain runs `npm run dev` for you. Default on. |
 | `secret_http_token` | The bearer credential. Minted at first boot; you never type it. |
 
-So pointing the UI at another machine is one line and a dev-server restart:
+The two URLs point opposite ways and are easy to confuse: `http_client_url` is
+where the *app* looks for Second Brain, `ui_url` is where *you* look for the
+app. On this machine they are different ports; behind a gateway that serves the
+build and proxies the API they can be one origin.
+
+`ui_url` is also the only place the dev server's port is written down — the
+kernel passes it in as `VITE_UI_PORT` when it starts one. A port in
+`config.json` and a port in `.env.local` would agree right up until somebody
+changed one, and the symptom of that is a notification pointing at nothing.
+
+So pointing the UI at another machine is one line and a `/restart`:
 
 ```
 /config   →  http_client_url = http://my-box.tail1234.ts.net:8787
 ```
 
-`.env.example` exists only for the two things that are genuinely about *this
-browser* — which thread it talks to, and which port the dev server listens on —
-plus commented-out overrides for the two above, if you ever want to ignore
-`config.json`.
+`.env.example` exists only for the one thing that is genuinely about *this
+browser* — which thread it talks to — plus commented-out overrides, if you ever
+want to ignore `config.json`. `VITE_UI_PORT` is among them and is normally
+supplied by the kernel from `ui_url`; setting it by hand only matters when you
+are running `npm run dev` yourself.
 
 ## The token is never in the page
 

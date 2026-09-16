@@ -66,7 +66,7 @@ from typing import Any
 import llm
 import parsing
 from config import config_manager
-from runtime import notifications
+from runtime import notifications, web_ui
 from pipeline.database import Database
 from pipeline.orchestrator import Orchestrator
 from pipeline.watcher import Watcher
@@ -261,6 +261,9 @@ def main():
 		logger.info("Shutting down...")
 		if plugin_watcher is not None:
 			plugin_watcher.stop()
+		# Before anything slow: it is a separate process, and leaving one
+		# holding the port is how the next boot adopts an orphan.
+		web_ui.stop()
 		event_trigger.stop()
 		watcher.stop()
 		_stop_subagents(scaffold)
@@ -370,6 +373,13 @@ def main():
 	)
 	scaffold.frontend_runtime.plugin_watcher = plugin_watcher
 	plugin_watcher.start()
+
+	# --- 10b. The web UI ---
+	# After the frontends, deliberately: this ends in a notification, and a
+	# notification is delivered to live sessions only. Raised before the REPL
+	# is up it would be persisted to the panel and shown to nobody — which
+	# looks exactly like not raising one.
+	web_ui.serve(config)
 
 	# --- 11. Main thread idles until shutdown ---
 	try:
