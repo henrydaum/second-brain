@@ -160,9 +160,9 @@ Set **`sync_directories`** to the folders you want indexed. Expect a flood of ta
 
 # Install the UI
 
-A modern React frontend built on [assistant-ui](https://www.assistant-ui.com/) — a familiar chat interface you can add to your phone's home screen. It lives in its own repo: **[second-brain-ui](https://github.com/henrydaum/second-brain-ui)**.
+The UI lives in this repo, in **`frame_ui/`**. It is being rebuilt: right now it is a page that connects and prints what the kernel sends, not yet a chat interface. The previous UI — a React app on [assistant-ui](https://www.assistant-ui.com/), in its own repo at [second-brain-ui](https://github.com/henrydaum/second-brain-ui) — still works and is still the one to use if you want a finished app today.
 
-Works on Windows, macOS and Linux. Takes about ten minutes.
+Works on Windows, macOS and Linux. Takes about two minutes.
 
 **Before you start:** Second Brain has to be *running* while you use the UI — the UI is just a face for it. Leave it going in its terminal and open a **second terminal** for everything below. You'll also need [Node 20.19+ or 22.12+](https://nodejs.org/).
 
@@ -189,10 +189,11 @@ Then run `/config`, find **`secret_http_token`**, and set it to any long random 
 In your second terminal:
 
 ```bash
-git clone https://github.com/henrydaum/second-brain-ui
-cd second-brain-ui
+cd frame_ui
 npm install
 ```
+
+(`frame_ui` is in your Second Brain folder — the same one you cloned to run the server.)
 
 Now make your own config file from the example:
 
@@ -207,7 +208,7 @@ Open **`.env.local`** in any editor. Find the line that reads `VITE_SB_TOKEN=` a
 VITE_SB_TOKEN=the-token-you-copied
 ```
 
-Leave the other two lines (`VITE_SB_URL`, `VITE_SB_THREAD`) exactly as they are — the defaults are correct. Save and close.
+Leave the rest as they are — the defaults are correct. **`VITE_SB_URL`** is the one to change later: it is where the dev server looks for Second Brain, so pointing the UI at a Tailscale address is one line (`VITE_SB_URL=http://my-box.tail1234.ts.net:8787`) and nothing else. The browser never reads it — the page only ever talks to its own origin — which is what keeps CORS out of this entirely. Save and close.
 
 ### 3. Start it
 
@@ -215,7 +216,7 @@ Leave the other two lines (`VITE_SB_URL`, `VITE_SB_THREAD`) exactly as they are 
 npm run dev
 ```
 
-Open **http://localhost:5173** in your browser. You should see your Second Brain, ready to chat.
+Open **http://localhost:5174** in your browser. You should see the thread name, `ok` beside **Request** and `open` beside **Stream** — that is the whole bridge working.
 
 If you get a blank screen or a `401`, the token in `.env.local` doesn't match the one in `/config` — that's almost always the problem. Fix it and restart `npm run dev`.
 
@@ -233,7 +234,7 @@ Open that URL in your phone's browser, then add it to your home screen — on iP
 
 ### Why the dev server?
 
-Because it's the only thing that works on every platform today. `npm run build` produces a `dist` folder that `frontend_http` can serve directly (the `http_static_dir` setting), but a production build deliberately ships **no API token** — so a browser pointed at it is refused before the page even loads. Serving a build needs a reverse proxy that adds the token, which today exists only in the UI repo's [macOS deployment](https://github.com/henrydaum/second-brain-ui/blob/main/docs/MACOS_DEPLOYMENT.md). The dev server is perfectly fine for personal use.
+Because it's the only thing that works on every platform today. `npm run build` produces a `dist` folder that `frontend_http` can serve directly (the `http_static_dir` setting), but a build served that way has to get its token from somewhere, and putting it in the bundle hands the credential to every browser that loads the page. Serving a build properly needs a reverse proxy that adds the token on its own hop — which today exists only in the old UI repo's [macOS deployment](https://github.com/henrydaum/second-brain-ui/blob/main/docs/MACOS_DEPLOYMENT.md). The dev server is perfectly fine for personal use.
 
 ---
 

@@ -39,7 +39,9 @@ TELEGRAM_PACKAGE = "frontend_telegram"
 #: turning it on is a line in ``enabled_frontends``, which is the name the
 #: frontend declares rather than its file stem.
 HTTP_FRONTEND = "http"
-UI_REPO = "https://github.com/henrydaum/second-brain-ui"
+#: The web app ships in this repo, so setting it up is an ``npm`` in a folder
+#: the user already has rather than a clone of somewhere else.
+UI_DIR = "frame_ui"
 #: Matches ``frontend_http``'s own declared default, so the URL this wizard
 #: prints is the one the frontend will actually serve on.
 DEFAULT_HTTP_PORT = 8787
@@ -124,10 +126,10 @@ WEB_UI_PROMPT = (
     "Last thing: the web UI — a ChatGPT-style app you open in a browser or "
     "install to your phone's home screen. It is a much nicer place to live than "
     "the REPL.\n\n"
-    "Saying yes now installs the HTTP frontend and generates your API token. "
-    "The app itself is a separate repository, so you'll clone and build it "
-    "afterwards — two commands, about two minutes, and they get printed at the "
-    "end along with the token."
+    "Saying yes now turns the HTTP frontend on and generates your API token. "
+    "The app itself ships in this repo, so all that is left is an npm install "
+    "in a terminal — about two minutes, and the steps get printed at the end "
+    "along with the token."
 )
 
 PACKAGES_SECTION = (
@@ -268,7 +270,7 @@ class SetupCommand(BaseCommand):
         return [FormStep(
             "web_ui_choice", WEB_UI_PROMPT, True,
             enum=["setup", "skip"],
-            enum_labels=["Set up the web UI", "Skip — I'll use /packages later"],
+            enum_labels=["Set up the web UI", "Skip — I'll do it later"],
             columns=1,
         )]
 
@@ -329,7 +331,8 @@ class SetupCommand(BaseCommand):
         if args.get("web_ui_choice") == "setup":
             sections.append(self._save_web_ui(sdk))
         elif args.get("web_ui_choice") == "skip":
-            sections.append("Web UI: skipped. Turn it on later with `/frontends enable " + HTTP_FRONTEND + "`.")
+            sections.append("Web UI: skipped. Turn it on later with `/frontends enable "
+                            + HTTP_FRONTEND + "`, then see `" + UI_DIR + "/README.md`.")
 
         sections.append(PACKAGES_SECTION)
         sections.append(self._location_section(sdk))
@@ -415,7 +418,7 @@ class SetupCommand(BaseCommand):
     def _save_web_ui(self, sdk):
         """Enable the HTTP frontend, mint its token, and print what is left.
 
-        The remaining work is a clone and a build in another terminal, so this
+        The remaining work is an npm install in another terminal, so this
         returns instructions rather than doing it. The token is printed because
         it is the one value the user has to carry across — into the UI's
         ``.env.local`` — and telling them to go dig it out of /config would be a
@@ -430,20 +433,24 @@ class SetupCommand(BaseCommand):
         windows = str(sdk.paths.get("platform") or "").startswith("win")
         copy_env = ("copy .env.example .env.local" if windows
                     else "cp .env.example .env.local")
+        # The app lives beside the kernel, so this is a real folder on the
+        # user's disk rather than a repository to go and find. Backslash on
+        # Windows, because the line is one the user retypes into a shell.
+        project = str(sdk.paths.get("project"))
+        folder = project + ("\\" if windows else "/") + UI_DIR
         return (
-            "Web UI: HTTP frontend installed, API token generated.\n"
+            "Web UI: HTTP frontend enabled, API token generated.\n"
             f"  Your token: {token}\n"
             "\n"
             "  Two minutes left. In a terminal (needs Node 20.19+ or 22.12+):\n"
-            f"    git clone {UI_REPO}\n"
-            "    cd second-brain-ui\n"
+            f"    cd {folder}\n"
             "    npm install\n"
             f"    {copy_env}\n"
             "\n"
             "  Paste the token above into VITE_SB_TOKEN in .env.local, then:\n"
             "    npm run dev\n"
             "\n"
-            "  Opens at http://localhost:5173. Restart Second Brain first so the "
+            "  Opens at http://localhost:5174. Restart Second Brain first so the "
             f"HTTP frontend comes online on port {DEFAULT_HTTP_PORT}."
         )
 

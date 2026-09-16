@@ -66,6 +66,20 @@ bespoke handling — folder-as-package install, SKILL.md frontmatter dependency
 parsing, folder-prefix uninstall — for a concept nothing in the kernel routed.
 Removing the packages removed the plumbing with them.
 
+**`frame_ui/` is not a tree root either, and it is worth saying why out
+loud** — it is a top-level folder holding a web app (Vite, `npm run dev`),
+served by nothing in this process. The test in **The layout** is whether the
+*kernel* routes it, and nothing in `trees.py`, discovery, the watcher or the
+package manager names it; the only code that knows it exists is
+`command_setup`, which prints a `cd` into it. It is in the repo rather than a
+separate one because the UI is the other half of a protocol this repo defines
+— `docs/HTTP_PROTOCOL.md` and `bundled/frontends/frontend_http.py` — and the
+two drifting apart across repos is exactly what a bundled frontend was meant to
+stop. Where Second Brain *is* stays a client-side fact (`VITE_SB_URL`, read by
+the dev server's proxy, never by the browser); there is deliberately no kernel
+setting for it, because `http_port` is what the server chooses and which
+address a client dials is not the server's to guess.
+
 **There is no top-level `helpers/`.** A helper exists to help a plugin, so it
 lives inside the family it helps (`<tree>/tools/helpers/x.py`) — the one nested
 folder the layout allows. The root existed because parsers and backends had
