@@ -1,6 +1,6 @@
 """The HTTP frontend: the whole connection between an app and the kernel.
 
-This is the store plugin's conformance suite, and it matters more than a
+This is the HTTP frontend's conformance suite, and it matters more than a
 frontend's usually would — nothing else is reachable from the client, so what
 is not covered here is what an app silently cannot do.
 
@@ -18,8 +18,6 @@ The design it pins is deliberately thin. There are two surfaces:
 Three things fail *quietly* when broken, so each has a test that says so out
 loud: a render that is dropped rather than buffered, a route that skips the
 bearer token, and a body that is allowed to name its own session.
-
-Skips cleanly when no store ref is reachable.
 """
 
 import json
@@ -33,27 +31,18 @@ import pytest
 # Aliases the guest package under the bare name ``guest``, which is how plugin
 # source resolves its imports both in-process and in a child.
 import sandbox  # noqa: F401
-from tests.support import store_source
-
-PLUGIN = "frontends/frontend_http.py"
+PLUGIN = "bundled/frontends/frontend_http.py"
+PLUGIN_PATH = Path(__file__).resolve().parents[1] / PLUGIN
 TOKEN = "test-token-abc"
-
-
-def _source_or_skip() -> str:
-    text = store_source(PLUGIN)
-    if text is None:
-        pytest.skip(f"{PLUGIN} is not present on a local store ref")
-    return text
 
 
 @pytest.fixture(scope="module")
 def source() -> str:
-    return _source_or_skip()
+    return PLUGIN_PATH.read_text(encoding="utf-8")
 
 
 # ──────────────────────────────────────────────────────────────────────
-# What the kernel reads off the file. These run by default: the subject is
-# kernel behaviour and the store file is the input.
+# What the kernel reads off the file.
 # ──────────────────────────────────────────────────────────────────────
 
 def test_it_conforms(source):
@@ -160,8 +149,8 @@ def _declared_requests(source: str):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Behaviour, in a real box against a real socket. Marked ``store``: this is
-# the plugin's own code, and a kernel change cannot break it.
+# Behaviour, in a real box against a real socket. This ships in the kernel
+# tree, so it runs by default like the rest of it.
 # ──────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -202,7 +191,8 @@ class _Runtime:
         #: Every ``session.state_set`` that landed, with the session it named.
         self.state = []
 
-    def update_session_plugin_state(self, session_key, namespace, value):
+    def update_session_plugin_state(self, session_key, namespace, value,
+                                    reset_on_compaction=False):
         """Record which session a state write actually reached."""
         self.state.append((session_key, namespace, value))
 
@@ -457,7 +447,6 @@ def _frames(raw: bytes) -> list:
 # The stream: renders, verbatim.
 # ──────────────────────────────────────────────────────────────────────
 
-@pytest.mark.store
 def test_every_render_kind_crosses_unchanged(running):
     """The whole outbound contract, stated once.
 
@@ -477,6 +466,8 @@ def test_every_render_kind_crosses_unchanged(running):
         ("buttons", [{"label": "Yes", "value": "yes"}]),
         ("error", {"message": "it broke"}),
         ("typing", True),
+        ("turn_activity", {"turn_id": "t1", "phase": "waiting"}),
+        ("conversation", {"conversation_id": 7, "title": "Main"}),
         ("tool_status", {"call_id": "c1", "tool_name": "search"}),
         ("stream_delta", {"stream_id": "s1", "seq": 0, "delta": "hi"}),
         ("notification", {"title": "Plugin registered", "body": "tool_x",
@@ -503,7 +494,6 @@ def test_every_render_kind_crosses_unchanged(running):
         assert frame["session_key"] == "http:t1"
 
 
-@pytest.mark.store
 def test_a_render_with_no_stream_is_kept_for_the_next_one(running):
     """A background turn nobody was watching still produced something.
 
@@ -520,7 +510,6 @@ def test_a_render_with_no_stream_is_kept_for_the_next_one(running):
     assert [f["payload"] for f in frames] == [["a background result"]]
 
 
-@pytest.mark.store
 def test_a_reconnecting_client_resumes_where_it_left_off(running):
     """``Last-Event-ID`` is free with ``EventSource``, so the frames are
     numbered and a page refresh does not lose the turn that ran across it."""
@@ -537,7 +526,6 @@ def test_a_reconnecting_client_resumes_where_it_left_off(running):
     assert b"id: 3" in got
 
 
-@pytest.mark.store
 def test_opening_a_stream_says_somebody_is_watching(running):
     """Attendance is the whole reason an unsafe Request can be asked about
     rather than silently refused, and the stream is the honest signal for it."""
@@ -550,7 +538,6 @@ def test_opening_a_stream_says_somebody_is_watching(running):
     conn.close()
 
 
-@pytest.mark.store
 def test_a_client_that_leaves_stops_being_attended(running):
     """Learned on the write after they went, which is how SSE works.
 
@@ -573,7 +560,6 @@ def test_a_client_that_leaves_stops_being_attended(running):
     assert not running.runtime.is_attended("http:t5")
 
 
-@pytest.mark.store
 def test_first_request_after_session_creation_refreshes_attendance(running):
     """A browser opens EventSource before boot creates its conversation.
 
@@ -607,7 +593,6 @@ def test_first_request_after_session_creation_refreshes_attendance(running):
 # The SDK route.
 # ──────────────────────────────────────────────────────────────────────
 
-@pytest.mark.store
 def test_a_safe_request_round_trips(running):
     """One POST, one Result. The client never learns it was detached."""
     conn = _open(running, _request("POST", "/sdk/config.read?thread=t1",
@@ -620,7 +605,6 @@ def test_a_safe_request_round_trips(running):
     assert _json_body(raw)["data"]
 
 
-@pytest.mark.store
 def test_a_refused_request_answers_with_its_code(running):
     """A refusal is an answer to forward, not a failure of this frontend.
 
@@ -638,7 +622,6 @@ def test_a_refused_request_answers_with_its_code(running):
     assert _json_body(raw)["code"] == "approval_declined"
 
 
-@pytest.mark.store
 def test_an_unknown_request_type_is_named(running):
     """The client made a typo, and should be told which one."""
     conn = _open(running, _request("POST", "/sdk/conv.summon?thread=t1",
@@ -650,7 +633,6 @@ def test_an_unknown_request_type_is_named(running):
     assert "conv.summon" in _json_body(raw)["error"]
 
 
-@pytest.mark.store
 def test_the_transport_is_not_reachable_through_the_sdk_route(running):
     """A client closing the stream it is being served on is the shape to keep
     impossible. Refused by the kernel rather than by a list here."""
@@ -662,7 +644,6 @@ def test_the_transport_is_not_reachable_through_the_sdk_route(running):
     assert _status(raw) == 400
 
 
-@pytest.mark.store
 def test_a_client_cannot_name_its_own_session_or_token(running):
     """Identity is ours to state. A body claiming either is claiming to be
     somebody it is not, so both are dropped before the Request is built."""
@@ -679,7 +660,6 @@ def test_a_client_cannot_name_its_own_session_or_token(running):
     assert _status(raw) == 200
 
 
-@pytest.mark.store
 def test_a_client_cannot_reach_another_frontends_session_by_key(running):
     """The other spelling, and the one that nearly got away.
 
@@ -705,7 +685,6 @@ def test_a_client_cannot_reach_another_frontends_session_by_key(running):
     assert running.state == [("http:t9", "sandbox", "reached")]
 
 
-@pytest.mark.store
 def test_a_client_can_attach_several_files_to_one_message(running):
     """A file picker returns a list, and this is the route it takes.
 
@@ -736,7 +715,6 @@ def test_a_client_can_attach_several_files_to_one_message(running):
         "what do these have in common?", ""]
 
 
-@pytest.mark.store
 def test_a_key_that_is_not_a_session_is_left_alone(running):
     """``key`` means a *setting name* to ``config.read``, so the rule has to be
     per-family. Stripping it everywhere would break ordinary reads."""
@@ -754,7 +732,6 @@ def test_a_key_that_is_not_a_session_is_left_alone(running):
 # The perimeter.
 # ──────────────────────────────────────────────────────────────────────
 
-@pytest.mark.store
 @pytest.mark.parametrize("method,path", [
     ("GET", "/events?thread=t1"),
     ("POST", "/sdk/config.read?thread=t1"),
@@ -771,7 +748,6 @@ def test_every_route_is_behind_the_token(running, method, path):
     assert _status(raw) == 401
 
 
-@pytest.mark.store
 def test_a_wrong_token_is_refused(running):
     """The other half of the same check."""
     conn = _open(running, _request("GET", "/events?thread=t1", token="nope"))
@@ -781,7 +757,6 @@ def test_a_wrong_token_is_refused(running):
     assert _status(raw) == 401
 
 
-@pytest.mark.store
 def test_the_stream_accepts_a_query_token(running):
     """Because ``EventSource`` cannot send headers. That is the browser API,
     not an oversight, and it is the only client that reconnects on its own."""
@@ -793,7 +768,6 @@ def test_the_stream_accepts_a_query_token(running):
     assert _status(raw) == 200
 
 
-@pytest.mark.store
 @pytest.mark.parametrize("method,path", [
     ("POST", "/sdk/config.read"),
     ("GET", "/index.html"),
@@ -810,7 +784,6 @@ def test_no_other_route_accepts_one(running, method, path):
     assert _status(raw) == 401
 
 
-@pytest.mark.store
 def test_preflight_is_answered_before_the_token(running):
     """A browser sends no Authorization header on OPTIONS, so checking it here
     would refuse every cross-origin request before it was ever made."""
@@ -821,7 +794,6 @@ def test_preflight_is_answered_before_the_token(running):
     assert _status(raw) == 204
 
 
-@pytest.mark.store
 def test_a_path_that_escapes_the_static_root_is_refused(running):
     """``fs.read_bytes`` is SAFE, so policy will not catch a careless join —
     this check is the only thing between a URL and the rest of the disk."""
@@ -832,7 +804,6 @@ def test_a_path_that_escapes_the_static_root_is_refused(running):
     assert _status(raw) in (403, 404)
 
 
-@pytest.mark.store
 def test_a_binary_asset_is_served_unmangled(running):
     """Encoding a font or a PNG as text corrupts it, and nothing downstream
     would tell you."""
@@ -844,7 +815,6 @@ def test_a_binary_asset_is_served_unmangled(running):
     assert b"\x89PNG\r\n\x1a\n\x00binary" in raw
 
 
-@pytest.mark.store
 def test_an_unknown_route_says_so(running):
     """With the static root configured, a bare 404 is still the answer for a
     path that looks like a file and is not one."""
@@ -884,7 +854,6 @@ def _files_url(path) -> str:
     return f"/files?path={quote(str(path), safe='')}"
 
 
-@pytest.mark.store
 def test_a_host_file_is_served_with_its_type(running, tmp_path):
     """The whole point: a real body with a real ``Content-Type``, so the
     browser decodes it natively instead of the client rebuilding a Blob."""
@@ -903,7 +872,6 @@ def test_a_host_file_is_served_with_its_type(running, tmp_path):
     assert _header(raw, "Accept-Ranges") == "bytes"
 
 
-@pytest.mark.store
 def test_a_range_request_gets_only_that_span(running, tmp_path):
     """What a Blob can never do. ``<video>`` seeks by asking for the bytes it
     landed on rather than everything before them."""
@@ -922,7 +890,6 @@ def test_a_range_request_gets_only_that_span(running, tmp_path):
     assert _body(raw) == bytes(range(10, 20))
 
 
-@pytest.mark.store
 def test_a_suffix_range_reads_from_the_end(running, tmp_path):
     """``bytes=-N`` is how a player reads a trailing index (an MP4 ``moov``
     atom) without downloading the file to find it."""
@@ -937,7 +904,6 @@ def test_a_suffix_range_reads_from_the_end(running, tmp_path):
     assert _status(raw) == 206 and _body(raw) == b"TAIL"
 
 
-@pytest.mark.store
 def test_a_range_past_the_end_is_refused_with_the_real_size(running, tmp_path):
     """416 carries ``Content-Range: bytes *–/size``, which is how a player
     learns the length it guessed wrong about."""
@@ -952,7 +918,6 @@ def test_a_range_past_the_end_is_refused_with_the_real_size(running, tmp_path):
     assert _status(raw) == 416 and _header(raw, "Content-Range") == "bytes */5"
 
 
-@pytest.mark.store
 def test_a_file_too_big_for_one_message_comes_back_in_windows(running, tmp_path):
     """One response body crosses in one wire message, and that message is
     capped — so a large file is answered as 206 whether or not a Range was
@@ -986,7 +951,6 @@ def test_a_file_too_big_for_one_message_comes_back_in_windows(running, tmp_path)
     assert _status(raw) == 206 and len(_body(raw)) == 4096
 
 
-@pytest.mark.store
 def test_a_missing_file_is_a_404_not_a_crash(running, tmp_path):
     conn = _open(running, _request("GET", _files_url(tmp_path / "ghost.png")))
     raw = _read(conn, timeout=3.0)
@@ -995,7 +959,6 @@ def test_a_missing_file_is_a_404_not_a_crash(running, tmp_path):
     assert _status(raw) == 404
 
 
-@pytest.mark.store
 def test_a_directory_is_not_a_file(running, tmp_path):
     conn = _open(running, _request("GET", _files_url(tmp_path)))
     raw = _read(conn, timeout=3.0)
@@ -1004,7 +967,6 @@ def test_a_directory_is_not_a_file(running, tmp_path):
     assert _status(raw) == 400
 
 
-@pytest.mark.store
 def test_it_needs_the_bearer_token_like_everything_else(running, tmp_path):
     """The route sits *after* the auth check. A byte transport that skipped it
     would be the one way to read a file without the token."""
@@ -1018,7 +980,6 @@ def test_it_needs_the_bearer_token_like_everything_else(running, tmp_path):
     assert _status(raw) == 401
 
 
-@pytest.mark.store
 def test_asking_for_nothing_says_what_was_missing(running):
     conn = _open(running, _request("GET", "/files"))
     raw = _read(conn, timeout=3.0)
@@ -1027,7 +988,6 @@ def test_asking_for_nothing_says_what_was_missing(running):
     assert _status(raw) == 400 and "path" in _json_body(raw)["error"]
 
 
-@pytest.mark.store
 def test_a_media_element_can_authenticate_at_all(running, tmp_path):
     """``?token=`` is accepted here for the same reason ``/events`` accepts it:
     the browser issues the request itself and there is nowhere to put a header.
@@ -1048,7 +1008,6 @@ def test_a_media_element_can_authenticate_at_all(running, tmp_path):
     assert _status(raw) == 200 and _body(raw) == target.read_bytes()
 
 
-@pytest.mark.store
 def test_a_wrong_query_token_is_still_refused(running, tmp_path):
     """The concession is to where the token may travel, never to whether one
     is needed."""
@@ -1063,7 +1022,6 @@ def test_a_wrong_query_token_is_still_refused(running, tmp_path):
     assert _status(raw) == 401
 
 
-@pytest.mark.store
 def test_no_other_route_takes_a_query_token(running):
     """A token in a URL reaches logs and history, so the list stays at two."""
     conn = _open(running, _request(
@@ -1075,7 +1033,6 @@ def test_no_other_route_takes_a_query_token(running):
     assert _status(raw) == 401
 
 
-@pytest.mark.store
 def test_every_native_modality_gets_a_playable_type(running, tmp_path):
     """The two tables must agree, because a client uses both.
 
@@ -1109,7 +1066,6 @@ def test_every_native_modality_gets_a_playable_type(running, tmp_path):
         "that will not play them:\n  " + "\n  ".join(mislabelled))
 
 
-@pytest.mark.store
 def test_an_unknown_extension_is_still_served(running, tmp_path):
     """Bytes for every extension; only the *label* falls back. A file the
     browser cannot render is a download, not an error."""
@@ -1125,7 +1081,6 @@ def test_an_unknown_extension_is_still_served(running, tmp_path):
     assert _body(raw) == target.read_bytes()
 
 
-@pytest.mark.store
 def test_a_file_with_no_extension_is_served_too(running, tmp_path):
     target = tmp_path / "LICENSE"
     target.write_bytes(b"MIT")
@@ -1141,7 +1096,6 @@ def test_a_file_with_no_extension_is_served_too(running, tmp_path):
 # An answer that cannot be delivered.
 # ──────────────────────────────────────────────────────────────────────
 
-@pytest.mark.store
 def test_an_undeliverable_answer_is_a_status_rather_than_a_hang(running):
     """The client is told, instead of waiting for a reply nobody still has.
 
@@ -1167,7 +1121,6 @@ def test_an_undeliverable_answer_is_a_status_rather_than_a_hang(running):
     assert _json_body(raw)["code"] == "too_large"
 
 
-@pytest.mark.store
 def test_one_undeliverable_answer_does_not_stop_the_other_clients(running):
     """The bug that took the UI down, in one test.
 

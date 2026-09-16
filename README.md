@@ -175,7 +175,7 @@ The UI proves it's allowed to talk to Second Brain with a token. You need one be
 **Otherwise,** in the Second Brain REPL:
 
 ```
-/packages install frontend_http
+/frontends enable http
 ```
 
 Then run `/config`, find **`secret_http_token`**, and set it to any long random string — mash the keyboard, it just has to be hard to guess. Copy what you set. Then restart Second Brain so the frontend comes online:

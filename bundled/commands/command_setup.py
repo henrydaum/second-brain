@@ -35,7 +35,10 @@ DEFAULT_BACKEND = "LiteLLMService"
 ESSENTIALS_BUNDLE = "bundle_essentials"
 KNOWLEDGEBASE_BUNDLE = "bundle_knowledgebase"
 TELEGRAM_PACKAGE = "frontend_telegram"
-HTTP_PACKAGE = "frontend_http"
+#: The HTTP frontend ships in the kernel tree, so there is nothing to install —
+#: turning it on is a line in ``enabled_frontends``, which is the name the
+#: frontend declares rather than its file stem.
+HTTP_FRONTEND = "http"
 UI_REPO = "https://github.com/henrydaum/second-brain-ui"
 #: Matches ``frontend_http``'s own declared default, so the URL this wizard
 #: prints is the one the frontend will actually serve on.
@@ -151,7 +154,7 @@ class SetupCommand(BaseCommand):
     require_approval = True
     approval_actor_id = "user"
     requests = [
-        "plugin.list", "plugin.install", "config.write",
+        "plugin.list", "plugin.install", "config.read", "config.write",
         "paths.get", "env.read", "net.http", "llm.list",
     ]
 
@@ -326,7 +329,7 @@ class SetupCommand(BaseCommand):
         if args.get("web_ui_choice") == "setup":
             sections.append(self._save_web_ui(sdk))
         elif args.get("web_ui_choice") == "skip":
-            sections.append("Web UI: skipped. Install it later with `/packages install " + HTTP_PACKAGE + "`.")
+            sections.append("Web UI: skipped. Turn it on later with `/frontends enable " + HTTP_FRONTEND + "`.")
 
         sections.append(PACKAGES_SECTION)
         sections.append(self._location_section(sdk))
@@ -410,23 +413,16 @@ class SetupCommand(BaseCommand):
         )
 
     def _save_web_ui(self, sdk):
-        """Install the HTTP frontend, mint its token, and print what is left.
+        """Enable the HTTP frontend, mint its token, and print what is left.
 
         The remaining work is a clone and a build in another terminal, so this
         returns instructions rather than doing it. The token is printed because
         it is the one value the user has to carry across — into the UI's
         ``.env.local`` — and telling them to go dig it out of /config would be a
         worse answer than showing it on their own machine."""
-        try:
-            sdk.plugins.install(HTTP_PACKAGE)
-        except sdk.Failed as e:
-            # Reported, not raised: the LLM and Telegram phases already
-            # succeeded and their report must survive this.
-            return (
-                f"Web UI: couldn't install `{HTTP_PACKAGE}`: {e.error}\n"
-                f"  Try `/packages install {HTTP_PACKAGE}` yourself, then follow "
-                "the web UI steps in the README."
-            )
+        enabled = list(sdk.config.read("enabled_frontends") or [])
+        if HTTP_FRONTEND not in enabled:
+            sdk.config.write("enabled_frontends", sorted(enabled + [HTTP_FRONTEND]))
         token = secrets.token_urlsafe(TOKEN_BYTES)
         sdk.config.write("secret_http_token", token, scope="plugin")
         # cmd.exe has no ``cp``, and this is the one line the user has to

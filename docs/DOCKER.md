@@ -190,7 +190,7 @@ which is why it can use the same port number as the app. A wildcard listener on
 8787 owns loopback 8787 too, so the app's own bind would fail with `EADDRINUSE`
 — reported by the frontend, several layers from the forwarder that caused it.
 
-Then, inside the app: `/packages install frontend_http`, set a long
+Then, inside the app: `/frontends enable http`, set a long
 `secret_http_token` in `/config`, and `/restart`. Point the UI's `VITE_SB_URL`
 at `http://localhost:8787`, and set `http_allowed_origins` to the origin the UI
 is served from, or the browser blocks the preflight and tells you very little

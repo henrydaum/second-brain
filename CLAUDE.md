@@ -122,27 +122,34 @@ future store) — *not* by deleting them. What remains:
   `tool_ask_user_question`, shell/file-editing tools, SQL tools, and plugin
   authoring tools are package capabilities unless discovery shows they are
   installed.
-- **Frontend:** `frontend_repl` only. Telegram (`frontend_telegram`, migrated
-  to the SDK) and `frontend_http` live on the store branch. There was a third,
+- **Frontend:** `frontend_repl` and `frontend_http`. The HTTP frontend is
+  bundled rather than installable because it is the whole of what a web or
+  native app can reach — a UI that has to install a package before it can
+  connect is a UI that cannot bootstrap itself, and the kernel's own client
+  should not be a store round trip. It is stdlib-only guest code over
+  `sdk.http.*` (the server is already kernel-side, `sandbox/http_server.py`),
+  so nothing about bundling it widens what runs in the kernel's process; being
+  enabled is a line in `enabled_frontends` and a `secret_http_token`, which is
+  what `/setup`'s web-UI phase writes. Telegram (`frontend_telegram`, migrated
+  to the SDK) still lives on the store branch. There was a third,
   an MCP server exposing Second Brain to external MCP clients over streamable
   HTTP; it was never migrated — it still imported `logging`,
   `pipeline.database` and `state_machine.conversation_phases`, so the bridge
   could not carry it and the app could not load it at all — and it was
   **deleted** rather than ported, along with the `mcp` service and command that
   went with it. Reviving MCP means writing it against the SDK, not restoring a
-  file. Testing the two that remain
-  is split by whose behaviour is under test. What the *kernel* claims about
-  them — the validator's verdict, the declarations the bridge reads, the
-  isolation the tree resolves — is `tests/test_store_frontend_contracts.py`
-  (plus `tests/test_frontend_http.py`, which has its own file because that
-  plugin is the whole of what a web or native app can reach)
-  and runs by default. Their own behaviour (markdown rendering, chunking, the
-  streamed-reply tracker, media planning) is marked
-  `store` in `pytest.ini` and deselected, since a kernel change cannot break
-  it; run it with `pytest -m store`. They reach the store branch through
-  `tests/support.store_source`, which prefers a store *worktree* when the
-  clone has one, so it checks the file being edited rather than the last
-  commit. `enabled_frontends`
+  file. Testing the store one is split by whose behaviour is under test. What
+  the *kernel* claims about it — the validator's verdict, the declarations the
+  bridge reads, the isolation the tree resolves — is
+  `tests/test_store_frontend_contracts.py` and runs by default; its own
+  behaviour (markdown rendering, chunking, the streamed-reply tracker, media
+  planning) is marked `store` in `pytest.ini` and deselected, since a kernel
+  change cannot break it. Run it with `pytest -m store`. It reaches the store
+  branch through `tests/support.store_source`, which prefers a store
+  *worktree* when the clone has one, so it checks the file being edited rather
+  than the last commit. `tests/test_frontend_http.py` is no longer one of
+  those: the file it reads is `bundled/frontends/frontend_http.py`, so the
+  whole suite — conformance *and* the real socket — runs by default. `enabled_frontends`
   is deliberately not whitelisted by the kernel: config normalization keeps
   unknown names so installed store frontends survive load, and bootstrap
   *prunes* what discovery can't resolve — a name it cannot match is a store

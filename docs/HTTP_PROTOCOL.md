@@ -4,7 +4,8 @@ Everything a client can do with Second Brain. This is the whole surface — ther
 is no second API, no direct database, no kernel import. Whatever is not here,
 a client cannot do.
 
-Served by the `frontend_http` store package. Hand this document to whoever is
+Served by the bundled `frontend_http` frontend (`/frontends enable http`).
+Hand this document to whoever is
 building the client; `docs/http_reference_client.html` is a working example to
 check the bridge against when the client misbehaves.
 
