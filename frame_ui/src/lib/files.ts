@@ -216,7 +216,7 @@ const CODE = new Set([
 
 /** Extensions the browser draws natively and the kernel has no parser for.
  *  Modality-blind on purpose: both answer `"unknown"`. */
-const EMBED = new Set([".pdf", ".svg", ".html", ".htm"]);
+const EMBED = new Set([".pdf", ".svg"]);
 
 /**
  * The static half of the modality map, as a fallback only.

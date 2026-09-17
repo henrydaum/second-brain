@@ -1,17 +1,18 @@
 /**
  * The one bridge between agent-authored HTML and the kernel.
  *
- * **Two surfaces, one `brain`.** An HTML file previewed in the file viewer and
- * a widget mounted in the panel are the same kind of thing — a document
- * somebody else wrote, running in an opaque origin, needing a way to ask the
- * kernel for something. They were briefly two implementations with two channel
- * names and two error shapes, which meant an agent writing HTML met a
- * different `brain` depending on where its file happened to land. One relay,
- * and the differences between the two surfaces are arguments to it.
+ * **One `brain`, however many surfaces.** A widget mounted in the panel is a
+ * document somebody else wrote, running in an opaque origin, needing a way to
+ * ask the kernel for something. The file viewer used to run agent-authored
+ * HTML the same way and is the reason this is a module rather than a function
+ * inside `widget-frame.tsx`: two implementations meant two channel names and
+ * two error shapes, so an agent writing HTML met a different `brain` depending
+ * on where its file happened to land. That surface is gone — widgets replaced
+ * it — and the relay stays parameterised, because the differences between
+ * surfaces belong in arguments rather than in a second copy.
  *
- * What a widget adds is a stylesheet (so it inherits the app's look, which a
- * standalone preview should not) and being *told its box* — a widget is
- * resized by a panel it cannot see, where a preview is sized by the page.
+ * What a widget passes is a stylesheet (so it inherits the app's look) and
+ * being *told its box* — a widget is resized by a panel it cannot see.
  */
 
 import { RequestFailed, sdk } from "@/lib/client";

@@ -4,8 +4,8 @@
  * A widget is an HTML document written by somebody the frame has no reason to
  * trust — the store, or the agent. So the app does not run it; it *contains*
  * it, and then talks to it. Everything in this file is one of those two jobs,
- * and both of them are done the same way an HTML file preview does them —
- * `lib/html-app.ts` is the one relay, and this is one of its two callers.
+ * and both of them go through `lib/html-app.ts`, the one relay, of which this
+ * is the only caller.
  *
  * **The containment is `sandbox="allow-scripts"`, and the thing that matters is
  * what is missing.** Adding `allow-same-origin` beside it cancels the sandbox

@@ -3,10 +3,9 @@
  * it is likely to use.
  *
  * This is the *styling* half of preparing a widget's document. The other half
- * — the bridge — belongs to `lib/html-app.ts`, which serves both surfaces that
- * run agent-authored HTML; what is here is the part only a widget gets, because
- * a widget is furniture inside the app and a previewed HTML file is a document
- * that happens to be on screen.
+ * — the bridge — belongs to `lib/html-app.ts`; what is here is the part that
+ * makes a widget furniture inside the app rather than a document that happens
+ * to be on screen.
  *
  * **The token values are read off the running app, never written down here.**
  * A widget is a separate document and inherits nothing, so the frame has to

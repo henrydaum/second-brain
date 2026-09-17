@@ -166,7 +166,7 @@ export const FileViewerDialog: FC = () => {
               closeView();
               openExplorer(path);
             }}><FolderOpenIcon className="size-4" /></TooltipIconButton>}
-            {(guessKind(path) === "markdown" || [".html", ".htm"].some((extension) => path.toLowerCase().endsWith(extension))) && <MarkdownModePicker />}
+            {guessKind(path) === "markdown" && <MarkdownModePicker />}
             {many && (
               <span className="shrink-0">
                 {viewing.index + 1} of {viewing.paths.length}

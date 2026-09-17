@@ -18,7 +18,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,48 +33,6 @@ import { forgetFile } from "@/lib/files";
 // exposed, and this project runs vitest without them — so two renders would
 // otherwise both be in the document and the query would answer with the first.
 afterEach(cleanup);
-
-describe("HTML previews", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it.each(["html", "HTM"])("renders .%s in a script-enabled opaque sandbox", async (extension) => {
-    const html = '<!doctype html><button onclick="this.textContent=42">Run</button>';
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true, headers: { get: () => null },
-      arrayBuffer: async () => new TextEncoder().encode(html).buffer,
-    }));
-    render(<FileView path={`/tmp/app.${extension}`} size="full" />);
-    const frame = await screen.findByTitle(`app.${extension}`);
-    expect(frame.tagName).toBe("IFRAME");
-    expect(frame).toHaveAttribute("src", "/html-app-host.html");
-    const post = vi.spyOn((frame as HTMLIFrameElement).contentWindow!, "postMessage");
-    fireEvent.load(frame);
-    expect(post).toHaveBeenCalledWith({
-      channel: "second-brain-html-mount-v1",
-      html: expect.stringContaining("window.brain"),
-    }, "*");
-    expect(post.mock.calls[0][0].html).toContain('onclick="this.textContent=42"');
-    fireEvent.load(frame);
-    expect(post).toHaveBeenCalledTimes(1);
-    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
-    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
-    expect(frame).toHaveClass("h-full");
-    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
-  });
-
-  it("shows highlighted source when Source is selected", async () => {
-    const html = "<!doctype html><h1>Hello</h1>";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true, headers: { get: () => null },
-      arrayBuffer: async () => new TextEncoder().encode(html).buffer,
-    }));
-    act(() => setMarkdownMode("source"));
-    const { container } = render(<FileView path="/tmp/source-mode.html" size="full" />);
-    await waitFor(() => expect(container.querySelector("pre")?.textContent).toContain(html));
-    expect(screen.queryByTitle("source-mode.html")).toBeNull();
-    act(() => setMarkdownMode("preview"));
-  });
-});
 
 describe("an SVG in the file viewer", () => {
   // `.svg` is decided by extension in `kindOf`, before anything is asked of the
