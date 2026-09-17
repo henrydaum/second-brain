@@ -1,0 +1,819 @@
+@import "tailwindcss";
+
+/* The keyframes and utilities every `animate-in` / `animate-out` /
+ * `animate-collapsible-*` class in this app depends on. The package was in
+ * `package.json` from the start but never imported, which left dialogs,
+ * popovers, tooltips, message entrances and tool-group expansion silently
+ * un-animated — the classes were there, the definitions were not. */
+@import "tw-animate-css";
+@import "./styles/design-system.css";
+
+/* ReplyActivity owns the single conversation-level activity animation. */
+
+@custom-variant dark (&:is(.dark *));
+
+.sb-composer-footer {
+  background: linear-gradient(to bottom, transparent, var(--background) 85%);
+}
+
+.sb-composer {
+  border-color: color-mix(in srgb, var(--sb-tint) 25%, var(--border));
+  background-color: var(--composer-bg);
+  box-shadow: var(--sb-shadow-subtle);
+  transition: border-color var(--sb-motion-control) var(--sb-ease), box-shadow var(--sb-motion-control) var(--sb-ease);
+}
+
+.sb-composer:focus-within {
+  border-color: color-mix(in srgb, var(--sb-tint) var(--sb-focus-strength), var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sb-tint) var(--sb-focus-halo), transparent);
+}
+
+.sb-composer[data-dragging="true"] {
+  border-color: var(--ring);
+}
+
+.sb-chat-shell:has(.sb-thread[data-empty="true"]) {
+  background-image: radial-gradient(ellipse 85% 32rem at 50% 0%, var(--sb-ambient), transparent 75%);
+}
+
+.sb-session-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 20;
+  pointer-events: none;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: blur(var(--sb-header-blur));
+  backdrop-filter: blur(var(--sb-header-blur));
+}
+
+.sb-session-bar > * {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+/* Trial for the iOS Home Screen top-edge blur: give the OS an opaque,
+ * viewport-fixed toolbar. Include the existing safe area in its background
+ * while keeping the controls at their original vertical position. Limit this
+ * to the single-column layout so it cannot cover a desktop sidebar. */
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone) and (max-width: 767px) {
+    .sb-session-bar {
+      position: fixed;
+      top: 0;
+      height: calc(3rem + env(safe-area-inset-top, 0px));
+      padding-top: env(safe-area-inset-top, 0px);
+      background-color: var(--background);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    .sb-session-bar::before {
+      display: none;
+    }
+  }
+}
+
+/* Keep the empty hero untinted so its ambient gradient stays continuous.
+ * Populated conversations add contrast behind the sharp title and controls. */
+.sb-session-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-color: color-mix(in srgb, var(--background) 0%, transparent);
+}
+
+.sb-session-bar[data-populated="true"]::before {
+  background-color: color-mix(in srgb, var(--background) var(--sb-header-opacity), transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sb-session-bar::before {
+    transition: background-color var(--sb-motion-enter) var(--sb-ease);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .sb-session-bar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .sb-session-bar::before {
+    display: none;
+  }
+}
+
+.sb-chat-shell [data-slot="chat-viewport"] {
+  padding-top: 4rem;
+  scroll-padding-top: 3rem;
+}
+
+/* Reserve a transparent header-sized lead-in inside the existing turn anchor.
+ * The negative margin keeps message spacing unchanged while the library can
+ * continue aligning the anchor itself with the viewport's top. */
+.sb-chat-shell [data-role="user"] {
+  padding-top: 3rem;
+  margin-top: -3rem;
+}
+
+.sb-header-controls {
+  border-radius: var(--sb-radius-pill);
+  background: color-mix(in srgb, var(--muted) 65%, transparent);
+  box-shadow: inset 0 1px 0 var(--sb-edge), 0 1px 3px rgb(0 0 0 / 5%);
+}
+
+.sb-session-bar .sb-control {
+  border-radius: var(--sb-radius-pill);
+}
+
+[data-slot="conversation"] {
+  border-radius: var(--sb-radius-row);
+  transition: background-color var(--sb-motion-control) var(--sb-ease);
+}
+
+[data-slot="conversation"][data-active="true"] {
+  background: var(--sb-selection);
+}
+
+.sb-logotype {
+  filter: none;
+}
+
+.dark .sb-logotype {
+  filter: invert(1);
+}
+
+[data-slot="conversation"][data-active="true"] > button:first-child {
+  font-weight: 500;
+}
+
+.sb-user-message {
+  border-radius: var(--sb-radius-message);
+  background: color-mix(in srgb, var(--muted) 85%, var(--sb-selection));
+}
+
+/* One divider, like the sidebar footer, rather than a border plus highlight. */
+[data-slot="conversation-sidebar"].sb-panel {
+  box-shadow: none;
+}
+
+.sb-settings-group {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--sb-radius-surface);
+  background: var(--card);
+}
+.sb-settings-group > .sb-row { border-radius: 0; }
+.sb-settings-group > .sb-row + .sb-row { border-top: 1px solid var(--border); }
+.sb-settings-group > .sb-row:focus-visible { outline-offset: -3px; }
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .sb-composer-footer {
+    background: var(--background);
+  }
+
+  .sb-chat-shell:has(.sb-thread[data-empty="true"]), .sb-panel, .sb-sheet {
+    background-image: none;
+  }
+}
+
+@media (forced-colors: active) {
+  [data-slot="conversation"][data-active="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+@layer components {
+  .conversation-category-dot {
+    background-color: oklch(
+      0.6 0.16 var(--conversation-category-hue, 0)
+    );
+  }
+
+  .conversation-category-pill {
+    background-color: oklch(
+      0.95 0.045 var(--conversation-category-hue, 0)
+    );
+    color: oklch(0.43 0.14 var(--conversation-category-hue, 0));
+  }
+
+  .conversation-category-pill:hover {
+    background-color: oklch(
+      0.92 0.06 var(--conversation-category-hue, 0)
+    );
+  }
+
+  .dark .conversation-category-dot {
+    background-color: oklch(
+      0.72 0.14 var(--conversation-category-hue, 0)
+    );
+  }
+
+  .dark .conversation-category-pill {
+    background-color: oklch(
+      0.27 0.055 var(--conversation-category-hue, 0)
+    );
+    color: oklch(0.82 0.11 var(--conversation-category-hue, 0));
+  }
+
+  .dark .conversation-category-pill:hover {
+    background-color: oklch(
+      0.31 0.065 var(--conversation-category-hue, 0)
+    );
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  html {
+    @apply overscroll-none scroll-smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+
+    *:hover {
+      scrollbar-color: color-mix(
+          in srgb,
+          var(--muted-foreground) 35%,
+          transparent
+        )
+        transparent;
+    }
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(
+      in srgb,
+      var(--muted-foreground) 30%,
+      transparent
+    );
+  }
+
+  *::-webkit-scrollbar-thumb:hover,
+  *::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(
+      in srgb,
+      var(--muted-foreground) 50%,
+      transparent
+    );
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /**
+   * A scroller whose bar takes no width.
+   *
+   * The 6px above is a *classic* scrollbar: it is laid out, so it narrows its
+   * content box by 6px wherever it appears. That is invisible in a scrolling
+   * page and glaring in a panel of full-width rules — the rows inside the
+   * scroller stop 6px short of the panel edge while a header outside it runs
+   * the whole way, and the two disagree by exactly the gutter. Phones never
+   * showed it because their scrollbars overlay and take nothing.
+   *
+   * So: for the surfaces that draw lines to their own edges, no gutter. The
+   * thumb is already transparent until hovered, which is most of why it can go
+   * without being missed.
+   */
+  .overlay-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .overlay-scrollbar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  /**
+   * A scroller for something you *read*, rather than something you skim.
+   *
+   * The global bar above hides until the pointer is over its scroller, which is
+   * right for a list: the bar is chrome, and chrome that appears when reached
+   * for stays out of the way. This one does the opposite, and the reason is
+   * that the disappearing act cannot be made to look like anything.
+   *
+   * **Nothing here can fade.** Chromium paints `::-webkit-scrollbar` parts
+   * through its scrollbar theme rather than as ordinary boxes and runs no
+   * transitions on them, so a hover rule is a hard cut — the bar blinks in as
+   * the pointer crosses the box and blinks out as it leaves. The platform's own
+   * bar is no help either: Windows draws a persistent rail that thickens under
+   * the pointer, so "fades out when idle" is not a behaviour available by
+   * either route on this desktop. A bar that genuinely faded would have to be a
+   * real element drawn over the content and driven from JavaScript, which is a
+   * great deal of machinery, and a second scrollbar to keep in sync with the
+   * first, for an animation.
+   *
+   * So: **always drawn, faint enough to ignore, and only the thumb itself
+   * reacts.** Two states rather than three — moving the pointer across a
+   * paragraph has no business changing the furniture at the edge of it, and
+   * every state removed is one less thing that can flicker. It also means the
+   * bar says where you are in a long note while you read, which is most of what
+   * a scrollbar is for and which a hover-only bar cannot do.
+   *
+   * **The width is padding, not thickness.** A 6px thumb is hard to catch and a
+   * 10px one drawn edge to edge looks like a gutter rail. `background-clip:
+   * padding-box` behind a transparent border gives a 6px thumb inside a 10px
+   * target: comfortable to hit, and sitting clear of the frame's border rather
+   * than against it.
+   *
+   * `overscroll-behavior: contain` because this scroller is usually inside a
+   * dialog — reaching the end of a note should stop, not hand the momentum to
+   * the page behind it and scroll the conversation away underneath.
+   */
+  .document-scrollbar {
+    overscroll-behavior: contain;
+  }
+
+  /**
+   * The standard properties, and why they are behind a guard.
+   *
+   * **In Chromium, naming `scrollbar-width` or `scrollbar-color` at all switches
+   * the element to the platform's own scrollbar and makes every
+   * `::-webkit-scrollbar` rule below it inert.** Not overridden — inert. Setting
+   * them unconditionally is a silent way to throw away the width, the colours
+   * and the thumb's minimum length in one line, and to leave a bar that looks
+   * *almost* right because these two still tint the native one.
+   *
+   * So they are for the engines that have nothing else, exactly as the global
+   * bar above does it. Firefox gets thin and tinted, and no say over the thumb.
+   */
+  @supports not selector(::-webkit-scrollbar) {
+    .document-scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(
+          in srgb,
+          var(--muted-foreground) 25%,
+          transparent
+        )
+        transparent;
+    }
+  }
+
+  .document-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  /**
+   * The track, held clear of the frame's own corners.
+   *
+   * A scrollbar is laid out against the *box*, which is square, while the frame
+   * around it is `rounded-lg` — so a thumb at either extreme runs under the
+   * curve and is sliced by it, and the bar reads as sitting on top of the panel
+   * rather than inside it. Margin on the track shortens the thumb's travel to
+   * the straight part of the edge.
+   *
+   * `--radius-lg` rather than a number, because that is the radius it is
+   * dodging: change the frame's corner and this follows. Per orientation, since
+   * the inset has to run along the bar — a margin across it would squeeze the
+   * bar's width instead.
+   */
+  .document-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .document-scrollbar::-webkit-scrollbar-track:vertical {
+    margin-block: var(--radius-lg);
+  }
+
+  .document-scrollbar::-webkit-scrollbar-track:horizontal {
+    margin-inline: var(--radius-lg);
+  }
+
+  /**
+   * The thumb, with a floor under its length.
+   *
+   * Left alone the browser sizes it to the fraction of the document on screen
+   * and puts no lower bound on the result, so the longer the note the smaller
+   * the handle — exactly backwards, since a long document is when a scrollbar
+   * matters most. 2.5rem is a comfortable grab target.
+   *
+   * The axis is set twice because a wide table scrolls sideways through this
+   * same class, and `min-height` governs the vertical bar only.
+   */
+  .document-scrollbar::-webkit-scrollbar-thumb {
+    background-color: color-mix(
+      in srgb,
+      var(--muted-foreground) 25%,
+      transparent
+    );
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    min-height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
+  .document-scrollbar::-webkit-scrollbar-thumb:hover,
+  .document-scrollbar::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(
+      in srgb,
+      var(--muted-foreground) 55%,
+      transparent
+    );
+  }
+
+  /**
+   * No stepper arrows.
+   *
+   * Styling `::-webkit-scrollbar` at all is what replaces the platform's bar,
+   * and the platform's arrows go with it. Redrawing them is not a real option:
+   * a scrollbar part does not paint like an ordinary box — Chromium honours
+   * geometry, background and border on these pseudo-elements and ignores
+   * `mask-image` — so a glyph would mean a `background-image` per direction and
+   * per theme, four assets kept in step with a palette they cannot read. The
+   * wheel, the arrow keys and Page Up/Down all reach the same places.
+   */
+  .document-scrollbar::-webkit-scrollbar-button {
+    display: none;
+  }
+
+  .document-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* Do not reset `box-shadow` here. Tailwind and the Radix-backed controls use
+ * it to draw their focus rings; the old global reset silently erased those
+ * rings and left keyboard focus visible only on a handful of bordered inputs. */
+
+@media (pointer: coarse) {
+  .sb-header-controls [role="status"] {
+    width: var(--spacing-touch);
+    height: var(--spacing-touch);
+  }
+  button,
+  [role="button"],
+  [role="menuitem"],
+  [role="menuitemradio"],
+  [role="radio"] {
+    min-width: var(--spacing-touch);
+    min-height: var(--spacing-touch);
+  }
+
+  /* The floor above grows the header's icon buttons from 32px to 44px, which
+   * grows the margin they leave around their glyphs with it. The indicator
+   * beside them follows, so the row stays evenly spaced on a phone instead of
+   * inheriting a desktop measurement that no longer matches the buttons. */
+  :root {
+    --header-control-inset: calc((var(--spacing-touch) - 1rem) / 2);
+  }
+
+  /* Text actions inside a compact notification row are the exception to the
+   * global 44px control floor. That floor otherwise creates a blank line above
+   * and below only the rows which happen to contain a link. */
+  .notification-link {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* This is one compact two-state control, not two independent toolbar
+   * actions. Let its buttons share the available mobile footer width. */
+  .sb-file-mode button {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* The mobile remove affordance sits over the attachment itself. Give it a
+   * reliably light surface in dark mode instead of relying on utility ordering
+   * against the tooltip button's background styles. */
+  .dark .aui-attachment-remove-surface {
+    background-color: rgb(255 255 255 / 88%);
+  }
+
+  .dark .aui-attachment-remove-icon {
+    color: rgb(0 0 0 / 78%);
+    stroke: currentColor;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/**
+ * Markdown, which is every word the agent says.
+ *
+ * `MarkdownTextPrimitive` tags its output `.aui-md` and stops there — the class
+ * is a hook, not a stylesheet, and nothing in the package or the starter ever
+ * filled it in. Tailwind's Preflight meanwhile flattens headings to body size,
+ * strips list markers, and zeroes every margin, so an unstyled `.aui-md` turns
+ * a structured reply into one undifferentiated block. This is that stylesheet.
+ *
+ * Two rules keep it out of the way of everything else:
+ *
+ * - **`@layer components`**, so ordinary utility classes still win. Unlayered
+ *   CSS beats every Tailwind layer, which would make these rules unoverridable.
+ * - **`:where()` around the element selectors**, which drops their specificity
+ *   to zero. Without it `.aui-md table` would outrank the `w-full` on a table
+ *   that `command-renderers.tsx` styles deliberately.
+ */
+@layer components {
+  .aui-md {
+    line-height: 1.7;
+  }
+
+  /* Vertical rhythm is stated once, as the gap between blocks, rather than as a
+   * margin on each element — that way a heading following a list and a
+   * paragraph following a heading cannot disagree. */
+  .aui-md > :where(* + *) {
+    margin-top: 1rem;
+  }
+
+  .aui-md :where(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+  .aui-md > :where(h1, h2, h3, h4, h5, h6) + * {
+    margin-top: 0.5rem;
+  }
+  .aui-md > :where(* + h1, * + h2, * + h3) {
+    margin-top: 1.75rem;
+  }
+
+  .aui-md :where(h1) {
+    font-size: 1.5rem;
+  }
+  .aui-md :where(h2) {
+    font-size: 1.25rem;
+  }
+  .aui-md :where(h3) {
+    font-size: 1.125rem;
+  }
+  .aui-md :where(h4, h5, h6) {
+    font-size: 1rem;
+  }
+
+  .aui-md :where(ul, ol) {
+    padding-inline-start: 1.5rem;
+  }
+  .aui-md :where(ul) {
+    list-style: disc;
+  }
+  .aui-md :where(ul ul) {
+    list-style: circle;
+  }
+  .aui-md :where(ol) {
+    list-style: decimal;
+  }
+  .aui-md :where(li) {
+    margin-top: 0.375rem;
+  }
+  .aui-md :where(li)::marker {
+    color: var(--muted-foreground);
+  }
+  /* A nested list belongs to the bullet above it, not to the block before it,
+   * so it does not take the full inter-block gap. */
+  .aui-md :where(li) > :where(ul, ol) {
+    margin-top: 0.375rem;
+  }
+
+  /* A GFM task list, which a vault note is half made of. The checkbox *is* the
+   * marker, so the bullet goes and the item shifts back into the space the
+   * bullet had — otherwise every task sits one indent further in than the plain
+   * items around it. Preflight leaves the box itself alone; only its colour and
+   * its alignment to the first line of text need saying. */
+  .aui-md :where(li.task-list-item) {
+    list-style: none;
+    margin-inline-start: -1.25rem;
+  }
+  .aui-md :where(li.task-list-item) > :where(input[type="checkbox"]) {
+    margin-inline-end: 0.5rem;
+    vertical-align: baseline;
+    accent-color: var(--primary);
+  }
+
+  .aui-md :where(a) {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .aui-md :where(a):hover {
+    text-decoration-thickness: 2px;
+  }
+
+  .aui-md :where(strong) {
+    font-weight: 600;
+  }
+  .aui-md :where(em) {
+    font-style: italic;
+  }
+
+  /* Inline code only. The descendant rule below undoes this inside `pre`, where
+   * a second background and border would draw a box inside a box. */
+  .aui-md :where(code) {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background-color: color-mix(in oklab, var(--muted) 70%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.125em 0.35em;
+  }
+
+  .aui-md :where(pre) {
+    background-color: color-mix(in oklab, var(--muted) 70%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.875rem 1rem;
+    overflow-x: auto;
+    line-height: 1.6;
+  }
+  .aui-md :where(pre) :where(code) {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: 0.8125rem;
+  }
+
+  /* A code block's header and its `pre` are *siblings* — that is how
+   * `MarkdownTextPrimitive` composes the two slots, with no wrapper to style —
+   * so the inter-block gap above lands between them and splits one box into
+   * two. This is the only pair in `.aui-md` that is a single object, and this
+   * is what closes it back up. See `components/assistant-ui/code-block.tsx`. */
+  .aui-md > :where([data-slot="code-header"] + pre) {
+    margin-top: 0;
+  }
+
+  .aui-md :where(blockquote) {
+    border-inline-start: 3px solid var(--border);
+    padding-inline-start: 1rem;
+    color: var(--muted-foreground);
+  }
+
+  /* Wide tables scroll inside themselves; the message column must never gain a
+   * horizontal scrollbar of its own. */
+  .aui-md :where(table) {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .aui-md :where(th, td) {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: start;
+    vertical-align: top;
+  }
+  .aui-md :where(th) {
+    background-color: color-mix(in oklab, var(--muted) 60%, transparent);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .aui-md :where(hr) {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin-block: 1.5rem;
+  }
+
+  .aui-md :where(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+  }
+
+  /* The first and last block sit flush against the message box, which is what
+   * gives the bubble its own padding rather than two stacked ones. */
+  .aui-md > :where(:first-child) {
+    margin-top: 0;
+  }
+  .aui-md > :where(:last-child) {
+    margin-bottom: 0;
+  }
+
+  /**
+   * The travelling highlight over a label that is still working.
+   *
+   * `tool-group.tsx` and `reasoning.tsx` stack a copy of their label under this
+   * class on top of the original. Undefined, that copy is simply opaque text
+   * drawn over identical text — the defect this replaces, not just a missing
+   * animation. Here it is clipped to the glyphs and swept across.
+   */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--foreground) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: aui-shimmer 2s linear infinite;
+  }
+
+  @keyframes aui-shimmer {
+    from {
+      background-position: 150% 0;
+    }
+    to {
+      background-position: -50% 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer {
+      animation: none;
+    }
+  }
+}
+
+/* The status sits in existing footer padding without adding layout height. */
+.sb-notification-status {
+  opacity: 1;
+  transition: opacity var(--sb-motion-fast) var(--sb-ease);
+  animation: sb-notification-enter var(--sb-motion-enter) var(--sb-ease);
+}
+.sb-notification-status[data-closing="true"] { opacity: 0; }
+@keyframes sb-notification-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.sb-notification-line {
+  color: color-mix(in srgb, var(--foreground) 78%, var(--background));
+  padding-left: calc(1rem + env(safe-area-inset-left, 0px));
+  padding-right: calc(1rem + env(safe-area-inset-right, 0px));
+}
+
+/* Extend the same image into letterboxed margins, under the sharp preview. */
+.sb-image-ambient {
+  position: absolute;
+  inset: -24px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(24px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.sb-image-ambient::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--background) 50%, transparent);
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .sb-image-ambient { display: none; }
+}

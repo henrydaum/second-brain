@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Second Brain",
+  "short_name": "Second Brain",
+  "description": "A private interface for Second Brain.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#252525",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

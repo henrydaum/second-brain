@@ -1,0 +1,13 @@
+# `index.html` carries the inline theme script that the production
+# Content-Security-Policy admits by hash, and a hash is over bytes. A CRLF
+# working copy would therefore compute a different answer from the LF checkout
+# the Mac Mini builds and serves. Pinning the endings keeps the one script that
+# has to match byte-for-byte identical on every machine.
+#
+# See `deploy/macos/csp-hash.test.ts`.
+index.html text eol=lf
+
+# Shell scripts run on macOS. A CRLF checkout of these fails with an
+# uninformative `bad interpreter` at the shebang.
+*.sh text eol=lf
+deploy/macos/Caddyfile text eol=lf

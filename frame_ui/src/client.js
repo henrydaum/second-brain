@@ -17,7 +17,7 @@
  * Second Brain's HTTP frontend wants `Authorization: Bearer <secret_http_token>`
  * on everything. The page never sends one: it talks only to its own origin, and
  * the dev server adds the header on the hop the browser cannot see
- * (`vite.config.js`, reading `config.json` through `server-config.js`). So the
+ * (`vite.config.ts`, reading `config.json` through `server-config.js`). So the
  * credential is never in the bundle, never in a query string, and never in
  * whatever the browser caches or a devtools tab shows a guest.
  *
@@ -44,10 +44,10 @@
  * first. **Only one stream may be open per thread** — a second `GET /events`
  * replaces the first — so two tabs on one thread take turns being connected.
  */
-export const THREAD =
-  new URLSearchParams(window.location.search).get("thread") ||
-  import.meta.env.VITE_SB_THREAD ||
-  "main";
+// Share the app's selected identity, including its browser-local fallback.
+// Do not open another stream here: the React runtime owns the active stream.
+import { THREAD } from "./lib/client";
+export { THREAD };
 
 /** A URL against the server, with the thread already attached. */
 export function serverUrl(path) {

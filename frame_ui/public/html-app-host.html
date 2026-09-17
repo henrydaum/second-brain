@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>HTML App host</title>
+<p>Loading HTML App…</p>
+<script>
+  // This URL has a dedicated CSP, unlike srcdoc which inherits the UI's CSP.
+  // The parent supplies one document. Never accept a replacement from an App.
+  window.addEventListener('message', function mount(event) {
+    if (event.source !== parent || parent === window ||
+        event.data?.channel !== 'second-brain-html-mount-v1' ||
+        typeof event.data.html !== 'string') return;
+    window.removeEventListener('message', mount);
+    document.open();
+    document.write(event.data.html);
+    document.close();
+  });
+</script>
+</html>

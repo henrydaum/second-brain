@@ -1,0 +1,149 @@
+{
+	auto_https off
+	admin off
+	default_bind 127.0.0.1
+}
+
+http://:4173 {
+	header {
+		X-Content-Type-Options "nosniff"
+		# FileView embeds same-origin PDFs and SVGs. SAMEORIGIN keeps external
+		# sites from framing the UI without blocking the app's own viewer.
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "microphone=(self), camera=(), geolocation=()"
+		# Nothing here is meant to be loaded by another site — not the app, and
+		# certainly not a host file. This refuses it at the browser rather than
+		# relying on every consumer to be well behaved.
+		Cross-Origin-Resource-Policy "same-origin"
+		Cross-Origin-Opener-Policy "same-origin"
+	}
+
+	@events path /events
+	@api path /sdk /sdk/*
+	@files path /files /files/*
+
+	# **A request from somewhere that is not this app.**
+	#
+	# Separate `not`s rather than one alternation because a named matcher's
+	# tokens are combined with AND: this matches when the Origin is none of the
+	# spellings of our own. `{http.request.host}` is resolved per request, so the
+	# loopback name and the tailnet name are both covered without either being
+	# written down here — and a request carrying no Origin at all matches too,
+	# since every `not` then holds. See the `@api` handler for why that is the
+	# intended answer.
+	#
+	# The third line is insurance against a front proxy that rewrites `Host`
+	# rather than passing it through. It cannot weaken anything: with no
+	# `X-Forwarded-Host` the placeholder is empty and the value is the bare
+	# `https://`, which no real Origin equals. Without it, a proxy that rewrote
+	# `Host` would make every request look foreign and the app would refuse to
+	# work at all through it.
+	@foreign {
+		not header Origin http://{http.request.host}
+		not header Origin https://{http.request.host}
+		not header Origin https://{http.request.header.X-Forwarded-Host}
+	}
+
+	handle @events {
+		reverse_proxy 127.0.0.1:8787 {
+			header_up Authorization "Bearer {$SB_HTTP_TOKEN}"
+			header_up Accept-Encoding "identity"
+			flush_interval -1
+		}
+	}
+
+	# **This handler credentials whatever reaches it**, so what reaches it is the
+	# whole of the perimeter.
+	#
+	# Without the Origin check, any page in any tab of this browser could POST
+	# here. A cross-origin POST of this shape needs no preflight and no token,
+	# because Caddy supplies the token itself — the reply would be unreadable to
+	# whoever sent it and the *action* would already have happened: a prompt
+	# submitted, a conversation deleted, a setting written. Binding to loopback
+	# does not help, because the request originates inside your own browser.
+	#
+	# Browsers send `Origin` on every POST, including same-origin ones, so an
+	# exact match costs this app nothing and refuses the drive-by outright. A
+	# request with no `Origin` is refused as well: that is `curl`, not this app,
+	# and `/sdk` is not a route meant to be driven by hand.
+	#
+	# `/events` and `/files` need no such check. Both are GETs, which carry no
+	# `Origin`, and a cross-origin read of either is already refused by the
+	# browser since no CORS headers ever come back. Checking them would break
+	# `<img>` and `EventSource` and buy nothing.
+	handle @api {
+		# `route` rather than bare directives: it pins the order to the order
+		# written here, so the refusal cannot end up behind the proxy it exists
+		# to stand in front of.
+		route {
+			respond @foreign "forbidden" 403
+			reverse_proxy 127.0.0.1:8787 {
+				header_up Authorization "Bearer {$SB_HTTP_TOKEN}"
+			}
+		}
+	}
+
+	handle @files {
+		# **A file served from this origin must never become a document.**
+		#
+		# An SVG is the case that matters: served as `image/svg+xml` into a
+		# framing element it is a page at this origin, and a `<script>` inside it
+		# could then call `/sdk` above — with the gateway attaching the
+		# credential, since the request would be genuinely same-origin. `sandbox`
+		# puts any such document in an opaque origin with scripting off.
+		#
+		# Documents only honour it, so images, audio, video and the PDF byte
+		# fetch are untouched. `FileView` sandboxes its own frame as well; this is
+		# the half that also covers opening a file's URL directly.
+		header Content-Security-Policy "sandbox"
+
+		reverse_proxy 127.0.0.1:8787 {
+			header_up Authorization "Bearer {$SB_HTTP_TOKEN}"
+		}
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# A real document gets its own policy; srcdoc inherits the main UI's
+	# hash-only script policy and cannot run agent-authored inline scripts.
+	# Keep this route opaque even if opened directly. Kernel calls go through
+	# the parent relay; this document has no direct network connection rights.
+	handle /html-app-host.html {
+		header Content-Security-Policy "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https:; media-src blob:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+		header Cache-Control "no-store"
+		root * "{$SB_UI_CURRENT}"
+		file_server
+	}
+
+	handle {
+		# Everything this app needs comes from its own origin, so the policy says
+		# exactly that. Two directives are deliberately looser than the rest:
+		#
+		# `style-src 'unsafe-inline'` is required rather than lazy. Radix
+		# positions every popover, tooltip and dialog with inline styles computed
+		# at runtime; without this they land in the wrong place.
+		#
+		# `img-src https:` lets a remote picture in an agent's markdown draw. An
+		# image URL is a weak channel next to what the rest of this closes, and it
+		# is the one directive whose failure would be silent — a blank space where
+		# a picture belonged. Tighten it to `'self'` once you have watched for a
+		# while and no remote image has ever appeared.
+		#
+		# `blob:` covers two things this app genuinely does: the PDF viewer, which
+		# fetches bytes and renders them from an object URL, and the composer's
+		# previews of files staged but not yet sent.
+		#
+		# The hash pins the one inline script there is — the theme bootstrap in
+		# `index.html`, which must run before first paint and so cannot move to a
+		# file without reintroducing the flash it exists to prevent.
+		# `deploy/macos/csp-hash.test.ts` fails the build if the two drift apart.
+		header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-0Csnp3pN6nPOOM7x87rY3BQZ3PplR1m1Q1STa9ux/u4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; object-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+		root * "{$SB_UI_CURRENT}"
+		try_files {path} /index.html
+		file_server
+	}
+}

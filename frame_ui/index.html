@@ -2,42 +2,62 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Second Brain's own icon, copied from `icon.ico` in the server repo — the
+      same mark the desktop app wears, so a pinned tab and a taskbar button
+      look like one program rather than two.
+
+      Two files on purpose. The `.ico` carries sizes drawn at 16, 20, 24 and 32
+      pixels, and a tab is 16: letting a browser shrink a 256px icon to that
+      turns a mark this detailed into a smudge. The PNG is for everywhere a
+      large one is wanted — bookmarks, a home-screen shortcut — where the `.ico`
+      would be the one having to scale up.
+
+      It replaces a hand-drawn placeholder SVG that adapted to the theme. The
+      real icon is a raster and cannot, but a fixed teal reads on both, and
+      being *the* icon is worth more than adapting.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/png" href="/favicon.png" sizes="256x256" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#252525" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-title" content="Second Brain" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="color-scheme" content="light dark" />
     <title>Second Brain</title>
     <!--
       The theme, before anything is painted.
 
-      The module bundle's first paint is far too late: on a dark desktop the
-      window would show a full white frame and then repaint, and that flash is
-      the single most noticeable thing about a theme that is otherwise correct.
-      So `color-scheme` and the background go on here, synchronously, ahead of
-      the stylesheet — this is the one place the arrangement is read outside
-      `config.js`, and it reads the same `sb.frame.v1` blob under the same key.
+      React's first render is far too late: on a dark desktop the page would
+      show a full white frame and then repaint, and that flash is the single
+      most noticeable thing about a theme that is otherwise correct. So the
+      class goes on here, synchronously, ahead of the stylesheet.
 
-      It sets only the two properties that decide what a blank page looks like.
-      The real token table arrives with the module a moment later, and a
-      half-copy of it here is exactly the second copy `theme.js` exists to
-      prevent.
+      Kept in sync with `src/lib/theme.ts`, which owns the same key.
     -->
     <script>
       (function () {
         try {
-          var stored = JSON.parse(localStorage.getItem("sb.frame.v1") || "{}");
-          var theme = stored && stored.theme;
-          var dark = theme === "dark" || (theme !== "light" &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches);
-          var root = document.documentElement;
-          root.style.colorScheme = dark ? "dark" : "light";
-          root.style.background = dark ? "oklch(0.145 0 0)" : "oklch(1 0 0)";
+          var stored = localStorage.getItem("second-brain:theme");
+          var wantsDark =
+            stored === "dark" ||
+            ((stored === "system" || !stored) &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (wantsDark) document.documentElement.classList.add("dark");
         } catch (e) {
-          /* Storage disabled, or a corrupt blob. Light is a fine place to start. */
+          /* Storage disabled. Light is a fine place to start. */
         }
       })();
     </script>
   </head>
   <body>
-    <main id="root"></main>
-    <script type="module" src="/src/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

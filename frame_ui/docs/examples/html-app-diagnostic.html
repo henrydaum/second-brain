@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTML App diagnostic v2</title>
+<style>body{font:16px system-ui;padding:20px;background:white;color:#18202b}button{padding:14px;margin:8px 0;display:block}pre{white-space:pre-wrap}</style>
+<h1>HTML App diagnostic v2</h1>
+<p>This visible version identifies the file currently loaded.</p>
+<p id="boot">BOOT PENDING</p>
+<button id="plain" type="button">Test click</button>
+<p id="click">CLICK PENDING</p>
+<button id="request" type="button">Test SDK</button>
+<pre id="sdk">SDK PENDING</pre>
+<pre id="errors" role="alert"></pre>
+<script>
+  const report = text => { document.querySelector('#errors').textContent += text + '\n'; };
+  window.addEventListener('error', event => report('ERROR: ' + event.message));
+  window.addEventListener('unhandledrejection', event => report('REJECTION: ' + String(event.reason)));
+  document.querySelector('#boot').textContent = 'SCRIPT EXECUTED — diagnostic v2';
+  document.querySelector('#plain').addEventListener('click', () => {
+    document.querySelector('#click').textContent = 'CLICK RECEIVED';
+  });
+  document.querySelector('#request').addEventListener('click', async () => {
+    const output = document.querySelector('#sdk');
+    output.textContent = 'SDK WAITING';
+    try {
+      const result = await brain.call('conv.list', { details: true, limit: 1 });
+      output.textContent = 'SDK OK\n' + JSON.stringify(result, null, 2);
+    } catch (error) { output.textContent = 'SDK ERROR: ' + error.message; }
+  });
+</script>
+</html>
