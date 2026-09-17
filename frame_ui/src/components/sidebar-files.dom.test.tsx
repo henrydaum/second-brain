@@ -62,7 +62,7 @@ it("switches only the list, retains its scroll, and keeps New chat working in Fi
   chats.scrollTop = 120;
   fireEvent.scroll(chats);
   const newChat = screen.getAllByRole("button", {name: "New chat"})[0];
-  await user.click(screen.getByRole("button", {name: "Files", exact: true}));
+  await user.click(screen.getByRole("button", {name: "Files"}));
   await screen.findByText("current.txt");
   expect(chats).not.toBeVisible();
   expect(newChat).toBeVisible();
@@ -71,10 +71,10 @@ it("switches only the list, retains its scroll, and keeps New chat working in Fi
   const files = document.querySelector<HTMLElement>('[data-slot="conversation-files-list"]')!;
   files.scrollTop = 75;
   fireEvent.scroll(files);
-  await user.click(screen.getByRole("button", {name: "Chats", exact: true}));
+  await user.click(screen.getByRole("button", {name: "Chats"}));
   expect(chats).toBeVisible();
   expect(chats.scrollTop).toBe(120);
-  await user.click(screen.getByRole("button", {name: "Files", exact: true}));
+  await user.click(screen.getByRole("button", {name: "Files"}));
   expect(files.scrollTop).toBe(75);
   await user.click(newChat);
   expect(newConversation).toHaveBeenCalledOnce();
@@ -83,7 +83,7 @@ it("switches only the list, retains its scroll, and keeps New chat working in Fi
 it("opens a file through the existing viewer and handles empty/error lists", async () => {
   const user = userEvent.setup();
   const result = render(<Harness />);
-  await user.click(screen.getByRole("button", {name: "Files", exact: true}));
+  await user.click(screen.getByRole("button", {name: "Files"}));
   await user.click(await screen.findByRole("button", {name: "current.txt"}));
   expect(view).toHaveBeenCalledWith(["/current.txt"], 0);
   result.rerender(<Harness empty />);
@@ -108,11 +108,11 @@ it("uses the left mobile sheet and dismisses it when opening a file", async () =
   desktop = false;
   const user = userEvent.setup();
   render(<Harness />);
-  await user.click(screen.getByRole("button", {name: "Files", exact: true}));
+  await user.click(screen.getByRole("button", {name: "Files"}));
   await user.click(await screen.findByRole("button", {name: "current.txt"}));
   expect(view).toHaveBeenCalledWith(["/current.txt"], 0);
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", {name: "Message files"}));
   expect(await screen.findByRole("dialog", {name: "Chats and files"})).toBeVisible();
-  expect(screen.getByRole("button", {name: "Files", exact: true})).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", {name: "Files"})).toHaveAttribute("aria-pressed", "true");
 });

@@ -10,7 +10,7 @@
 
 import { type FC } from "react";
 import { useAuiState } from "@assistant-ui/react";
-import { PanelLeftOpenIcon, XIcon } from "lucide-react";
+import { LayoutGridIcon, PanelLeftOpenIcon, XIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ConversationMenu } from "@/components/conversation-menu";
@@ -24,7 +24,11 @@ const LABELS = {
   reconnecting: "Reconnecting…",
 } as const;
 
-export const SessionBar: FC<{ onOpenNav: () => void }> = ({ onOpenNav }) => {
+export const SessionBar: FC<{
+  onOpenNav: () => void;
+  widgetOpen: boolean;
+  onToggleWidget: () => void;
+}> = ({ onOpenNav, widgetOpen, onToggleWidget }) => {
   const { status } = useSession();
   const hasMessages = useAuiState((s) => s.thread.messages.length > 0);
   const label = LABELS[status];
@@ -86,6 +90,21 @@ export const SessionBar: FC<{ onOpenNav: () => void }> = ({ onOpenNav }) => {
         </span>
 
         <NotificationPanel />
+
+        {/* Last in the row, against the edge its panel comes out of on a
+            desktop — the same pairing the sidebar button has with the
+            conversations at the other end. It is in the row at every width: the
+            panel is a side drawer on one and a pinned split on the other, but
+            it is the same widget and the same way in. */}
+        <TooltipIconButton
+          tooltip={widgetOpen ? "Hide widget" : "Show widget"}
+          side="bottom"
+          className="size-8"
+          aria-expanded={widgetOpen}
+          onClick={onToggleWidget}
+        >
+          <LayoutGridIcon className="size-4" />
+        </TooltipIconButton>
       </div>
     </header>
   );

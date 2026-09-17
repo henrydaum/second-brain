@@ -18,6 +18,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useReducer,
   useRef,
   useState,
   type FC,
@@ -345,6 +346,40 @@ const ScrollToBottom: FC = () => (
 const Composer: FC = () => {
   const finePointer = useMediaQuery(FINE_POINTER_QUERY);
   const input = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * Re-measure the input when its *width* changes.
+   *
+   * **The autosize behind `ComposerPrimitive.Input` only recalculates on a
+   * render or a window resize** (`react-textarea-autosize`: a layout effect
+   * with no deps, plus a `window.resize` listener). Nothing else is watching.
+   * So any change to the composer's width that is not a window resize leaves
+   * the inline height it computed at the old width — too short while a panel
+   * opens beside it, and stuck tall after one closes, with the jump arriving
+   * later when some unrelated state finally causes a render.
+   *
+   * The widget panel is what surfaced this, but it is not the cause and the
+   * fix does not belong there: collapsing the sidebar does the same thing, and
+   * so would any future split. The composer is what has to notice its own box
+   * changing.
+   *
+   * Width only, and compared before bumping — observing height would re-render
+   * in response to the very resize it just performed, which is a loop.
+   */
+  const [, remeasure] = useReducer((tick: number) => tick + 1, 0);
+  useEffect(() => {
+    const element = input.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    let last = element.getBoundingClientRect().width;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      if (Math.abs(width - last) < 1) return;
+      last = width;
+      remeasure();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const viewport = window.visualViewport;
