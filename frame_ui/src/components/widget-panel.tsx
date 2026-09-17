@@ -31,10 +31,17 @@ import {
 import { Minimize2Icon, Maximize2Icon, XIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { WidgetFrame } from "@/components/widget-frame";
+import { WidgetPicker } from "@/components/widget-picker";
+import { useResolvedTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import type { Widget } from "@/lib/widgets";
 import type { WidgetMode } from "@/runtime/widget-mode";
 
 const WIDTH_KEY = "second-brain:widget-width";
+/** Which widget was in the panel. Remembered for the reason the width is: a
+ *  panel that comes back empty is one you re-fill every morning. */
+const CHOSEN_KEY = "second-brain:widget-name";
 
 /**
  * The tolerances, and what each one is protecting.
@@ -88,6 +95,14 @@ function storedWidth(): number {
   }
 }
 
+function storedChoice(): string | null {
+  try {
+    return localStorage.getItem(CHOSEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export const WidgetPanel: FC<{
   open: boolean;
   mode: WidgetMode;
@@ -96,6 +111,29 @@ export const WidgetPanel: FC<{
 }> = ({ open, mode, onClose, onToggleFull }) => {
   const [width, setWidth] = useState(storedWidth);
   const [dragging, setDragging] = useState(false);
+  const [widgets, setWidgets] = useState<Widget[]>([]);
+  const [chosen, setChosen] = useState(storedChoice);
+  const scheme = useResolvedTheme();
+
+  const choose = useCallback((name: string | null) => {
+    setChosen(name);
+    try {
+      if (name) localStorage.setItem(CHOSEN_KEY, name);
+      else localStorage.removeItem(CHOSEN_KEY);
+    } catch {
+      /* Refused. The choice holds for this window and will not come back. */
+    }
+  }, []);
+
+  /**
+   * The widget the panel is holding, or nothing.
+   *
+   * A name that matches no installed widget is ordinary rather than an error —
+   * the store uninstalled it, or the agent renamed a file — and it is said
+   * below rather than silently treated as empty, which looks identical to a
+   * panel nobody has filled in.
+   */
+  const widget = widgets.find((entry) => entry.name === chosen) ?? null;
   const full = mode === "full";
   const side = mode === "side";
 
@@ -399,9 +437,14 @@ export const WidgetPanel: FC<{
           // panel shrank. Left to fill the layer, they stay where they were.
           style={side && !layer ? { width } : undefined}
         >
-          <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">
-            Widget
-          </span>
+          <div className="min-w-0 flex-1">
+            <WidgetPicker
+              widgets={widgets}
+              chosen={chosen}
+              onRefresh={setWidgets}
+              onChoose={choose}
+            />
+          </div>
           <TooltipIconButton
             tooltip={full ? "Exit fullscreen" : "Fullscreen"}
             side="bottom"
@@ -416,13 +459,27 @@ export const WidgetPanel: FC<{
           </TooltipIconButton>
         </header>
 
+        {/*
+          The widget gets this box entirely: no padding, no border, no scroll
+          container of the frame's. `overflow-hidden` rather than `auto`
+          because the document inside does its own scrolling — an outer
+          scrollbar here would be a second one for the same content.
+        */}
         <div
-          className="min-h-0 w-full flex-1 overflow-y-auto"
+          className="min-h-0 w-full flex-1 overflow-hidden"
           style={side && !layer ? { width } : undefined}
         >
-          <p className="text-muted-foreground p-4 text-xs">
-            Nothing here yet. This is where a widget will be mounted.
-          </p>
+          {widget ? (
+            // Keyed by path, so choosing a different widget builds a new frame
+            // rather than swapping the `srcdoc` under a running document.
+            <WidgetFrame key={widget.path} widget={widget} scheme={scheme} />
+          ) : (
+            <p className="text-muted-foreground p-4 text-xs">
+              {chosen
+                ? `No widget named "${chosen}" is installed.`
+                : "Nothing here yet. Choose a widget from the menu above."}
+            </p>
+          )}
         </div>
       </aside>
     </>
