@@ -27,11 +27,26 @@
  */
 
 import { DEFAULT_LAYOUT, layoutById } from "./layouts.js";
+import { DEFAULT_THEME, THEMES } from "./theme.js";
 
 const KEY = "sb.frame.v1";
 
 const DEFAULTS = {
   layout: DEFAULT_LAYOUT,
+  /**
+   * Light, dark, or whatever the machine is set to.
+   *
+   * **Three states, not two**, for the reason the old UI gives: "system" is a
+   * genuine setting rather than a synonym for light — one tracks the machine
+   * as it changes through the day and the other does not, and collapsing them
+   * into a toggle loses that silently.
+   *
+   * It lives here beside the layout rather than under its own key because it
+   * is the same kind of fact: something this person arranged about this window.
+   * The pre-paint script in `index.html` reads it out of the same blob, which
+   * is why the shape of this file is now load-bearing for something outside it.
+   */
+  theme: DEFAULT_THEME,
   /** `{ "<slot>": "<widget name>" }`, keyed by slot name **across all four
    *  layouts** rather than per layout. That is what lets a layout change be a
    *  rearrangement rather than a reload: the frame keeps one element per slot
@@ -124,6 +139,7 @@ export function loadConfig() {
     // older arrangement, a hand-edited value — opens the single slot instead
     // of an empty window.
     layout: layoutById(stored.layout || DEFAULTS.layout).id,
+    theme: THEMES.includes(stored.theme) ? stored.theme : DEFAULTS.theme,
     slots: { ...(stored.slots || {}) },
     sizes,
     closed: { ...DEFAULTS.closed, ...(stored.closed || {}) },

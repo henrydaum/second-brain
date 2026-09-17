@@ -47,11 +47,13 @@ import {
   buttonBar, closeWindow, iconRail, openWidgetWindow, pressButton,
 } from "./buttons.js";
 import {
-  chooseWidget, closeChooser, editButton, layoutBar, slotChrome,
+  chooseWidget, closeChooser, editButton, layoutBar, slotChrome, themeBar,
 } from "./editing.js";
 import { LAYOUTS, layoutById } from "./layouts.js";
 import { mountWidget } from "./mount.js";
-import { applyTheme, preferredScheme } from "./theme.js";
+import { mountPanel } from "./panels/host.js";
+import { isPanelId, panelById, panelRows } from "./panels/registry.js";
+import { applyTheme, resolveScheme } from "./theme.js";
 import { listWidgets, readWidget } from "./widgets.js";
 
 /** Every slot name any layout uses. One element each, for the life of the
@@ -60,16 +62,27 @@ import { listWidgets, readWidget } from "./widgets.js";
 const ALL_SLOTS = [...new Set(LAYOUTS.flatMap((layout) => layout.slots))];
 
 export async function startFrame(root) {
-  let scheme = preferredScheme();
-  applyTheme(scheme);
-
   const config = loadConfig();
+  /** The palette on screen: the preference resolved against the machine. */
+  let scheme = resolveScheme(config.theme);
+  applyTheme(scheme);
   /** The pooled slot elements, by name. Built once, never reparented. */
   const panels = new Map();
   /** Mounted widgets by slot name. */
   const mounts = new Map();
   /** The widget catalog, refreshed whenever the picker opens. */
   let catalog = [];
+  /**
+   * Everything that can go in a slot: the built-in panels, then the installed
+   * widgets.
+   *
+   * One list, because from the person's side it is one question. Panels first
+   * because they are the app's own and a stable set; widgets after, in the
+   * kernel's own precedence order. Nothing downstream of here asks which kind
+   * it is holding except the two places that must — `fill` and `popUp`, which
+   * fork on the `sb:` prefix and nowhere else.
+   */
+  const offer = () => [...panelRows(), ...catalog];
   let editing = false;
 
   const frame = document.createElement("div");
@@ -93,12 +106,11 @@ export async function startFrame(root) {
   arrange();
   for (const slot of ALL_SLOTS) fill(slot);
 
+  // The machine changing its mind only moves the app while the preference is
+  // "system". An explicit choice is not something the OS gets to overrule, and
+  // leaving this unguarded would let it — at dusk, silently.
   window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.(
-    "change", (event) => {
-      scheme = event.matches ? "dark" : "light";
-      applyTheme(scheme);
-      for (const mounted of mounts.values()) mounted.setScheme(scheme);
-    });
+    "change", () => { if (config.theme === "system") applyScheme(); });
 
   return {
     frame,
@@ -130,7 +142,7 @@ export async function startFrame(root) {
     // otherwise leave the previous main area holding an Edit button of its own,
     // one more on every switch. Furniture is cleared by what it is, not by
     // where it happens to be parked.
-    for (const old of frame.querySelectorAll(".edit-btn, .layout-bar")) old.remove();
+    for (const old of frame.querySelectorAll(".edit-btn, .edit-stack")) old.remove();
 
     for (const [slot, panel] of panels) {
       const cell = layout.cells.find((entry) => entry.slot === slot);
@@ -184,7 +196,7 @@ export async function startFrame(root) {
     // The widget's box and the editing chrome are siblings: the chrome has to
     // stay clickable while the iframe under it is inert, and an overlay *in*
     // the iframe's element would be inside the box it is labelling.
-    element.append(inner, slotChrome(slot, assignment(config, slot), {
+    element.append(inner, slotChrome(slot, shown(assignment(config, slot)), {
       onChoose: (anchor) => choose(slot, anchor),
     }));
     return element;
@@ -215,7 +227,7 @@ export async function startFrame(root) {
         redrawBar(slot, place);
       },
       onPick: (entry, anchor) => chooseWidget(frame, anchor, {
-        widgets: catalog,
+        widgets: offer(),
         current: entry.widget === WILDCARD ? null : entry.widget,
         empty: false,
         wildcard: true,
@@ -269,7 +281,7 @@ export async function startFrame(root) {
         redrawRail();
       },
       onPick: (entry, anchor) => chooseWidget(frame, anchor, {
-        widgets: catalog,
+        widgets: offer(),
         current: entry.widget === WILDCARD ? null : entry.widget,
         empty: false,
         wildcard: true,
@@ -293,7 +305,7 @@ export async function startFrame(root) {
    *  button is a button — only where it was drawn differs. */
   function press(entry, anchor) {
     pressButton(frame, entry, anchor, {
-      widgets: catalog,
+      widgets: offer(),
       open: (name, from) => popUp(name, from),
     });
   }
@@ -301,16 +313,21 @@ export async function startFrame(root) {
   /** Summon a widget over the frame. The other way a widget reaches the screen;
    *  `buttons.js` says how it differs from being placed in a slot. */
   function popUp(name, anchor) {
-    const widget = catalog.find((row) => row.name === name);
-    if (!widget) return say(`No widget named "${name}" is installed.`);
-    openWidgetWindow(frame, anchor, name, {
+    const panel = isPanelId(name) ? panelById(name) : null;
+    const widget = panel ? null : catalog.find((row) => row.name === name);
+    if (!panel && !widget) return say(`Nothing named "${name}" is installed.`);
+    openWidgetWindow(frame, anchor, panel ? panel.name : name, {
       mount: (body) => {
-        // Mounting is asynchronous and the popup is already on screen, so the
-        // handle arrives after `openWidgetPopup` has returned. It is parked on
-        // the element the popup will unmount from.
+        // Mounting is asynchronous and the window is already on screen, so the
+        // handle arrives after `openWidgetWindow` has returned. It is parked on
+        // the element the window will unmount from.
         const holder = { unmount: () => holder.mounted?.unmount() };
-        readWidget(widget).then(
-          (html) => { holder.mounted = mountWidget(body, widget, { html, scheme }); },
+        const arriving = panel
+          ? mountPanel(body, panel, { scheme })
+          : readWidget(widget)
+              .then((html) => mountWidget(body, widget, { html, scheme }));
+        arriving.then(
+          (mounted) => { holder.mounted = mounted; },
           (error) => note(body, explain(error)),
         );
         return holder;
@@ -405,14 +422,23 @@ export async function startFrame(root) {
     panel.dataset.filled = name ? "yes" : "no";
     if (!name) return;
 
-    const widget = catalog.find((row) => row.name === name);
-    if (!widget) {
-      // An assignment outliving its widget is ordinary — the store uninstalled
-      // it, or the agent renamed a file. Saying so beats a blank box, which is
-      // indistinguishable from a slot nobody has filled in.
-      return note(body, `No widget named "${name}" is installed.`);
-    }
+    // The one fork. A panel is constructed here in the page; a widget is
+    // prepared and written into an iframe. Both answer with the same handle, so
+    // nothing past this point knows the difference.
     try {
+      if (isPanelId(name)) {
+        const panel = panelById(name);
+        if (!panel) return note(body, `No built-in panel named "${name}".`);
+        mounts.set(slot, await mountPanel(body, panel, { scheme }));
+        return;
+      }
+      const widget = catalog.find((row) => row.name === name);
+      if (!widget) {
+        // An assignment outliving its widget is ordinary — the store
+        // uninstalled it, or the agent renamed a file. Saying so beats a blank
+        // box, which is indistinguishable from a slot nobody has filled in.
+        return note(body, `No widget named "${name}" is installed.`);
+      }
       const html = await readWidget(widget);
       mounts.set(slot, mountWidget(body, widget, { html, scheme }));
     } catch (error) {
@@ -424,7 +450,16 @@ export async function startFrame(root) {
     remember(assign(config, slot, name));
     fill(slot);
     const label = panels.get(slot)?.querySelector(".slot-name");
-    if (label) label.textContent = name || "Empty";
+    if (label) label.textContent = shown(name);
+  }
+
+  /** What a stored assignment is *called*. A widget is known by its file, so
+   *  the name is the name; a panel is stored under its namespaced id and has a
+   *  written one, and `sb:about` in the slot control is an implementation
+   *  detail leaking into the one place the person is choosing. */
+  function shown(name) {
+    if (!name) return "Empty";
+    return (isPanelId(name) && panelById(name)?.name) || name;
   }
 
   /** The widget picker, drawn by the frame because it overhangs its slot. */
@@ -438,7 +473,7 @@ export async function startFrame(root) {
       /* Keep the previous catalog; the picker is still worth showing. */
     }
     chooseWidget(frame, anchor, {
-      widgets: catalog,
+      widgets: offer(),
       current: assignment(config, slot),
       onPick: (name) => set(slot, name),
     });
@@ -484,6 +519,27 @@ export async function startFrame(root) {
     if (button) button.hidden = !config.closed[side];
   }
 
+  /**
+   * Choose light, dark, or the machine's answer.
+   *
+   * The frame states the scheme and every widget is told; a widget must never
+   * ask the OS itself, or one box out of fourteen disagrees the moment somebody
+   * picks a theme here. `theme.js` says the rest.
+   */
+  function setTheme(next) {
+    if (next === config.theme) return;
+    config.theme = next;
+    remember(saveConfig(config));
+    applyScheme();
+  }
+
+  /** Resolve the preference and push it everywhere it is drawn. */
+  function applyScheme() {
+    scheme = resolveScheme(config.theme);
+    applyTheme(scheme);
+    for (const mounted of mounts.values()) mounted.setScheme(scheme);
+  }
+
   function setEditing(next) {
     editing = next;
     applyEditing();
@@ -504,14 +560,22 @@ export async function startFrame(root) {
     redrawBars();
     redrawRail();
     frame.querySelector(".edit-btn")?.setAttribute("aria-pressed", String(editing));
-    frame.querySelector(".layout-bar")?.remove();
+    frame.querySelector(".edit-stack")?.remove();
     if (!editing) return;
-    chromeCorner().append(layoutBar(LAYOUTS, config.layout, (id) => {
+    // Appearance above Layout above Edit, in one corner of one slot. A stack
+    // rather than two absolutely-placed bars, because the only thing that knows
+    // how tall the layout chooser is — which changes with the window, since it
+    // wraps — is the layout chooser.
+    const stack = document.createElement("div");
+    stack.className = "edit-stack";
+    stack.append(themeBar(config.theme, setTheme));
+    stack.append(layoutBar(LAYOUTS, config.layout, (id) => {
       if (id === config.layout) return;
       config.layout = id;
       remember(saveConfig(config));
       arrange();
     }));
+    chromeCorner().append(stack);
   }
 
   /**

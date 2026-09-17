@@ -31,7 +31,7 @@
  */
 
 import { call } from "./client.js";
-import { themeCss } from "./theme.js";
+import { themeCss, THEME_STYLE_ID } from "./theme.js";
 
 const CHANNEL = "sb-widget-v1";
 const MOUNT_CHANNEL = "sb-widget-mount-v1";
@@ -63,6 +63,9 @@ export function widgetDocument(html, { token, scheme = "light" }) {
   const doc = new DOMParser().parseFromString(html, "text/html");
 
   const style = doc.createElement("style");
+  // Named, because the scheme changes and this element is what has to change
+  // with it. See the bridge's `scheme` branch.
+  style.id = THEME_STYLE_ID;
   style.textContent = themeCss(scheme);
 
   const script = doc.createElement("script");
@@ -112,6 +115,17 @@ function bridgeSource(token) {
     "    }",
     '    if (m.kind === "size" || m.kind === "scheme") {',
     "      state[m.kind] = m.value;",
+    // The tokens are values in a stylesheet, so *telling* a widget the scheme
+    // changed is not enough: something has to replace the sheet. It cannot be
+    // the frame — a widget document has an opaque origin and the frame cannot
+    // reach into it — so the frame sends the new text and the bridge swaps it
+    // in. Swapping the text of one element rather than remounting is what lets
+    // a widget change palette with its state, its scroll position and its open
+    // stream all intact.
+    '    if (m.kind === "scheme" && typeof m.css === "string") {',
+    "      const sheet = document.getElementById(" + JSON.stringify(THEME_STYLE_ID) + ");",
+    "      if (sheet) sheet.textContent = m.css;",
+    "    }",
     "      for (const fn of listeners.get(m.kind) || []) {",
     "        try { fn(m.value); } catch (error) { console.error(error); }",
     "      }",
@@ -231,7 +245,7 @@ export function mountWidget(slot, widget, { html, scheme = "light" }) {
     delivered = true;
     frame.contentWindow?.postMessage({ channel: MOUNT_CHANNEL, html: source }, "*");
     sizes.observe(frame);
-    send({ kind: "scheme", value: scheme });
+    send({ kind: "scheme", value: scheme, css: themeCss(scheme) });
   });
 
   window.addEventListener("message", receive);
@@ -239,8 +253,11 @@ export function mountWidget(slot, widget, { html, scheme = "light" }) {
 
   return {
     widget,
-    /** Tell the widget the frame changed scheme. */
-    setScheme: (next) => send({ kind: "scheme", value: next }),
+    /** Tell the widget the frame changed scheme, and hand it the stylesheet
+     *  that goes with it — a widget cannot build one and the frame cannot reach
+     *  in to install it. */
+    setScheme: (next) =>
+      send({ kind: "scheme", value: next, css: themeCss(next) }),
     /** Take the widget down. Stops new calls and the delivery of late results;
      *  it cannot undo work the kernel has already accepted. */
     unmount() {

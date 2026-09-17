@@ -24,7 +24,20 @@
 @property --sb-deck { syntax: "<length>"; inherits: true; initial-value: 220px; }
 
 html, body, #root { height: 100%; }
-body { overflow: hidden; }
+
+/* The frame's own base, which the injected sheet deliberately does not supply:
+ * `tokensCss` hands the frame the token table and no defaults, because the
+ * chrome is not a widget. See `theme.js`. */
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--sb-bg);
+  color: var(--sb-fg);
+  font-family: var(--sb-font);
+  font-size: var(--sb-text);
+  line-height: var(--sb-leading);
+  -webkit-font-smoothing: antialiased;
+}
 
 /* ------------------------------------------------------------------- frame */
 
@@ -601,12 +614,25 @@ body { overflow: hidden; }
  * — the slot controls sit in the middle of each slot now, and the middle of a
  * short deck is the bottom middle of the window.
  */
-.layout-bar {
+/*
+ * The editing controls, stacked in the corner the Edit button is in. The stack
+ * is what is positioned; the bars inside it are ordinary blocks, so the one
+ * that wraps decides its own height and the one above it simply moves.
+ */
+.edit-stack {
   position: absolute;
   z-index: 4;
   right: 0.5rem;
   bottom: 3rem;
   max-width: calc(100% - 1rem);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+}
+
+.layout-bar {
+  max-width: 100%;
   flex-wrap: wrap;
   display: flex;
   align-items: center;
@@ -667,6 +693,103 @@ body { overflow: hidden; }
   background: color-mix(in srgb, var(--sb-muted) 60%, transparent);
 }
 .layout-choice[aria-checked="true"] .layout-thumb-slot { background: var(--sb-accent); }
+
+/* --------------------------------------------------------- ported palette */
+
+/*
+ * The old UI's token names, aliased onto ours.
+ *
+ * Its components — the ones being ported in as panels — are written against
+ * `--background`, `--foreground`, `--border` and the rest of the shadcn
+ * vocabulary. `theme.js` holds the same values under `--sb-*`, so this is a
+ * mapping rather than a second palette: a ported component works untouched, in
+ * both schemes, driven by the Appearance selector, and there is still exactly
+ * one table. A find-and-replace through the components would have been the
+ * other option and the worse one — it makes every future port a rewrite, and a
+ * token the mapping is missing announces itself immediately, where a missed
+ * replacement does not.
+ *
+ * Frame-only, deliberately: a widget document gets the `--sb-*` table and
+ * nothing else, so a widget cannot quietly come to depend on this.
+ */
+:root {
+  --background: var(--sb-bg);
+  --foreground: var(--sb-fg);
+  --card: var(--sb-card);
+  --card-foreground: var(--sb-fg);
+  --popover: var(--sb-card);
+  --popover-foreground: var(--sb-fg);
+  --primary: var(--sb-accent);
+  --primary-foreground: var(--sb-accent-fg);
+  --secondary: var(--sb-surface);
+  --secondary-foreground: var(--sb-fg);
+  --muted: var(--sb-surface);
+  --muted-foreground: var(--sb-muted);
+  --accent: var(--sb-surface);
+  --accent-foreground: var(--sb-fg);
+  --destructive: var(--sb-bad);
+  --caution: var(--sb-caution);
+  --notice: var(--sb-notice);
+  --border: var(--sb-line);
+  --input: var(--sb-line);
+  --ring: var(--sb-ring);
+  --radius: var(--sb-radius-control);
+}
+
+/* ------------------------------------------------------------- appearance */
+
+/*
+ * Three choices in one segmented control, sharing the layout chooser's shell so
+ * the two read as one panel of settings rather than as two floating widgets.
+ */
+.theme-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 0.5px solid var(--sb-line);
+  border-radius: var(--sb-radius-surface);
+  background: var(--sb-surface);
+  box-shadow: var(--sb-shadow);
+}
+
+.theme-group {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.theme-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.5rem;
+  border: 0.5px solid transparent;
+  border-radius: var(--sb-radius-control);
+  background: transparent;
+  color: var(--sb-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background var(--sb-motion-fast) var(--sb-ease),
+    color var(--sb-motion-fast) var(--sb-ease),
+    border-color var(--sb-motion-fast) var(--sb-ease);
+}
+.theme-choice svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.theme-choice:hover { color: var(--sb-fg); background: var(--sb-bg); }
+.theme-choice[aria-checked="true"] {
+  color: var(--sb-fg);
+  background: var(--sb-bg);
+  border-color: var(--sb-line);
+}
 
 /* ------------------------------------------------------------------ picker */
 

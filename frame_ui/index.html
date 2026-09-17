@@ -5,6 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Second Brain</title>
+    <!--
+      The theme, before anything is painted.
+
+      The module bundle's first paint is far too late: on a dark desktop the
+      window would show a full white frame and then repaint, and that flash is
+      the single most noticeable thing about a theme that is otherwise correct.
+      So `color-scheme` and the background go on here, synchronously, ahead of
+      the stylesheet — this is the one place the arrangement is read outside
+      `config.js`, and it reads the same `sb.frame.v1` blob under the same key.
+
+      It sets only the two properties that decide what a blank page looks like.
+      The real token table arrives with the module a moment later, and a
+      half-copy of it here is exactly the second copy `theme.js` exists to
+      prevent.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = JSON.parse(localStorage.getItem("sb.frame.v1") || "{}");
+          var theme = stored && stored.theme;
+          var dark = theme === "dark" || (theme !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.style.colorScheme = dark ? "dark" : "light";
+          root.style.background = dark ? "oklch(0.145 0 0)" : "oklch(1 0 0)";
+        } catch (e) {
+          /* Storage disabled, or a corrupt blob. Light is a fine place to start. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <main id="root"></main>

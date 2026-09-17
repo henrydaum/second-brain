@@ -44,6 +44,79 @@ export function editButton(editing, onToggle) {
 /* --------------------------------------------------------------- the layouts */
 
 /** The layout chooser: four thumbnails, one of them current. */
+/**
+ * Light, dark, or the machine's answer.
+ *
+ * A three-way radio group rather than a two-state toggle, because "System" is
+ * a real answer and the one most people are already on — `theme.js` and the
+ * old UI's `lib/theme.ts` both say why at more length.
+ *
+ * It updates its own checked state rather than being redrawn, because it is
+ * the only thing that ever changes the preference: the OS flipping under
+ * "System" changes the *palette* and leaves the answer to this question
+ * exactly where it was. A bar that redrew on a scheme change would move the
+ * selection to whichever of light or dark the machine had landed on, which is
+ * the one reading of it that is wrong.
+ */
+export function themeBar(current, onPick) {
+  const bar = document.createElement("div");
+  bar.className = "theme-bar";
+  bar.setAttribute("role", "radiogroup");
+  bar.setAttribute("aria-label", "Appearance");
+
+  const label = document.createElement("span");
+  label.className = "layout-bar-label";
+  label.textContent = "Appearance";
+  bar.append(label);
+
+  const group = document.createElement("div");
+  group.className = "theme-group";
+  for (const option of THEME_OPTIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "theme-choice";
+    button.dataset.theme = option.id;
+    button.title = option.hint;
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-checked", String(option.id === current));
+    button.innerHTML = option.icon;
+    const name = document.createElement("span");
+    name.textContent = option.name;
+    button.append(name);
+    button.addEventListener("click", () => {
+      for (const sibling of group.children) {
+        sibling.setAttribute("aria-checked", String(sibling === button));
+      }
+      onPick(option.id);
+    });
+    group.append(button);
+  }
+  bar.append(group);
+  return bar;
+}
+
+/** Sun, moon, monitor — the old UI's three, drawn as strokes so they inherit
+ *  the button's colour the way every other glyph in the frame does. */
+const THEME_OPTIONS = [
+  {
+    id: "system", name: "System", hint: "Follow this machine's setting",
+    icon: `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="12" rx="2"/>
+      <path d="M8 20h8M12 16v4"/></svg>`,
+  },
+  {
+    id: "light", name: "Light", hint: "Always light",
+    icon: `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4"/>
+      <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>`,
+  },
+  {
+    id: "dark", name: "Dark", hint: "Always dark",
+    icon: `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></svg>`,
+  },
+];
+
 export function layoutBar(layouts, current, onPick) {
   const bar = document.createElement("div");
   bar.className = "layout-bar";
@@ -214,7 +287,8 @@ export function chooseWidget(frame, anchor,
   }
   for (const widget of widgets) {
     popover.append(option(
-      widget.name,
+      // A built-in panel carries a written name; a widget is known by its file.
+      widget.label || widget.name,
       // `shadowed` is a *list of paths* the kernel hid behind this one, not a
       // name — checked against the handler rather than guessed from the field.
       widget.shadowed?.length
