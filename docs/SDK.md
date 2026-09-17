@@ -15,7 +15,11 @@ different jobs:
   contracts live.
 - `templates/<type>_template.py` defines that type's filename, folder,
   declarations, lifecycle, entry-point signature, and common failure modes. It
-  also contains executable examples.
+  also contains executable examples. A **widget** is the one family whose
+  template is not Python — `templates/widget_template.html` — because a widget
+  is one HTML file with no base class and no entry point. This guide does not
+  describe it: a widget runs in a browser, not in a box, and reaches the kernel
+  through `brain.call` rather than `sdk`. Its template is the whole contract.
 
 Do not infer an API from a similar framework or an older Second Brain plugin.
 If this guide and the template do not answer a detail, follow their code
@@ -40,6 +44,7 @@ pointer and inspect the implementation. The shortest safe authoring loop is:
 | A file-type reader | parser | `templates/parser_template.py` |
 | A model-provider connection | LLM backend | `templates/llm_backend_template.py` |
 | A service that influences agent turns | hook | `templates/hook_template.py` and `sandbox/guest/hooks.py` |
+| A small visual surface inside the web UI | widget | `templates/widget_template.html` |
 
 ### Where to look when this guide stops
 

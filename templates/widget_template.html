@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Widget template</title>
+
+<!--
+  ============================================================================
+  WRITING A WIDGET
+  ============================================================================
+
+  A widget is ONE HTML FILE. Structure, style and behaviour all live in it, and
+  there is nothing else to ship: no build step, no bundle, no registration, no
+  Python. Save it as `widgets/widget_<name>.html` in the workspace and the app
+  can mount it — the same live-loading every other family gets.
+
+      DATA_DIR/workspace/widgets/widget_notes.html
+
+  The prefix is how the kernel finds it and the stem is what the user sees in
+  the picker: `widget_notes.html` is listed as "notes".
+
+  This file is a WORKING WIDGET. Copy it, delete the parts you do not want, and
+  keep the shape. Everything below runs.
+
+  ---------------------------------------------------------------------------
+  WHERE IT RUNS, AND WHAT THAT COSTS
+  ---------------------------------------------------------------------------
+
+  Your document loads in a sandboxed iframe with its own OPAQUE ORIGIN. It is
+  not a page on the app's origin and it is not a page on the internet. Four
+  consequences, and none of them are bugs to work around:
+
+    * NO NETWORK. `fetch`, `XMLHttpRequest` and `WebSocket` reach nothing —
+      there is no origin to be same-origin with and no credential to send. The
+      only way out is `brain.call`, below, and that is deliberate: it is what
+      makes every effect a widget has classifiable by the kernel.
+
+    * NO STORAGE. `localStorage`, `sessionStorage` and cookies either throw or
+      are wiped between mounts, because an opaque origin has no persistent
+      partition. Anything worth keeping goes through `brain.call` — the kernel
+      has a database, and `db.query` is a Request.
+
+    * NO PARENT. `window.parent` exists but is cross-origin, so you can read
+      nothing off it. `window.top`, `document.referrer` and the URL tell you
+      nothing either.
+
+    * NO NAVIGATION. Links to other pages go nowhere useful. Build what you
+      need in here, or hand a path to the kernel and let it open it.
+
+  What you DO get is the whole of the DOM, the whole of modern JavaScript, and
+  `brain`.
+
+  ---------------------------------------------------------------------------
+  THE SDK: `brain`
+  ---------------------------------------------------------------------------
+
+  The frame injects `window.brain` before any of your scripts run, so it is
+  there at the top of your first `<script>`.
+
+      brain.call(type, args)   One Second Brain Request. Returns a promise:
+                               resolves with the Result's data, rejects with an
+                               Error carrying `.code`.
+
+      brain.on(kind, fn)       "size" or "scheme". Returns an unsubscribe
+                               function.
+
+      brain.size               { width, height } of your box, in CSS pixels.
+      brain.scheme             "light" or "dark" — the app's choice, not the
+                               operating system's.
+
+  `brain.call` IS the SDK. Anything `sdk.*` can do in a Python plugin, a widget
+  can ask for by Request type — `conv.list`, `db.query`, `fs.read`, `net.http`,
+  `agent.spawn`. `docs/SECURITY_CONTRACT_APPENDIX.md` is the full catalogue and
+  `docs/HTTP_PROTOCOL.md` describes the same wire this rides on.
+
+  Two rules about what comes back:
+
+    * A REFUSAL IS AN ANSWER. An unsafe Request raises an approval dialog in
+      the app, and the person may say no. That rejects with `code` set —
+      `approval_declined`, `not_permitted` — and it is a thing to show, not to
+      retry. A widget gets no special treatment here: its Requests are
+      classified exactly as a tool's are, with the widget in the chain.
+
+    * `frontend.*` IS NOT YOURS. Identity, attendance and answering approval
+      dialogs belong to the app. Asking is refused with `not_permitted`. A
+      widget approving its own dialog would be approving itself.
+
+  ---------------------------------------------------------------------------
+  SIZE: YOU ARE A GUEST IN SOMEBODY ELSE'S BOX
+  ---------------------------------------------------------------------------
+
+  A widget does not choose its size. It sits in a panel the person drags, that
+  slides shut, that goes fullscreen — and it is TOLD, through `brain.size` and
+  `brain.on("size", …)`. Never measure `window.innerWidth` to decide a layout:
+  it is your iframe's width, which is right by accident today and wrong the
+  moment a widget is mounted somewhere else.
+
+  Lay out for the box you are given. That means: no fixed pixel widths on the
+  outermost element, `height: 100%` if you want to fill, and your own scrolling
+  container if your content can overflow. The frame gives you the panel EDGE TO
+  EDGE — no padding, no border, nothing between your first pixel and the box —
+  so if you want breathing room, pad your own container. Most widgets should.
+
+  ---------------------------------------------------------------------------
+  STYLE
+  ---------------------------------------------------------------------------
+
+  THE FRAME INJECTS A STYLESHEET INTO YOUR DOCUMENT BEFORE YOUR OWN STYLES RUN.
+  It sets the token table, sensible defaults for every element you are likely to
+  use, and `color-scheme`. You do not import it, link it, or copy it.
+
+      Write plain, semantic HTML and it will already look right. Reach for a
+      token when you need a value. Never write a hex colour, a font stack, or a
+      hand-typed radius.
+
+  A widget whose `<style>` block is empty is a correct widget. That is the
+  target, and it is the whole reason fourteen widgets by fourteen authors read
+  as one app rather than fourteen.
+
+  These already look right with no classes on them: `body`, `h1`–`h4`, `p`,
+  `a`, `small`, `hr`, `button`, `input`, `textarea`, `select`, `label`,
+  `table`/`th`/`td`, `code`, `pre`, `blockquote`, the scrollbar, the focus ring
+  and `::selection`. Four classes cover the shapes that recur: `.sb-card` (a
+  grouping), `.sb-row` (a list row with a hover), `.sb-pill` (a count or a
+  status), `.sb-muted` (secondary text). Buttons come filled; `.sb-secondary`
+  and `.sb-ghost` are the quieter two.
+
+  THE TOKENS. Every one is a CSS custom property on `:root`; use `var(--sb-…)`.
+  The palette is achromatic — everything that looks like a colour is a
+  lightness, and the three that carry hue mean something.
+
+      --sb-bg          The surface you are on
+      --sb-fg          Text
+      --sb-muted       Secondary text
+      --sb-card        A raised grouping
+      --sb-surface     A quiet fill: hover, an inset, a code block
+      --sb-line        Hairlines and borders
+      --sb-accent      The one prominent colour — a primary button
+      --sb-accent-fg   Text on `--sb-accent`
+      --sb-ring        The focus ring
+      --sb-bad         Something went wrong. Only that.
+      --sb-selection   Selected text
+
+      --sb-space       One unit of room. `--sb-space-sm` is half.
+      --sb-font        --sb-font-mono
+      --sb-radius-control  --sb-radius-row  --sb-radius-surface
+      --sb-radius-dialog   --sb-radius-pill
+      --sb-shadow      --sb-shadow-subtle
+      --sb-ease        --sb-motion-fast  --sb-motion-control  --sb-motion-panel
+
+  DARK MODE IS NOT YOURS TO DETECT. Do not write a `prefers-color-scheme` media
+  query: the app decides the scheme, and one box asking the operating system
+  instead would be right until somebody picks a theme in the app, at which
+  point one widget out of fourteen disagrees with the rest. The tokens change
+  underneath you when the scheme changes; if you need to *do* something about
+  it — redraw a canvas, swap an image — listen with `brain.on("scheme", …)`.
+
+  GOING OFF-PALETTE IS ALLOWED, AND IS A DECISION. Our stylesheet goes in
+  first, so anything you write wins: a widget that wants to be a neon synth or
+  a 1987 terminal can be, and that is a legitimate thing for somebody to ask
+  for. What is not legitimate is drifting off it by accident — a hand-typed
+  `#1a1a1a` that is half a shade from `--sb-bg` reads as a bug, not a style.
+  Either use the tokens or commit to something.
+-->
+
+<style>
+  /*
+    Layout only, and one deliberate flourish at the bottom.
+
+    Note what is NOT here: no colours, no font stack, no radius values. Every
+    one of those would be a copy of something the frame already told us, and a
+    copy is how a widget drifts half a shade away from the app around it.
+  */
+  main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sb-space);
+    /* The box is the panel, and the panel is not ours to size. */
+    height: 100%;
+    /* The frame hands over the full box; the inset is ours to choose. */
+    padding: var(--sb-space);
+    /* Our own scrolling, because the frame provides none — an outer scrollbar
+       would be a second one for the same content. */
+    overflow: auto;
+  }
+
+  header { display: flex; align-items: baseline; gap: var(--sb-space-sm); }
+  header h1 { margin: 0; }
+
+  dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1.25rem;
+    margin: 0;
+  }
+  dt { color: var(--sb-muted); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+  /* `min-height: 0` is what lets a flex child scroll instead of growing the
+     page — the one flexbox rule a widget will meet on its first day. */
+  .answer { min-height: 0; flex: 1; overflow: auto; }
+
+  /* A narrow panel is the normal case, not the edge case: the widget zone is
+     often 320px. Container queries rather than media queries, because the
+     window's width is not ours and `brain.size` is the box's. */
+  @container (max-width: 22rem) {
+    dl { grid-template-columns: 1fr; gap: 0 }
+  }
+  body { container-type: inline-size; }
+</style>
+</head>
+
+<body>
+<main>
+  <header>
+    <h1>Widget template</h1>
+    <span class="sb-pill" id="tree">live</span>
+  </header>
+
+  <p class="sb-muted">
+    Everything below is real. The box and scheme come from the frame; the
+    button makes an actual Request.
+  </p>
+
+  <dl>
+    <dt>Box</dt><dd id="box">…</dd>
+    <dt>Scheme</dt><dd id="scheme">…</dd>
+  </dl>
+
+  <div>
+    <button id="ask" type="button">Ask the kernel</button>
+    <button id="clear" type="button" class="sb-ghost">Clear</button>
+  </div>
+
+  <div class="answer sb-card" id="answer">Nothing asked yet.</div>
+</main>
+
+<script>
+  // `brain` is already here: the frame injects it ahead of this script. There
+  // is nothing to import and nothing to wait for.
+
+  const box = document.getElementById("box");
+  const scheme = document.getElementById("scheme");
+  const answer = document.getElementById("answer");
+
+  /* ---------------------------------------------------- being told the box */
+
+  // Read once for the size we start at, then listen. Both halves are needed:
+  // the listener does not fire until something changes, and something may
+  // never change.
+  const showSize = (size) => {
+    box.textContent = `${Math.round(size.width)} × ${Math.round(size.height)}`;
+  };
+  showSize(brain.size);
+  brain.on("size", showSize);
+
+  const showScheme = (value) => { scheme.textContent = value; };
+  showScheme(brain.scheme);
+  // Only needed for what CSS cannot do for itself — the tokens have already
+  // changed by the time this runs.
+  brain.on("scheme", showScheme);
+
+  /* ------------------------------------------------------- making a Request */
+
+  document.getElementById("ask").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    answer.textContent = "Asking…";
+    try {
+      // An ordinary read. `conv.list` is SAFE, so nobody is interrupted; a
+      // Request that changes something would raise a dialog in the app, and
+      // the person may decline it.
+      const page = await brain.call("conv.list", { details: true, limit: 5 });
+      const items = Array.isArray(page) ? page : (page.items || []);
+      answer.replaceChildren(...items.map((item) => {
+        const row = document.createElement("div");
+        row.className = "sb-row";
+        // `textContent`, never `innerHTML`: this is somebody's own text, and a
+        // conversation titled `<img onerror=…>` is a conversation title.
+        row.textContent = item.title || "New conversation";
+        return row;
+      }));
+      if (!items.length) answer.textContent = "No conversations yet.";
+    } catch (error) {
+      // A refusal is an answer. `code` tells the two apart: `approval_declined`
+      // is a person saying no, anything else is the Request failing.
+      answer.textContent = error.code === "approval_declined"
+        ? "You declined that."
+        : `Could not ask: ${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.getElementById("clear").addEventListener("click", () => {
+    answer.textContent = "Nothing asked yet.";
+  });
+</script>
+</body>
+</html>

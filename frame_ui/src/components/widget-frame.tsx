@@ -166,6 +166,31 @@ export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
   }, [scheme, source]);
 
   /**
+   * The first size and scheme, at the moment the document is ready for them.
+   *
+   * **Everything pushed before `load` is lost**, and silently: the bridge that
+   * would receive it is in the document being parsed, so the frame is posting
+   * into an empty realm. The `ResizeObserver` below does fire on `observe`, but
+   * that happens as the iframe is created — so a widget reading `brain.size`
+   * in its first script found `0 × 0` and kept it until somebody dragged the
+   * panel. The one measurement a widget cannot take for itself is the one it
+   * was missing.
+   */
+  const announce = () => {
+    const element = frame.current;
+    if (!element) return;
+    const { width, height } = element.getBoundingClientRect();
+    element.contentWindow?.postMessage(
+      { channel: CHANNEL, kind: "scheme", value: scheme, css: tokenBlock(scheme) },
+      "*",
+    );
+    element.contentWindow?.postMessage(
+      { channel: CHANNEL, kind: "size", value: { width, height } },
+      "*",
+    );
+  };
+
+  /**
    * The box's size, pushed on change.
    *
    * A widget is sized *by the frame* — the panel's width, the drawer sliding,
@@ -204,6 +229,7 @@ export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
       // The whole boundary, and the absence is the point. See the module note.
       sandbox="allow-scripts"
       srcDoc={source ?? ""}
+      onLoad={announce}
       // `block` rather than the default `inline`, which leaves a descender's
       // worth of background under every iframe, and a border of zero because
       // the browser's default is a 2px inset ridge nobody asked for.

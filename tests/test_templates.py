@@ -47,6 +47,13 @@ DISCOVERY_ONLY = (
 )
 
 
+# The one template that is not Python, because the family is not. A widget is
+# one HTML file — no base class, no entry point, nothing imported — so the
+# validator has nothing to say about it and the checks below are about what it
+# *teaches* instead.
+WIDGET = "widget_template.html"
+
+
 def _templates() -> list:
     """Every template on disk, so a new one cannot be added unnoticed."""
     return sorted(p.name for p in TEMPLATES.glob("*_template.py"))
@@ -143,3 +150,57 @@ def test_native_template_imports_nothing(filename):
     imports = [n for n in ast.walk(tree) if isinstance(n, (ast.Import,
                                                            ast.ImportFrom))]
     assert not imports, f"{filename} executes imports at module level"
+
+
+def test_the_widget_template_exists_and_is_html():
+    """The one family whose template is not Python.
+
+    Listed here rather than left out, because the glob above cannot see it:
+    ``*_template.py`` is how every other template is found, so an HTML one is
+    invisible to the accounting test and could rot indefinitely without a
+    single failure. This is that accounting.
+    """
+    assert (TEMPLATES / WIDGET).is_file()
+    assert sorted(p.name for p in TEMPLATES.glob("*_template.html")) == [WIDGET]
+
+
+def test_the_widget_template_teaches_the_bridge():
+    """A widget reaches the kernel one way, and cannot reach it any other."""
+    source = (TEMPLATES / WIDGET).read_text(encoding="utf-8")
+
+    # The whole SDK, and the only door out of an opaque origin.
+    assert "brain.call" in source
+    assert "brain.on" in source
+
+    # The three the sandbox makes unreachable. Naming them is the point: an
+    # author who does not know they are gone will reach for `fetch` first, and
+    # a widget that fails silently at the network layer is a long afternoon.
+    for absent in ("fetch", "localStorage", "window.parent"):
+        assert absent in source, f"the template must say why {absent} is gone"
+
+    # The family that is refused, and the reason it is refused.
+    assert "frontend." in source
+
+
+def test_the_widget_template_writes_no_colour_of_its_own():
+    """The style rule the template states, applied to the template.
+
+    "Never write a hex colour" is the one piece of the styling contract that
+    can be checked rather than asked for, and a template that broke it would
+    teach the opposite of what it says two paragraphs up. Every apparent colour
+    in this app is a token, so a literal here is either a mistake or a decision
+    that needs to be made somewhere a person will see it.
+    """
+    import re
+
+    source = (TEMPLATES / WIDGET).read_text(encoding="utf-8")
+    # Prose mentions one as an example of what not to do; that sentence is the
+    # teaching, so it is allowed and nothing else is.
+    body = source.replace("`#1a1a1a`", "")
+    found = re.findall(r"#[0-9a-fA-F]{3,8}", body)
+    assert not found, f"{WIDGET} hard-codes {found}; use var(--sb-*)"
+
+    # Same rule, the other two ways it is broken.
+    assert "prefers-color-scheme" not in body.replace(
+        "`prefers-color-scheme` media", "")
+    assert "font-family:" not in body
