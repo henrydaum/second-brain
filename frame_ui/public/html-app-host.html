@@ -2,6 +2,24 @@
 <html lang="en">
 <meta charset="utf-8">
 <title>HTML App host</title>
+<style>
+  /*
+    Transparent, so the frame that embeds this decides what is behind a
+    document that has not arrived yet. A document's default background is the
+    browser's `canvas` — white — and this page is visible for the moment
+    between the iframe loading and the App being written into it, which reads
+    as a white flash against a dark panel.
+
+    The embedder still gets to choose: the file preview sets `bg-white` on the
+    iframe element, so a previewed page keeps the sheet of paper it expects,
+    and the widget panel sets the panel's own colour, so a widget fades up out
+    of the surface it sits on rather than out of a flashbulb.
+  */
+  html, body { margin: 0; background: transparent; }
+  /* Only worth reading if something went wrong — the App normally replaces
+     this document within a frame or two. */
+  p { padding: 1rem; color: #888; font: 400 13px/1.5 system-ui, sans-serif; }
+</style>
 <p>Loading HTML App…</p>
 <script>
   // This URL has a dedicated CSP, unlike srcdoc which inherits the UI's CSP.

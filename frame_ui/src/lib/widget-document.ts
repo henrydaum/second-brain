@@ -1,12 +1,12 @@
 /**
- * Preparing a widget's document: the theme, then the bridge, then its markup.
+ * What a widget is dressed in: the app's tokens, and defaults for the elements
+ * it is likely to use.
  *
- * Order is the whole of it. The theme goes into `<head>` *first* so the
- * widget's own styles come after and win — a widget that wants to override a
- * token may, and one that says nothing inherits the app's look rather than the
- * browser's defaults. The bridge goes in before any of the author's scripts,
- * because a widget calling `brain` at the top of its first script would
- * otherwise find nothing there.
+ * This is the *styling* half of preparing a widget's document. The other half
+ * — the bridge — belongs to `lib/html-app.ts`, which serves both surfaces that
+ * run agent-authored HTML; what is here is the part only a widget gets, because
+ * a widget is furniture inside the app and a previewed HTML file is a document
+ * that happens to be on screen.
  *
  * **The token values are read off the running app, never written down here.**
  * A widget is a separate document and inherits nothing, so the frame has to
@@ -58,9 +58,11 @@ const ALIASES: Record<string, string> = {
   "--sb-accent-fg": "--primary-foreground",
   "--sb-bad": "--destructive",
   "--sb-selection": "--sb-selection",
-  "--sb-font": "--font-sans",
-  "--sb-font-mono": "--font-mono",
 };
+
+/** Tokens the frame states outright, because the app emits nothing to read —
+ *  see the note in `tokenBlock`. */
+const STATED = ["--sb-font", "--sb-font-mono", "--sb-space", "--sb-space-sm"];
 
 /** Tokens the app already spells the way a widget should see them. */
 const PASSTHROUGH = [
@@ -76,6 +78,22 @@ const PASSTHROUGH = [
   "--sb-shadow",
   "--sb-shadow-subtle",
   "--sb-tint",
+];
+
+/**
+ * Every token a widget is promised, by name.
+ *
+ * **This is the contract `WIDGET_STYLE.md` and the template describe**, and it
+ * is exported so those two can be checked against it rather than trusted. A
+ * doc naming a token the frame does not send is worse than a doc naming none:
+ * `var(--sb-text)` resolves to nothing, which makes the whole declaration
+ * invalid and drops it, silently — which is exactly how every widget came to
+ * be rendered in Times New Roman.
+ */
+export const WIDGET_TOKENS: readonly string[] = [
+  ...Object.keys(ALIASES),
+  ...PASSTHROUGH,
+  ...STATED,
 ];
 
 /**
@@ -98,10 +116,30 @@ export function tokenBlock(scheme: "light" | "dark"): string {
     const value = computed.getPropertyValue(name).trim();
     if (value) lines.push(`  ${name}: ${value};`);
   }
-  // The one token written down rather than forwarded, and the reason is that
-  // there is nothing to forward it from: spacing in this app is Tailwind's,
-  // and a widget has no Tailwind. A widget still needs *a* unit of room that
-  // agrees with the frame's, so the frame states one.
+  /*
+   * The tokens the frame states rather than forwards, because there is nothing
+   * to forward them from.
+   *
+   * **Spacing and type are Tailwind's here, and a widget has no Tailwind.**
+   * Worse for type: `--font-sans` is declared inside `@theme inline`, and
+   * `inline` is precisely the Tailwind directive that says "inline this into
+   * the utilities and emit no custom property" — so reading it answers the
+   * empty string. `tokenBlock` skips an empty value rather than writing an
+   * invalid declaration, so `--sb-font` simply never arrived and every widget
+   * fell back to the browser's serif default. Silent, and it looked like a
+   * widget authoring mistake rather than a missing token.
+   *
+   * The sans stack is therefore read off the *running app's body*, which is
+   * the resolved value rather than a copy of the declaration — one source, and
+   * it follows the app if the stack ever changes. There is no element rendering
+   * mono text to read, so that one is stated; it is the only token in here that
+   * is a copy, and `test_the_style_contract_is_kept` is what notices if it
+   * drifts.
+   */
+  const body = getComputedStyle(document.body);
+  lines.push(`  --sb-font: ${body.fontFamily || "ui-sans-serif, system-ui, sans-serif"};`);
+  lines.push('  --sb-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, '
+    + 'Consolas, "Liberation Mono", "Courier New", monospace;');
   lines.push("  --sb-space: 1rem;");
   lines.push("  --sb-space-sm: 0.5rem;");
 
@@ -136,7 +174,7 @@ body {
   padding: 0;
   background: var(--sb-bg);
   color: var(--sb-fg);
-  font-family: var(--sb-font);
+  font-family: var(--sb-font, ui-sans-serif, system-ui, sans-serif);
   font-size: 0.875rem;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
@@ -178,7 +216,7 @@ label { display: inline-block; margin-bottom: 0.25rem; color: var(--sb-muted); }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 0.375rem 0.5rem; border-bottom: 0.5px solid var(--sb-line); text-align: left; }
 th { color: var(--sb-muted); font-weight: 500; }
-code, pre { font-family: var(--sb-font-mono); font-size: 0.8125rem; }
+code, pre { font-family: var(--sb-font-mono, ui-monospace, monospace); font-size: 0.8125rem; }
 code { padding: 0.1rem 0.3rem; border-radius: 0.375rem; background: var(--sb-surface); }
 pre { padding: 0.75rem; border-radius: var(--sb-radius-surface); background: var(--sb-surface); overflow: auto; }
 pre code { padding: 0; background: none; }
@@ -217,104 +255,8 @@ blockquote {
 }
 `;
 
-/**
- * The bridge, as source text for a `<script>` in the widget's own document.
- *
- * **It grants no authority of its own.** It relays Requests to the frame,
- * which makes them with the same `sdk()` everything else uses, so the kernel
- * classifies a widget's Request exactly as it classifies a tool call and an
- * unsafe one still raises a dialog. What it withholds is the `frontend.*`
- * family: identity, attendance and approval answers belong to the frame, which
- * holds the stream — a widget answering its own approval dialog would be
- * approving itself.
- *
- * It is a string rather than a module because it has to execute in the
- * *widget's* realm. Nothing here is imported, bundled or type-checked; that is
- * the price of the boundary, and it is why this stays as small as it can be.
- */
-function bridgeScript(channel: string, token: string): string {
-  return `(function () {
-  var pending = new Map();
-  var next = 1;
-  var listeners = { size: [], scheme: [] };
-  var state = { size: { width: 0, height: 0 }, scheme: "light" };
 
-  window.addEventListener("message", function (event) {
-    // The frame is the only sender we answer to, and it is recognised by
-    // object identity rather than by origin: this document has an opaque
-    // origin, so \`event.origin\` on anything it sends is the string "null".
-    if (event.source !== window.parent) return;
-    var message = event.data;
-    if (!message || message.channel !== ${JSON.stringify(channel)}) return;
-
-    if (message.kind === "result") {
-      var settle = pending.get(message.id);
-      if (!settle) return;
-      pending.delete(message.id);
-      if (message.error) settle.reject(Object.assign(new Error(message.error), { code: message.code || "" }));
-      else settle.resolve(message.data);
-      return;
-    }
-    if (message.kind === "size" || message.kind === "scheme") {
-      state[message.kind] = message.value;
-      if (message.kind === "scheme" && typeof message.css === "string") {
-        var sheet = document.getElementById("sb-theme");
-        if (sheet) sheet.textContent = message.css;
-      }
-      (listeners[message.kind] || []).forEach(function (fn) {
-        try { fn(message.value); } catch (error) { console.error(error); }
-      });
-    }
-  });
-
-  window.brain = {
-    call: function (type, args) {
-      var id = next++;
-      return new Promise(function (resolve, reject) {
-        pending.set(id, { resolve: resolve, reject: reject });
-        // "*" as the target, because an opaque origin has no name to address.
-        // That is safe only because the frame checks \`event.source\`.
-        window.parent.postMessage({
-          channel: ${JSON.stringify(channel)},
-          token: ${JSON.stringify(token)},
-          kind: "call",
-          id: id,
-          type: type,
-          args: args || {},
-        }, "*");
-      });
-    },
-    on: function (kind, fn) {
-      if (!listeners[kind]) return function () {};
-      listeners[kind].push(fn);
-      return function () {
-        listeners[kind] = listeners[kind].filter(function (other) { return other !== fn; });
-      };
-    },
-    get size() { return state.size; },
-    get scheme() { return state.scheme; },
-  };
-})();`;
-}
-
-/**
- * The finished document, for `srcdoc`.
- *
- * The theme and the bridge are *prepended* rather than inserted into the
- * widget's `<head>`, and the difference matters for a file that has no `<head>`
- * at all — which a hand-written widget very often does not. A browser building
- * the DOM will hoist what belongs in a head; a string replace on a tag that is
- * not there silently drops both.
- */
-export function widgetDocument(
-  html: string,
-  options: { channel: string; token: string; scheme: "light" | "dark" },
-): string {
-  const head = [
-    `<meta charset="utf-8">`,
-    `<meta name="viewport" content="width=device-width, initial-scale=1">`,
-    `<style id="sb-theme">${tokenBlock(options.scheme)}${BASE}</style>`,
-    `<script>${bridgeScript(options.channel, options.token)}</script>`,
-  ].join("\n");
-  return `${head}\n${html}`;
+/** The whole stylesheet a widget is handed, in the order it is handed it. */
+export function widgetStyles(scheme: "light" | "dark"): string {
+  return tokenBlock(scheme) + BASE;
 }

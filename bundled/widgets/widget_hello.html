@@ -38,7 +38,10 @@
       gap: 1rem;
       align-items: flex-start;
       padding: var(--sb-space);
-      height: 100%;
+      /* The box is the panel's, and the panel is not ours to size. `min-height`
+         rather than `height` so content taller than the box grows it instead of
+         overflowing a fixed one. */
+      min-height: 100%;
     }
 
     h1 { font-size: 1.15rem; margin: 0; }
@@ -50,7 +53,7 @@
       margin: 0;
       padding-top: 0.75rem;
       border-top: 1px solid var(--sb-line);
-      width: 100%;
+      align-self: stretch;
     }
 
     dt { color: var(--sb-muted); }
@@ -70,13 +73,20 @@
     button:disabled { opacity: 0.6; cursor: wait; }
 
     .answer {
-      width: 100%;
+      /* `align-self: stretch` rather than `width: 100%`: this is a flex child,
+         and a percentage width resolves against the parent's content box while
+         the browser's scrollbar does not — which is how a box that "fits"
+         still puts a hairline of horizontal scroll under the whole widget. */
+      align-self: stretch;
       margin: 0;
       padding: 0.75rem 1rem;
       border: 1px solid var(--sb-line);
       border-radius: var(--sb-radius-surface);
       background: var(--sb-surface);
-      font: var(--sb-font-mono);
+      /* `font-family`, not `font`. The shorthand requires a size, so
+         `font: var(--sb-font-mono)` is invalid and drops the whole
+         declaration — silently, leaving the body font in place. */
+      font-family: var(--sb-font-mono);
       white-space: pre-wrap;
       overflow: auto;
     }

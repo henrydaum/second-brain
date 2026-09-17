@@ -65,29 +65,34 @@ lightness, and the three that carry hue mean something.
 | `--sb-line` | Borders and hairlines |
 | `--sb-ring` | The focus outline |
 | `--sb-accent` / `--sb-accent-fg` | The one emphatic fill and its text |
-| `--sb-bad` | A failure, a destructive action |
-| `--sb-caution` | Something that needs attention but has not failed |
-| `--sb-notice` | Something worth noticing |
+| `--sb-bad` | A failure, a destructive action. The only token that carries hue. |
 | `--sb-selection` | Selected text, a pressed state |
-| `--sb-shadow` / `--sb-shadow-subtle` / `--sb-shadow-dialog` | Three elevations |
+| `--sb-shadow` / `--sb-shadow-subtle` | Two elevations |
 
 Need a colour between two of these? `color-mix(in srgb, var(--sb-fg) 10%,
 transparent)`. The palette is `oklch`, so a mix stays neutral; mixing hex
 drifts, which is why there are no hex values in the table.
 
-**Shape and type** — `--sb-font`, `--sb-font-mono`, `--sb-text`, `--sb-text-sm`,
-`--sb-text-xs`, `--sb-leading`, `--sb-space`, `--sb-divider-width`.
+**Shape and type** — `--sb-font`, `--sb-font-mono`, `--sb-space`,
+`--sb-space-sm`, and `--sb-tint`.
+
+Type *sizes* are deliberately not tokens. The frame sets a body size and a
+line height and the elements above inherit them; a widget that needs a bigger
+heading says `font-size: 1.25rem` and means it. A ladder nobody could remember
+was four more names to get subtly wrong.
 
 Radii are picked by *what the thing is*, never by eye:
 
 `--sb-radius-control` (a button, an input) · `--sb-radius-row` · 
 `--sb-radius-surface` (a card) · `--sb-radius-dialog` · `--sb-radius-pill`
 
-Control heights likewise: `--sb-control-sm`, `--sb-control-md`, `--sb-touch`.
+Control heights are not tokens either: `button`, `input`, `textarea` and
+`select` already come out at the app's height, which is the only one that
+matters.
 
-**Motion** — one easing, `--sb-ease`, and a ladder of durations:
-`--sb-motion-press` (70ms) · `--sb-motion-fast` · `--sb-motion-control` ·
-`--sb-motion-reveal` · `--sb-motion-enter` · `--sb-motion-panel` (220ms).
+**Motion** — one easing, `--sb-ease`, and three durations:
+`--sb-motion-fast` (120ms) · `--sb-motion-control` (140ms) ·
+`--sb-motion-panel` (220ms).
 
 Pick by what is moving: a press is the fastest thing in the app, a panel is the
 slowest. Anything outside the ladder will read as being from somewhere else.
@@ -119,8 +124,9 @@ drawer and hidden without being asked, so:
   the viewport is the slot, and the slot changes.
 - Do not try to draw outside yourself. Menus, dialogs and tooltips that overhang
   belong to the frame; a popover in a widget is clipped by the iframe.
-- `body` already has `--sb-space` of padding. Remove it if your widget is a
-  table or a canvas that should meet its edges.
+- `body` has **no padding**: the frame hands over the panel edge to edge, so a
+  full-bleed widget can be one. Pad your own container — most widgets should.
+-   table or a canvas that should meet its edges.
 
 ## Things not to do
 
