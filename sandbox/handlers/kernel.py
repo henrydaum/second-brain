@@ -1489,6 +1489,57 @@ def _frontend_description(name: str, adapters: dict) -> str:
         return ""
 
 
+def _widget_list() -> Result:
+    """Every widget the trees hold, in discovery precedence order.
+
+    **The one way the UI learns what exists.** A widget runs in a browser,
+    which can reach no disk at all, so this is not a convenience over a
+    directory listing the client could do itself — it is the only route there
+    is. That is the whole reason ``widgets/`` is a root in ``trees.py``
+    rather than a folder the web app globs.
+
+    Read off the trees at call time, because there is no widget registry and
+    deliberately so: the kernel never loads a widget, so a registry would be a
+    second copy of what the disk already says, and the way a second copy fails
+    is a widget that is installed and invisible.
+
+    **First match wins, per name**, the same rule every other discoverer
+    follows — bundled shadows installed shadows workspace — so a draft in the
+    workspace does not silently replace what the store put there. The shadowed
+    file is reported rather than dropped, since "my widget is not showing up"
+    is otherwise unanswerable from the browser.
+
+    Answers facts, never a URL. Fetching one is ``GET /files?path=``, which is
+    ``frontend_http``'s route and not the kernel's to name — a client knows
+    its own transport, and a second client would have a different one.
+    """
+    import trees
+
+    root = trees.roots_by_name["widgets"]
+    found: dict[str, dict] = {}
+    for tree, directory in trees.dirs_for(root.name):
+        try:
+            entries = sorted(directory.glob(root.glob))
+        except OSError:
+            logger.warning("could not list widgets in %s", directory)
+            continue
+        for path in entries:
+            name = path.stem[len(root.prefix):]
+            if not name:
+                continue
+            if name in found:
+                found[name].setdefault("shadowed", []).append(str(path))
+                continue
+            found[name] = {
+                "name": name,
+                "stem": path.stem,
+                "tree": tree.name,
+                "path": str(path),
+                "extension": path.suffix,
+            }
+    return Result(data=[found[name] for name in sorted(found)])
+
+
 def _plugin_list(ctx, args: dict) -> Result:
     """Everything currently registered, by family."""
     source = args.get("source") or "registered"
@@ -1504,6 +1555,8 @@ def _plugin_list(ctx, args: dict) -> Result:
 
         return Result(data=[root.name for root in trees.ROOTS]
                       + list(EXTRA_FAMILIES))
+    if source == "widgets":
+        return _widget_list()
     if source != "registered":
         try:
             from paths import ROOT_DIR

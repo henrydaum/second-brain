@@ -174,6 +174,24 @@ Entry points by family — note the **argument order differs**:
 | command | `run(self, sdk, args)` and optionally `form(self, sdk, args)` |
 | service | `start(self, sdk)`, `stop(self, sdk)`, plus its exported methods |
 
+### A widget
+
+`widgets/widget_<name>.html` — and note the extension. A widget is a piece of
+the **web UI**, not of the kernel: it is one HTML document, run by a browser
+inside a frame the UI controls, and none of this guide's Request vocabulary
+applies to it, because a widget makes no Requests. One file, with its script
+and style inside it. It has a root here for one reason — the browser can reach
+no disk, so the only way the UI learns which widgets exist is to ask the
+kernel, through `sdk.plugins.widgets()`.
+
+Everything else about the root is ordinary: a widget can ship bundled, be
+installed from the store, or be written by the agent into
+`<DATA_DIR>/workspace/widgets/`, exactly like a tool.
+
+**The contract for what goes inside the file is not settled yet.** Until it
+is, do not write one from this guide; a widget written against a guess is a
+file the UI will not load.
+
 ---
 
 ## The idiom

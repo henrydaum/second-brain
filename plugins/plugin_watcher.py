@@ -98,14 +98,15 @@ class PluginWatcher:
         """Internal helper to handle scan existing."""
         with self._lock:
             self._known_mtimes.clear()
-            # Every ``.py`` in every watched root, not just the ones matching a
-            # prefix. Seeding only the registrable files meant anything else had
-            # no baseline mtime, so its first save after startup looked like a
-            # brand-new file.
-            for _tree, _root, directory in trees.iter_root_dirs(watched_only=True):
+            # Every file *of the root's own kind*, not just the ones matching
+            # a prefix. Seeding only the registrable files meant anything else
+            # had no baseline mtime, so its first save after startup looked
+            # like a brand-new file. The extension comes off the root because
+            # not every root is Python — ``widgets/`` is HTML.
+            for _tree, root, directory in trees.iter_root_dirs(watched_only=True):
                 if not directory.exists():
                     continue
-                for path in directory.glob("*.py"):
+                for path in directory.glob(f"*{root.ext}"):
                     try:
                         self._known_mtimes[str(path.resolve())] = path.stat().st_mtime
                     except OSError:
@@ -114,7 +115,7 @@ class PluginWatcher:
     def handle_create_or_modify(self, raw_path: str):
         """Handle create or modify."""
         path = Path(raw_path).resolve()
-        if not path.exists() or path.suffix != ".py":
+        if not path.exists() or path.suffix not in trees.SUFFIXES:
             return
         try:
             mtime = path.stat().st_mtime
@@ -134,13 +135,13 @@ class PluginWatcher:
         key = str(path)
         with self._lock:
             known = self._known_mtimes.pop(key, None)
-        if known is not None or path.suffix == ".py":
+        if known is not None or path.suffix in trees.SUFFIXES:
             self.unregister(path)
 
     def register(self, raw_path, *, edited: bool = False) -> dict:
         """Load or reload one recognized plugin source file."""
         path = Path(raw_path).resolve()
-        if not path.exists() or path.suffix != ".py":
+        if not path.exists() or path.suffix not in trees.SUFFIXES:
             error = f"Plugin file does not exist: {path}"
             self._notify("Plugin registration failed", f"{path.name}\n\n{error}",
                          level="error")
@@ -152,6 +153,21 @@ class PluginWatcher:
             self._notify(f"LLM backend {verb}", path.stem, level="success")
             return {
                 "ok": True, "name": path.stem, "family": "llm_backend",
+                "path": str(path),
+            }
+        if root == "widgets":
+            # Nothing to refresh, and that is the design rather than a gap. A
+            # widget runs in a browser and the kernel never loads one: the UI
+            # asks what exists when it needs to know, and the answer is read
+            # off the trees at that moment. A registry here would be a second
+            # copy of a question the disk already answers, and the failure
+            # mode of the second copy is a widget that is installed and
+            # invisible. So registering one is exactly the notification — the
+            # user is told a widget appeared, and the UI finds it next time it
+            # looks.
+            self._notify(f"Widget {verb}", path.stem, level="success")
+            return {
+                "ok": True, "name": path.stem, "family": "widget",
                 "path": str(path),
             }
         if root == "parsers":
@@ -209,6 +225,12 @@ class PluginWatcher:
             self._notify("LLM backend removed", path.stem)
             return {
                 "ok": True, "names": [path.stem], "family": "llm_backend",
+                "path": str(path),
+            }
+        if root == "widgets":
+            self._notify("Widget removed", path.stem)
+            return {
+                "ok": True, "names": [path.stem], "family": "widget",
                 "path": str(path),
             }
         if root == "parsers":
@@ -375,14 +397,12 @@ class PluginWatcher:
         the user's chat for saving one.
 
         Top level only: a family-local ``tools/helpers/x.py`` belongs to its
-        plugin, not to a root, and is not watched at all.
+        plugin, not to a root, and is not watched at all. The extension has to
+        match the root's own, which is ``trees.root_for``'s whole job — this
+        was four hardcoded ``.py`` checks until a root arrived that was not.
         """
-        if path.suffix != ".py":
-            return None
-        found = trees.locate(path)
-        if found is None or found.root is None or len(found.rel.parts) != 1:
-            return None
-        return found.root.name
+        root = trees.root_for(path)
+        return root.name if root else None
 
 
 # Load priority: services must register before the tasks that require them, so
@@ -390,10 +410,13 @@ class PluginWatcher:
 # missing services. Lower number = loaded first. Unknown types load last.
 _LOAD_PRIORITY = {"service": 0, "task": 1, "tool": 2, "command": 3, "frontend": 4}
 
-#: Roots a kernel registry scans rather than discovery, which is why a file in
-#: one is hoisted to the front of a batch: it belongs to no family, so
-#: ``plugin_info`` cannot rank it at all.
-_RESCANNED_ROOTS = ("parsers", "llm")
+#: Roots that belong to no plugin family, which is why a file in one is
+#: hoisted to the front of a batch: ``plugin_info`` cannot rank it at all, and
+#: for ``widgets`` cannot even read it — handing an HTML file to an AST
+#: parser reports a working widget as a broken plugin. Derived from the table
+#: rather than listed, because the previous list was written when every such
+#: root was one a kernel registry rescans, and the next one need not be.
+_UNFAMILIED_ROOTS = tuple(root.name for root in trees.ROOTS if not root.family)
 
 
 class _PluginEventHandler(FileSystemEventHandler):
@@ -442,7 +465,7 @@ class _PluginEventHandler(FileSystemEventHandler):
             path = Path(raw_path)
             # Parsers and backends load first: either is what a plugin arriving
             # in the same batch may be about to look for.
-            if self.watcher._root_of(path) in _RESCANNED_ROOTS:
+            if self.watcher._root_of(path) in _UNFAMILIED_ROOTS:
                 return _LOAD_PRIORITY["service"]
             info, err = plugin_info(path)
             return _LOAD_PRIORITY.get(info.plugin_type, len(_LOAD_PRIORITY)) if info and not err else len(_LOAD_PRIORITY)

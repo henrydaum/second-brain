@@ -718,10 +718,28 @@ class _Plugins(_Namespace):
         installed tree) narrow all the way to one package named by ``name``,
         answering with a single dict carrying its description and
         dependencies rather than a list.
+
+        ``source="widgets"`` is :meth:`widgets`.
         """
         return self._ask(
             PLUGIN_LIST, source=source, category=category or None,
             role=role or None, details=details, name=name or None)
+
+    def widgets(self):
+        """Every widget installed, for a client that has to render them.
+
+        A widget is a piece of the **web UI** — one HTML document, run by a
+        browser inside a frame, never loaded by the kernel — and this is the
+        only way to find out that one exists, because the browser can reach no
+        disk. Each row carries ``name``, ``stem``, ``tree``, ``path`` and
+        ``extension``, plus ``shadowed`` listing any same-named file a
+        higher-precedence tree hid.
+
+        It answers no URL. Fetch the file over whatever route your own
+        transport offers — over HTTP that is ``GET /files?path=``, which
+        already labels ``.html`` correctly for a browser to render.
+        """
+        return self._ask(PLUGIN_LIST, source="widgets")
 
     def describe(self, name: str):
         """Metadata for one plugin."""

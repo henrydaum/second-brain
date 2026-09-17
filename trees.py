@@ -18,7 +18,15 @@ Precedence runs bundled → installed → workspace, matching discovery order.
 A root is declared here **only when the kernel itself routes it**. That test
 admits ``parsers/`` and ``llm/`` (kernel registries live in ``parsing/`` and
 ``llm/``) and ``scripts/`` (``script.run``, ``isolation.is_script``,
-``policy._classify_script``) beside the five plugin families. It excludes
+``policy._classify_script``) beside the five plugin families. It admits
+``widgets/`` too, and that one is worth saying out loud because it is the
+first root that is **not Python**: a widget is a piece of the web UI, and the
+browser it runs in can reach no disk at all — so the only way `frame_ui` can
+learn which widgets exist is to ask the kernel, over the same SDK it asks
+everything else. That is the routing, and it is why the answer is a root here
+rather than a folder `frame_ui` globs for itself. What a widget *is* — how it
+is validated, and what contains it once it runs — is a separate question with
+a separate answer, and none of it belongs to this table. It excludes
 ``bundles/``, which exists because of store packages and which the package
 layer keeps handling on its own. It also excludes ``workspace/memory/``, which
 the kernel *does* name — ``agent.system_prompt`` inlines its ``MEMORY.md`` —
@@ -125,11 +133,26 @@ class Root:
     ``family`` is set for the five kinds ``plugin_discovery`` registers, and is
     what ``plugin_info`` reports. ``parsers`` and ``llm`` are registered too,
     but by their own kernel registries, so they carry a prefix and no family.
+
+    ``ext`` is the language, and it is a field rather than an assumption
+    because ``widgets/`` is not Python. Everything else about a root holds
+    unchanged for one that is not — it is a shape every tree repeats, it
+    carries a prefix so something can glob it, the store installs into it, and
+    the watcher notices it changing. Only *what the kernel does with the file*
+    differs, and no code in this module does anything with a file.
+
+    One extension per root, and the word is deliberately singular. It was a
+    tuple for as long as ``widgets/`` might have held either HTML or bare
+    JavaScript, which is a question about how a browser *contains* a widget
+    rather than about what language it is in; that is settled — a widget is one
+    HTML document, which carries its own script and style — so the plural was
+    describing an option nothing takes.
     """
     name: str
     prefix: str = ""
     watched: bool = True
     family: str | None = None
+    ext: str = ".py"
 
     @property
     def registered(self) -> bool:
@@ -138,7 +161,11 @@ class Root:
 
     @property
     def glob(self) -> str:
-        return f"{self.prefix}*.py" if self.prefix else "*.py"
+        return f"{self.prefix}*{self.ext}"
+
+    def holds(self, path) -> bool:
+        """Whether this root would hold a file of that name."""
+        return Path(path).suffix == self.ext
 
 
 ROOTS: tuple[Root, ...] = (
@@ -152,6 +179,15 @@ ROOTS: tuple[Root, ...] = (
     # Nothing registers a script, so nothing needs to hear about one changing;
     # it is read from disk at the moment it runs.
     Root("scripts", watched=False),
+    # The UI's own extensions: a widget is a piece of `frame_ui/` that a person
+    # installs or an agent writes, and it is one HTML document because that is
+    # what a browser can hold at arm's length — script and style ride inside
+    # it, so there is exactly one file and no second language. It is a root on the same test as the rest — the kernel routes
+    # it: `frame_ui` learns what exists by asking the kernel, never by reading
+    # the disk it cannot reach. A widget never enters the Python sandbox and
+    # is not validated like one; containment is the browser's problem and is
+    # answered separately.
+    Root("widgets", "widget_", ext=".html"),
 )
 
 #: Where a plugin keeps code that is not itself a plugin. Not a root — it is
@@ -241,6 +277,38 @@ def locate(path) -> Located | None:
         root = roots_by_name.get(head)
         return Located(tree, root, Path(*rel.parts[1:]) if root else rel)
     return None
+
+
+#: Every extension the layout holds. The watcher filters on this before it
+#: asks *which* root a file is in, because a path outside every tree is still
+#: something a caller may hand :meth:`PluginWatcher.register` by name — the
+#: question there is "is this a kind of file we load at all", which is weaker
+#: than :func:`root_for`'s and deliberately so.
+SUFFIXES: frozenset[str] = frozenset(root.ext for root in ROOTS)
+
+
+def root_for(path) -> Root | None:
+    """The root this file sits directly in, or None if the layout holds no
+    such file.
+
+    Two questions in one, because they are never usefully asked apart: *which
+    folder* and *is this the kind of file that folder holds*. The second used
+    to be four copies of ``path.suffix != ".py"`` spread through the watcher,
+    which was true of every root at the time and silently became a filter that
+    hid ``widgets/`` from the only thing that notices a file changing.
+
+    **Top level only.** A family-local ``tools/helpers/x.py`` belongs to its
+    plugin rather than to a root, and is not watched at all.
+
+    Note this is stricter than "in a root, with a plausible extension": a
+    ``tools/thing.js`` is nothing the layout describes, and answering None is
+    what keeps it from reaching an AST parser that will report it as a broken
+    plugin.
+    """
+    found = locate(path)
+    if found is None or found.root is None or len(found.rel.parts) != 1:
+        return None
+    return found.root if found.root.holds(found.rel) else None
 
 
 def tree_of(path) -> Tree | None:

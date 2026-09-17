@@ -461,6 +461,7 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `plugin.list(family)` | Enumerate installed plugins | — | safe |
+| `plugin.list(source="widgets")` | Enumerate installed UI widgets | — | safe |
 | `plugin.describe(name)` | Metadata, path, dependencies | — | safe |
 | `plugin.validate(path)` | Lint a source file against this contract | path | safe |
 | `plugin.register(path)` | Load a plugin live | path, family | unsafe |

@@ -205,7 +205,7 @@ def _validate_package_dest(path: str) -> str:
         raise StorePublishError(f"Invalid package destination: {path}")
     if p.parts[0] == "bundles" and p.suffix == ".json":
         return p.as_posix()
-    if p.suffix == ".py":
+    if p.suffix in package_manager.TREE_SUFFIXES:
         return package_manager._validate_rel_path(path)
     if p.parts[0] not in package_manager.TREE_ROOTS:
         raise StorePublishError(f"Package destination must start with one of {sorted(package_manager.TREE_ROOTS)}: {path}")

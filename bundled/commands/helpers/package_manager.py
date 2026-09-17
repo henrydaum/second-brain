@@ -30,6 +30,11 @@ INSTALLED_PLUGINS = trees.tree("installed").path
 # is not in ``trees``, and it keeps the bespoke handling below.
 TREE_ROOTS = {root.name for root in trees.ROOTS}
 
+#: Every extension the layout holds, plus Python for the helpers any family may
+#: carry. A path is checked against its own root's ``ext`` in
+#: :func:`_is_valid_tree_rel`; this is only the cheap first filter.
+TREE_SUFFIXES = {root.ext for root in trees.ROOTS} | {".py"}
+
 #: Families the store carries that are *not* tree roots. Named here rather
 #: than in ``trees`` for exactly the reason above — the kernel routes it not —
 #: but named somewhere, so a menu of "what can I install" can be derived
@@ -693,7 +698,7 @@ def _validate_rel_path(path: str) -> str:
     p = PurePosixPath(str(path).replace("\\", "/"))
     if p.is_absolute() or not p.parts or any(part in {"", ".", ".."} for part in p.parts):
         raise PackageError(f"Invalid package file path: {path}")
-    if p.suffix != ".py":
+    if p.suffix not in TREE_SUFFIXES:
         raise PackageError(f"Invalid package file path: {path}")
     if p.parts[0] not in TREE_ROOTS:
         raise PackageError(f"Package file path must start with one of {sorted(TREE_ROOTS)}: {path}")
@@ -716,27 +721,33 @@ def _is_valid_tree_rel(rel: str) -> bool:
 
         tools/tool_x.py            a registered file, carrying its root's prefix
         parsers/parse_pdf.py       likewise — the prefix is what a scanner globs
+        widgets/widget_files.html  likewise, and note it is not Python
         scripts/backfill.py        an unprefixed root: run, never registered
         tools/helpers/x.py         a helper belonging to one family
 
     The prefix rule is read off the root rather than restated here: a root
     declaring one is scanned and its files must carry it, and a root declaring
     none is reached by being named, where a prefix would only make the
-    validator expect a plugin class. Unprefixed roots are top level only —
+    validator expect a plugin class. **The extension is read off the root for
+    the same reason** — it was ``.py`` in three places here, which was true of
+    every root when it was written and became the thing that refused to
+    install a widget.
+    Unprefixed roots are top level only —
     ``scripts/helpers/x.py`` falls through to the three-part branch, which
     admits family folders and nothing else, matching ``isolation.is_script``,
     which is what decides whether an installed script may run at all.
+
+    A helper is always Python, whatever its family holds: a helper is imported
+    by the plugin beside it, and nothing in a browser imports from this tree.
     """
     p = PurePosixPath(rel)
-    if p.suffix != ".py":
-        return False
     root = trees.roots_by_name.get(p.parts[0])
     if root is None:
         return False
     if len(p.parts) == 2:
-        return p.name.startswith(root.prefix)
+        return root.holds(p) and p.name.startswith(root.prefix)
     return (len(p.parts) == 3 and p.parts[1] == trees.HELPERS_DIRNAME
-            and root.family is not None)
+            and p.suffix == ".py" and root.family is not None)
 
 
 def _target(rel_path: str) -> Path:

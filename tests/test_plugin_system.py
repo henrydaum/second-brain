@@ -10,7 +10,7 @@ from pathlib import Path
 
 from events.event_bus import bus
 from events.event_channels import NOTIFICATION_PUSHED
-from plugins import plugin_discovery
+from plugins import plugin_discovery, plugin_watcher
 from plugins.plugin_watcher import PluginWatcher
 
 
@@ -703,3 +703,127 @@ def test_reinstalling_a_bridged_service_keeps_its_runtime(tmp_path, monkeypatch)
         assert services["counter"]._runtime is runtime
     finally:
         configure(None)
+
+
+# ── A root that is not Python ─────────────────────────────────────────
+#
+# ``widgets/`` is the first one, and everything below is a place that used to
+# say ``.py`` out loud. Each of those literals was true of every root when it
+# was written, which is exactly why none of them looked like a filter — and a
+# widget that is installed but that the watcher never sees is invisible in the
+# one direction nothing reports.
+
+
+def _widget_tree(tmp_path, monkeypatch):
+    """A workspace tree with a widget in it, and the layout pointed at it."""
+    from tests.support import retarget_trees
+
+    roots = retarget_trees(monkeypatch, tmp_path)
+    directory = roots["workspace"] / "widgets"
+    directory.mkdir(parents=True)
+    path = directory / "widget_file_explorer.html"
+    path.write_text("export default {};\n", encoding="utf-8")
+    return path
+
+
+def test_the_layout_places_a_widget_by_its_own_extension(tmp_path, monkeypatch):
+    """``root_for`` answers for a root whose files are not Python.
+
+    And answers None for the two near-misses, which is the half that matters:
+    a ``.py`` in ``widgets/`` is not a widget, and a helper is not in a root
+    at all.
+    """
+    import trees
+
+    path = _widget_tree(tmp_path, monkeypatch)
+
+    assert trees.root_for(path).name == "widgets"
+    assert trees.root_for(path.with_suffix(".py")) is None
+    assert trees.root_for(path.parent / "helpers" / "x.html") is None
+
+
+def test_the_watcher_registers_a_widget_and_loads_nothing(tmp_path, monkeypatch):
+    """A widget is announced, and no plugin loader is reached.
+
+    Registering one is *only* the notification: the kernel never loads a
+    widget, so there is nothing to refresh and deliberately no registry. The
+    negative is the point — an HTML file handed to ``plugin_info`` is an AST
+    parse of markup, which reports a working widget as a broken plugin.
+    """
+    path = _widget_tree(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "plugins.plugin_watcher.load_single_plugin",
+        lambda *a, **k: pytest.fail("a widget must not reach the plugin loader"))
+    notices = []
+    watcher = PluginWatcher({})
+    watcher._notify = lambda title, body="", level="info": notices.append(title)
+
+    registered = watcher.register(str(path))
+    removed = watcher.unregister(str(path))
+
+    assert registered == {"ok": True, "name": "widget_file_explorer",
+                          "family": "widget", "path": str(path.resolve())}
+    assert removed["family"] == "widget"
+    assert notices == ["Widget registered", "Widget removed"]
+
+
+def test_the_watcher_baselines_and_hoists_a_widget(tmp_path, monkeypatch):
+    """The scan seeds its mtime, and a batch loads it before the families.
+
+    Without the baseline its first save after start-up reads as a brand-new
+    file. The hoist is ``plugin_info``'s problem again: it cannot rank a file
+    belonging to no family, and for this one cannot even read it.
+    """
+    path = _widget_tree(tmp_path, monkeypatch)
+    watcher = PluginWatcher({})
+
+    watcher._scan_existing()
+
+    assert str(path.resolve()) in watcher._known_mtimes
+    assert watcher._root_of(path) in plugin_watcher._UNFAMILIED_ROOTS
+
+
+def test_the_store_installs_a_widget_and_checks_it_against_its_own_root():
+    """A store path is valid against the root's extension, not against Python."""
+    from bundled.commands.helpers import package_manager
+
+    assert package_manager._validate_rel_path(
+        "widgets/widget_file_explorer.html") == "widgets/widget_file_explorer.html"
+    assert not package_manager._is_valid_tree_rel("widgets/widget_x.py")
+    assert not package_manager._is_valid_tree_rel("widgets/x.html")
+    assert not package_manager._is_valid_tree_rel("tools/tool_x.html")
+    # A helper is Python whatever its family holds: it is imported by the
+    # plugin beside it, and nothing in a browser imports from this tree.
+    assert package_manager._is_valid_tree_rel("tools/helpers/x.py")
+
+
+def test_the_sdk_lists_widgets_from_every_tree_first_match_winning(tmp_path, monkeypatch):
+    """``plugin.list(source="widgets")`` is how the browser learns what exists.
+
+    Precedence is every other discoverer's — bundled over installed over
+    workspace — but the shadowed file is *reported* rather than dropped,
+    because "my widget is not showing up" cannot be answered from a browser
+    that can read no disk.
+
+    """
+    from tests.support import retarget_trees
+    from sandbox.handlers.kernel import _plugin_list
+
+    roots = retarget_trees(monkeypatch, tmp_path)
+    for tree, name in (("installed", "widget_file_explorer.html"),
+                       ("workspace", "widget_file_explorer.html"),
+                       ("workspace", "widget_notes.html")):
+        directory = roots[tree] / "widgets"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text("", encoding="utf-8")
+
+    rows = _plugin_list(None, {"source": "widgets"}).data
+
+    assert [row["name"] for row in rows] == ["file_explorer", "notes"]
+    assert rows[0]["tree"] == "installed"
+    assert rows[0]["shadowed"] == [
+        str(roots["workspace"] / "widgets" / "widget_file_explorer.html")]
+    assert rows[1]["extension"] == ".html"
+    # No URL. Fetching one is the transport's business, and a second client
+    # would have a different one.
+    assert not any("url" in row for row in rows)
