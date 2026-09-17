@@ -34,6 +34,17 @@ persisted to the panel and shown to nobody — which is exactly as useful as not
 raising one. The adopt path made that the *normal* case rather than a race,
 since an already-running server answers the first probe in milliseconds.
 
+**Stopping it is a question about ownership, and the unit is the app rather
+than the process.** "Only stop what you started" is right and was one word too
+narrow: a ``/restart`` re-execs, so the server still serving afterwards is one
+this app started a life ago, and a process that reads *started* as "started by
+me" adopts it and then declines to stop it forever. One ungraceful exit and the
+dev server outlived every boot for the rest of the machine's uptime, which is
+the symptom that got this looked at. The pid of whatever is listening is
+therefore written down, and a later boot reclaims a server only when the port
+still answers to that pid — so a dev server somebody runs in their own terminal
+and a real deployment are both left exactly alone.
+
 Nothing here is fatal. A machine with no Node, a checkout with no
 ``node_modules``, a port already taken by something else: each is logged and
 the kernel carries on, because the web UI is one way in and the REPL is
@@ -84,8 +95,115 @@ PROBE_TIMEOUT = 2.0
 #: not waiting is none at all.
 AUDIENCE_TIMEOUT = 30.0
 
+#: How long to keep asking the bridge before deciding nothing is behind it.
+#: The HTTP frontend binds its port on its own thread a moment after boot, and
+#: on the adopt path this check gets there first — so the wait is for the
+#: kernel's own frontend, not for the dev server.
+BRIDGE_TIMEOUT = 20.0
+
+#: Where the pid of a dev server *we* started is written, so a later boot can
+#: tell one of ours from somebody else's. See :func:`_reclaim`.
+PID_FILE = DATA_DIR / "web_ui.pid"
+
 _process: subprocess.Popen | None = None
+
+#: A server this process did not start but has established *was* ours, from a
+#: previous life. Stoppable; see :func:`_reclaim` for what establishes it.
+_adopted_pid: int | None = None
+
 _lock = threading.Lock()
+
+
+# ── Whose dev server is that? ─────────────────────────────────────────
+#
+# "Only stop what you started" is the right rule and it was one word too
+# narrow: *started* has to mean this app rather than this process, or the first
+# ungraceful exit orphans a server permanently. A `/restart` re-execs, the new
+# process finds the old server still serving and adopts it, and from that
+# moment nothing will ever stop it again — every later `/quit` calls `stop()`
+# and correctly declines to kill something it did not start. One crash and the
+# dev server outlives every boot for the rest of the machine's uptime.
+#
+# So ownership is recorded on disk instead of only in memory. What is written
+# is the pid *listening on the port* — not the `npm` shell we hold, which is a
+# parent of it — because that is the one thing a later process can check
+# against reality. Reclaiming asks the port who owns it now and compares: equal
+# means the same process is still there and it is ours, anything else means it
+# is somebody's dev server or a real deployment, which is left alone.
+#
+# The comparison is what makes this safe. A bare pid file would be a promise
+# that a pid still means what it meant, and pids are reused.
+
+
+def _owner_of_port(port: str) -> int | None:
+    """The pid listening on ``port``, or None if that cannot be established.
+
+    Two spellings of one question, and both are allowed to fail: this decides
+    whether we may *stop* something, so not knowing has to mean leaving it
+    alone. Nothing here is on a hot path — it runs twice per boot at most.
+    """
+    if not port:
+        return None
+    try:
+        if os.name == "nt":
+            # No ``-p tcp``: Windows counts TCP and TCPv6 as different
+            # protocols for that flag, and Vite listens on ``[::1]`` — so
+            # filtering by it finds nothing at all, silently, on the one
+            # machine anybody is testing. Match the column instead.
+            out = subprocess.run(["netstat", "-ano"],
+                                 capture_output=True, text=True, timeout=15).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[0].upper().startswith("TCP") \
+                        and parts[3] == "LISTENING" \
+                        and parts[1].rsplit(":", 1)[-1] == port:
+                    return int(parts[4])
+            return None
+        out = subprocess.run(["lsof", "-t", f"-i:{port}", "-sTCP:LISTEN"],
+                             capture_output=True, text=True, timeout=10).stdout
+        first = out.split()
+        return int(first[0]) if first else None
+    except Exception:
+        logger.debug("Could not read the owner of port %s.", port, exc_info=True)
+        return None
+
+
+def _remember(pid: int | None) -> None:
+    """Record that ``pid`` is a dev server this app started."""
+    if not pid:
+        return
+    try:
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PID_FILE.write_text(str(pid), encoding="utf-8")
+    except OSError:
+        logger.debug("Could not write %s.", PID_FILE, exc_info=True)
+
+
+def _forget() -> None:
+    """Drop the record. Called once the server it named is gone."""
+    try:
+        PID_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _reclaim(url: str) -> int | None:
+    """Whether the server already on ``url`` is one of ours, by pid.
+
+    Answers the pid when the process listening now is the one we wrote down,
+    and None for everything else — a dev server somebody runs in their own
+    terminal, a Caddy deployment, a stale file whose pid has been reused.
+    Wrong in the direction of leaving things running, which is the direction
+    where being wrong costs a stray process rather than somebody's work.
+    """
+    try:
+        recorded = int(PID_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    if recorded and recorded == _owner_of_port(_port_of(url)):
+        return recorded
+    _forget()
+    return None
 
 
 # ── The probe ─────────────────────────────────────────────────────────
@@ -236,7 +354,22 @@ def _announce(url: str, runtime=None) -> None:
     alternative, when the address works and the bridge behind it does not."""
     _await_audience(runtime, time.time() + AUDIENCE_TIMEOUT)
 
+    # Asked more than once, because the two things being compared start at
+    # different times. ``_await_audience`` returns the moment *any* session
+    # exists — the REPL's, which is up well before the HTTP frontend has
+    # finished binding its port — and on the adopt path the page answers
+    # instantly, so the bridge check routinely arrived first. A single ask
+    # then reported "nothing answers behind it" about a frontend that was
+    # seconds from being ready, and sent somebody to debug a working setup.
+    #
+    # Only *no answer* is retried. A refusal is a real answer from a real
+    # server and will not become a different one by being asked again.
     bridge = bridge_ok(url)
+    deadline = time.time() + BRIDGE_TIMEOUT
+    while bridge is None and time.time() < deadline:
+        time.sleep(PROBE_INTERVAL)
+        bridge = bridge_ok(url)
+
     if bridge is True:
         notifications.notify(
             title=f"UI is reachable at: {url}",
@@ -266,13 +399,26 @@ def _announce(url: str, runtime=None) -> None:
 
 def _watch(url: str, autostart: bool, runtime=None) -> None:
     """Probe, start if needed, probe again, announce. Runs on its own thread."""
-    global _process
+    global _process, _adopted_pid
 
     if reachable(url):
-        # Already served — a survivor of a /restart, or a real deployment.
-        # Adopted rather than replaced: killing a server this process did not
-        # start is a worse failure than using one that turns out to be stale,
-        # and ``_announce`` is where staleness gets named.
+        # Already served — a survivor of a /restart, a leftover from a crash,
+        # or a real deployment. Adopted rather than replaced: killing a server
+        # this process did not start is a worse failure than using one that
+        # turns out to be stale, and ``_announce`` is where staleness gets
+        # named.
+        #
+        # But ask whether it was *ours*, because "this process" is the wrong
+        # unit for ownership — a /restart re-execs and the survivor is the
+        # server this app started one life ago. Establishing that here is what
+        # lets `stop()` end it, and is the whole of why one used to outlive
+        # every boot after the first crash.
+        with _lock:
+            _adopted_pid = _reclaim(url)
+        if _adopted_pid:
+            logger.info("Adopted the web UI already serving %s (pid %s); it is "
+                        "ours from a previous run and will stop with the app.",
+                        url, _adopted_pid)
         _announce(url, runtime)
         return
 
@@ -296,6 +442,10 @@ def _watch(url: str, autostart: bool, runtime=None) -> None:
                            "See %s.", _process.returncode, url, LOG_FILE)
             return
         if reachable(url):
+            # The pid on the *port*, not the one we hold: `npm run dev` is a
+            # shell, and the thing listening is its child. The child's pid is
+            # the only one a later boot can check against reality.
+            _remember(_owner_of_port(_port_of(url)))
             _announce(url, runtime)
             return
         time.sleep(PROBE_INTERVAL)
@@ -326,32 +476,56 @@ def serve(config: dict, runtime=None) -> None:
 
 # ── Stopping it ───────────────────────────────────────────────────────
 
-def stop() -> None:
-    """End a dev server this process started. Never touches one it adopted.
+def _end(pid: int) -> None:
+    """Kill a pid and everything under it.
 
-    The group, not the process: what we hold is a shell, and the thing on the
-    port is its child. ``taskkill /T`` and ``killpg`` are the two spellings of
-    "and everything under it".
+    The tree, not the process: ``npm run dev`` is a shell and the thing on the
+    port is its child, so killing what we hold would leave the dev server
+    running — after which the next boot finds it, adopts it, and inherits an
+    orphan. ``taskkill /T`` and ``killpg`` are the two spellings of "and
+    everything under it".
     """
-    global _process
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=10, check=False)
+    else:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+
+
+def stop() -> None:
+    """End the dev server this *app* started, in this life or a previous one.
+
+    Never touches one somebody else is running, which is the rule that matters
+    and the reason `_reclaim` exists: "not ours" has to be decided by asking
+    the port who owns it, rather than by whether this particular process object
+    happens to be holding a handle.
+    """
+    global _process, _adopted_pid
     with _lock:
         process, _process = _process, None
-    if process is None or process.poll() is not None:
-        return
-    logger.info("Stopping the web UI...")
-    try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=10, check=False)
-        else:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-    except Exception as exc:
-        logger.debug("Web UI shutdown: %s", exc)
-    try:
-        process.wait(timeout=5)
-    except Exception:
+        adopted, _adopted_pid = _adopted_pid, None
+
+    if process is not None and process.poll() is None:
+        logger.info("Stopping the web UI...")
         try:
-            process.kill()
+            _end(process.pid)
+        except Exception as exc:
+            logger.debug("Web UI shutdown: %s", exc)
+        try:
+            process.wait(timeout=5)
         except Exception:
-            pass
+            try:
+                process.kill()
+            except Exception:
+                pass
+        _forget()
+        return
+
+    if adopted is not None:
+        logger.info("Stopping the web UI we adopted (pid %s)...", adopted)
+        try:
+            _end(adopted)
+        except Exception as exc:
+            logger.debug("Web UI shutdown: %s", exc)
+        _forget()

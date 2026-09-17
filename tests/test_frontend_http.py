@@ -352,7 +352,11 @@ def running(tmp_path, source, owns_its_token):
     finally:
         module.SERVER = previous_server
         configure(previous_sandbox)
-        box_sandbox.shutdown()
+        # Half a second, not the default ten. A box's stop waits out its
+        # timeout while a stream is still open, and six tests here open one —
+        # which was sixty seconds, and the whole suite's runtime, spent on
+        # teardown nothing asserts about.
+        box_sandbox.shutdown(0.5)
         server.stop()
         unpark(token)
 

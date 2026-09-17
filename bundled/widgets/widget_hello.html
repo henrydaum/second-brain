@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Hello</title>
+  <!--
+    The first widget, and a worked example of the whole contract.
+
+    A widget is one HTML file. Structure, style and behaviour all live in it,
+    and there is nothing else to ship — no build step, no bundle, no
+    registration. Drop this in `widgets/` in any of the kernel's trees and the
+    frame can mount it.
+
+    Everything it needs arrives on `window.brain`, which the frame injects
+    before this file's own scripts run:
+
+        brain.call(type, args)  one Second Brain Request, as a promise
+        brain.on(kind, fn)      hear about "size" or "scheme" changing
+        brain.size              the box, in CSS pixels
+        brain.scheme            "light" or "dark", the frame's choice
+
+    Note what is *not* here: no URL, no bearer token, no thread id, no
+    connection of its own. A widget cannot reach the network directly — it runs
+    in a sandboxed frame with its own opaque origin — so `brain.call` is the
+    only way out, and every Request it makes is classified by the kernel exactly
+    as any other would be.
+
+    The look is free. The frame injects its design tokens above this file's own
+    styles, so `var(--sb-fg)` is the app's text colour and `var(--sb-line)` its
+    border. Using them is what makes a widget somebody else wrote look like part
+    of the same app; overriding one is allowed, and is a decision rather than an
+    accident, because ours went in first.
+  -->
+  <style>
+    main {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      align-items: flex-start;
+      padding: var(--sb-space);
+      height: 100%;
+    }
+
+    h1 { font-size: 1.15rem; margin: 0; }
+
+    dl {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 0.35rem 1.25rem;
+      margin: 0;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--sb-line);
+      width: 100%;
+    }
+
+    dt { color: var(--sb-muted); }
+    dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+    button {
+      font: inherit;
+      color: var(--sb-bg);
+      background: var(--sb-accent);
+      border: 0;
+      border-radius: var(--sb-radius-control);
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      transition: opacity var(--sb-motion-fast) var(--sb-ease);
+    }
+
+    button:disabled { opacity: 0.6; cursor: wait; }
+
+    .answer {
+      width: 100%;
+      margin: 0;
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--sb-line);
+      border-radius: var(--sb-radius-surface);
+      background: var(--sb-surface);
+      font: var(--sb-font-mono);
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+
+    .bad { color: var(--sb-bad); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>This is a widget.</h1>
+
+    <dl>
+      <dt>Box</dt><dd id="size">—</dd>
+      <dt>Scheme</dt><dd id="scheme">—</dd>
+    </dl>
+
+    <button id="ask" type="button">Ask the kernel</button>
+    <p class="answer" id="answer">Nothing asked yet.</p>
+  </main>
+
+  <script>
+    const say = (id, text, bad) => {
+      const node = document.getElementById(id);
+      node.textContent = text;
+      node.classList.toggle("bad", Boolean(bad));
+    };
+
+    // The frame tells a widget its size, because an iframe gets no resize event
+    // for its own element — there is no other way to find out that the box
+    // changed. Read it once for where we start, then listen for the rest.
+    const showSize = ({ width, height }) => say("size", `${width} x ${height}`);
+    showSize(brain.size);
+    brain.on("size", showSize);
+
+    const showScheme = (scheme) => say("scheme", scheme);
+    showScheme(brain.scheme);
+    brain.on("scheme", showScheme);
+
+    // One read-only Request, to prove the bridge end to end. `conv.list` is
+    // safe, so nothing is asked of the user; an unsafe one would raise the
+    // kernel's own approval dialog, which the frame renders — not this file.
+    const button = document.getElementById("ask");
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      say("answer", "asking…");
+      try {
+        const conversations = await brain.call("conv.list", { limit: 5 });
+        const rows = Array.isArray(conversations)
+          ? conversations : conversations?.conversations ?? [];
+        say("answer", rows.length
+          ? rows.map((row) => `#${row.id}  ${row.title || "(untitled)"}`).join("\n")
+          : "No conversations yet — say something in the REPL.");
+      } catch (error) {
+        say("answer", `${error.message}${error.code ? ` [${error.code}]` : ""}`, true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

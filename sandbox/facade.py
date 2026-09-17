@@ -772,14 +772,21 @@ class Sandbox:
         """Every resident box currently loaded."""
         return [b for b in self._boxes.values() if b.alive]
 
-    def close(self, name: str) -> Result:
-        """Stop one resident box."""
+    def close(self, name: str, timeout: float | None = None) -> Result:
+        """Stop one resident box.
+
+        ``timeout`` is how long its occupants get to stop cleanly before they
+        are starved. It is passed through rather than left to the box's own
+        default because ``shutdown`` already took one and was dropping it here
+        — so bounding a shutdown bounded only the *runs*, and each box still
+        waited out ten seconds of its own.
+        """
         with self._lock:
             box = self._boxes.pop(name, None)
             self._source_of.pop(name, None)
         if box is None:
             return Result(data=False)
-        outcome = box.stop()
+        outcome = box.stop() if timeout is None else box.stop(timeout)
         unload_box(name)
         return outcome
 
@@ -842,7 +849,7 @@ class Sandbox:
 
         for name in names:
             try:
-                self.close(name)
+                self.close(name, timeout)
             except Exception:
                 logger.exception("failed to close box %s", name)
         self._pool.shutdown(wait=False)

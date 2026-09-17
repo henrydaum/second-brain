@@ -1,77 +1,14 @@
 /**
- * A blank page that proves the bridge.
+ * The entry point: hand the page to the frame.
  *
- * This is the whole app for now, and it exists to answer one question before
- * anything is built on top: does the browser reach Second Brain, with a token
- * it accepts, on a session it will speak about. So it does exactly two things —
- * one Request out (`conv.list`, read-only) and one stream in — and prints what
- * came back. Nothing here is a UI decision worth keeping; the client in
- * `client.js` is.
+ * This used to be the whole app — a probe that made one Request and dumped
+ * render frames into a `<pre>`, to answer "does the browser reach the kernel"
+ * before anything was built on it. That question is answered, and the widget
+ * now asks it for itself, visibly, which is a better test than a page that only
+ * ever agreed with itself.
  */
 
 import "./style.css";
-import { THREAD, call, openStream } from "./client.js";
+import { startFrame } from "./frame.js";
 
-const root = document.getElementById("root");
-root.innerHTML = `
-  <h1>Second Brain</h1>
-  <dl>
-    <dt>Thread</dt><dd>${THREAD}</dd>
-    <dt>Request</dt><dd id="request">checking…</dd>
-    <dt>Stream</dt><dd id="stream">connecting…</dd>
-  </dl>
-  <pre id="frames" class="empty">Renders from the kernel will appear here.</pre>
-`;
-
-const say = (id, text, state) => {
-  const node = document.getElementById(id);
-  node.textContent = text;
-  node.className = state || "";
-};
-
-// Out: one read-only Request. A 401 here is the token, a 404 is the proxy, and
-// anything else is the server having an opinion — all three worth telling apart
-// on a page whose only job is to connect.
-call("conv.list", { limit: 5 })
-  .then((data) => {
-    const rows = Array.isArray(data) ? data : (data?.conversations ?? []);
-    say("request", `ok — ${rows.length} conversation(s)`, "ok");
-  })
-  .catch((error) => say("request", explain(error), "bad"));
-
-/**
- * What went wrong, in terms of the thing to go and fix.
- *
- * A bare `unauthorized` is the least useful true statement available here:
- * the page cannot be the cause, because it sends no credential — the dev
- * server adds one. So a 401 is always about the server in front, and saying
- * which is the difference between a two-second fix and an afternoon.
- */
-function explain(error) {
-  if (error.status === 401) {
-    return "unauthorized — the dev server is not sending the API token. " +
-      "Restart it; it reads Second Brain's config.json.";
-  }
-  if (error.status === 404) {
-    return "not found — is the proxy configured? Check vite.config.js.";
-  }
-  return `${error.message}${error.code ? ` [${error.code}]` : ""}`;
-}
-
-// In: the render stream. Opening it also declares this session attended, which
-// is what lets an unsafe Request raise a dialog instead of being refused.
-const frames = document.getElementById("frames");
-const seen = [];
-
-openStream(
-  (frame) => {
-    seen.unshift(`${frame.kind}  ${JSON.stringify(frame.payload)}`);
-    seen.length = Math.min(seen.length, 50);
-    frames.className = "";
-    frames.textContent = seen.join("\n");
-  },
-  (state) =>
-    state === "open"
-      ? say("stream", "open", "ok")
-      : say("stream", "reconnecting…", "bad"),
-);
+startFrame(document.getElementById("root"));

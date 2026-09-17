@@ -1,64 +1,54 @@
-:root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #252525;
-  --muted: #6b7280;
-  --line: #e5e7eb;
-  --ok: #0f766e;
-  --bad: #b91c1c;
+/*
+ * The frame's own chrome. Deliberately small.
+ *
+ * The design tokens are *not* here — they are in `theme.js`, because a widget
+ * is a separate document that inherits nothing from this page, so the tokens
+ * have to be injectable as text. A copy of them in a stylesheet is the second
+ * copy, and the way a second copy fails is that widgets drift half a shade away
+ * from the app around them.
+ *
+ * What is here is layout: where the slot is and how big. That is the one thing
+ * a widget can never decide for itself.
+ */
+
+html, body, #root { height: 100%; }
+
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1c1c;
-    --fg: #ededed;
-    --muted: #9ca3af;
-    --line: #333333;
-    --ok: #2dd4bf;
-    --bad: #f87171;
-  }
+.frame-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.6rem var(--sb-space);
+  border-bottom: 1px solid var(--sb-line);
+  background: var(--sb-surface);
+  font-size: 0.85rem;
 }
 
-* { box-sizing: border-box; }
+.frame-title { font-weight: 600; }
+.frame-thread, .frame-status { color: var(--sb-muted); }
+.frame-status { margin-left: auto; }
+.frame-status.ok { color: var(--sb-accent); }
+.frame-status.bad { color: var(--sb-bad); }
 
-body {
+/*
+ * One slot, filling what is left. Every layout that comes after is this
+ * repeated and arranged — which is why the widget is given `height: 100%` and
+ * no opinion about it.
+ */
+.slot {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.frame-problem {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: var(--sb-space);
+  color: var(--sb-bad);
+  max-width: 40rem;
 }
-
-main {
-  max-width: 44rem;
-  margin: 0 auto;
-  padding: 3rem 1rem;
-}
-
-h1 { font-size: 1.4rem; margin: 0 0 1.5rem; }
-
-dl {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.4rem 1.5rem;
-  margin: 0 0 2rem;
-  border-top: 1px solid var(--line);
-  padding-top: 1rem;
-}
-
-dt { color: var(--muted); }
-dd { margin: 0; font-variant-numeric: tabular-nums; }
-
-.ok { color: var(--ok); }
-.bad { color: var(--bad); }
-
-pre {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  overflow: auto;
-  max-height: 20rem;
-  font-size: 13px;
-  margin: 0;
-}
-
-.empty { color: var(--muted); }

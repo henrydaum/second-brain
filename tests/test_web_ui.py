@@ -65,8 +65,14 @@ def raised(monkeypatch):
     """Every notification ``web_ui`` puts on the bus, in order."""
     seen = []
     bus.subscribe(NOTIFICATION_PUSHED, seen.append)
-    # The wait is real and the test should not be. Each test sets its own.
+    # The waits are real and the test should not be. Each test sets its own.
     monkeypatch.setattr(web_ui, "AUDIENCE_TIMEOUT", 3.0)
+    # The bridge is asked repeatedly, because the HTTP frontend binds its port
+    # a moment after the page starts answering and a single ask routinely got
+    # there first — reporting "nothing answers behind it" about a frontend that
+    # was two seconds away. Here the stand-in's answer is final on the first
+    # ask, so the retry only costs the test its own timeout.
+    monkeypatch.setattr(web_ui, "BRIDGE_TIMEOUT", 0.0)
     yield seen
 
 
@@ -199,3 +205,62 @@ def test_an_empty_url_does_nothing_at_all(raised):
     time.sleep(0.5)
     assert not raised
     assert web_ui._process is None
+
+
+# ── Whose dev server is that? ────────────────────────────────────────
+#
+# The rule is "only stop what this *app* started", and the word that had to
+# widen is *app*: a `/restart` re-execs, so the server still serving afterwards
+# was started by a process that no longer exists. Reading it as "started by me"
+# meant adopting it and then declining to ever stop it — so one ungraceful exit
+# left a dev server outliving every boot for the rest of the machine's uptime.
+
+
+@pytest.fixture
+def owned(monkeypatch, tmp_path):
+    """A pid file under tmp_path, and a kill that is recorded rather than done."""
+    monkeypatch.setattr(web_ui, "PID_FILE", tmp_path / "web_ui.pid")
+    monkeypatch.setattr(web_ui, "_process", None)
+    monkeypatch.setattr(web_ui, "_adopted_pid", None)
+    killed = []
+    monkeypatch.setattr(web_ui, "_end", killed.append)
+    return killed
+
+
+def test_a_server_from_a_previous_run_is_reclaimed_and_stopped(owned, monkeypatch):
+    """The orphan case, which is the one that made this permanent.
+
+    Nothing in memory says the server is ours — there is no handle, because the
+    process that held it is gone. What establishes it is the pid on the port
+    matching the pid written down, which is a fact this process can check
+    against reality rather than a promise it has to take on trust.
+    """
+    web_ui._remember(4321)
+    monkeypatch.setattr(web_ui, "_owner_of_port", lambda port: 4321)
+
+    web_ui._adopted_pid = web_ui._reclaim("http://localhost:5174")
+    assert web_ui._adopted_pid == 4321
+    web_ui.stop()
+
+    assert owned == [4321]
+    assert not web_ui.PID_FILE.exists(), "the record outlived what it named"
+
+
+def test_a_server_somebody_else_is_running_is_left_alone(owned, monkeypatch):
+    """Two ways to not be ours, and both must end in doing nothing.
+
+    A dev server in somebody's own terminal has no record at all; a *stale*
+    record names a pid that has since been reused, and trusting it would kill
+    whatever inherited that number. Neither is worth a running process, so the
+    check is against the port's current owner in both cases.
+    """
+    monkeypatch.setattr(web_ui, "_owner_of_port", lambda port: 9999)
+
+    assert web_ui._reclaim("http://localhost:5174") is None  # no record
+
+    web_ui._remember(4321)                                   # stale record
+    assert web_ui._reclaim("http://localhost:5174") is None
+    assert not web_ui.PID_FILE.exists(), "a stale record was kept"
+
+    web_ui.stop()
+    assert owned == [], "something nobody owns was killed"

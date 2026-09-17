@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Widget host</title>
+<!--
+  The page every widget is written into, and the reason it exists rather than
+  the frame using `srcdoc`.
+
+  A `srcdoc` iframe inherits the parent's Content-Security-Policy — the header
+  that says which scripts a document may run. The frame's policy is written for
+  the frame, so under it both the injected bridge and the widget's own <script>
+  tags are blocked: the widget renders perfectly and nothing in it works. This
+  is not hypothetical, it is what the old UI shipped and then had to unpick
+  (`docs/HTML_APP_TROUBLESHOOTING.md` in the UI repo).
+
+  A real URL gets its own policy. The frame prepares the widget's document and
+  posts it here once; this page writes it into itself, which keeps the opaque
+  sandbox origin and takes the policy of *this* route. In development Vite sends
+  no CSP at all, so `srcdoc` would appear to work and fail only in production —
+  which is exactly how that bug hid. Same path in both, deliberately.
+
+  One document, once. A widget that posts a replacement to itself is refused:
+  the delivery is what the frame authorised, and accepting a second would let a
+  widget swap its own contents for something the frame never prepared.
+-->
+<script>
+  window.addEventListener('message', function mount(event) {
+    if (event.source !== parent || parent === window ||
+        event.data?.channel !== 'sb-widget-mount-v1' ||
+        typeof event.data.html !== 'string') return;
+    window.removeEventListener('message', mount);
+    document.open();
+    document.write(event.data.html);
+    document.close();
+  });
+</script>
