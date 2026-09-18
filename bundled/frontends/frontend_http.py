@@ -276,6 +276,12 @@ class HTTP(BaseFrontend):
         self._static = ""
         # session_key -> the http request id of its open event stream.
         self._streams = {}
+        # session_key -> the ``?client=`` its stream named, for the ones that
+        # do. Kept here rather than read per request because the request that
+        # *declares* it is not the one that can act on it: a stream opens
+        # before its session exists, so the declaration that reaches the
+        # runtime is the refresh made from a later ``/sdk/`` call.
+        self._clients = {}
         # session_key -> [(seq, frame), …] kept for a client that reconnects.
         self._buffered = {}
         # session_key -> how many frames it has ever been sent, which is what
@@ -456,6 +462,11 @@ class HTTP(BaseFrontend):
         key = self._session_of(request)
         if key in self._streams:
             self._drop(sdk, key)
+        # What the client says it is. Any client may say anything, so nothing
+        # is authorized by it — it decides only what the agent is told this
+        # surface can render, and a client that lies about that has merely
+        # asked to be sent markup it will not draw.
+        self._clients[key] = self._query(request, "client") or None
 
         headers = dict(self._cors())
         sdk.http.respond(request["id"], status=200, headers=headers,
@@ -526,6 +537,7 @@ class HTTP(BaseFrontend):
                 sdk.http.close(request_id)
             except Exception:
                 pass    # already gone, which is the case this exists for
+        self._clients.pop(session_key, None)
         self._attend(sdk, session_key, False)
 
     def _attend(self, sdk, session_key, present):
@@ -537,7 +549,8 @@ class HTTP(BaseFrontend):
         than exceptional.
         """
         try:
-            sdk.frontend.attended(session_key, present)
+            sdk.frontend.attended(session_key, present,
+                                  client=self._clients.get(session_key))
         except Exception as exc:
             sdk.log(f"could not set attendance for {session_key}: {exc}",
                     "debug")

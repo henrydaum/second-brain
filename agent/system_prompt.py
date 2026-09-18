@@ -41,7 +41,6 @@ from typing import Any, Callable
 import prompt_cues
 from runtime.agent_scope import AgentScope
 from runtime.security_modes import security_mode as normalize_security_mode
-from runtime import web_ui
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
@@ -89,6 +88,8 @@ class PromptContext:
     scope: "AgentScope | None" = None
     profile_name: str = "default"
     frontend_name: str | None = None
+    #: What the frontend says is watching this session, when it says anything.
+    frontend_client: str | None = None
     session_key: str | None = None
     security_mode: str = "ask"
     conversation_id: int | None = None
@@ -137,6 +138,7 @@ def build_prompt_sections(
     prompt_extras: dict[str, Any] | None = None,
     notification_suffix: str = "",
     frontend_name: str | None = None,
+    frontend_client: str | None = None,
     frontend=None,
     command_filter: Callable[[str], bool] | None = None,
     active_llm=None,
@@ -177,6 +179,7 @@ def build_prompt_sections(
         db=db, services=services or {}, orchestrator=orchestrator,
         config=config or {}, scope=scope, profile_name=profile_name,
         frontend_name=frontend_name,
+        frontend_client=frontend_client,
         session_key=session_key,
         security_mode=normalize_security_mode(security_mode),
         conversation_id=conversation_id,
@@ -609,6 +612,12 @@ def _session_facts(ctx: PromptContext, frontend=None) -> str:
     return "\n".join(lines)
 
 
+#: The client that renders widgets, as it names itself to ``frontend.attend``.
+#: A name rather than a frontend, because the HTTP frontend serves more than the
+#: app: a script, the reference client, somebody's own build all hold sessions on
+#: it and draw what they choose. This is the one that says it draws these.
+WIDGET_CLIENT = "frame_ui"
+
 #: What the agent may do with the built-in web UI's richer surface, told only to
 #: sessions that are actually on it. Write the guidance here.
 WIDGET_GUIDANCE = """## Widgets
@@ -616,34 +625,30 @@ Second Brain has a built-in web UI that can render widgets. Widgets are HTML fil
 
 
 def _widgets(ctx: PromptContext) -> str:
-    """Widget guidance, for a session on the built-in UI and nobody else.
+    """Widget guidance, for a session whose client says it draws them.
 
-    Two conditions, and both are needed. The session has to be the HTTP
-    frontend's, because that is the only transport the app speaks over — and the
-    built-in UI has to be *working*, which ``web_ui.serving()`` answers to the
-    stricter standard of an authenticated Request having been answered through
-    it rather than of a page having loaded. A widget the surface cannot draw is
-    worse than no widget: the agent spends a turn on markup the person sees
-    raw, and nothing anywhere reports that it did.
+    **The client declares itself; nothing here guesses.** The frontend name is
+    not enough — the HTTP frontend is a transport, and a script, the reference
+    client in ``docs/`` and somebody's own build all hold sessions on it while
+    rendering whatever they like. Nor is the origin header: it is absent on the
+    request that opens a stream, rewritten by whatever proxies, and a claim by
+    the client either way — so sniffing it is the same claim with a guess in
+    front of it. The claim is made plainly instead, through ``frontend.attend``,
+    which is the same shape every other capability in this codebase takes.
 
-    Note the HTTP frontend is not the app's alone — a third-party client, the
-    reference client in ``docs/``, or a script may hold a session on it, and each
-    renders whatever it chooses. The second condition is what keeps the guidance
-    honest for them: it is about *this* machine serving *its own* UI, which is as
-    close to "the user is looking at the app" as the kernel can get without the
-    client saying so. If some other client ever wants to claim it renders
-    widgets, that is a capability flag on ``FrontendCapabilities`` — which the
-    block above already reads — not a guess made here.
+    The failure being avoided is the silent one. A widget the surface cannot
+    draw does not come back as an error: the agent spends its turn on markup,
+    the person is shown the markup, and nothing anywhere reports that the two
+    disagreed. So the default is off, and it stays off for every client that
+    does not ask — including the app itself while its stream is down, since
+    ``mark_unattended`` takes the name away with the attendance.
 
     It rides in ``_session_facts`` and therefore in the semi-stable block, which
-    is the right tier by the rule ``prompt_cues`` states: a session's frontend is
-    fixed for that session's life, and the UI going down mid-session does not
-    make the guidance wrong — it makes it unusable, which the agent finds out
-    from the failure rather than from the prompt.
+    is the right tier by the rule ``prompt_cues`` states: the client is
+    established when the stream opens and holds for as long as it is open, which
+    is a session's life or nothing.
     """
-    if (ctx.frontend_name or "").strip() != "http":
-        return ""
-    if not web_ui.serving():
+    if (ctx.frontend_client or "").strip() != WIDGET_CLIENT:
         return ""
     return WIDGET_GUIDANCE.strip()
 

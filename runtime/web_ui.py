@@ -111,20 +111,7 @@ _process: subprocess.Popen | None = None
 #: previous life. Stoppable; see :func:`_reclaim` for what establishes it.
 _adopted_pid: int | None = None
 
-#: The address the UI was last established to be working at, or None. Set only
-#: on a *successful* bridge probe, which is the same standard :func:`_announce`
-#: holds itself to: a page that loads is not the question, a Request answered
-#: through it is. Anything asking "is the built-in UI up?" — the agent prompt
-#: does — wants that stricter reading, since a UI that cannot reach the kernel
-#: cannot render anything the agent sends it either.
-_serving: str | None = None
-
 _lock = threading.Lock()
-
-
-def serving() -> str | None:
-    """The URL the built-in UI is working at, or None if it is not."""
-    return _serving
 
 
 # ── Whose dev server is that? ─────────────────────────────────────────
@@ -429,8 +416,6 @@ def _announce(url: str, runtime=None) -> None:
         bridge = bridge_ok(url)
 
     if bridge is True:
-        global _serving
-        _serving = url
         notifications.notify(
             title=f"UI is reachable at: {url}",
             source="web_ui",
@@ -561,11 +546,10 @@ def stop() -> None:
     the port who owns it, rather than by whether this particular process object
     happens to be holding a handle.
     """
-    global _process, _adopted_pid, _serving
+    global _process, _adopted_pid
     with _lock:
         process, _process = _process, None
         adopted, _adopted_pid = _adopted_pid, None
-        _serving = None
 
     if process is not None and process.poll() is None:
         logger.info("Stopping the web UI...")

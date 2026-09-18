@@ -703,7 +703,7 @@ the same shape but a worse failure mode: handlers run on the thread that
 | `frontend.submit(session_key, input_kind, ...)` | Carry a person's input into the state machine | token, kind | safe |
 | `frontend.cancel(session_key)` | Stop what a session is doing | token | safe |
 | `frontend.bind(session_key, external_id, ...)` | Say whose data a session is | token, external_id | safe |
-| `frontend.attend(session_key, present)` | Say whether a person is watching | token | safe |
+| `frontend.attend(session_key, present, client=None)` | Say whether a person is watching, and through what | token | safe |
 | `frontend.pending(session_key, details=False)` | Whether an approval is still waiting; with `details`, the pending approval or form step itself | token | safe |
 | `frontend.resolve(session_key, value, request_id)` | Answer a pending approval | token, request_id | safe |
 | `frontend.act(session_key, request_type, args)` | Run one Request as one of your sessions | token, session ownership | safe |

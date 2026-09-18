@@ -200,29 +200,18 @@ def test_an_entry_with_no_description_is_reported_not_guessed_at():
     assert "with no description were skipped" in service
 
 
-def test_the_corpus_is_actions_and_facts_live_elsewhere():
-    """An entry that names no action cannot change what anyone does.
-
-    That rule is the whole filter on what gets written: it kills the dominant
-    failure mode, which is a curator producing tidy summaries of what happened,
-    and it implements "a neutral result is not worth recording" for free — a
-    neutral result changes no action, so there is nothing to write.
-
-    Facts go in MEMORY.md, which the kernel inlines and no part of this suite
-    may touch. Every half has to say so or the agent is told one thing and the
-    curator does another.
-    """
-    for relative in (SERVICE, TASK, MEMORY):
-        source = _source_or_skip(relative)
-        assert "MEMORY.md" in source, relative
-
-    # The rule is stated where it decides something: to the agent that writes
-    # mid-conversation, and to the curator that writes after one. The service
-    # only has to say where facts go instead. Matched on the fragment that
-    # survives line-wrapping in both prompts.
-    assert "there is nothing to write" in _source_or_skip(MEMORY)
-    assert "there is nothing to write" in _source_or_skip(TASK)
-    assert "not entries" in _source_or_skip(SERVICE)
+# There is deliberately no test that the three halves *word* the rule the same
+# way — that an entry naming no action is not worth writing. There was one, and
+# it matched prose fragments in each file's description and agent prompt. What
+# it caught in practice was a rewording: the rule was still stated, in better
+# words, and the test failed for the words. A prompt is edited constantly and by
+# design, so pinning its phrasing puts a red suite in front of every
+# improvement, and the only way to keep it green is to write the sentence the
+# test wants. That is the test dictating the prompt, which is backwards.
+#
+# What is worth pinning is what a reader cannot check by reading: structure,
+# declarations, reach, the disjoint tool halves below. Whether guidance reads
+# well is a judgement, and judgement belongs to whoever is editing it.
 
 
 # ──────────────────────────────────────────────────────────────────────

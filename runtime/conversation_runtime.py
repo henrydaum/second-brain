@@ -1130,6 +1130,18 @@ class ConversationRuntime:
         if session is not None:
             session.attended = attended
 
+    def set_session_client(self, session_key: str, client: str | None) -> None:
+        """Frontend hook: name the client watching ``session_key``.
+
+        The kernel only *reads* this, exactly as it only reads attendance. What
+        a name means is the frontend's business — it is a declaration, not a
+        verdict — and the one reader today is the agent prompt, which tells the
+        agent what the surface in front of the user can draw.
+        """
+        session = self.sessions.get(session_key)
+        if session is not None:
+            session.client = client or None
+
     # ──────────────────────────────────────────────────────────────────
     # Security mode — "how does this conversation answer approval dialogs?"
     # The kernel only *reads* it in two places: the sandbox approver

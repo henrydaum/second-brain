@@ -1200,14 +1200,26 @@ class _Frontend(_Namespace):
                                       else str(external_id)),
                          user_type=user_type, config=config)
 
-    def attended(self, session_key: str, present: bool = True):
+    def attended(self, session_key: str, present: bool = True,
+                 client: str | None = None):
         """Say whether a person is actually watching this session.
 
         The kernel only reads attendance; a frontend owns the policy. Say it
         on connect and disconnect and background-safety gating follows.
+
+        ``client`` names *what* they are watching through, when your transport
+        serves more than one kind of client and can tell them apart. It rides
+        along here rather than on a Request of its own because one gesture
+        establishes both — a socket opening — and because withdrawing
+        attendance has to withdraw this with it. The kernel stores the name and
+        asks nothing of it; the agent prompt reads it to decide what the surface
+        can be told to draw. It is a claim by your client, so treat it as one:
+        never as authorization, and never as proof of anything you would refuse
+        a stranger.
         """
         return self._ask(FRONTEND_ATTEND, token=self._token(),
-                         session_key=session_key, present=bool(present))
+                         session_key=session_key, present=bool(present),
+                         client=(str(client) if client else None))
 
     def pending_input(self, session_key: str, details: bool = False):
         """What this session is blocked on, or None.
