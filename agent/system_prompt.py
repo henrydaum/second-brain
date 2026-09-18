@@ -41,6 +41,7 @@ from typing import Any, Callable
 import prompt_cues
 from runtime.agent_scope import AgentScope
 from runtime.security_modes import security_mode as normalize_security_mode
+from runtime import web_ui
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
@@ -602,7 +603,49 @@ def _session_facts(ctx: PromptContext, frontend=None) -> str:
     met = _first_met(ctx.db, ctx.user_id)
     if met:
         lines.append(f"- You first met this user: {met}.")
+    widgets = _widgets(ctx)
+    if widgets:
+        lines += ["", widgets]
     return "\n".join(lines)
+
+
+#: What the agent may do with the built-in web UI's richer surface, told only to
+#: sessions that are actually on it. Write the guidance here.
+WIDGET_GUIDANCE = """## Widgets
+Second Brain has a built-in web UI that can render widgets. Widgets are HTML files that you can build similarly to plugins. Use widgets for visual elements like designs, dashboards, interactive tools, and games. They can even use the SDK. When you want to build one, read the template first."""
+
+
+def _widgets(ctx: PromptContext) -> str:
+    """Widget guidance, for a session on the built-in UI and nobody else.
+
+    Two conditions, and both are needed. The session has to be the HTTP
+    frontend's, because that is the only transport the app speaks over — and the
+    built-in UI has to be *working*, which ``web_ui.serving()`` answers to the
+    stricter standard of an authenticated Request having been answered through
+    it rather than of a page having loaded. A widget the surface cannot draw is
+    worse than no widget: the agent spends a turn on markup the person sees
+    raw, and nothing anywhere reports that it did.
+
+    Note the HTTP frontend is not the app's alone — a third-party client, the
+    reference client in ``docs/``, or a script may hold a session on it, and each
+    renders whatever it chooses. The second condition is what keeps the guidance
+    honest for them: it is about *this* machine serving *its own* UI, which is as
+    close to "the user is looking at the app" as the kernel can get without the
+    client saying so. If some other client ever wants to claim it renders
+    widgets, that is a capability flag on ``FrontendCapabilities`` — which the
+    block above already reads — not a guess made here.
+
+    It rides in ``_session_facts`` and therefore in the semi-stable block, which
+    is the right tier by the rule ``prompt_cues`` states: a session's frontend is
+    fixed for that session's life, and the UI going down mid-session does not
+    make the guidance wrong — it makes it unusable, which the agent finds out
+    from the failure rather than from the prompt.
+    """
+    if (ctx.frontend_name or "").strip() != "http":
+        return ""
+    if not web_ui.serving():
+        return ""
+    return WIDGET_GUIDANCE.strip()
 
 
 def _account_name(db, user_id) -> str:
