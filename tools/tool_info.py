@@ -350,7 +350,8 @@ class Info(BaseTool):
         "Use it instead of guessing, and before saying something is not "
         "installed.\n"
         "- `sdk` — the SDK reference by section; read before writing any code\n"
-        "- `templates` — the authoring contract for one plugin family\n"
+        "- `templates` — the authoring contract for one kind of file, "
+        "plugin families and widgets alike\n"
         "- `docs` — README and everything in docs/\n"
         "- `tools` — what you can call, and each one's arguments\n"
         "- `commands` — slash commands; these are the user's to run, not yours\n"
@@ -430,31 +431,54 @@ class Info(BaseTool):
             return "\n".join(lines)
         return _render_chapter(matched[0], matched[0]["source"])
 
+    #: Fence language per template extension. A widget is one HTML file, so
+    #: ``templates/`` is not all Python, and never was anything but this tool's
+    #: own glob saying otherwise.
+    FENCES = {".py": "python", ".html": "html"}
+
+    def _template_files(self, sdk, root):
+        """``{stem: filename}`` for every template, whatever it is written in.
+
+        Matched on ``*_template.*`` rather than ``*_template.py``: the widget
+        template is HTML, and a glob that spells the extension answers "No
+        template for 'widget'" about a file sitting in the folder it has just
+        listed — which reads as the contract not existing rather than as this
+        tool not having looked for it.
+        """
+        found = {}
+        listing = sdk.fs.list(_join(root, "templates"), pattern="*_template.*")
+        for entry in self._entries(listing):
+            filename = str(entry).rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            stem, _, extension = filename.rpartition(".")
+            if stem.endswith("_template") and f".{extension}" in self.FENCES:
+                found[stem[:-len("_template")]] = filename
+        return dict(sorted(found.items()))
+
     def _templates(self, sdk, name):
-        """The authoring contract for one plugin family, verbatim."""
+        """The authoring contract for one kind of file, verbatim."""
         root = sdk.paths.get("project")
-        listing = sdk.fs.list(_join(root, "templates"), pattern="*_template.py")
-        stems = sorted(
-            entry.rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:-len("_template.py")]
-            for entry in self._entries(listing)
-            if str(entry).endswith("_template.py"))
+        files = self._template_files(sdk, root)
         if not name:
             lines = ["# templates", ""]
-            lines += [f"  {stem}" for stem in stems]
+            lines += [f"  {stem}" for stem in files]
             lines += ["", 'One template, in full: info("templates", "tool"). '
                           "Read it before writing that kind of file — code "
                           "written from memory does not load."]
             return "\n".join(lines)
 
         wanted = name.lower().replace("_template", "").rstrip("s")
-        for stem in stems:
+        for stem, filename in files.items():
             if stem.lower().rstrip("s") == wanted or wanted in stem.lower():
-                relative = f"templates/{stem}_template.py"
+                relative = f"templates/{filename}"
+                fence = self.FENCES["." + filename.rpartition(".")[2]]
                 text = sdk.fs.read(_join(root, relative))
                 if len(text) > MAX_CHARS:
-                    text = text[:MAX_CHARS] + f"\n# [truncated — read {relative}]"
-                return f"```python\n{text}\n```\n\n---\nFrom {relative}"
-        return (f"No template for '{name}'. Available: {', '.join(stems)}.")
+                    # Left bare rather than made a comment: the leader differs
+                    # per language and a note that is syntax in one of them is
+                    # worse than a note that is syntax in neither.
+                    text = text[:MAX_CHARS] + f"\n[truncated — read {relative}]"
+                return f"```{fence}\n{text}\n```\n\n---\nFrom {relative}"
+        return (f"No template for '{name}'. Available: {', '.join(files)}.")
 
     def _read_doc(self, sdk, relative):
         """One documentation file, by repo-relative path."""
