@@ -80,7 +80,7 @@ export function ModelSelector() {
     // submitting a command onto a running turn.
     if (!modelName || state.typing) return;
     setOpen(false);
-    openSettings("plugins");
+    openSettings("packages");
     void say(`/llm ${quoteArg(modelName)} edit`);
   };
   const label = modelsLoading && !modelName ? "Loading…" : compactModelName(modelName);

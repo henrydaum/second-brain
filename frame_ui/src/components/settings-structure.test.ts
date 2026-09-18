@@ -24,7 +24,7 @@ describe("commandsForPage", () => {
     );
 
     expect(
-      commandsForPage(commands, "additional").map((command) => command.name),
+      commandsForPage(commands, "extensions").map((command) => command.name),
     ).toEqual(["reveal"]);
   });
 
@@ -38,34 +38,34 @@ describe("commandsForPage", () => {
     ).toEqual(["config", "agent", "debug", "setup"]);
   });
 
-  it("leaves Additional in the order the catalogue supplied", () => {
+  it("leaves Extensions in the order the catalogue supplied", () => {
     // Nothing here is named in `PAGE_COMMANDS`, so the sort has no opinion and
     // must not invent one — `listCommands` already sorted these by name.
     const commands = named("alpha", "beta", "gamma");
 
     expect(
-      commandsForPage(commands, "additional").map((command) => command.name),
+      commandsForPage(commands, "extensions").map((command) => command.name),
     ).toEqual(["alpha", "beta", "gamma"]);
   });
 });
 
 describe("pageForCommand", () => {
-  it("sends a command no page claims to Additional", () => {
+  it("sends a command no page claims to Extensions", () => {
     // The whole third section is this rule: the kernel does not report where a
     // command came from, so "unclaimed" is how an installed or agent-written
     // one is recognised.
-    expect(pageForCommand("something-a-package-installed")).toBe("additional");
+    expect(pageForCommand("something-a-package-installed")).toBe("extensions");
   });
 
   it("keeps the kernel and plugin commands off it", () => {
     expect(pageForCommand("config")).toBe("kernel");
     expect(pageForCommand("setup")).toBe("kernel");
-    expect(pageForCommand("packages")).toBe("plugins");
-    expect(pageForCommand("scripts")).toBe("plugins");
-    expect(pageForCommand("frontends")).toBe("plugins");
+    expect(pageForCommand("packages")).toBe("packages");
+    expect(pageForCommand("scripts")).toBe("packages");
+    expect(pageForCommand("frontends")).toBe("packages");
     // A capability like the rest of that page, and the kernel agrees — `/llm`
     // declares `category = "Capabilities"` alongside tools and services.
-    expect(pageForCommand("llm")).toBe("plugins");
+    expect(pageForCommand("llm")).toBe("packages");
   });
 });
 

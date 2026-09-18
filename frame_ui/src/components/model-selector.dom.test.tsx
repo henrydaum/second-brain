@@ -103,7 +103,7 @@ describe("the configure link", () => {
     const user = await openPanel();
     await clickConfigure(user);
 
-    expect(openSettings).toHaveBeenCalledWith("plugins");
+    expect(openSettings).toHaveBeenCalledWith("packages");
     expect(say).toHaveBeenCalledWith("/llm 'anthropic/sonnet-4.6' edit");
   });
 

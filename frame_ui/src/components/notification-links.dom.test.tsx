@@ -187,7 +187,7 @@ describe("the links out of a notification", () => {
   });
 
   it("sends a setting managed elsewhere to the section that manages it", async () => {
-    // `default_llm_profile` is `/llm`'s to edit, and `/llm` lives on Plugins.
+    // `default_llm_profile` is `/llm`'s to edit, and `/llm` lives on Packages.
     // `/config` is the one form that provably does not list it, so asking the
     // kernel about it is not worth a round trip when the answer is known.
     const { say, openSettings, user } = stub({
@@ -197,7 +197,7 @@ describe("the links out of a notification", () => {
 
     await user.click(screen.getByRole("button", { name: "Open settings" }));
 
-    expect(openSettings).toHaveBeenCalledWith("plugins");
+    expect(openSettings).toHaveBeenCalledWith("packages");
     expect(say).not.toHaveBeenCalled();
     expect(sdk).not.toHaveBeenCalled();
   });
@@ -284,7 +284,7 @@ describe("Settings lands where it was asked to", () => {
   it("opens at the requested section rather than the default", () => {
     // Without this the link lands on "Kernel", which is the default page and
     // proves nothing. The requested page has to be one the default is not.
-    stub({ settingsRequest: { page: "plugins" } });
+    stub({ settingsRequest: { page: "packages" } });
     render(
       <SettingsDialogContent
         commandActionPending={false}
@@ -292,14 +292,14 @@ describe("Settings lands where it was asked to", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Plugins" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Packages" })).toBeTruthy();
   });
 
   it("consumes the request instead of standing on it", () => {
     // A request that never cleared would undo the next navigation: press
     // "Kernel" and the still-standing `plugins` would put you back.
     const { clearSettingsRequest } = stub({
-      settingsRequest: { page: "plugins" },
+      settingsRequest: { page: "packages" },
     });
     render(
       <SettingsDialogContent
@@ -328,9 +328,9 @@ describe("Settings lands where it was asked to", () => {
     const { user } = stub({
       say,
       commands: [{ name: "llm", description: "Choose a model" }],
-      // `/llm` is on Plugins, and the dialog opens on Kernel — without this the
+      // `/llm` is on Packages, and the dialog opens on Kernel — without this the
       // card under test is not on screen to be clicked.
-      settingsRequest: { page: "plugins" },
+      settingsRequest: { page: "packages" },
     });
     render(
       <SettingsDialogContent

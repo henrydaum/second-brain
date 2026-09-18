@@ -278,8 +278,8 @@ export const SettingsDialogContent: FC<{
               </div>
             ) : visibleCommands.length === 0 ? (
               <div className="text-muted-foreground rounded-xl border border-dashed p-8 text-center text-sm">
-                {page === "additional"
-                  ? "Nothing added yet. Install commands from the store with Manage packages, under Plugins."
+                {page === "extensions"
+                  ? "Nothing added yet. Install commands from the store with Manage packages, under Packages."
                   : "No commands are available in this section."}
               </div>
             ) : (

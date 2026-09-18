@@ -38,7 +38,7 @@ import { titleCase } from "@/lib/utils";
  * `/packages` or get written into the workspace by the agent, so both the
  * commands and their topics are unbounded, while their origins are not.
  */
-export type SettingsPageId = "kernel" | "plugins" | "additional";
+export type SettingsPageId = "kernel" | "packages" | "extensions";
 
 type SettingsPage = {
   id: SettingsPageId;
@@ -55,15 +55,15 @@ export const SETTINGS_PAGES: SettingsPage[] = [
     icon: CpuIcon,
   },
   {
-    id: "plugins",
-    label: "Plugins",
+    id: "packages",
+    label: "Packages",
     description:
       "Manage the capabilities installed around the kernel, and the store they come from.",
     icon: BoxIcon,
   },
   {
-    id: "additional",
-    label: "Additional",
+    id: "extensions",
+    label: "Extensions",
     description:
       "Commands added by installed packages or written into the workspace.",
     icon: CommandIcon,
@@ -78,7 +78,7 @@ export const SETTINGS_PAGES: SettingsPage[] = [
  * name instead, `config` — the one people actually come here for — landed
  * second, between `agent` and `debug`.
  *
- * `additional` names nothing on purpose. It is the fallthrough, and listing
+ * `extensions` names nothing on purpose. It is the fallthrough, and listing
  * its members is exactly what it cannot do: they arrive from the store or from
  * the agent's own hand long after this file was written.
  */
@@ -92,7 +92,7 @@ const PAGE_COMMANDS: Record<SettingsPageId, readonly string[]> = {
     "debug",
     "setup",
   ],
-  plugins: [
+  packages: [
     "packages",
     "scripts",
     "llm",
@@ -102,11 +102,14 @@ const PAGE_COMMANDS: Record<SettingsPageId, readonly string[]> = {
     "services",
     "frontends",
   ],
-  additional: [],
+  extensions: [],
 };
 
 /** Primary commands receive a subtle fill within their settings group. */
-export const FEATURED_COMMANDS: ReadonlySet<string> = new Set(["config"]);
+export const FEATURED_COMMANDS: ReadonlySet<string> = new Set([
+  "config",
+  "packages",
+]);
 
 export const SYSTEM_ACTIONS = [
   {
@@ -212,11 +215,11 @@ export function pageForNotification(source: string): SettingsPageId | null {
  * notification body has already named it.
  */
 const SETTING_PAGES: Record<string, SettingsPageId> = {
-  llm_profiles: "plugins",
-  default_llm_profile: "plugins",
+  llm_profiles: "packages",
+  default_llm_profile: "packages",
   agent_profiles: "kernel",
   active_agent_profile: "kernel",
-  frontend_profiles: "plugins",
+  frontend_profiles: "packages",
 };
 
 export function pageForSetting(setting: string): SettingsPageId | null {
@@ -245,24 +248,24 @@ export function settingCommand(setting: string): string {
 /**
  * Which page shows a command.
  *
- * **Anything unclaimed is Additional, and that is the rule rather than a
+ * **Anything unclaimed is Extensions, and that is the rule rather than a
  * default.** The kernel does not say where a command came from — `command.list`
  * answers name, description and category, and nothing about the file it was
  * loaded from — so "not one of the ones we named" is the only provenance signal
  * available. It is the right one for the question: the commands this file
  * cannot enumerate are exactly the ones a package or the agent installed.
  *
- * The cost is that a *new kernel* command lands on Additional until it is added
+ * The cost is that a *new kernel* command lands on Extensions until it is added
  * to `PAGE_COMMANDS` above. That is the same upkeep `COMMAND_PRESENTATION`
  * already asks for, and it fails by showing the command in the wrong section
  * rather than by not showing it.
  */
 export function pageForCommand(name?: string | null): SettingsPageId {
-  if (!name || SYSTEM_ACTION_NAMES.has(name)) return "additional";
+  if (!name || SYSTEM_ACTION_NAMES.has(name)) return "extensions";
   for (const page of SETTINGS_PAGES) {
     if (PAGE_COMMANDS[page.id].includes(name)) return page.id;
   }
-  return "additional";
+  return "extensions";
 }
 
 export function commandsForPage(
@@ -277,7 +280,7 @@ export function commandsForPage(
         return false;
       return pageForCommand(command.name) === page;
     })
-    // **Additional keeps the order it arrived in, and relies on this to.**
+    // **Extensions keeps the order it arrived in, and relies on this to.**
     // Its list is empty, so every `indexOf` is -1, every comparison is 0, and a
     // stable sort leaves `listCommands`' own sort by name standing — which is
     // the only sensible order for a page whose contents nobody here has seen.
