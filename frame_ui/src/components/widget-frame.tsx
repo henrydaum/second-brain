@@ -34,10 +34,18 @@ import { appDocument, attachAppRelay, tellApp } from "@/lib/html-app";
 import { widgetStyles } from "@/lib/widget-document";
 import { readWidget, type Widget } from "@/lib/widgets";
 
-export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
-  widget,
-  scheme,
-}) => {
+export const WidgetFrame: FC<{
+  widget: Widget;
+  scheme: "light" | "dark";
+  /**
+   * The widget's own saved state, as the kernel stored it.
+   *
+   * Delivered at mount and never again. It is the document's to interpret —
+   * nothing out here parses it — and a widget that never calls
+   * `brain.state.set` never sees anything but null, which is correct.
+   */
+  state?: string | null;
+}> = ({ widget, scheme, state = null }) => {
   const frame = useRef<HTMLIFrameElement>(null);
   const [source, setSource] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -111,7 +119,21 @@ export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
     const { width, height } = element.getBoundingClientRect();
     tellApp(element, token.current, "scheme", scheme, { css: widgetStyles(scheme) });
     tellApp(element, token.current, "size", { width, height });
-  }, [scheme]);
+    // Its saved state, once, with the first size and scheme. A widget frame is
+    // an opaque origin with no storage of its own, so this is the only moment
+    // anything it kept last time can reach it. Parsed here rather than in the
+    // document so a corrupted blob is one console line instead of a widget
+    // that throws before it draws.
+    let saved: unknown = null;
+    if (state) {
+      try {
+        saved = JSON.parse(state);
+      } catch (error) {
+        console.error("Discarding unreadable widget state", error);
+      }
+    }
+    tellApp(element, token.current, "state", saved);
+  }, [scheme, state]);
 
   /**
    * Hand the host its document, once both it and the document exist.

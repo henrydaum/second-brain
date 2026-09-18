@@ -8,7 +8,7 @@ The design it pins is deliberately thin. There are two surfaces:
 
 * ``GET /events`` streams every ``render`` the kernel makes, **verbatim**. No
   mapping table, no protocol vocabulary, no message-id bookkeeping. A client
-  that can read the eleven kinds can do what the REPL can — and more, since
+  that can read the render kinds can do what the REPL can — and more, since
   ``notification`` is a kind the REPL flattens back into chat.
 * ``POST /sdk/<type>`` runs any Request, through ``frontend.act``, rooted at
   the session named by ``?thread=``. Nothing is allowlisted, because policy
@@ -79,6 +79,10 @@ def test_the_declarations_the_bridge_reads(source):
     # calls ``render`` directly, so it proves the frame survives the wire while
     # saying nothing about whether the bus would ever route one to it.
     assert caps.get("supports_notifications") is True
+    # And the same for the widget panel: without this the kernel routes the
+    # kind nowhere at all — there is no markdown a widget flattens into — so a
+    # missing declaration presents as a panel that never changes.
+    assert caps.get("supports_widgets") is True
 
 
 def test_it_declares_every_request_it_makes(source):
@@ -477,6 +481,9 @@ def test_every_render_kind_crosses_unchanged(running):
         ("notification", {"title": "Plugin registered", "body": "tool_x",
                           "source": "plugin_watcher", "level": "success"}),
         ("callable_output", ["| setting | value |"]),
+        ("widget", {"conversation_id": 7, "name": "clock",
+                    "path": "/w/widget_clock.html", "tree": "bundled",
+                    "installed": True, "state": None}),
     ]
 
     # Stated once, checked against the kernel: a kind added to ``KINDS`` and

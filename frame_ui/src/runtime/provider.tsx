@@ -80,6 +80,7 @@ import {
   extensionOf,
   uploadToHost,
 } from "@/lib/upload";
+import { getWidget, setWidget, type Binding } from "@/lib/widgets";
 import { convertMessage } from "@/runtime/convert";
 import {
   initialInputRequests,
@@ -364,6 +365,12 @@ export type SecondBrain = {
   clearSettingsRequest: () => void;
   securityMode: "lockdown" | "ask" | "yolo";
   setSecurityMode: (mode: "lockdown" | "ask" | "yolo") => Promise<void>;
+  /** The widget bound to the open conversation, or null while the first read
+   *  is in flight. A bound `name` of null means the conversation holds none,
+   *  which is the ordinary state and different from not yet knowing. */
+  widgetBinding: Binding | null;
+  /** Bind a widget to the open conversation, or `null` to bind none. */
+  chooseWidget: (name: string | null) => void;
 };
 
 export type LlmProfile = {
@@ -457,6 +464,16 @@ type SettingsDomain = Pick<
   | "clearSettingsRequest"
 >;
 type SecurityDomain = Pick<SecondBrain, "securityMode" | "setSecurityMode">;
+/**
+ * The widget beside this conversation.
+ *
+ * A domain of its own because the panel is not the only thing that decides
+ * what is in it any more. The agent sets one with `sdk.widget.set`, switching
+ * conversations swaps it, and a second window of the same conversation moves
+ * with both — so the binding belongs where the frames already arrive rather
+ * than inside the component that draws it.
+ */
+type WidgetDomain = Pick<SecondBrain, "widgetBinding" | "chooseWidget">;
 
 const SessionContext = createContext<SessionDomain | null>(null);
 const ModelContext = createContext<ModelDomain | null>(null);
@@ -465,6 +482,7 @@ const ApprovalContext = createContext<ApprovalDomain | null>(null);
 const NotificationContext = createContext<NotificationDomain | null>(null);
 const SettingsContext = createContext<SettingsDomain | null>(null);
 const SecurityContext = createContext<SecurityDomain | null>(null);
+const WidgetContext = createContext<WidgetDomain | null>(null);
 
 function useDomain<T>(context: Context<T | null>, name: string): T {
   const value = use(context);
@@ -481,6 +499,7 @@ export const useNotifications = () =>
   useDomain(NotificationContext, "useNotifications");
 export const useSettings = () => useDomain(SettingsContext, "useSettings");
 export const useSecurity = () => useDomain(SecurityContext, "useSecurity");
+export const useWidget = () => useDomain(WidgetContext, "useWidget");
 
 /* ── The provider ───────────────────────────────────────────────────── */
 
@@ -553,6 +572,15 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
   );
   const [status, setStatus] = useState<StreamStatus>("connecting");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  /**
+   * The widget this conversation is showing.
+   *
+   * Read once on connect and maintained by the `widget` frame from then on.
+   * Both halves are needed: a fresh page has missed every announcement ever
+   * made, and a page with only the read goes stale the first time the agent,
+   * another window, or a conversation switch changes it.
+   */
+  const [widgetBinding, setWidgetBinding] = useState<Binding | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRequest, setSettingsRequest] = useState<{
     page: SettingsPageId;
@@ -789,6 +817,24 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
           // pure function of its arguments. A transient notification has no
           // `notification_id` to key a list on; this is what it gets instead.
           key: crypto.randomUUID(),
+        });
+        return;
+      }
+      /*
+        Which widget the panel holds. Routed here rather than into the store
+        for the same reason a notification is: it is not part of the
+        conversation's history, and the next history read would drop it.
+        It arrives on a conversation switch as well as on a deliberate change,
+        which is what makes the panel follow the conversation without the
+        `conversation` branch below having to know widgets exist.
+      */
+      if (frame.kind === "widget") {
+        setWidgetBinding({
+          name: frame.payload.name ?? null,
+          path: frame.payload.path ?? "",
+          tree: frame.payload.tree ?? "",
+          installed: frame.payload.installed ?? false,
+          state: frame.payload.state ?? null,
         });
         return;
       }
@@ -2308,9 +2354,46 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
       clearSettingsRequest,
     ],
   );
+  /**
+   * Put a widget in the panel, optimistically.
+   *
+   * The kernel announces the change to every live session on this
+   * conversation, so this window would find out regardless — but a menu that
+   * waits for a round trip before showing what you picked reads as a menu that
+   * did not hear you. A refusal or an unknown name re-reads rather than
+   * guessing: whatever the kernel says is what the other windows are showing.
+   */
+  const chooseWidget = useCallback((name: string | null) => {
+    setWidgetBinding((current) => (current ? { ...current, name } : current));
+    void setWidget(name).catch((error: unknown) => {
+      report(error);
+      void getWidget().then(setWidgetBinding, () => {});
+    });
+  }, [report]);
+
+  useEffect(() => {
+    let live = true;
+    void getWidget().then(
+      (found) => { if (live) setWidgetBinding(found); },
+      // A session in no conversation yet is the ordinary answer on a fresh
+      // page, not a failure worth showing anybody.
+      () => {
+        if (live) {
+          setWidgetBinding({ name: null, path: "", tree: "",
+                             installed: false, state: null });
+        }
+      },
+    );
+    return () => { live = false; };
+  }, []);
+
   const securityValue = useMemo<SecurityDomain>(
     () => ({ securityMode, setSecurityMode }),
     [securityMode, setSecurityMode],
+  );
+  const widgetValue = useMemo<WidgetDomain>(
+    () => ({ widgetBinding, chooseWidget }),
+    [widgetBinding, chooseWidget],
   );
 
   return (
@@ -2322,7 +2405,9 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
               <NotificationContext value={notificationValue}>
                 <SettingsContext value={settingsValue}>
                   <SecurityContext value={securityValue}>
-                    {children}
+                    <WidgetContext value={widgetValue}>
+                      {children}
+                    </WidgetContext>
                   </SecurityContext>
                 </SettingsContext>
               </NotificationContext>

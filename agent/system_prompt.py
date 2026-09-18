@@ -31,6 +31,7 @@ cost measured.
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -41,10 +42,11 @@ from typing import Any, Callable
 import prompt_cues
 from runtime.agent_scope import AgentScope
 from runtime.security_modes import security_mode as normalize_security_mode
-from runtime import web_ui
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
+
+logger = logging.getLogger("Agent")
 
 SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
 
@@ -243,6 +245,7 @@ def build_prompt_sections(
         _conversation_metadata(conversation_metadata, context_tokens,
                                getattr(active_llm, "context_size", 0)),
         _agent_memory(config),
+        _active_widget(pctx),
         *_collect(populations, pctx, stable=False),
         _prompt_extras(prompt_extras),
         notification_suffix,
@@ -603,7 +606,7 @@ def _session_facts(ctx: PromptContext, frontend=None) -> str:
     met = _first_met(ctx.db, ctx.user_id)
     if met:
         lines.append(f"- You first met this user: {met}.")
-    widgets = _widgets(ctx)
+    widgets = _widgets(frontend)
     if widgets:
         lines += ["", widgets]
     return "\n".join(lines)
@@ -612,40 +615,79 @@ def _session_facts(ctx: PromptContext, frontend=None) -> str:
 #: What the agent may do with the built-in web UI's richer surface, told only to
 #: sessions that are actually on it. Write the guidance here.
 WIDGET_GUIDANCE = """## Widgets
-Second Brain has a built-in web UI that can render widgets. Widgets are HTML files that you can build similarly to plugins. Use widgets for visual elements like designs, dashboards, interactive tools, and games. They can even use the SDK. When you want to build one, read the template first."""
+This surface can render widgets. A widget is an HTML file you write much as you write a plugin \u2014 use one for anything visual: a design, a dashboard, an interactive tool, a game. Widgets can call the SDK, and they can save their own state so it survives a reload. Read the template before building one.
+
+Each conversation shows at most one widget, and `info("widgets")` lists what is installed. `sdk.widget.set(name)` puts one in front of the user and `sdk.widget.set()` takes it away; either is the ordinary way to show your work."""
 
 
-def _widgets(ctx: PromptContext) -> str:
-    """Widget guidance, for a session on the built-in UI and nobody else.
+def _widgets(frontend) -> str:
+    """Widget guidance, for a frontend that says it draws them.
 
-    Two conditions, and both are needed. The session has to be the HTTP
-    frontend's, because that is the only transport the app speaks over — and the
-    built-in UI has to be *working*, which ``web_ui.serving()`` answers to the
-    stricter standard of an authenticated Request having been answered through
-    it rather than of a page having loaded. A widget the surface cannot draw is
-    worse than no widget: the agent spends a turn on markup the person sees
-    raw, and nothing anywhere reports that it did.
+    **The declaration is the whole gate**, and it replaced a guess. This asked
+    whether the session was the HTTP frontend's *and* whether ``web_ui.
+    serving()`` said this machine was serving its own UI — as close to "the
+    user is looking at the app" as the kernel could get while no frontend had a
+    way to say so. ``supports_widgets`` is that way, and it is the same bargain
+    ``supports_notifications`` and ``supports_streaming`` already make: a
+    transport states what it can draw, and the kernel stops inferring it.
 
-    Note the HTTP frontend is not the app's alone — a third-party client, the
-    reference client in ``docs/``, or a script may hold a session on it, and each
-    renders whatever it chooses. The second condition is what keeps the guidance
-    honest for them: it is about *this* machine serving *its own* UI, which is as
-    close to "the user is looking at the app" as the kernel can get without the
-    client saying so. If some other client ever wants to claim it renders
-    widgets, that is a capability flag on ``FrontendCapabilities`` — which the
-    block above already reads — not a guess made here.
+    It is the honest reading in both directions. A third-party client on the
+    HTTP transport that draws no widget now gets told about them, which the old
+    check happened to avoid for the wrong reason — it was testing the *server*,
+    not the client. And a future frontend that draws widgets over something
+    else is told about them without this function learning its name.
 
-    It rides in ``_session_facts`` and therefore in the semi-stable block, which
-    is the right tier by the rule ``prompt_cues`` states: a session's frontend is
-    fixed for that session's life, and the UI going down mid-session does not
-    make the guidance wrong — it makes it unusable, which the agent finds out
-    from the failure rather than from the prompt.
+    A widget the surface cannot draw is worse than no widget: the agent spends
+    a turn on markup the person sees raw, and nothing anywhere reports that it
+    did. That is what the declaration is protecting, and a frontend that
+    declares it falsely gets exactly what it asked for.
+
+    It rides in ``_session_facts`` and therefore in the semi-stable block,
+    which is the right tier by the rule ``prompt_cues`` states: a frontend's
+    capabilities are fixed for the life of a session. *Which* widget is showing
+    is not — it moves whenever the conversation does — so that lives in the
+    dynamic block, in ``_active_widget``.
     """
-    if (ctx.frontend_name or "").strip() != "http":
-        return ""
-    if not web_ui.serving():
+    if not getattr(getattr(frontend, "capabilities", None),
+                   "supports_widgets", False):
         return ""
     return WIDGET_GUIDANCE.strip()
+
+
+def _active_widget(ctx: PromptContext) -> str:
+    """Which widget the user is looking at right now, if any.
+
+    **Dynamic rather than semi-stable, and the reason is the one ``prompt_cues``
+    states.** A session's frontend is fixed for that session's life, so the
+    guidance above can ride in the cacheable prefix; the widget is a fact about
+    the *conversation*, and one session walks through many. Put here it would
+    go stale the moment somebody loaded another conversation, and a prompt
+    naming a widget that is no longer on screen is worse than naming none — the
+    agent edits a file nobody is looking at.
+
+    Deliberately only the name. What the widget *is* is a file, and
+    ``info("widgets", name)`` reads it — the same trade that shortened the rest
+    of this prompt. Paying for a description on every turn to save a lookup on
+    the few turns that need one is the wrong way round.
+
+    Says nothing at all when no widget is bound, which is the ordinary state of
+    a conversation. A line saying "no widget" would be noise on almost every
+    turn, and the guidance above already says how to put one there.
+    """
+    db = ctx.db
+    if db is None or ctx.conversation_id is None:
+        return ""
+    try:
+        row = db.get_conversation(ctx.conversation_id) or {}
+    except Exception:
+        logger.exception("could not read the widget for conversation %s",
+                         ctx.conversation_id)
+        return ""
+    name = (row.get("widget") or "").strip()
+    if not name:
+        return ""
+    return (f"The user is looking at the '{name}' widget beside this "
+            f"conversation. `info(\"widgets\", \"{name}\")` reads its source.")
 
 
 def _account_name(db, user_id) -> str:

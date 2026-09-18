@@ -32,9 +32,59 @@ export type Widget = {
   shadowed?: string[];
 };
 
+/**
+ * What a conversation is showing, as the kernel holds it.
+ *
+ * `name` is null when it holds none, which is the ordinary state — every
+ * conversation starts there. `installed` is false when the name outlived its
+ * file; the binding is kept deliberately, so a reinstall finds the
+ * conversation still pointing at it, and this is what lets the panel say so
+ * rather than looking merely empty.
+ *
+ * `state` is the widget's own saved JSON, as a string. Nothing out here parses
+ * it — it is handed to the document at mount and is meaningless to anyone
+ * else.
+ */
+export type Binding = {
+  name: string | null;
+  path: string;
+  tree: string;
+  installed: boolean;
+  state: string | null;
+};
+
 /** Every widget installed, in the kernel's own precedence order. */
 export function listWidgets(): Promise<Widget[]> {
-  return sdk<Widget[]>("plugin.list", { source: "widgets" });
+  return sdk<Widget[]>("widget.list", {});
+}
+
+/**
+ * Which widget this conversation holds.
+ *
+ * **The binding lives in the kernel, not in this browser.** It was
+ * `localStorage`, which made the panel a property of the window you happened
+ * to open it in: the same conversation showed different things on a laptop and
+ * a phone, and the agent could not know what the person was looking at. On the
+ * conversation row it follows the conversation, survives a restart, and is
+ * readable by the turn that wants to update it.
+ */
+export function getWidget(): Promise<Binding> {
+  return sdk<Binding>("widget.get", {});
+}
+
+/** Show a widget beside this conversation, or `null` to show none. */
+export function setWidget(name: string | null): Promise<unknown> {
+  return sdk("widget.set", { name });
+}
+
+/**
+ * Save a widget's own state against this conversation.
+ *
+ * Called by the relay on the document's behalf. Capped at 64 KB kernel-side,
+ * where the refusal says what to do instead.
+ */
+export function setWidgetState(value: unknown): Promise<unknown> {
+  return sdk("widget.state_set", { value });
 }
 
 /**

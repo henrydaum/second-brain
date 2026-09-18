@@ -42,6 +42,7 @@ from events.event_channels import (
     FORM_REQUESTED,
     NOTIFICATION_PUSHED,
     SESSION_CONVERSATION_CHANGED,
+    SESSION_WIDGET_CHANGED,
     SESSION_TURN_ACTIVITY,
     SESSION_TURN_CHANGED,
     TASKS_CHANGED,
@@ -151,6 +152,12 @@ class FrontendCapabilities:
     # render_messages, which is what every frontend saw before the kind existed.
     # Same bargain as supports_notifications directly above.
     supports_callable_output: bool = False
+    # Frontend draws the conversation's widget — one HTML document, in a frame
+    # of its own (and implements render_widget). False is different from every
+    # flag above it: there is no fallback path, because a widget flattens into
+    # nothing. A transport that cannot draw one is simply not sent the kind,
+    # and the agent is not told widgets exist.
+    supports_widgets: bool = False
 
 
 class BaseFrontend:
@@ -483,6 +490,7 @@ class BaseFrontend:
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
             bus.subscribe(SESSION_CONVERSATION_CHANGED, self.on_bus_session_conversation_changed),
+            bus.subscribe(SESSION_WIDGET_CHANGED, self.on_bus_session_widget_changed),
             bus.subscribe(CONVERSATION_CHANGED, self.on_bus_conversation_catalog_changed),
             bus.subscribe(SESSION_TURN_CHANGED, self.on_bus_session_turn_changed),
             bus.subscribe(SESSION_TURN_ACTIVITY, self.on_bus_session_turn_activity),
@@ -1077,6 +1085,40 @@ class BaseFrontend:
             self.render_conversation_banner(key, dict(payload))
         except Exception:
             logger.exception(f"render_conversation_banner failed for '{self.name}'")
+
+    def on_bus_session_widget_changed(self, payload: dict) -> None:
+        """Route a widget change to the frontend that can draw one.
+
+        **The capability gate is here rather than in ``render_widget``**, and
+        that placement is the whole of what makes it work: ``residency.
+        RENDER_METHODS`` replaces ``render_widget`` wholesale with the box
+        forwarder, so a check written inside a default implementation never
+        runs for a sandboxed frontend — which is every frontend. Same lesson
+        the notification fallback learned, arriving at the opposite answer,
+        because there *is* no fallback here. A widget is an HTML document in a
+        frame; there is no markdown it degrades into, so a transport that
+        cannot draw one is told nothing rather than told badly.
+        """
+        if not getattr(self.capabilities, "supports_widgets", False):
+            return
+        payload = payload or {}
+        key = payload.get("session_key")
+        if not key or key not in self._live_session_keys():
+            return
+        try:
+            self.render_widget(key, dict(payload))
+        except Exception:
+            logger.exception(f"render_widget failed for '{self.name}'")
+
+    def render_widget(self, session_key: str, info: dict) -> None:
+        """Default no-op; frontends with ``supports_widgets`` override.
+
+        ``info`` carries ``name`` (None for none), ``path`` and ``tree`` to
+        find the file with, ``installed``, and ``state`` — the widget's own
+        saved JSON string, handed over at mount because a widget frame has no
+        storage of its own to keep anything in.
+        """
+        return
 
     def on_bus_conversation_catalog_changed(self, payload: dict) -> None:
         """Refresh banners when the conversation a live session shows is retitled."""

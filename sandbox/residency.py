@@ -69,7 +69,8 @@ RENDER_METHODS = {"messages": "render_messages",
                   "stream_delta": "render_stream_delta",
                   "notification": "render_notification",
                   "callable_output": "render_callable_output",
-                  "conversation": "render_conversation_banner"}
+                  "conversation": "render_conversation_banner",
+                  "widget": "render_widget"}
 
 
 def _sync_hooks(service) -> None:

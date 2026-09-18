@@ -14,7 +14,7 @@
 
 import { authHeaders, serverUrl } from "@/lib/client";
 
-/* ── The eleven kinds ────────────────────────────────────────────────────
+/* ── The kinds ───────────────────────────────────────────────────────────
  *
  * Handle what you can show and ignore the rest; a client that only renders
  * `messages` is a working client. These types are transcriptions of the
@@ -194,6 +194,36 @@ type ConversationPayload = {
 };
 
 /**
+ * Which widget belongs beside the open conversation.
+ *
+ * **This kind only arrives because the frontend asked for it**, the way
+ * `notification` does — `frontend_http.py` declares `supports_widgets`. The
+ * difference is that there is no fallback: a notification a client ignores
+ * still reaches it flattened into `messages`, and a widget flattens into
+ * nothing at all, so a transport that does not declare the capability is sent
+ * this kind never rather than badly.
+ *
+ * It arrives on a deliberate change *and* on a conversation switch, which is
+ * what makes the panel follow the conversation without anything here having to
+ * watch `conversation` as well.
+ *
+ * `name` is null when the conversation holds no widget, which is the ordinary
+ * state. `installed` is false when the name outlived its file — uninstalled,
+ * or renamed — and the binding is kept on purpose, so a reinstall finds the
+ * conversation still pointing at it. `state` is the widget's own saved JSON,
+ * as a string: it is handed to the document at mount and is meaningless to
+ * anybody else, so nothing out here parses it.
+ */
+type WidgetPayload = {
+  conversation_id: number;
+  name: string | null;
+  path: string;
+  tree: string;
+  installed: boolean;
+  state: string | null;
+};
+
+/**
  * Something the *system* is telling you, as opposed to something the agent said.
  *
  * **This kind only arrives because the frontend asked for it.** The store's
@@ -274,6 +304,7 @@ export type Frame =
   | { kind: "error"; payload: ErrorPayload }
   | { kind: "attachments"; payload: AttachmentsPayload }
   | { kind: "conversation"; payload: ConversationPayload }
+  | { kind: "widget"; payload: WidgetPayload }
   | { kind: "notification"; payload: NotificationPayload };
 
 /** What the connection itself is doing, for the status line. This is not part

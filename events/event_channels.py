@@ -436,6 +436,27 @@ Payload:
     conversation_id: int | None â€” None when the session was reset to New Conversation
     title:           str"""
 
+SESSION_WIDGET_CHANGED = "session_widget_changed"
+"""The widget a live session is showing changed — bound, unbound, or swapped
+because the session moved to another conversation.
+
+Separate from SESSION_CONVERSATION_CHANGED rather than a field on it, because
+the two move independently: `widget.set` changes the widget without changing
+the conversation, and a frontend redrawing a banner should not be woken by a
+widget swap it cannot draw anyway.
+
+Only frontends declaring ``supports_widgets`` are handed the render kind this
+becomes; there is no markdown a widget flattens into, so a transport that
+cannot draw one is told nothing rather than told badly.
+Payload:
+    session_key:     str
+    conversation_id: int
+    name:            str | None  â€” None when the conversation holds no widget
+    state:           str | None  â€” the widget's own saved JSON, as stored
+    path:            str         â€” "" when the named widget is not installed
+    tree:            str
+    installed:       bool"""
+
 SESSION_CONVERSATION_ENDED = "session_conversation_ended"
 """A live session stopped being in a conversation — the other half of
 SESSION_CONVERSATION_CHANGED, and the one that says which conversation the

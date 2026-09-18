@@ -1190,6 +1190,9 @@ function applyFrame(state: State, frame: Frame): State {
     case "approval":
     case "notification":
     case "conversation":
+    // And the widget beside the conversation, which is not part of its history
+    // either — the provider holds it and the panel draws it.
+    case "widget":
       return state;
 
     /**

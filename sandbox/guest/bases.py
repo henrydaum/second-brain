@@ -465,6 +465,13 @@ class BaseFrontend(BasePlugin):
         ``supports_callable_output``; without it command output arrives as
         ``messages``. In every case that is what every frontend saw before the
         kind existed.
+
+        ``widget`` is the exception to that bargain and needs
+        ``supports_widgets``. It carries one HTML document's ``name``, ``path``
+        and saved ``state`` for the conversation the session is in, and there
+        is no plain-text path: a widget flattens into nothing, so a transport
+        that does not declare the capability is never sent the kind and the
+        agent is never told widgets exist here.
         """
         raise NotImplementedError
 

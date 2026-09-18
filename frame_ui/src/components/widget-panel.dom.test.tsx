@@ -24,6 +24,14 @@ import { WidgetPanel, clampWidth } from "@/components/widget-panel";
 import { modeFor, sharedMode } from "@/runtime/widget-mode";
 import type { WidgetMode } from "@/runtime/widget-mode";
 
+// The binding lives in the provider now — the agent and a conversation switch
+// both change it, so the panel is no longer the only thing that decides what is
+// in it. These tests are about the panel's geometry and mount nothing that
+// could open a connection, so the one hook it reaches for is stubbed.
+vi.mock("@/runtime/provider", () => ({
+  useWidget: () => ({ widgetBinding: null, chooseWidget: () => {} }),
+}));
+
 vi.mock("@/components/assistant-ui/tooltip-icon-button", () => ({
   TooltipIconButton: ({ tooltip, children, ...rest }: {
     tooltip: string; children: React.ReactNode;

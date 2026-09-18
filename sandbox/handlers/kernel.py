@@ -17,6 +17,7 @@ Two conventions run through the file:
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -67,9 +68,13 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               UI_APPROVE,
                               UI_ASK, UI_PROGRESS, UI_RENDER, USER_LIST,
                               USER_READ,
-                              USER_WRITE, ALL_TYPES, Request, Result)
+                              USER_WRITE,
+                              WIDGET_GET, WIDGET_LIST, WIDGET_SET,
+                              WIDGET_STATE_SET,
+                              ALL_TYPES, Request, Result)
 from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
-                          ERROR_NOT_PERMITTED, ERROR_UNAVAILABLE)
+                          ERROR_NOT_PERMITTED, ERROR_TOO_LARGE,
+                          ERROR_UNAVAILABLE)
 from ..guest import protocol
 from .args import float_arg, int_arg
 from ..credentials import lookup_from, redact, redact_nested, resolve
@@ -1538,6 +1543,161 @@ def _widget_list() -> Result:
                 "extension": path.suffix,
             }
     return Result(data=[found[name] for name in sorted(found)])
+
+
+#: How much saved state one conversation's widget may hold.
+#:
+#: A real cap rather than a guess at what is reasonable, because this column is
+#: read back whole on every mount and there is no paging for it. A widget with
+#: more than this to keep has a filesystem: ``sdk.fs.write`` into a folder of
+#: its own under the workspace, and the state here holds the *path*. That is
+#: the same answer ``fs.temp`` gives an oversized attachment, which is why the
+#: refusal below says so rather than only saying no.
+WIDGET_STATE_MAX = 64 * 1024
+
+
+def widget_named(name: str):
+    """One widget by name, as ``_widget_list`` describes it, or None.
+
+    Shared with the runtime, which needs the file's location to tell a frontend
+    what to mount. It goes through the listing rather than globbing for the name
+    directly so precedence is decided in exactly one place — a workspace draft
+    must not resolve here while the panel shows the bundled one.
+    """
+    for found in (_widget_list().data or []):
+        if found.get("name") == name:
+            return found
+    return None
+
+
+def _widget_conversation(ctx, args: dict):
+    """Which conversation a widget Request is about, and whether it may be.
+
+    ``conversation_id`` is optional and its absence is the ordinary case: the
+    caller means the conversation it is already in, which the context knows and
+    the guest cannot misstate. That is also what ``classify`` branched on — an
+    absent argument is SAFE, a named one raises a dialog — so the two halves
+    agree by construction rather than by both being kept in step.
+
+    Answers ``(conversation_id, refusal)``.
+    """
+    cid = args.get("conversation_id")
+    if cid is None:
+        # Off the live session rather than off the context, which carries no
+        # conversation at all — a plain ``getattr(ctx, "conversation_id")``
+        # here would answer None for every caller and turn the ordinary case
+        # into a failure. The session is where the binding between "who is
+        # asking" and "which conversation" actually lives.
+        runtime = _runtime(ctx)
+        key = getattr(ctx, "session_key", None)
+        session = getattr(runtime, "sessions", {}).get(key) if (runtime and key) else None
+        cid = getattr(session, "conversation_id", None)
+        if cid is None:
+            return None, Result.failure(
+                "this session is not in a conversation yet",
+                code=ERROR_NOT_FOUND)
+        return cid, None
+    try:
+        cid = int(cid)
+    except (TypeError, ValueError):
+        return None, Result.failure("conversation_id must be a number",
+                                    code=ERROR_INVALID_ARGUMENT)
+    if (refused := _check_access(ctx, cid)) is not None:
+        return None, refused
+    return cid, None
+
+
+def _widget_get(ctx, args: dict) -> Result:
+    """What one conversation is showing, and whatever state it saved.
+
+    A conversation with no widget answers ``{"name": None}`` rather than
+    failing: holding none is the ordinary state and every conversation starts
+    there, so a caller branching on absence should not have to branch on an
+    error as well.
+
+    ``installed`` is separate from ``name`` because the two come apart. A
+    package can be uninstalled, or the agent can rename a workspace file, and
+    the binding is deliberately kept when that happens — reinstalling should
+    find the conversation still pointing at it. A client with a name and no
+    path is what says "this widget is not here any more", which is the only
+    honest thing to draw.
+    """
+    runtime = _runtime(ctx)
+    reader = getattr(runtime, "conversation_widget", None)
+    if (bad := _need(reader, "widgets")) is not None:
+        return bad
+    cid, refused = _widget_conversation(ctx, args)
+    if refused is not None:
+        return refused
+    return Result(data=reader(cid) or {"name": None, "state": None,
+                                       "path": "", "tree": "",
+                                       "installed": False})
+
+
+def _widget_set(ctx, args: dict) -> Result:
+    """Bind a widget to a conversation, or unbind it by naming none.
+
+    The name is checked against what is installed, and an unknown one *fails*
+    rather than being stored. That is the opposite call from the read above and
+    the asymmetry is the point: keeping a binding whose file went missing costs
+    nothing and recovers on reinstall, while accepting a name nobody has is a
+    typo that presents as an empty panel with no explanation anywhere.
+    """
+    runtime = _runtime(ctx)
+    setter = getattr(runtime, "set_conversation_widget", None)
+    if (bad := _need(setter, "widgets")) is not None:
+        return bad
+    cid, refused = _widget_conversation(ctx, args)
+    if refused is not None:
+        return refused
+    name = (args.get("name") or "").strip() or None
+    if name is not None and widget_named(name) is None:
+        return Result.failure(f"no widget named '{name}' is installed",
+                              code=ERROR_NOT_FOUND)
+    if not setter(getattr(ctx, "session_key", None), cid, name):
+        return Result.refusal(
+            f"conversation {cid} is not available to this user")
+    return Result(data={"conversation_id": cid, "name": name})
+
+
+def _widget_state_set(ctx, args: dict) -> Result:
+    """Save whatever the widget wants handed back at its next mount.
+
+    The kernel never reads into the value; it is the widget's own shape. What
+    it does insist on is that the value is *JSON* and that it fits — the first
+    because the column is read straight back out to a browser, the second
+    because nothing else bounds it.
+    """
+    runtime = _runtime(ctx)
+    setter = getattr(runtime, "set_conversation_widget_state", None)
+    if (bad := _need(setter, "widgets")) is not None:
+        return bad
+    cid, refused = _widget_conversation(ctx, args)
+    if refused is not None:
+        return refused
+    value = args.get("value")
+    if value is None:
+        packed = None
+    else:
+        try:
+            packed = json.dumps(value)
+        except (TypeError, ValueError) as exc:
+            # The guest supplied it, so this is its mistake rather than a
+            # kernel bug — reported as an invalid argument, with the traceback
+            # kept because a live object arriving in here is worth seeing.
+            logger.exception("widget state would not serialize")
+            return Result.failure(f"widget state must be JSON: {exc}",
+                                  code=ERROR_INVALID_ARGUMENT)
+        if len(packed) > WIDGET_STATE_MAX:
+            return Result.failure(
+                f"widget state is {len(packed)} bytes, over the "
+                f"{WIDGET_STATE_MAX} byte limit. Write anything larger to a "
+                f"file of your own and keep the path here instead.",
+                code=ERROR_TOO_LARGE)
+    if not setter(getattr(ctx, "session_key", None), cid, packed):
+        return Result.refusal(
+            f"conversation {cid} is not available to this user")
+    return Result(data={"conversation_id": cid, "bytes": len(packed or "")})
 
 
 def _plugin_list(ctx, args: dict) -> Result:
@@ -4260,6 +4420,9 @@ HANDLERS = {
     CONFIG_READ: _config_read, CONFIG_WRITE: _config_write,
     PATH_GET: _path_get,
     USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,
+    WIDGET_LIST: lambda ctx, args: _widget_list(),
+    WIDGET_GET: _widget_get, WIDGET_SET: _widget_set,
+    WIDGET_STATE_SET: _widget_state_set,
     PLUGIN_LIST: _plugin_list, PLUGIN_DESCRIBE: _plugin_describe,
     PLUGIN_VALIDATE: _plugin_validate,
     PLUGIN_REGISTER: _plugin_register, PLUGIN_UNREGISTER: _plugin_unregister,

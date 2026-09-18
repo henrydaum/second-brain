@@ -400,6 +400,14 @@ GRANT_PHRASES = {
     # notifications" would cover both by covering neither.
     "notification.list": "read your notifications",
     "notification.mark_read": "mark your notifications as read",
+    # The widget shown beside a conversation. Split the way the notification
+    # pair above is: reading which widget is up is nothing like putting a
+    # different document in front of somebody, and only the writes ever reach
+    # a dialog — and then only for a conversation other than the caller's own.
+    "widget.list": "list the widgets installed",
+    "widget.get": "see which widget a conversation shows",
+    "widget.set": "change the widget shown beside a conversation",
+    "widget.state_set": "store a widget's saved state on a conversation",
     "conv.list": "list conversations", "conv.read": "read conversations",
     "user.read": "read user accounts", "user.list": "read user accounts",
     "config.read": "read settings",

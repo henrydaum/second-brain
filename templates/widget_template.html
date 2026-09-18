@@ -35,10 +35,13 @@
       only way out is `brain.call`, below, and that is deliberate: it is what
       makes every effect a widget has classifiable by the kernel.
 
-    * NO STORAGE. `localStorage`, `sessionStorage` and cookies either throw or
-      are wiped between mounts, because an opaque origin has no persistent
-      partition. Anything worth keeping goes through `brain.call` — the kernel
-      has a database, and `db.query` is a Request.
+    * NO BROWSER STORAGE. `localStorage`, `sessionStorage` and cookies either
+      throw or are wiped between mounts, because an opaque origin has no
+      persistent partition. What you get instead is `brain.state`, below: the
+      kernel keeps one JSON value per conversation for you, hands it back at
+      your next mount, and that is what makes a widget survive a reload, a
+      conversation switch and a restart. Anything bigger than 64 KB goes in a
+      file of your own — `fs.write` is a Request — with the path in the state.
 
     * NO PARENT. `window.parent` exists but is cross-origin, so you can read
       nothing off it. `window.top`, `document.referrer` and the URL tell you
@@ -67,6 +70,26 @@
       brain.size               { width, height } of your box, in CSS pixels.
       brain.scheme             "light" or "dark" — the app's choice, not the
                                operating system's.
+
+      brain.state.get()        Whatever you last saved, or null. Local — the
+                               host delivers it at mount, so this costs no
+                               round trip and is safe to read in a loop.
+      brain.state.set(value)   Save any JSON value against this conversation.
+                               Debounced, so saving on every keystroke costs
+                               one write. Capped at 64 KB.
+
+  `brain.state` is OPT-IN and has to be: nothing can snapshot your scroll
+  position, your half-typed fields and your open connections on your behalf.
+  A widget that wants to come back as it was is the one that knows what that
+  means. A widget that never calls it simply starts fresh every time, which is
+  right for a clock and wrong for a game.
+
+  ONE WIDGET PER CONVERSATION. The panel holds the widget the open conversation
+  is bound to, and a conversation starts with none. The agent binds one with
+  `sdk.widget.set("<name>")` and the person picks one from the panel's own
+  menu; either way, switching conversations swaps what is on screen. Your
+  saved state belongs to that conversation too, so the same widget in two
+  conversations is two independent things.
 
   `brain.call` IS the SDK. Anything `sdk.*` can do in a Python plugin, a widget
   can ask for by Request type — `conv.list`, `db.query`, `fs.read`, `net.http`,

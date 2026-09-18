@@ -20,7 +20,7 @@ import { RequestFailed, sdk } from "@/lib/client";
 const CHANNEL = "second-brain-html-v1";
 
 /** What the host can tell a document about itself, unprompted. */
-export type Announcement = "size" | "scheme";
+export type Announcement = "size" | "scheme" | "state";
 
 /**
  * Install before author scripts, without putting credentials in the document.
@@ -48,9 +48,15 @@ export function appDocument(
     const channel = ${JSON.stringify(CHANNEL)};
     const token = ${JSON.stringify(token)};
     const pending = new Map();
-    const listeners = { size: [], scheme: [] };
-    const state = { size: { width: 0, height: 0 }, scheme: "light" };
+    const listeners = { size: [], scheme: [], state: [] };
+    const state = { size: { width: 0, height: 0 }, scheme: "light", state: null };
     let next = 0;
+    // How long a burst of saves is collapsed into one write. A widget saving
+    // on every keystroke would otherwise be one database write and one bus
+    // emit per character; half a second is short enough that a reload right
+    // after a change keeps it, and long enough that typing costs one write.
+    const SAVE_AFTER = 500;
+    let saveTimer = 0;
     window.addEventListener("message", event => {
       const m = event.data;
       if (event.source !== parent || !m || m.channel !== channel ||
@@ -78,15 +84,46 @@ export function appDocument(
       if (m.error) job.reject(Object.assign(new Error(m.error.message), m.error));
       else job.resolve(m.data);
     });
+    const call = (type, args = {}) => new Promise((resolve, reject) => {
+      const id = ++next;
+      pending.set(id, { resolve, reject });
+      try { parent.postMessage({ channel, token, kind: "call", id, type, args }, "*"); }
+      catch (error) { pending.delete(id); reject(error); }
+    });
     window.brain = Object.freeze({
-      call(type, args = {}) {
-        return new Promise((resolve, reject) => {
-          const id = ++next;
-          pending.set(id, { resolve, reject });
-          try { parent.postMessage({ channel, token, kind: "call", id, type, args }, "*"); }
-          catch (error) { pending.delete(id); reject(error); }
-        });
-      },
+      call,
+      /*
+        Saved state, which is the only storage a widget has.
+
+        Browser storage is not an alternative here: this document loads into an
+        opaque origin, where site storage either throws or is partitioned to
+        something that comes back empty. So without this there is nowhere at
+        all for a widget to keep anything across a reload, a conversation
+        switch or a restart.
+
+        It is opt-in, and it has to be — nothing can snapshot a document's
+        scroll position, half-typed fields and open connections on its behalf.
+        A widget that wants to come back as it was says what that means.
+
+        Reading is local, because the host delivers the saved value at mount;
+        writing is debounced and stores against the conversation this widget is
+        bound to, capped at 64 KB. Anything larger belongs in a file of the
+        widget's own, with the path kept here.
+      */
+      state: Object.freeze({
+        get() { return state.state; },
+        set(value) {
+          state.state = value;
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => {
+            call("widget.state_set", { value }).catch(error => {
+              // Reported rather than thrown: a save that could not happen must
+              // not take down a widget that is working.
+              console.error("Could not save widget state", error);
+            });
+          }, SAVE_AFTER);
+        },
+      }),
       on(what, fn) {
         if (!listeners[what] || typeof fn !== "function") return () => {};
         listeners[what].push(fn);

@@ -223,6 +223,13 @@ class HTTP(BaseFrontend):
         # thing, and a client drawing a conversation could not tell them apart
         # while both arrived as ``messages``.
         "supports_callable_output": True,
+        # The built-in web UI draws the conversation's widget in a frame beside
+        # the thread, which is the whole reason the kind exists. Declared on the
+        # transport rather than per client, because a capability is what a
+        # frontend claims about itself — a third-party client on this same
+        # transport that draws no widget simply ignores the kind, exactly as it
+        # would ignore any other.
+        "supports_widgets": True,
         "max_message_chars": None,
     }
 

@@ -462,6 +462,10 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 |---|---|---|---|
 | `plugin.list(family)` | Enumerate installed plugins | — | safe |
 | `plugin.list(source="widgets")` | Enumerate installed UI widgets | — | safe |
+| `widget.list()` | Enumerate installed UI widgets | — | safe |
+| `widget.get(conversation_id=None)` | Which widget a conversation shows, and its saved state | — | safe |
+| `widget.set(name, conversation_id=None)` | Show a widget beside a conversation, or none | `conversation_id` | safe for the caller's own conversation; unsafe when another is named |
+| `widget.state_set(value, conversation_id=None)` | Store a widget's saved state (JSON, 64 KB) | `conversation_id` | same branch as `widget.set` |
 | `plugin.describe(name)` | Metadata, path, dependencies | — | safe |
 | `plugin.validate(path)` | Lint a source file against this contract | path | safe |
 | `plugin.register(path)` | Load a plugin live | path, family | unsafe |

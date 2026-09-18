@@ -55,6 +55,23 @@ CONV_NEW = "conv.new"
 CONV_CLEAR = "conv.clear"
 CONV_DELETE = "conv.delete"
 
+# ── widgets ───────────────────────────────────────────────────────────
+# A widget is a piece of the **web UI** — one HTML document a browser runs, in
+# a tree root the kernel routes but never loads. Its own family rather than
+# more arguments on ``plugin.list``, because a widget is deliberately not a
+# plugin: nothing registers it, nothing imports it, and it never enters the
+# Python sandbox. ``plugin.list(source="widgets")`` still answers, since a
+# client in the field is holding it.
+#
+# One widget per conversation, stored on the conversation row. So ``get`` and
+# ``set`` take a conversation and default to the caller's own, which is what
+# ``classify`` branches on: your own conversation is yours to arrange, another
+# one may belong to another person.
+WIDGET_LIST = "widget.list"
+WIDGET_GET = "widget.get"
+WIDGET_SET = "widget.set"
+WIDGET_STATE_SET = "widget.state_set"
+
 # ── sessions ──────────────────────────────────────────────────────────
 SESSION_GET = "session.get"
 SESSION_LIST = "session.list"
@@ -319,6 +336,7 @@ ALL_TYPES = {
     SESSION_ADD_PROMPT, SESSION_REMOVE_PROMPT, SESSION_ADD_ATTACHMENT,
     SESSION_SET_MODE,
     NOTIFICATION_LIST, NOTIFICATION_MARK_READ,
+    WIDGET_LIST, WIDGET_GET, WIDGET_SET, WIDGET_STATE_SET,
     UI_ASK, UI_APPROVE, UI_RENDER, UI_PROGRESS,
     CONFIG_READ, CONFIG_WRITE, PATH_GET,
     USER_READ, USER_LIST, USER_WRITE,
@@ -351,6 +369,7 @@ READ_ONLY = {
     DB_QUERY, CONV_READ, CONV_LIST, SESSION_GET,
     SESSION_LIST, SESSION_STATE_GET, CONFIG_READ, PATH_GET, USER_READ, USER_LIST,
     PLUGIN_LIST, PLUGIN_DESCRIBE, PLUGIN_VALIDATE,
+    WIDGET_LIST, WIDGET_GET,
     SERVICE_LIST, TOOL_LIST, COMMAND_LIST, LLM_LIST,
     CRON_LIST, CRON_GET, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     FILE_LIST, PARSE_FILE,

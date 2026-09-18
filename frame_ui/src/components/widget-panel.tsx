@@ -22,6 +22,15 @@
  * `localStorage` for the reason the sidebar's collapsed state is: it is a fact
  * about this window rather than about the account, and a `config.write` from
  * this page would raise an approval dialog for the crime of dragging a border.
+ *
+ * **Which widget is showing is not that kind of fact, and it moved out.** It
+ * was in `localStorage` beside the width, which made the panel a property of
+ * the window you happened to open: the same conversation showed different
+ * things on a laptop and a phone, and the agent had no way to know what the
+ * person was looking at. The binding is on the conversation row now and the
+ * provider owns it — see `useWidget` — because the panel is no longer the only
+ * thing that decides what is in it. The width stayed, because a dragged border
+ * really is about this window and nothing else.
  */
 
 import {
@@ -35,13 +44,11 @@ import { WidgetFrame } from "@/components/widget-frame";
 import { WidgetPicker } from "@/components/widget-picker";
 import { useResolvedTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { useWidget } from "@/runtime/provider";
 import type { Widget } from "@/lib/widgets";
 import type { WidgetMode } from "@/runtime/widget-mode";
 
 const WIDTH_KEY = "second-brain:widget-width";
-/** Which widget was in the panel. Remembered for the reason the width is: a
- *  panel that comes back empty is one you re-fill every morning. */
-const CHOSEN_KEY = "second-brain:widget-name";
 
 /**
  * The tolerances, and what each one is protecting.
@@ -95,14 +102,6 @@ function storedWidth(): number {
   }
 }
 
-function storedChoice(): string | null {
-  try {
-    return localStorage.getItem(CHOSEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
 export const WidgetPanel: FC<{
   open: boolean;
   mode: WidgetMode;
@@ -112,26 +111,27 @@ export const WidgetPanel: FC<{
   const [width, setWidth] = useState(storedWidth);
   const [dragging, setDragging] = useState(false);
   const [widgets, setWidgets] = useState<Widget[]>([]);
-  const [chosen, setChosen] = useState(storedChoice);
   const scheme = useResolvedTheme();
-
-  const choose = useCallback((name: string | null) => {
-    setChosen(name);
-    try {
-      if (name) localStorage.setItem(CHOSEN_KEY, name);
-      else localStorage.removeItem(CHOSEN_KEY);
-    } catch {
-      /* Refused. The choice holds for this window and will not come back. */
-    }
-  }, []);
+  /**
+   * What this conversation holds, and how to change it.
+   *
+   * Owned by the provider rather than by this component, because three things
+   * now decide it: the menu below, the agent calling `sdk.widget.set`, and a
+   * conversation switch. The last two arrive as render frames, which reach the
+   * provider and not this file.
+   */
+  const { widgetBinding, chooseWidget: choose } = useWidget();
+  const chosen = widgetBinding?.name ?? null;
 
   /**
    * The widget the panel is holding, or nothing.
    *
-   * A name that matches no installed widget is ordinary rather than an error —
-   * the store uninstalled it, or the agent renamed a file — and it is said
-   * below rather than silently treated as empty, which looks identical to a
-   * panel nobody has filled in.
+   * Resolved against the listing rather than taken from the binding's own
+   * `path`, because the picker needs the whole row anyway and the two must not
+   * disagree about which file a name means. A name that matches no installed
+   * widget is ordinary rather than an error — the store uninstalled it, or the
+   * agent renamed a file — and it is said below rather than silently treated
+   * as empty, which looks identical to a panel nobody has filled in.
    */
   const widget = widgets.find((entry) => entry.name === chosen) ?? null;
   const full = mode === "full";
@@ -486,7 +486,12 @@ export const WidgetPanel: FC<{
           {widget ? (
             // Keyed by path, so choosing a different widget builds a new frame
             // rather than swapping the `srcdoc` under a running document.
-            <WidgetFrame key={widget.path} widget={widget} scheme={scheme} />
+            <WidgetFrame
+              key={widget.path}
+              widget={widget}
+              scheme={scheme}
+              state={widgetBinding?.state ?? null}
+            />
           ) : (
             <p className="text-muted-foreground p-4 text-xs">
               {chosen

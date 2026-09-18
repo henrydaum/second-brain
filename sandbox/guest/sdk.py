@@ -103,7 +103,8 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        TASK_OUTPUT, TASK_PAUSE, TASK_RESET, TASK_STATUS,
                        TASK_TRIGGER, TOOL_CALL, TOOL_LIST, UI_APPROVE, UI_ASK,
                        UI_PROGRESS, UI_RENDER, USER_LIST, USER_READ,
-                       USER_WRITE, Request,
+                       USER_WRITE, WIDGET_GET, WIDGET_LIST, WIDGET_SET,
+                       WIDGET_STATE_SET, Request,
                        Result)
 
 
@@ -701,6 +702,79 @@ class _Users(_Namespace):
         return self._ask(USER_WRITE, id=user_id, **fields)
 
 
+class _Widget(_Namespace):
+    """The widget bound to a conversation, and what is available to bind.
+
+    A widget is one HTML document the **web UI** draws beside the conversation.
+    The kernel never loads one — it runs in a browser, in a frame with no
+    same-origin credential — so everything here is about *which* file, never
+    about what it does.
+
+    **One per conversation, and none is ordinary.** A conversation starts
+    holding no widget and most never hold one. Changing the widget on the
+    conversation you are in needs no approval; naming another conversation
+    raises a dialog, because it may be somebody else's.
+
+    Only a frontend declaring ``supports_widgets`` draws any of this. On every
+    other transport a widget is set, stored and never seen — which is worth
+    knowing before spending a turn writing one.
+    """
+
+    def list(self):
+        """Every widget installed, in the kernel's own precedence order.
+
+        Each row carries ``name``, ``stem``, ``tree``, ``path`` and
+        ``extension``, plus ``shadowed`` listing any same-named file a
+        higher-precedence tree hid. This is the only way to learn a widget
+        exists: a browser can reach no disk, and bundled beats installed beats
+        workspace exactly as it does for plugins.
+
+        It answers no URL. Read the file at ``path`` however your transport
+        does — over HTTP that is ``GET /files?path=``.
+        """
+        return self._ask(WIDGET_LIST)
+
+    def get(self, conversation_id: int | None = None):
+        """What a conversation is showing: ``name``, ``state``, ``path``.
+
+        ``name`` is None when it holds no widget, which is not an error.
+        ``installed`` is False when the name survives but the file does not —
+        uninstalled, or renamed — and the binding is deliberately kept, so a
+        reinstall finds the conversation still pointing at it.
+
+        Defaults to the conversation this session is in.
+        """
+        return self._ask(WIDGET_GET, conversation_id=conversation_id)
+
+    def set(self, name: str | None = None, conversation_id: int | None = None):
+        """Show a widget beside a conversation, or ``None`` to show none.
+
+        An unknown name fails rather than being stored — a typo would
+        otherwise present as an empty panel with nothing anywhere explaining
+        it. Unbinding clears the saved state with it, since state without its
+        widget means nothing and a later re-bind should not silently resume it.
+
+        Defaults to the conversation this session is in, which is the spelling
+        that needs no approval.
+        """
+        return self._ask(WIDGET_SET, name=name, conversation_id=conversation_id)
+
+    def state_set(self, value, conversation_id: int | None = None):
+        """Save state to hand the widget back at its next mount.
+
+        Any JSON value, capped at 64 KB. The kernel never reads into it — the
+        shape is the widget's own. Anything larger belongs in a file of the
+        widget's own, with the path kept here.
+
+        This is what makes a widget survive a reload, a conversation switch and
+        a restart: a widget frame is an opaque origin with no storage of its
+        own, so without this there is nowhere for it to keep anything. Reading
+        it back is :meth:`get`.
+        """
+        return self._ask(WIDGET_STATE_SET, value=value,
+                         conversation_id=conversation_id)
+
+
 class _Plugins(_Namespace):
     """Introspection over what is registered."""
 
@@ -738,6 +812,12 @@ class _Plugins(_Namespace):
         It answers no URL. Fetch the file over whatever route your own
         transport offers — over HTTP that is ``GET /files?path=``, which
         already labels ``.html`` correctly for a browser to render.
+
+        The same answer as ``sdk.widget.list()``, which is where widgets live
+        now — they are deliberately not plugins, and one subject should be one
+        namespace. This is kept because clients in the field hold it, and it
+        keeps sending ``plugin.list``: a namespace is exactly one Request
+        family, so an alias that reached across would make this one two.
         """
         return self._ask(PLUGIN_LIST, source="widgets")
 
@@ -2434,6 +2514,7 @@ class SDK:
         self.paths = _Paths(self)
         self.users = _Users(self)
         self.plugins = _Plugins(self)
+        self.widget = _Widget(self)
         self.services = _Services(self)
         self.tools = _Tools(self)
         self.commands = _Commands(self)

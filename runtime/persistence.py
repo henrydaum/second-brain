@@ -794,3 +794,12 @@ def announce_session_conversation(runtime, session: RuntimeSession) -> None:
         "conversation_id": session.conversation_id,
         "title": conversation_title(runtime, session.conversation_id),
     })
+    # And what the conversation is showing. Here rather than at each of the two
+    # call sites above, because arriving in a conversation and finding out what
+    # widget it holds are one event as far as a client is concerned — a switch
+    # that announced the title and not the widget would leave the panel showing
+    # the *previous* conversation's, which is worse than showing nothing.
+    try:
+        runtime.announce_widget(session.conversation_id)
+    except Exception:
+        logger.exception("could not announce the widget for %s", session.key)

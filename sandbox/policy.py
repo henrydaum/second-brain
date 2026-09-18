@@ -546,6 +546,10 @@ ALWAYS_SAFE = {
     # its own work, and putting a dialog in that loop would only teach the
     # agent to skip the check.
     R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.PLUGIN_VALIDATE,
+    # What widgets exist, and which one a conversation is showing. Reading the
+    # trees and one column; the file's *contents* are ``fs.read`` like anything
+    # else on disk, and are not answered here.
+    R.WIDGET_LIST, R.WIDGET_GET,
     R.SERVICE_LIST, R.SERVICE_CALL,
     # Which model profiles exist and whether each is open. Names, endpoints and
     # context sizes — never the key, which is a ``secret_*`` setting and comes
@@ -669,6 +673,7 @@ _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
              UI_ASK, R.UI_APPROVE, SESSION_ADD_TOOL, R.SESSION_COMPACT,
              SESSION_ADD_PROMPT, R.SESSION_SET_MODE, AGENT_SCHEDULE,
              CONV_DELETE,
+             R.WIDGET_SET, R.WIDGET_STATE_SET,
              R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
@@ -1406,6 +1411,37 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"inject prompt text into session {target}",
                         say="This writes into a prompt built for another "
                             "session, which may belong to another user.")
+
+    # ── widgets: mechanism 3 (ownership), aimed at a conversation ──
+    #
+    # A widget is one HTML document in the web UI's panel, bound to the
+    # conversation it was set on. Changing the one in front of you is SAFE, and
+    # the argument is the one the prompt-overlay branch above makes: the
+    # capability is already free. A loaded plugin puts arbitrary text in front
+    # of the person every turn with nobody asked, and a widget is *less* reach
+    # than that — it runs in an opaque origin with no same-origin credential,
+    # so it can do nothing this Request has not already been classified for.
+    # It is also reversible in one gesture, by the person, from the panel it
+    # appears in. A dialog per swap would make the capability unusable and
+    # teach somebody to stop reading dialogs, which is the expensive failure.
+    #
+    # **Naming a conversation is what is asked about**, and the decision rests
+    # on the argument being *absent* rather than on comparing it to anything.
+    # ``classify`` holds no context and so cannot know which conversation the
+    # caller is in; the handler does, and scopes to it. So "no argument" is the
+    # own-conversation case by construction — there is nothing to get wrong —
+    # and any named conversation may belong to another person, which is the
+    # same question one subject over that ``session.add_prompt_extra`` asks
+    # about a session key.
+    if kind in (R.WIDGET_SET, R.WIDGET_STATE_SET):
+        target = args.get("conversation_id")
+        if target is None:
+            return Decision(SAFE, "arranges its own conversation's widget")
+        what = ("store widget state on" if kind == R.WIDGET_STATE_SET
+                else "change the widget shown in")
+        return Decision(UNSAFE, f"{what} conversation {target}",
+                        say="This is a conversation other than the one you "
+                            "are in, which may belong to another user.")
 
     # ── unattended work gets less benefit of the doubt ────────────
     if kind in (SESSION_ADD_TOOL, AGENT_SCHEDULE, CONV_DELETE):

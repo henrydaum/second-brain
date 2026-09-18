@@ -2340,7 +2340,7 @@ kernel-owned and hook-*shaped*.
 are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
 per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs), `docs/HTTP_PROTOCOL.md` (hand this to an agent
-writing a *client* — the twelve render kinds with their real payload shapes, the
+writing a *client* — every render kind with their real payload shapes, the
 Requests worth calling, and the half-dozen rules a working demo cannot show;
 `docs/http_reference_client.html` is that demo, for checking the bridge when
 the client misbehaves).
@@ -2764,6 +2764,93 @@ the body — a terminal affordance inside prose. `conversation_id` is structured
 on the payload now and `load_hint` carries the pre-rendered command for surfaces
 with no better way; a client that can open a conversation itself uses the id and
 ignores the hint.
+
+## Widgets
+
+One HTML document the web UI draws beside the conversation — a dashboard, a
+game, a design. `widgets/` is the one tree root that is not Python and the
+kernel never loads one: it runs in a browser, in a frame with no same-origin
+credential, and everything kernel-side is about *which* file.
+
+**A widget is bound to a conversation, and the binding is a column**
+(`conversations.widget`, with `conversations.widget_state` beside it). It was
+`localStorage` in the browser, which made the panel a property of whichever
+window you opened: the same conversation showed different things on a laptop
+and a phone, and the agent could not know what the person was looking at. On
+the row it is the same kind of fact `category` is — it follows the conversation
+across sessions, frontends and restarts, and one turn can read it and the next
+can change it. NULL is legal and ordinary; every conversation starts there.
+
+`widget_state` is **excluded from every listing** (`database._CONV_COLUMNS`),
+and that is the `conv.read` lesson applied before it cost anything: a sidebar
+refresh reads pages of rows and looks inside none of them. `get_conversation`
+still answers whole, because it is the one read that asks about a single
+conversation.
+
+**`sdk.widget` is four Requests and its own family**, not more arguments on
+`plugin.list` — a widget is deliberately not a plugin, and one subject should
+be one namespace. `list`/`get` are `ALWAYS_SAFE` and `READ_ONLY`; `set` and
+`state_set` branch on **mechanism 3**, and the branch rests on the argument
+being *absent* rather than on a comparison. `classify` holds no context and
+cannot know which conversation the caller is in; the handler does, and scopes
+to it — so "no `conversation_id`" is the own-conversation case by construction,
+with nothing to get wrong, and any named conversation may belong to somebody
+else. `plugin.list(source="widgets")` still answers, and `sdk.plugins.widgets()`
+still sends *that* type, because a namespace is exactly one Request family.
+
+**Own-conversation is SAFE, and the argument is the prompt-overlay one.** The
+capability is already free: any loaded plugin puts arbitrary text in front of
+the person every turn with nobody asked, and a widget has strictly less reach
+than that — every effect it has is already a classified Request. It is also
+reversible in one gesture, from the panel it appears in. A dialog per swap
+would make it unusable and teach somebody to stop reading dialogs.
+
+**The fifteenth render kind, and the one with no fallback.** `widget` is in
+`frontends.KINDS` and `residency.RENDER_METHODS`, and `supports_widgets` gates
+it — but unlike `notification` and `callable_output` a frontend that declines
+is sent it *never* rather than flattened, because a widget flattens into
+nothing. The gate lives on the **bus handler**, not on `render_widget`:
+`RENDER_METHODS` replaces that method wholesale for every sandboxed frontend,
+so a check inside a default implementation would never run. Same lesson as the
+notification fallback, reaching the opposite answer.
+
+`runtime.announce_widget` is the one funnel, on `SESSION_WIDGET_CHANGED`, and
+it is emitted **per session on that conversation** — a widget is something a
+person is looking at. It rides alongside `announce_session_conversation`, so a
+conversation switch swaps the panel with nothing else having to know widgets
+exist. Storing *state* deliberately does not announce: the only thing that
+writes state is the widget itself, which already holds it, and handing a live
+document its own state back reloads it.
+
+**The state is the only storage a widget has.** The frame is
+`sandbox="allow-scripts"` with no `allow-same-origin`, so the document loads
+into an opaque origin where `localStorage` throws or comes back empty — there
+was nowhere at all for a widget to keep anything across a reload. So the kernel
+keeps one JSON value per conversation, delivered at mount as a `tell` beside
+`size` and `scheme`, and written back through `brain.state.set` (debounced in
+the relay, since a widget saving per keystroke is one row write per character).
+Capped at `WIDGET_STATE_MAX` (64 KB), and the refusal names the alternative:
+anything larger is a file of the widget's own with the path kept in the state.
+
+It is **opt-in and has to be** — nothing can snapshot a document's scroll
+position, half-typed fields and open connections on its behalf. A widget that
+wants to come back as it was is the one that knows what that means.
+
+**The prompt is split by tier, and the split is `prompt_cues`' own rule.**
+General guidance is gated on `supports_widgets` and rides in `_session_facts`,
+the semi-stable block, because a frontend's capabilities are fixed for a
+session's life. *Which* widget is showing is `_active_widget` in the dynamic
+block, because one session walks through many conversations — named in the
+prefix it would go stale the moment somebody loaded another one, and a prompt
+naming a widget nobody is looking at is worse than naming none. It names only
+the widget; `info("widgets", name)` reads the file, which is the same trade
+that shortened the rest of the prompt.
+
+The capability replaced a guess. `_widgets` used to ask whether the session was
+the HTTP frontend's *and* whether `web_ui.serving()` said this machine served
+its own UI — which tested the **server** rather than the client, and had no way
+to be right for a third-party client on the same transport. A frontend states
+what it draws, the same bargain `supports_streaming` already makes.
 
 ## Command lifecycle (current)
 

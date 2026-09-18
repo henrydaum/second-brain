@@ -183,19 +183,38 @@ Entry points by family — note the **argument order differs**:
 
 `widgets/widget_<name>.html` — and note the extension. A widget is a piece of
 the **web UI**, not of the kernel: it is one HTML document, run by a browser
-inside a frame the UI controls, and none of this guide's Request vocabulary
-applies to it, because a widget makes no Requests. One file, with its script
-and style inside it. It has a root here for one reason — the browser can reach
-no disk, so the only way the UI learns which widgets exist is to ask the
-kernel, through `sdk.plugins.widgets()`.
+inside a frame the UI controls. One file, with its script and style inside it.
+It has a root here for one reason — the browser can reach no disk, so the only
+way the UI learns which widgets exist is to ask the kernel.
 
 Everything else about the root is ordinary: a widget can ship bundled, be
 installed from the store, or be written by the agent into
 `<DATA_DIR>/workspace/widgets/`, exactly like a tool.
 
-**The contract for what goes inside the file is not settled yet.** Until it
-is, do not write one from this guide; a widget written against a guess is a
-file the UI will not load.
+**One widget per conversation.** The panel holds whatever the open
+conversation is bound to, and a conversation starts bound to nothing. From a
+plugin or a script that is `sdk.widget`:
+
+```python
+sdk.widget.list()            # every widget installed, with its path
+sdk.widget.get()             # what this conversation shows, and its saved state
+sdk.widget.set("dashboard")  # show one
+sdk.widget.set()             # show none
+```
+
+`set` and `get` default to the conversation you are in, which is the spelling
+that needs no approval; naming another conversation raises a dialog, because
+it may belong to somebody else. Only a frontend declaring `supports_widgets`
+draws any of it — on every other transport a widget is set, stored and never
+seen.
+
+**Inside the file, the vocabulary is different.** A widget does not import this
+SDK; the frame injects `window.brain`, and `brain.call(type, args)` is one
+Request by name. It also gets `brain.state`, which is the only storage it has:
+the frame runs in an opaque origin where browser storage throws or comes back
+empty, so `brain.state.set(value)` (64 KB, JSON, per conversation) is what
+makes a widget survive a reload. Read `templates/widget_template.html` before
+writing one — it is the contract, and it is not guessable from here.
 
 ---
 

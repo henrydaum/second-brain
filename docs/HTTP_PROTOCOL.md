@@ -396,6 +396,60 @@ A good client gives this its own treatment — a collapsible block, a monospace
 panel beside the transcript — rather than a chat bubble. It is output, not
 speech.
 
+#### `widget` — `dict`
+
+Which widget belongs beside the open conversation.
+
+```json
+{"conversation_id": 7, "name": "dashboard", "path": "/…/widget_dashboard.html",
+ "tree": "installed", "installed": true, "state": "{\"tab\":\"today\"}"}
+```
+
+A **widget** is one HTML document a client may draw beside the conversation —
+a dashboard, a game, a design. The kernel never loads one; it routes the file
+and says which one belongs here. Fetching it is `GET /files?path=`, using the
+`path` above.
+
+**One per conversation, and none is ordinary.** `name` is `null` when the
+conversation holds none, which is where every conversation starts. This frame
+arrives on a deliberate change *and* on a conversation switch, so a client that
+handles it needs no separate reaction to `conversation` — following this kind
+is enough to keep the panel right.
+
+`installed` is `false` when the name outlived its file: the package was removed,
+or the agent renamed it. The binding is kept on purpose, so a reinstall finds
+the conversation still pointing at it — which means `false` is a thing to *say*
+("this widget is not here any more") rather than a reason to treat the panel as
+empty.
+
+`state` is the widget's own saved JSON, as a string, and it is not yours to
+parse. Hand it to the document at mount and no later. It exists because a
+widget must be contained — an opaque origin, no same-origin credential — and an
+opaque origin has no working browser storage, so this is the only place
+anything it keeps can live. The document saves with `widget.state_set`
+(64 KB, JSON); the kernel never reads into it.
+
+Changing it yourself:
+
+```
+POST /sdk/widget.list   {}                     # everything installed
+POST /sdk/widget.get    {}                     # what this conversation shows
+POST /sdk/widget.set    {"name": "dashboard"}  # show one
+POST /sdk/widget.set    {"name": null}         # show none
+```
+
+All three default to the thread's own conversation, which is the spelling that
+needs no approval; naming a `conversation_id` may belong to another user and
+raises a dialog.
+
+**You only get this kind if you ask for it**, and unlike every other opt-in
+kind there is no fallback. Declare `supports_widgets` in `capabilities`, which
+`frontend_http` does. A `notification` a client ignores still reaches it
+flattened into `messages`; a widget flattens into nothing at all, so a client
+that does not declare it is sent the kind never rather than badly. A client
+drawing no frames of its own has nothing to do here and should leave the
+capability alone.
+
 #### Filling the panel on a fresh load
 
 The stream only ever answers "what happened since you connected". A panel that

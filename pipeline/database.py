@@ -72,6 +72,18 @@ def _describe_action(action, arg1, arg2) -> str:
 # there is deliberately no privileged "admin" user.
 DEFAULT_USER_ID = 1
 
+#: What a *listing* of conversations selects — every column but ``widget_state``.
+#:
+#: Named rather than ``SELECT *`` for one reason: that blob is a widget's own
+#: saved state, capped at 64 KB each, and a sidebar refresh reads pages of rows
+#: nobody is going to look inside. This is the ``conv.read`` lesson applied
+#: before it costs anything — the answer crosses, not the data. One row at a
+#: time (``get_conversation``) still answers whole.
+_CONV_COLUMNS = (
+	"id, title, kind, category, created_at, updated_at, "
+	"last_title_check_message_count, user_id, widget"
+)
+
 """
 Database for the task pipeline.
 
@@ -365,6 +377,23 @@ class Database:
 		self.conn.execute(
 			"UPDATE conversations SET user_id = ? WHERE user_id IS NULL",
 			(DEFAULT_USER_ID,))
+		# Migration: a conversation carries the widget the UI shows beside it,
+		# and that widget's own saved state. Both belong on this row rather than
+		# in a session marker for the reason ``category`` does: the binding
+		# follows the conversation across sessions, frontends and restarts, and
+		# a marker is rewritten on compaction. NULL is a legal and ordinary
+		# value — a conversation starts with no widget.
+		#
+		# ``widget_state`` is JSON the *widget* owns; the kernel never reads
+		# into it. It is deliberately excluded from every listing query below
+		# (see ``_CONV_COLUMNS``), because a blob nobody is looking at must not
+		# ride along in the sidebar refresh.
+		for column in ("widget TEXT", "widget_state TEXT"):
+			try:
+				self.conn.execute(f"ALTER TABLE conversations ADD COLUMN {column}")
+				self.conn.commit()
+			except Exception:
+				pass
 
 		# Users — the "user dimension". One row per identity. ``config`` is a JSON
 		# blob (email, credits, per-user settings); ``username``/``password_hash``
@@ -1718,8 +1747,53 @@ class Database:
 				params)
 			self.conn.commit()
 
+	def set_conversation_widget(self, conversation_id, widget, user_id=None):
+		"""Bind a widget to a conversation, or ``None`` to bind none.
+
+		Scoped to an owner the way ``set_conversation_category`` is, and for
+		the same reason: defence-in-depth behind the runtime's access guard.
+
+		Clearing the binding clears the state with it. A widget's saved state
+		is meaningless without the widget, and leaving it behind means a
+		re-bind silently restores whatever the last one was holding — state
+		from a session the person deliberately ended.
+		"""
+		scope = " AND user_id = ?" if user_id is not None else ""
+		tail = [user_id] if user_id is not None else []
+		with self.lock:
+			if widget is None:
+				self.conn.execute(
+					f"UPDATE conversations SET widget = NULL, widget_state = NULL "
+					f"WHERE id = ?{scope}", [conversation_id] + tail)
+			else:
+				self.conn.execute(
+					f"UPDATE conversations SET widget = ? WHERE id = ?{scope}",
+					[widget, conversation_id] + tail)
+			self.conn.commit()
+
+	def set_conversation_widget_state(self, conversation_id, state, user_id=None):
+		"""Store a widget's own saved state (a JSON string, or None to clear).
+
+		The kernel never reads into it — the shape belongs to whichever widget
+		wrote it. Size is capped at the handler, where there is somebody to
+		report the refusal to.
+		"""
+		scope = " AND user_id = ?" if user_id is not None else ""
+		params = [state, conversation_id] + ([user_id] if user_id is not None else [])
+		with self.lock:
+			self.conn.execute(
+				f"UPDATE conversations SET widget_state = ? WHERE id = ?{scope}",
+				params)
+			self.conn.commit()
+
 	def get_conversation(self, conversation_id):
-		"""Get conversation."""
+		"""One conversation row, whole — ``widget_state`` included.
+
+		The listings use ``_CONV_COLUMNS`` and leave that blob behind; this is
+		the one read that asks about a single conversation, so it is the one
+		place the state can be answered without it riding along behind every
+		sidebar refresh.
+		"""
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT * FROM conversations WHERE id = ?",
@@ -1733,7 +1807,7 @@ class Database:
 		params = ([user_id] if user_id is not None else []) + [limit]
 		with self.lock:
 			cur = self.conn.execute(
-				f"SELECT * FROM conversations {where} ORDER BY updated_at DESC LIMIT ?",
+				f"SELECT {_CONV_COLUMNS} FROM conversations {where} ORDER BY updated_at DESC LIMIT ?",
 				params)
 			return [dict(row) for row in cur.fetchall()]
 
@@ -1761,7 +1835,7 @@ class Database:
 		params += [limit + 1, offset]
 		with self.lock:
 			cur = self.conn.execute(
-				f"SELECT * FROM conversations {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+				f"SELECT {_CONV_COLUMNS} FROM conversations {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
 				params)
 			rows = [dict(row) for row in cur.fetchall()]
 		has_more = len(rows) > limit

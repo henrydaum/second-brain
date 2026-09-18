@@ -49,6 +49,7 @@ from events.event_channels import (
     CONVERSATION_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
     SESSION_SECURITY_MODE_CHANGED,
+    SESSION_WIDGET_CHANGED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
 )
 
@@ -1026,6 +1027,90 @@ class ConversationRuntime:
             self.db.set_conversation_category(conversation_id, category)
         bus.emit(CONVERSATION_CHANGED, {"action": "recategorized", "conversation_id": conversation_id, "user_id": self.session_user_id(session_key), "category": category})
         return True
+
+    def set_conversation_widget(self, session_key: str, conversation_id: int,
+                                widget: str | None, *, override: bool = False) -> bool:
+        """Bind a widget to a conversation the session's user owns.
+
+        ``None`` unbinds, which is the ordinary state — a conversation starts
+        with no widget and nothing is wrong with one that never gets one.
+
+        Refuses a cross-user conversation the way every other mutate-by-id path
+        does, and announces afterwards so any live session showing that
+        conversation swaps what it is drawing. The announcement is *per
+        session*, because a widget is something a person is looking at: two
+        sessions on one conversation both need telling, and a session on
+        another conversation needs nothing.
+        """
+        allowed = self.assert_conversation_access(session_key, conversation_id, override=override)
+        _ledger.record_system(self.db, action_type="conversation_widget", ok=allowed,
+                              session_key=session_key, conversation_id=conversation_id,
+                              user_id=self.session_user_id(session_key),
+                              args={"widget": widget},
+                              error_code=None if allowed else "access_denied")
+        if not allowed:
+            return False
+        if self.db is not None:
+            self.db.set_conversation_widget(conversation_id, widget)
+        self.announce_widget(conversation_id)
+        return True
+
+    def set_conversation_widget_state(self, session_key: str, conversation_id: int,
+                                      state: str | None, *, override: bool = False) -> bool:
+        """Store the widget's own saved state against a conversation.
+
+        Deliberately **not** announced. The only thing that writes state is the
+        widget itself, which already holds what it just wrote — re-rendering it
+        would hand a live document its own state back and reload it, which is
+        the one thing a persistence mechanism must not do. The state is read at
+        *mount*, and this is what makes the next mount find something.
+        """
+        allowed = self.assert_conversation_access(session_key, conversation_id, override=override)
+        if not allowed:
+            return False
+        if self.db is not None:
+            self.db.set_conversation_widget_state(conversation_id, state)
+        return True
+
+    def conversation_widget(self, conversation_id: int | None) -> dict | None:
+        """What a conversation is showing: name, state, and where the file is.
+
+        Answers ``None`` for no conversation, no database, no binding, and for
+        a binding whose file is no longer on disk — the last of those is
+        ordinary rather than an error, since uninstalling a widget or renaming
+        a workspace file leaves the name behind. The binding is *kept* in that
+        case rather than cleared: a package reinstalled ten minutes later
+        should find the conversation still pointing at it.
+        """
+        if conversation_id is None or self.db is None:
+            return None
+        row = self.db.get_conversation(conversation_id) or {}
+        name = (row.get("widget") or "").strip()
+        if not name:
+            return None
+        from sandbox.handlers.kernel import widget_named
+
+        found = widget_named(name) or {}
+        return {"name": name, "state": row.get("widget_state"),
+                "path": found.get("path", ""), "tree": found.get("tree", ""),
+                "installed": bool(found)}
+
+    def announce_widget(self, conversation_id: int | None) -> None:
+        """Tell every live session on this conversation what widget it holds.
+
+        The one funnel, the way ``runtime.notifications.notify`` is the one door
+        for a notification. Three things reach it — binding a widget, switching
+        conversation, and a frontend asking to be caught up — and a fourth must
+        not be able to arrive by a route that forgets to announce.
+        """
+        if conversation_id is None:
+            return
+        info = self.conversation_widget(conversation_id) or {"name": None, "state": None}
+        for session in list(self.sessions.values()):
+            if session.conversation_id != conversation_id:
+                continue
+            bus.emit(SESSION_WIDGET_CHANGED, dict(
+                info, session_key=session.key, conversation_id=conversation_id))
 
     def set_conversation_notification_mode(self, session_key: str, conversation_id: int, mode: str, *, override: bool = False) -> str | None:
         """Update notification mode for a live or stored conversation. Returns the
