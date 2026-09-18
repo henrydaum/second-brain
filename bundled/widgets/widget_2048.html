@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>2048</title>
+  <!--
+    2048, as a widget.
+
+    The widget that shipped before this one printed its box, its scheme and one
+    Request's answer — enough to prove the bridge worked, and nothing about
+    whether the contract holds up under a real interface. This is that: it owns
+    the keyboard, it animates, it has to fit a box it does not choose, and it
+    wants to remember something between mounts.
+
+    Three parts of it are worth reading before changing anything.
+
+    THE PALETTE IS A RAMP, NOT A SET OF COLOURS. The original game gives each
+    value its own warm hue, which is the one thing that cannot be carried over:
+    this app's palette is achromatic on purpose, and a board of oranges would
+    be the single thing on screen from somewhere else. So value maps to
+    *lightness* — `--fill` is a percentage of `--sb-fg` mixed into the page,
+    climbing with the exponent, and the ink flips to `--sb-bg` once the fill is
+    strong enough to need it. 2048 and above is `--sb-accent`, which makes
+    winning the only moment the widget spends the app's one emphatic colour.
+    The whole ramp is eleven declarations and no colour value, so a theme
+    change needs nothing from this file.
+
+    POSITION IS `transform`, EVERYTHING ELSE IS `scale`. A tile is absolutely
+    placed and moved by translating it, so `transform` is spoken for — an
+    `@keyframes` touching it would fight the layout and win, which is how a
+    merged tile ends up animating from wherever it happened to be to the
+    top-left corner. The spawn and merge animations use the independent
+    `scale` property instead, and the two never meet.
+
+    A MERGE MAKES A THIRD TILE. The two that combined keep their old values and
+    slide to the destination, where a new tile is already sitting with the new
+    value; the old two are dropped once the slide is over. Doubling one of them
+    in place is a line shorter and shows a `4` travelling across the board
+    before it has merged with anything.
+
+    Note what the persistence is and is not. A widget has no storage — an
+    opaque origin has no partition to keep one in — so the board and the best
+    score live in the kernel's per-session scratch state, which is an ordinary
+    Request and is SAFE, so nothing is asked of anybody. It is scoped to the
+    session, which is the honest lifetime for a game: close the app and the
+    board is gone. Every failure is swallowed, because a game that will not
+    start because it could not read a high score is worse than one that forgets.
+  -->
+  <style>
+    main {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      /* `min-height`, never `height`: the panel is short sometimes, and content
+         taller than the box should grow it rather than be cut off by it. */
+      min-height: 100%;
+      padding: var(--sb-space);
+      /* Arrows and swipes are the controls; neither should also scroll the page
+         or pull the browser's overscroll glow down over the board. */
+      overscroll-behavior: contain;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+
+    .scores { display: flex; gap: 0.375rem; }
+
+    .score {
+      position: relative;
+      min-width: 4.25rem;
+      padding: 0.25rem 0.5rem;
+      border: 0.5px solid var(--sb-line);
+      border-radius: var(--sb-radius-surface);
+      background: var(--sb-card);
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .score b {
+      display: block;
+      font-size: 0.95rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .score small {
+      display: block;
+      font-size: 0.6875rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* What a move was worth, leaving from the number it was added to. Once the
+       tiles have settled it is the only sign a merge happened at all, and it
+       costs one element. */
+    .gain {
+      position: absolute;
+      inset-inline: 0;
+      top: 0.15rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      pointer-events: none;
+      animation: rise 0.7s var(--sb-ease) forwards;
+    }
+
+    @keyframes rise {
+      from { opacity: 1; translate: 0 0; }
+      to   { opacity: 0; translate: 0 -1.1rem; }
+    }
+
+    /* The board is square and fits whichever dimension runs out first. That is
+       measured rather than expressed in CSS: `aspect-ratio` against two
+       independent maxima has no single answer a browser is obliged to reach,
+       and this is a slot whose shape is somebody else's to change at any
+       moment. */
+    .arena {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      min-height: 0;
+    }
+
+    .board {
+      position: relative;
+      width: var(--side, 100%);
+      height: var(--side, auto);
+      aspect-ratio: 1;
+      padding: var(--gap, 6px);
+      border-radius: var(--sb-radius-surface);
+      background: var(--sb-surface);
+      /* A swipe is a gesture this widget reads; letting the browser also treat
+         it as a scroll makes every drag do two things. */
+      touch-action: none;
+      user-select: none;
+    }
+
+    .board:focus-visible { outline: 2px solid var(--sb-ring); outline-offset: 2px; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--gap, 6px);
+      height: 100%;
+    }
+
+    .grid div {
+      border-radius: var(--sb-radius-control);
+      background: color-mix(in srgb, var(--sb-fg) 5%, transparent);
+    }
+
+    .tiles { position: absolute; inset: var(--gap, 6px); }
+
+    .tile {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      width: var(--cell);
+      height: var(--cell);
+      border-radius: var(--sb-radius-control);
+      background: color-mix(in srgb, var(--sb-fg) var(--fill, 7%), var(--sb-bg));
+      color: var(--ink, var(--sb-fg));
+      font-size: calc(var(--cell) * 0.42);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.03em;
+      transform: translate(
+        calc(var(--c) * (var(--cell) + var(--gap))),
+        calc(var(--r) * (var(--cell) + var(--gap))));
+      transition: transform var(--sb-motion-control) var(--sb-ease);
+    }
+
+    /* The ramp. Eleven lightnesses and one accent — no colour value anywhere,
+       so a theme change is nothing to this file. */
+    .tile[data-v="2"]    { --fill: 7%; }
+    .tile[data-v="4"]    { --fill: 13%; }
+    .tile[data-v="8"]    { --fill: 21%; }
+    .tile[data-v="16"]   { --fill: 30%; }
+    .tile[data-v="32"]   { --fill: 41%; --ink: var(--sb-bg); }
+    .tile[data-v="64"]   { --fill: 53%; --ink: var(--sb-bg); }
+    .tile[data-v="128"]  { --fill: 64%; --ink: var(--sb-bg); }
+    .tile[data-v="256"]  { --fill: 74%; --ink: var(--sb-bg); }
+    .tile[data-v="512"]  { --fill: 83%; --ink: var(--sb-bg); }
+    .tile[data-v="1024"] { --fill: 91%; --ink: var(--sb-bg); }
+    .tile[data-v="max"]  {
+      background: var(--sb-accent);
+      color: var(--sb-accent-fg);
+      box-shadow: var(--sb-shadow-subtle);
+    }
+
+    /* Four digits in a cell sized for two. */
+    .tile[data-len="3"] { font-size: calc(var(--cell) * 0.34); }
+    .tile[data-len="4"] { font-size: calc(var(--cell) * 0.27); }
+    .tile[data-len="5"] { font-size: calc(var(--cell) * 0.22); }
+    .tile[data-len="6"] { font-size: calc(var(--cell) * 0.18); }
+
+    /* `scale`, not a transform: see the note at the top of the file. */
+    .tile.spawn { animation: spawn var(--sb-motion-control) var(--sb-ease) backwards; }
+    .tile.merge { animation: bump var(--sb-motion-control) var(--sb-ease); }
+    .tile.dead  { z-index: 0; }
+    .tile.live  { z-index: 1; }
+
+    @keyframes spawn { from { scale: 0.35; opacity: 0; } to { scale: 1; opacity: 1; } }
+    @keyframes bump  { 0% { scale: 1; } 45% { scale: 1.16; } 100% { scale: 1; } }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 0.625rem;
+      padding: var(--sb-space);
+      border-radius: var(--sb-radius-surface);
+      background: color-mix(in srgb, var(--sb-bg) 76%, transparent);
+      backdrop-filter: blur(2px);
+      text-align: center;
+      animation: fade var(--sb-motion-panel) var(--sb-ease);
+    }
+
+    .overlay[hidden] { display: none; }
+    .overlay strong { font-size: 1.15rem; }
+    .overlay p { margin: 0; }
+
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+    footer { display: flex; align-items: center; gap: 0.5rem; }
+    footer .hint { margin: 0; margin-inline-start: auto; text-align: right; }
+
+    button[disabled] { opacity: 0.45; cursor: default; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>2048</h1>
+      <div class="scores">
+        <div class="score" id="score-box">
+          <small class="sb-muted">Score</small><b id="score">0</b>
+        </div>
+        <div class="score">
+          <small class="sb-muted">Best</small><b id="best">0</b>
+        </div>
+      </div>
+    </header>
+
+    <div class="arena">
+      <!-- Focusable, because an iframe hears no key until something inside it
+           has focus, and a game that does not answer the keyboard looks broken
+           rather than unfocused. -->
+      <div class="board" id="board" tabindex="0" role="application" aria-label="2048 board">
+        <div class="grid" aria-hidden="true">
+          <div></div><div></div><div></div><div></div>
+          <div></div><div></div><div></div><div></div>
+          <div></div><div></div><div></div><div></div>
+          <div></div><div></div><div></div><div></div>
+        </div>
+        <div class="tiles" id="tiles"></div>
+        <div class="overlay" id="overlay" hidden>
+          <strong id="verdict"></strong>
+          <p class="sb-muted" id="verdict-note"></p>
+          <button type="button" id="again">New game</button>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <button type="button" id="new" class="sb-secondary">New game</button>
+      <button type="button" id="undo" class="sb-ghost" disabled>Undo</button>
+      <p class="hint sb-muted"><small>Arrows, WASD, or swipe</small></p>
+    </footer>
+  </main>
+
+  <script>
+    const SIZE = 4;
+    const NAMESPACE = "widget_2048";
+    const SLIDE = 160;  // Long enough to read, short enough to hold a key down.
+
+    const el = (id) => document.getElementById(id);
+    const board = el("board"), layer = el("tiles"), overlay = el("overlay");
+
+    /* ── The game ──────────────────────────────────────────────────────── */
+
+    // A tile is { id, v, r, c }. The list is the state and the grid is derived,
+    // because a move is easier to express over a line of tiles than over a
+    // sparse array with holes in it. The id is what lets a tile keep its DOM
+    // node across a move, which is what makes the move animate at all.
+    let tiles = [], score = 0, best = 0, won = false, over = false, seq = 0;
+    let previous = null;   // One step of undo. Two would want a real history.
+
+    const at = (r, c) => tiles.find((t) => t.r === r && t.c === c);
+
+    function holes() {
+      const open = [];
+      for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) if (!at(r, c)) open.push([r, c]);
+      }
+      return open;
+    }
+
+    function spawn() {
+      const open = holes();
+      if (!open.length) return;
+      const [r, c] = open[Math.floor(Math.random() * open.length)];
+      // The original's odds: a four often enough to matter, rarely enough to
+      // still feel like bad luck.
+      tiles.push({ id: ++seq, v: Math.random() < 0.9 ? 2 : 4, r, c, born: true });
+    }
+
+    /** The cells one move walks, per line, near edge first — so the first tile
+     *  along the path is the one that ends up against the wall. */
+    function path(dir, i) {
+      const run = [0, 1, 2, 3];
+      if (dir === "left")  return run.map((c) => [i, c]);
+      if (dir === "right") return run.map((c) => [i, SIZE - 1 - c]);
+      if (dir === "up")    return run.map((r) => [r, i]);
+      return run.map((r) => [SIZE - 1 - r, i]);
+    }
+
+    /**
+     * Resolve one move, or answer null if nothing would change.
+     *
+     * The tiles handed back are the ones that must still be *drawn* sliding
+     * although they no longer exist — the pairs that merged. They are dropped
+     * once the slide is over, which is the only reason the caller hears about
+     * them at all.
+     */
+    function slide(dir) {
+      const dead = [], next = [];
+      let gained = 0, moved = false;
+
+      for (let i = 0; i < SIZE; i++) {
+        const line = path(dir, i);
+        const row = line.map(([r, c]) => at(r, c)).filter(Boolean);
+        const out = [];
+
+        for (let k = 0; k < row.length; k++) {
+          const a = row[k], b = row[k + 1];
+          if (b && a.v === b.v) {
+            // A third tile, rather than doubling one of the two. See the note
+            // at the top of the file.
+            out.push({ id: ++seq, v: a.v * 2, merged: true, from: [a, b] });
+            gained += a.v * 2;
+            k++;                          // b is consumed by this merge
+          } else {
+            out.push(a);
+          }
+        }
+
+        out.forEach((tile, k) => {
+          const [r, c] = line[k];
+          if (tile.from) {
+            for (const source of tile.from) { source.r = r; source.c = c; dead.push(source); }
+            moved = true;
+          } else if (tile.r !== r || tile.c !== c) {
+            moved = true;
+          }
+          tile.r = r;
+          tile.c = c;
+          tile.born = false;
+          delete tile.from;
+          next.push(tile);
+        });
+      }
+
+      if (!moved) return null;
+      tiles = next;
+      score += gained;
+      return { dead, gained };
+    }
+
+    /** Whether any move is left. Cheaper than trying all four: a move exists
+     *  exactly when there is a hole or two neighbours agree. */
+    function stuck() {
+      if (holes().length) return false;
+      for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+          const v = at(r, c).v;
+          if (c < SIZE - 1 && at(r, c + 1).v === v) return false;
+          if (r < SIZE - 1 && at(r + 1, c).v === v) return false;
+        }
+      }
+      return true;
+    }
+
+    /* ── Drawing ───────────────────────────────────────────────────────── */
+
+    const nodes = new Map();
+
+    function place(node, tile) {
+      node.style.setProperty("--r", tile.r);
+      node.style.setProperty("--c", tile.c);
+    }
+
+    function paint(tile) {
+      const known = nodes.get(tile.id);
+      if (known) { place(known, tile); return; }
+
+      const node = document.createElement("div");
+      node.className = "tile live";
+      // Positioned before it enters the document, so a tile that has just
+      // appeared does not transition in from wherever the last one was.
+      place(node, tile);
+      node.dataset.v = tile.v >= 2048 ? "max" : tile.v;
+      node.dataset.len = String(tile.v).length;
+      node.textContent = tile.v;
+      if (tile.merged) node.classList.add("merge");
+      else if (tile.born) node.classList.add("spawn");
+      layer.append(node);
+      nodes.set(tile.id, node);
+    }
+
+    function render(dead = []) {
+      for (const tile of dead) {
+        const node = nodes.get(tile.id);
+        if (!node) continue;
+        // Under whatever is arriving on top of it — including the merge result,
+        // which is the whole point of drawing a tile that no longer exists.
+        node.classList.replace("live", "dead");
+        place(node, tile);
+        nodes.delete(tile.id);
+        window.setTimeout(() => node.remove(), SLIDE);
+      }
+      for (const tile of tiles) paint(tile);
+
+      el("score").textContent = score;
+      el("best").textContent = best;
+      el("undo").disabled = !previous;
+    }
+
+    /** Throw every node away and draw the board fresh. A new game, an undo and
+     *  a restore need this; a move never does, which is what the ids are for. */
+    function repaint() {
+      nodes.clear();
+      layer.replaceChildren();
+      for (const tile of tiles) { tile.born = false; tile.merged = false; }
+      render();
+    }
+
+    function showGain(points) {
+      if (!points) return;
+      const flyer = document.createElement("span");
+      flyer.className = "gain";
+      flyer.textContent = "+" + points;
+      el("score-box").append(flyer);
+      window.setTimeout(() => flyer.remove(), 700);
+    }
+
+    function verdict() {
+      el("verdict").textContent = over ? "No moves left" : "2048";
+      el("verdict-note").textContent = over
+        ? "You finished on " + score + "."
+        : "Made it. Keep going for a bigger one.";
+      el("again").textContent = over ? "New game" : "Keep going";
+      overlay.hidden = false;
+    }
+
+    /* ── Playing ───────────────────────────────────────────────────────── */
+
+    function move(dir) {
+      if (over || !overlay.hidden) return;
+
+      const snapshot = { tiles: tiles.map((t) => ({ ...t })), score, won };
+      const result = slide(dir);
+      if (!result) return;
+
+      previous = snapshot;
+      spawn();
+      render(result.dead);
+      showGain(result.gained);
+
+      if (!won && tiles.some((t) => t.v >= 2048)) { won = true; verdict(); }
+      else if (stuck()) { over = true; verdict(); }
+      save();
+    }
+
+    function undo() {
+      if (!previous) return;
+      tiles = previous.tiles;
+      score = previous.score;
+      won = previous.won;
+      previous = null;
+      over = false;
+      overlay.hidden = true;
+      repaint();
+      focusBoard();
+      save();
+    }
+
+    function reset() {
+      tiles = []; score = 0; won = false; over = false; previous = null; seq = 0;
+      spawn();
+      spawn();
+      overlay.hidden = true;
+      repaint();
+      focusBoard();
+      save();
+    }
+
+    /* ── Controls ──────────────────────────────────────────────────────── */
+
+    const KEYS = {
+      arrowleft: "left", arrowright: "right", arrowup: "up", arrowdown: "down",
+      a: "left", d: "right", w: "up", s: "down",
+      h: "left", l: "right", k: "up", j: "down",
+    };
+
+    function focusBoard() {
+      try { board.focus({ preventScroll: true }); } catch (error) { /* not focusable yet */ }
+    }
+
+    // On `window` rather than on the board: clicking New game moves focus onto
+    // that button, and a game that stops answering the keyboard because you
+    // pressed one of its own controls is the kind of thing nobody reports.
+    window.addEventListener("keydown", (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const dir = KEYS[String(event.key).toLowerCase()];
+      if (!dir) return;
+      event.preventDefault();    // Arrows would otherwise scroll this document.
+      move(dir);
+    });
+
+    // Clicking anywhere hands the keyboard back, which matters because the
+    // frame's own header can take focus away at any time.
+    document.addEventListener("pointerdown", focusBoard);
+
+    let from = null;
+    board.addEventListener("pointerdown", (event) => {
+      from = { x: event.clientX, y: event.clientY };
+      try { board.setPointerCapture(event.pointerId); } catch (error) { /* mouse */ }
+    });
+    board.addEventListener("pointerup", (event) => {
+      if (!from) return;
+      const dx = event.clientX - from.x, dy = event.clientY - from.y;
+      from = null;
+      // Far enough to be a swipe rather than a tap, and settled by whichever
+      // axis won — a diagonal drag still has to mean one thing.
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+      move(Math.abs(dx) > Math.abs(dy)
+        ? (dx > 0 ? "right" : "left")
+        : (dy > 0 ? "down" : "up"));
+    });
+    board.addEventListener("pointercancel", () => { from = null; });
+
+    el("new").addEventListener("click", reset);
+    el("undo").addEventListener("click", undo);
+    el("again").addEventListener("click", () => {
+      if (over) reset();
+      else { overlay.hidden = true; focusBoard(); }
+    });
+
+    /* ── The box ───────────────────────────────────────────────────────── */
+
+    // The arena's size, not `brain.size`: the board is one element in a column
+    // with a header and a footer, so what it may have is a fraction of the
+    // panel that only this layout knows. `brain.size` is what makes the arena
+    // change; this is what reads the result, and it would keep working if the
+    // widget were ever mounted somewhere that did not tell it anything.
+    const arena = document.querySelector(".arena");
+
+    function fit({ width, height }) {
+      const side = Math.max(120, Math.floor(Math.min(width, height)));
+      const gap = Math.round(Math.min(10, Math.max(4, side * 0.028)));
+      board.style.setProperty("--side", side + "px");
+      board.style.setProperty("--gap", gap + "px");
+      // Five gaps: one each side as padding, three between the four cells.
+      board.style.setProperty("--cell", ((side - gap * 5) / SIZE) + "px");
+    }
+
+    new ResizeObserver(([entry]) => fit(entry.contentRect)).observe(arena);
+    fit(arena.getBoundingClientRect());
+
+    /* ── Remembering ───────────────────────────────────────────────────── */
+
+    // A widget has no storage of its own — an opaque origin has no partition to
+    // keep one in — so the board lives in the kernel's per-session scratch
+    // state. Every call here is swallowed: this is a game, and none of it is
+    // worth a visible failure.
+    let queued = null;
+
+    function save() {
+      best = Math.max(best, score);
+      el("best").textContent = best;
+      window.clearTimeout(queued);
+      // Debounced, or holding an arrow key down is one Request per repeat.
+      queued = window.setTimeout(() => {
+        brain.call("session.state_set", {
+          namespace: NAMESPACE,
+          value: {
+            best, score, won, over, seq,
+            tiles: tiles.map(({ id, v, r, c }) => ({ id, v, r, c })),
+          },
+        }).catch(() => {});
+      }, 300);
+    }
+
+    /** Whether a saved board is a board. Nothing else writes this namespace
+     *  today, so this is not defending against an attacker — it is defending
+     *  against an older version of this file, which is the thing that will
+     *  actually happen. A board that fails is a new game rather than an error,
+     *  so the check can afford to be strict: every position on the grid and
+     *  unshared, every value a real tile, every id usable as a key. */
+    function sane(saved) {
+      if (!saved || typeof saved !== "object" || !Array.isArray(saved.tiles)) return false;
+      if (!saved.tiles.length || saved.tiles.length > SIZE * SIZE) return false;
+      const taken = new Set();
+      return saved.tiles.every((t) => {
+        if (!t || !Number.isInteger(t.id) || t.id < 1) return false;
+        if (!Number.isInteger(t.v) || t.v < 2 || !Number.isInteger(Math.log2(t.v))) return false;
+        if (!Number.isInteger(t.r) || t.r < 0 || t.r >= SIZE) return false;
+        if (!Number.isInteger(t.c) || t.c < 0 || t.c >= SIZE) return false;
+        const cell = t.r * SIZE + t.c;
+        if (taken.has(cell)) return false;
+        taken.add(cell);
+        return true;
+      });
+    }
+
+    async function restore() {
+      let saved = null;
+      try {
+        saved = await brain.call("session.state_get", { namespace: NAMESPACE });
+      } catch (error) {
+        // No state, no runtime, or a refusal. All three mean "new game".
+      }
+
+      best = Number(saved && saved.best) || 0;
+      if (!sane(saved)) { reset(); return; }
+
+      score = Number(saved.score) || 0;
+      won = Boolean(saved.won);
+      over = Boolean(saved.over);
+      tiles = saved.tiles.map((t) => ({ id: t.id, v: t.v, r: t.r, c: t.c }));
+      seq = Math.max(Number(saved.seq) || 0, ...tiles.map((t) => t.id));
+      repaint();
+      if (over) verdict();
+      focusBoard();
+    }
+
+    restore();
+  </script>
+</body>
+</html>

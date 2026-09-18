@@ -26,11 +26,14 @@ vi.mock("@/lib/client", () => ({
 
 const { WidgetFrame } = await import("@/components/widget-frame");
 
+// Deliberately not one of the widgets that ship: the file is never read — the
+// fetch is stubbed — so naming a real one only means this goes stale the day
+// that widget is renamed.
 const WIDGET = {
-  name: "hello",
-  stem: "widget_hello",
+  name: "example",
+  stem: "widget_example",
   tree: "bundled",
-  path: "/w/widget_hello.html",
+  path: "/w/widget_example.html",
   extension: ".html",
 };
 
@@ -48,7 +51,7 @@ async function mountFrame({ hold = false } = {}) {
     : Promise.resolve("<main>hi</main>");
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: () => text }));
   render(<WidgetFrame widget={WIDGET} scheme="light" />);
-  const frame = await waitFor(() => screen.getByTitle("hello") as HTMLIFrameElement);
+  const frame = await waitFor(() => screen.getByTitle("example") as HTMLIFrameElement);
   const posted = vi.fn();
   Object.defineProperty(frame, "contentWindow", {
     value: { postMessage: posted },
