@@ -501,10 +501,13 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
       {/* New chat remains pinned to the rail while its label is revealed. The
           drawer toggle follows the moving outer edge, matching the panel it
           opens and closes. */}
-      <div className="sb-divider-bottom relative grid shrink-0 grid-cols-[2rem_minmax(0,1fr)_auto] gap-x-1 p-2 pt-11 pointer-coarse:pt-16">
+      <div className="sb-divider-bottom relative grid shrink-0 grid-cols-[2rem_minmax(0,1fr)_auto] gap-x-1 p-2 pt-12">
+        {/* Match the session bar's 48px row and center its controls, including
+            the larger touch targets, instead of offsetting them from the top. */}
+        <div className="absolute inset-x-0 top-0 flex h-12 items-center justify-between px-2">
         {!railCollapsed && (
           <div role="group" aria-label="Sidebar view"
-            className="absolute top-2 left-2 flex h-8 items-center rounded-full bg-muted/60 p-0.5 pointer-coarse:h-12">
+            className="flex h-8 items-center rounded-full bg-muted/60 p-0.5 pointer-coarse:h-12">
             {([false, true] as const).map(files => (
               <button key={String(files)} type="button" aria-pressed={filesOpen === files}
                 aria-controls={files ? "sidebar-files" : "sidebar-chats"}
@@ -525,7 +528,7 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
         <TooltipIconButton
           tooltip="Hide sidebar"
           side="right"
-          className="absolute top-2 right-2 size-8 md:hidden"
+          className="ml-auto size-8 md:hidden"
           onClick={closeDrawer}
         >
           <PanelLeftCloseIcon className="size-4 translate-x-[0.5px]" />
@@ -533,7 +536,7 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
         <TooltipIconButton
           tooltip={railCollapsed ? "Show sidebar" : "Hide sidebar"}
           side="right"
-          className="absolute top-2 right-2 hidden size-8 md:inline-flex"
+          className="ml-auto hidden size-8 md:inline-flex"
           aria-expanded={!railCollapsed}
           onClick={() => setCollapsed((value) => !value)}
         >
@@ -543,6 +546,7 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
             <PanelLeftCloseIcon className="size-4 translate-x-[0.5px]" />
           )}
         </TooltipIconButton>
+        </div>
 
         <TooltipIconButton
           tooltip="New chat"
@@ -749,7 +753,7 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent side="left" className="w-80 max-w-[85vw] border-0">
+        <SheetContent side="left" className="w-80 max-w-[85vw] border-0 pt-[env(safe-area-inset-top)]">
           {sidebar}
         </SheetContent>
       </Sheet>
