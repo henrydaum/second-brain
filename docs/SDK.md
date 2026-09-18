@@ -1218,7 +1218,7 @@ sdk.frontend.submit_attachments(session_key, files, caption="", ingest=False)
 sdk.frontend.submit_action(session_key, action_type, payload=None)
 sdk.frontend.cancel(session_key)
 sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
-sdk.frontend.attended(session_key, present=True, client=None)
+sdk.frontend.attended(session_key, present=True)
 sdk.frontend.pending_input(session_key, details=False)      # an id, or None
                                                 # details=True: the question,
                                                 # {"kind": "approval"|"form_field",
@@ -1297,7 +1297,6 @@ attendance now decides — and attendance is *what you declared*:
 ```python
 sdk.frontend.attended(key, True)      # a socket connected
 sdk.frontend.attended(key, False)     # it went away
-sdk.frontend.attended(key, True, client="my_web_app")   # …and what it is
 ```
 
 So an unsafe Request raises a real dialog, which arrives back at you as an

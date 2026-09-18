@@ -227,13 +227,6 @@ class RuntimeSession:
     # Ephemeral live state — deliberately NOT persisted in to_marker(), so it
     # resets to None (defer-to-global) across restarts.
     attended: bool | None = None
-    # Which client is watching, when its frontend cares to say — a name the
-    # frontend chooses, meaningful only to whoever reads it back. Ephemeral and
-    # deliberately not persisted, for the same reason ``attended`` is not: it is
-    # a claim about right now, and a stale one would outlive the socket that
-    # made it. Cleared when attendance is withdrawn, so "somebody is watching"
-    # and "through this" cannot disagree.
-    client: str | None = None
     # How this conversation answers approval dialogs: one of
     # ``runtime.security_modes.SECURITY_MODES``, or None for the default
     # ("ask"). Set by ``/mode`` through ``runtime.set_security_mode``.

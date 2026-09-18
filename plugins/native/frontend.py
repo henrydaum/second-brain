@@ -200,8 +200,7 @@ class BaseFrontend:
         cancel(session_key)
         bind_session(session_key, external_id=None) -> int   — apply user_binding
         identify(session_key, external_id, config=None) -> int — per_user upgrade
-        mark_attended(session_key, client=None) / mark_unattended(key)
-                                                              — attendance
+        mark_attended/mark_unattended(session_key)            — attendance
     """
 
     # --- Identity ---
@@ -681,7 +680,7 @@ class BaseFrontend:
         if getattr(session, "user_id", None) is None:
             session.user_id = self.default_user_id
 
-    def mark_attended(self, session_key: str, client: str | None = None) -> None:
+    def mark_attended(self, session_key: str) -> None:
         """Declare that a human is present at ``session_key`` (e.g. a websocket
         connected). Concurrent multi-user frontends call this so each user's
         session is treated as foreground independently; single-user frontends
@@ -689,22 +688,13 @@ class BaseFrontend:
         behavior unchanged."""
         if self.runtime is not None:
             self.runtime.set_session_attended(session_key, True)
-            if client:
-                self.runtime.set_session_client(session_key, client)
 
     def mark_unattended(self, session_key: str) -> None:
         """Declare that no human is present at ``session_key`` (e.g. the socket
         closed). Interactive tools will be refused and replies delivered as
-        notifications until ``mark_attended`` is called again.
-
-        Any declared client name goes with it. The two facts are made by one
-        gesture — a socket opening — so letting them come apart would mean a
-        session remembering what it was being watched *through* after nothing
-        was watching it, which is the one reading of the pair that can mislead
-        somebody."""
+        notifications until ``mark_attended`` is called again."""
         if self.runtime is not None:
             self.runtime.set_session_attended(session_key, False)
-            self.runtime.set_session_client(session_key, None)
 
     def identify(self, session_key: str, external_id, config: dict | None = None, user_type: str = "user") -> int | None:
         """Resolve (creating if needed) the user behind this session and bind it.

@@ -3141,7 +3141,7 @@ def _frontend_attend(ctx, args: dict) -> Result:
     if (refusal := _not_yours(adapter, session_key)) is not None:
         return refusal
     if args.get("present"):
-        adapter.mark_attended(session_key, str(args.get("client") or "") or None)
+        adapter.mark_attended(session_key)
     else:
         adapter.mark_unattended(session_key)
     return Result(data=True)

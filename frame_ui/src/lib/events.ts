@@ -456,14 +456,6 @@ export function connect(
 
   const open = (status: StreamStatus) => {
     const url = serverUrl("/events");
-    // **Who is watching, in the agent's terms.** The kernel puts widget
-    // guidance in the system prompt only for a session whose client says it
-    // renders them, and this is where this app says so. It is a claim and
-    // authorizes nothing — the kernel stores the name and reads it back when it
-    // builds a prompt. The stream is the right place for it because the stream
-    // is already the attendance signal: the name arrives and departs with the
-    // socket, so the agent is never told about a surface that is not there.
-    url.searchParams.set("client", "frame_ui");
     // EventSource cannot send headers, so development puts its token in the URL.
     // Production has no browser token: Caddy authenticates the loopback hop.
     const authorization = authHeaders().Authorization;

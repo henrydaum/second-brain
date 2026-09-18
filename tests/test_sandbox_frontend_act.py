@@ -108,7 +108,7 @@ class FakeAdapter:
         self.runtime = runtime if runtime is not None else FakeRuntime()
         self.attended_calls = []
 
-    def mark_attended(self, session_key, client=None):
+    def mark_attended(self, session_key):
         """Record the declaration."""
         self.attended_calls.append((session_key, True))
 

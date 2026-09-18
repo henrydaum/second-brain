@@ -230,7 +230,7 @@ class _Desk:
         self.submitted.append((session_key, "plain", {"path": path}))
         return SimpleNamespace(ok=True)
 
-    def mark_attended(self, session_key, client=None):
+    def mark_attended(self, session_key):
         """Somebody opened a stream for this session."""
         # The real runtime deliberately does not create sessions as a side
         # effect of an attendance signal. EventSource opens before boot creates

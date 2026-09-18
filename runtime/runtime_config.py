@@ -363,7 +363,6 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             prompt_extras=dict(session.system_prompt_extras or {}),
             notification_suffix=_notify_suffix(),
             frontend_name=session.frontend_name,
-            frontend_client=session.client,
             frontend=frontend,
             command_filter=command_filter,
             active_llm=active_llm(runtime, session),
