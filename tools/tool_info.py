@@ -29,7 +29,8 @@ dependencies_files = []
 dependencies_pip = []
 requests = ["fs.read", "fs.list", "fs.exists", "paths.get", "db.query",
             "tool.list", "command.list", "service.list",
-            "task.list", "task.graph", "plugin.list"]
+            "task.list", "task.graph", "plugin.list",
+            "widget.list", "widget.get"]
 
 import difflib
 import re
@@ -39,7 +40,7 @@ from guest.bases import BaseTool
 #: The closed vocabulary. Order is the order the agent_prompt lists them in:
 #: what to read before writing code first, then what exists on this machine.
 KINDS = ("sdk", "docs", "templates", "tools", "commands", "services",
-         "tasks", "frontends", "scripts", "database")
+         "tasks", "frontends", "scripts", "widgets", "database")
 
 #: A safety net, not a routine trim. Chapters are leaves (see _chapters) and
 #: templates are the authoring contract — half a contract is worse than none —
@@ -324,7 +325,7 @@ class Info(BaseTool):
                 # with no schema at all. Keep this list and KINDS in step.
                 "enum": ["sdk", "docs", "templates", "tools", "commands",
                          "services", "tasks", "frontends", "scripts",
-                         "database"],
+                         "widgets", "database"],
                 "description": "What to look up.",
             },
             "name": {
@@ -359,6 +360,7 @@ class Info(BaseTool):
         "- `tasks` — the pipeline, task status and what is scheduled\n"
         "- `frontends` — transports, and whether each is enabled\n"
         "- `scripts` — scripts already written, by path\n"
+        "- `widgets` — HTML surfaces the web UI can show, and their source\n"
         "- `database` — tables and their schemas"
     )
 
@@ -696,6 +698,54 @@ class Info(BaseTool):
                 return f"```python\n{text}\n```\n\n---\nFrom {path}"
         stems = [stem for stem, _, _ in found]
         return f"No script named '{name}'. Available: {', '.join(stems)}."
+
+    def _widgets(self, sdk, name):
+        """What the web UI can show, and which one the user is looking at.
+
+        The counterpart to the system prompt's one line. That line names the
+        active widget precisely so this can be the place the detail lives —
+        paying for a description of every widget on every turn to save a lookup
+        on the few turns that need one is the wrong way round, which is the
+        same trade the rest of this tool exists to make.
+
+        Reading one answers its *source*, because that is what you need before
+        changing it. A widget is one HTML file: the whole contract for what
+        goes inside it is `info("templates", "widget")`, and nothing here
+        repeats it.
+        """
+        try:
+            found = sdk.widget.list()
+        except sdk.Failed as error:
+            return f"Could not list widgets: {error}"
+        active = ""
+        try:
+            active = (sdk.widget.get() or {}).get("name") or ""
+        except sdk.Failed:
+            # No conversation yet, or a frontend that draws none. Ordinary.
+            pass
+        if not found:
+            return ("No widgets installed. Write one to "
+                    f"{_join(sdk.paths.get('workspace'), 'widgets')} as "
+                    'widget_<name>.html — start from info("templates", '
+                    '"widget").')
+        if not name:
+            lines = [f"# widgets — {len(found)}", ""]
+            for row in found:
+                mark = "  (showing now)" if row.get("name") == active else ""
+                lines.append(f"  {row.get('name')} ({row.get('tree')})"
+                             f"  {row.get('path')}{mark}")
+            lines += ["", 'Source of one: info("widgets", "<name>")',
+                      'Show one: sdk.widget.set("<name>")']
+            return "\n".join(lines)
+        for row in found:
+            if str(row.get("name", "")).lower() == name.lower():
+                path = row.get("path") or ""
+                text = sdk.fs.read(path)
+                if len(text) > MAX_CHARS:
+                    text = text[:MAX_CHARS] + f"\n<!-- truncated — read {path} -->"
+                return f"```html\n{text}\n```\n\n---\nFrom {path}"
+        names = [str(row.get("name")) for row in found]
+        return f"No widget named '{name}'. Available: {', '.join(names)}."
 
     def _database(self, sdk, name):
         """Tables and their schemas.
