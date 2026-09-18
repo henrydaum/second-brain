@@ -507,16 +507,20 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
         <div className="absolute inset-x-0 top-0 flex h-12 items-center justify-between px-2">
         {!railCollapsed && (
           <div role="group" aria-label="Sidebar view"
-            className="flex h-8 items-center rounded-full bg-muted/60 p-0.5 pointer-coarse:h-12">
+            className="relative isolate flex h-8 items-center px-0.5 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-muted/60 pointer-coarse:h-12 pointer-coarse:before:inset-y-1">
             {([false, true] as const).map(files => (
               <button key={String(files)} type="button" aria-pressed={filesOpen === files}
                 aria-controls={files ? "sidebar-files" : "sidebar-chats"}
                 onPointerEnter={files ? preloadFilesDrawer : undefined}
                 onFocus={files ? preloadFilesDrawer : undefined}
                 onClick={() => setFilesOpen(files)}
-                className={cn("rounded-full px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring",
-                  filesOpen === files ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}>
-                {files ? "Files" : "Chats"}
+                className="group flex h-full items-center rounded-full text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring">
+                {/* Paint a 40px pill with a 36px selection inside it while
+                    keeping each mobile button's full 48px touch target. */}
+                <span className={cn("flex items-center rounded-full px-3 py-1 transition-colors pointer-coarse:h-9",
+                  filesOpen === files ? "bg-accent text-foreground" : "text-muted-foreground group-hover:text-foreground")}>
+                  {files ? "Files" : "Chats"}
+                </span>
               </button>
             ))}
           </div>
