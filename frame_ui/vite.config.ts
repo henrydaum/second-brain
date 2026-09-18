@@ -2,7 +2,7 @@ import path from "node:path";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { backend, token } from "./server-config.js";
+import { backend, token, uiHosts } from "./server-config.js";
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -44,6 +44,22 @@ export default defineConfig(({ mode }) => {
   server: {
     port: Number(env.VITE_UI_PORT) || 5174,
     strictPort: true,
+
+    /**
+     * The names this server will answer to, beyond its own localhost.
+     *
+     * Vite refuses an unrecognised `Host` outright — a plain-text 403 that
+     * names `vite.config.js` as the fix. Reaching this app through a gateway
+     * (a Tailscale address, say) is exactly the case that produces one, and
+     * the refusal is indistinguishable from a broken deployment: the page
+     * never loads, and the kernel's own probe reports the bridge as refused
+     * while pointing at a token that was never involved.
+     *
+     * The name comes from `ui_url`, which is already the setting that says
+     * where this app lives, so there is nothing to keep in step. A checkout
+     * with no gateway contributes none and keeps Vite's default.
+     */
+    allowedHosts: uiHosts(),
 
     /**
      * The Second Brain endpoints, served from this app's own origin.

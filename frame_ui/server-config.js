@@ -103,3 +103,30 @@ export function backend() {
     found: Object.keys(settings).length > 0,
   };
 }
+
+/**
+ * The host in `ui_url`, for `server.allowedHosts`.
+ *
+ * **Vite refuses a request whose `Host` it does not recognise**, and a gateway
+ * is precisely a thing that puts an unfamiliar one there: reaching this app
+ * over a Tailscale name means every request arrives as `henrys-mac-mini…`
+ * rather than `localhost`, and the answer is a plain-text refusal with a 403.
+ * That reads as a broken UI and names the fix in a file the kernel is supposed
+ * to be configuring — so it is read from the same setting that already says
+ * where this app lives, rather than written down a second time here.
+ *
+ * `ui_url` is the one that points *at* this app (`http_client_url` points the
+ * other way, at Second Brain), so its host is exactly the name a browser will
+ * send. An empty or unparseable value yields `[]`, which leaves Vite's own
+ * localhost-only default in place — the right answer for a plain checkout.
+ */
+export function uiHosts() {
+  const url = (config().ui_url || "").trim();
+  if (!url) return [];
+  try {
+    const { hostname } = new URL(url);
+    return hostname ? [hostname] : [];
+  } catch {
+    return [];
+  }
+}

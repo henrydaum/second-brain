@@ -264,3 +264,110 @@ def test_a_server_somebody_else_is_running_is_left_alone(owned, monkeypatch):
 
     web_ui.stop()
     assert owned == [], "something nobody owns was killed"
+
+
+def test_the_probe_carries_an_origin_so_a_real_gateway_answers_it():
+    """A deployed UI refuses an origin-less POST, and that is not a broken token.
+
+    ``/sdk`` is the one route the gateway credentials itself, so it checks the
+    ``Origin`` header and refuses anything that does not carry the app's own —
+    a cross-origin POST of that shape needs no preflight and would otherwise
+    arrive pre-authenticated. A Vite dev server proxies with no such check, so
+    a probe sending no ``Origin`` worked for as long as the only thing ever
+    probed was a dev server, and then reported a perfectly healthy deployment
+    as *"serving but its bridge is refused"* — pointing at a token that was
+    never the problem.
+
+    The failure is silent in the direction that matters: the advice is
+    plausible, specific, and about the wrong thing entirely.
+    """
+    seen_origins = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            origin = self.headers.get("Origin")
+            seen_origins.append(origin)
+            # Exactly the Caddyfile's rule: our own origin, or forbidden.
+            expected = f"http://127.0.0.1:{self.server.server_address[1]}"
+            self.send_response(200 if origin == expected else 403)
+            body = b'{"ok": true, "data": []}'
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        # A trailing slash, because that is how a person pastes an address in —
+        # and `https://host/` is not equal to `https://host` to a string match.
+        assert web_ui.bridge_ok(url + "/") is True
+        assert seen_origins == [url]
+    finally:
+        server.shutdown()
+
+
+def test_a_gateway_with_nothing_behind_it_is_not_a_running_ui():
+    """502 means the proxy is up and the app is not — so autostart must fire.
+
+    ``ui_url`` may be an address a gateway answers: a Tailscale name, a reverse
+    proxy, anything fronting the app. That gateway is up whether or not the
+    dev server is, and it says so with a 502.
+
+    Reading "any HTTP answer" as *reachable* therefore made the kernel decide a
+    server was already serving, skip the spawn, and then report the bridge as
+    unanswered — advice about an HTTP frontend that was running perfectly. The
+    arrangement autostart is most useful for was the one arrangement where it
+    could never fire, and nothing in the message pointed at the real cause.
+    """
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            self.send_response(502)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert web_ui.reachable(f"http://127.0.0.1:{server.server_address[1]}") is False
+    finally:
+        server.shutdown()
+
+
+def test_a_page_that_merely_dislikes_the_request_is_still_a_running_ui():
+    """The other side of the line: 404 and 500 are answers about *this* server.
+
+    Vite answers before its own routes are ready, so a status code is not a
+    verdict this probe is entitled to have an opinion about. Only the gateway
+    family speaks about something upstream.
+    """
+    for status in (404, 500):
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            code = status
+
+            def do_GET(self):
+                self.send_response(self.code)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            assert web_ui.reachable(f"http://127.0.0.1:{server.server_address[1]}") is True
+        finally:
+            server.shutdown()

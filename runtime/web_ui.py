@@ -213,6 +213,19 @@ def _join(url: str, path: str) -> str:
     return url.rstrip("/") + path
 
 
+def _origin_of(url: str) -> str:
+    """``url`` reduced to a browser's spelling of an origin.
+
+    Scheme and host only, with the port when there is one — which is what a
+    browser puts in ``Origin``, and therefore what a gateway checking that
+    header compares against. ``urljoin`` would not do: it keeps a trailing
+    slash and ``https://host/`` is not equal to ``https://host``, and an exact
+    string match is the whole of what is being asked for.
+    """
+    parts = urlparse(url)
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else url
+
+
 def bridge_ok(url: str) -> bool | None:
     """Whether a Request made through the UI's origin is answered.
 
@@ -232,11 +245,21 @@ def bridge_ok(url: str) -> bool | None:
     ``conv.list`` because it is read-only, cheap, and ``ALWAYS_SAFE`` — a probe
     must not be able to raise a dialog at somebody, and it runs at boot with
     nobody watching, where an unsafe Request would be refused anyway.
+
+    **It sends an ``Origin``, and without one a real deployment can only ever
+    answer "refused".** ``/sdk`` is the route the gateway credentials itself,
+    so it refuses any POST that does not carry the app's own origin — that
+    check *is* the perimeter, since a cross-origin POST of this shape needs no
+    preflight and would otherwise arrive pre-authenticated. A dev server
+    proxies with no such check, which is why sending nothing worked right up
+    until the first probe of a deployed UI, and then reported a working setup
+    as a broken token. The header is honest rather than a bypass: this probe
+    really is aimed at that origin's own bridge.
     """
     request = urllib.request.Request(
         _join(url, "/sdk/conv.list?thread=probe"),
         data=b'{"limit": 1}',
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Origin": _origin_of(url)},
         method="POST")
     try:
         with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT) as answer:
@@ -247,20 +270,42 @@ def bridge_ok(url: str) -> bool | None:
         return None
 
 
-def reachable(url: str) -> bool:
-    """Whether something is serving at ``url``.
+#: What a gateway answers when it is up and the thing behind it is not.
+#: See :func:`reachable` — these are the one family of status codes that
+#: speak about the *upstream* rather than about the server that sent them.
+GATEWAY_ERRORS = (502, 503, 504)
 
-    **Any HTTP answer counts, including 404 and 500.** The question is whether
-    a server is there, not whether it likes the request — and during startup
-    Vite answers before its own routes are ready. Treating a status code as a
-    failure would mean waiting for a page this function is not entitled to
-    have an opinion about.
+
+def reachable(url: str) -> bool:
+    """Whether the web app is serving at ``url``.
+
+    **Almost any HTTP answer counts, including 404 and 500.** The question is
+    whether a server is there, not whether it likes the request — and during
+    startup Vite answers before its own routes are ready. Treating a status
+    code as a failure would mean waiting for a page this function is not
+    entitled to have an opinion about.
+
+    **The exception is a gateway error, and without it autostart cannot work
+    behind a gateway at all.** ``ui_url`` may be an address that a proxy
+    answers — a Tailscale name, a reverse proxy, anything fronting the app —
+    and such a proxy is up whether or not the app it points at is. It answers
+    ``502`` to say precisely that: *I am here, the thing you want is not*.
+    Counting it as reachable made the kernel conclude a server was already
+    serving, skip the spawn, and then report the bridge as unanswered — so the
+    one arrangement autostart is most useful for was the one where it never
+    fired, and the advice it printed was about a frontend that was running
+    perfectly.
+
+    These codes are safe to exclude because no dev server answers one about
+    itself: Vite serves its own page or refuses the host, and a 502 from it
+    would be about *its* proxy to the kernel, which is a route this probe does
+    not ask for. ``bridge_ok`` already drew the same line for the same reason.
     """
     try:
         with urllib.request.urlopen(url, timeout=PROBE_TIMEOUT):
             return True
-    except urllib.error.HTTPError:
-        return True
+    except urllib.error.HTTPError as answer:
+        return answer.code not in GATEWAY_ERRORS
     except Exception:
         return False
 
