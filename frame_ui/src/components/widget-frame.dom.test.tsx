@@ -114,6 +114,25 @@ it("tells the widget its box, which is the one thing it cannot measure", async (
 });
 
 
+it("sends the whole stylesheet with a scheme, not only the tokens", async () => {
+  // The bridge *replaces* `#sb-theme` with whatever a scheme tell carries, and
+  // `announce()` fires on mount rather than only on a theme change. Sending
+  // the token block alone therefore deleted `BASE` — and with it the body
+  // `font-family` — a tick after every widget appeared, which is how they all
+  // came to render in the browser's serif default while their colours stayed
+  // perfectly right.
+  const { frame, posted } = await mountFrame();
+  frame.dispatchEvent(new Event("load"));
+
+  await waitFor(() => {
+    const [scheme] = posted.mock.calls
+      .map(([m]) => m)
+      .filter((m) => m?.kind === "tell" && m.what === "scheme");
+    expect(scheme.css).toContain("--sb-font:");
+    expect(scheme.css).toContain("font-family: var(--sb-font");
+  });
+});
+
 it("delivers whichever arrives last, the host page or the file", async () => {
   // The failure this pins was invisible in a test and intermittent in a
   // browser, because it *was* intermittent: the iframe starts loading when

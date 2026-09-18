@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useRef, useState, type FC } from "react";
 
 import { appDocument, attachAppRelay, tellApp } from "@/lib/html-app";
-import { tokenBlock, widgetStyles } from "@/lib/widget-document";
+import { widgetStyles } from "@/lib/widget-document";
 import { readWidget, type Widget } from "@/lib/widgets";
 
 export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
@@ -109,7 +109,7 @@ export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
     const element = frame.current;
     if (!element) return;
     const { width, height } = element.getBoundingClientRect();
-    tellApp(element, token.current, "scheme", scheme, { css: tokenBlock(scheme) });
+    tellApp(element, token.current, "scheme", scheme, { css: widgetStyles(scheme) });
     tellApp(element, token.current, "size", { width, height });
   }, [scheme]);
 
@@ -144,7 +144,7 @@ export const WidgetFrame: FC<{ widget: Widget; scheme: "light" | "dark" }> = ({
   useEffect(() => {
     const element = frame.current;
     if (!element || !delivered.current) return;
-    tellApp(element, token.current, "scheme", scheme, { css: tokenBlock(scheme) });
+    tellApp(element, token.current, "scheme", scheme, { css: widgetStyles(scheme) });
   }, [scheme]);
 
   /**

@@ -57,9 +57,11 @@ export function appDocument(
           m.token !== token) return;
       if (m.kind === "tell" && listeners[m.what]) {
         state[m.what] = m.value;
-        // The tokens for the new scheme arrive with it: the host swaps the
-        // sheet it put in rather than rebuilding the document, because a
-        // rebuild would reload the widget for a colour change.
+        // The stylesheet for the new scheme arrives with it: the host swaps
+        // the sheet it put in rather than rebuilding the document, because a
+        // rebuild would reload the widget for a colour change. Note this
+        // *replaces* the sheet, so what arrives has to be the whole of it and
+        // not only the tokens that changed.
         if (m.what === "scheme" && typeof m.css === "string") {
           const sheet = document.getElementById("sb-theme");
           if (sheet) sheet.textContent = m.css;

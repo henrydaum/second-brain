@@ -98,12 +98,18 @@ export const WIDGET_TOKENS: readonly string[] = [
 /**
  * The app's current token values, as a `:root` block.
  *
+ * Internal to `widgetStyles`, and deliberately not exported: a caller holding
+ * only this half will sooner or later send it on its own, and what a scheme
+ * tell does to the sheet it names is *replace* it — so the base rules go with
+ * the tokens and the widget falls back to the browser's serif default. That
+ * is not hypothetical; it is what `widget-frame` did on every mount.
+ *
  * Read at call time, which is what makes a theme change a re-read rather than a
  * second source of truth. `getPropertyValue` answers the empty string for a
  * variable that does not exist, and an empty declaration is skipped rather than
  * written — a `--sb-fg: ;` would be invalid and take the whole block with it.
  */
-export function tokenBlock(scheme: "light" | "dark"): string {
+function tokenBlock(scheme: "light" | "dark"): string {
   const computed = getComputedStyle(document.documentElement);
   const lines: string[] = [];
 
