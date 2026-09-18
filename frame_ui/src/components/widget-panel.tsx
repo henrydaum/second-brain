@@ -310,7 +310,7 @@ export const WidgetPanel: FC<{
       ? { width: open ? width : 0 }
       // Pinned: a fixed split, because there is no room on a phone for a
       // gesture that divides two small things into two smaller ones.
-      : { height: open ? "45dvh" : 0 };
+      : { height: open ? "calc(45dvh + env(safe-area-inset-top, 0px))" : 0 };
 
   return (
     <>
@@ -371,6 +371,17 @@ export const WidgetPanel: FC<{
         />
       )}
 
+      {/* The mobile panel covers the fixed session bar while this spacer
+          reserves the split above the chat. The app already reserves the
+          safe area, so only the panel itself adds that inset to its height. */}
+      {!side && !layer && (
+        <div
+          aria-hidden
+          style={{ height: open ? "45dvh" : 0 }}
+          className="order-first w-full shrink-0 transition-[height] md:hidden"
+        />
+      )}
+
       <aside
         data-slot="widget-panel"
         data-mode={mode}
@@ -397,7 +408,7 @@ export const WidgetPanel: FC<{
             // side it actually lives on. Held against the right, the growing
             // width moves the left edge instead, and the panel opens across the
             // chat the way it is already sitting beside it.
-            ? "fixed top-0 right-0 bottom-0 z-50 h-dvh"
+            ? "fixed top-0 right-0 bottom-0 z-50 h-dvh pt-[env(safe-area-inset-top)]"
             : side
               // Beside the chat, from `md`. Hidden below it, where `pinned` is
               // the shared mode instead.
@@ -408,7 +419,7 @@ export const WidgetPanel: FC<{
               // widget *under* the chat is a widget under the composer —
               // typing in the middle of the display, with the keyboard opening
               // over the thing you are watching.
-              : "sb-divider-bottom order-first w-full shrink-0 md:hidden",
+              : "sb-divider-bottom fixed inset-x-0 top-0 z-30 w-full md:hidden",
           !open && "border-0",
           // A fullscreen panel has no measurement that shrinks it out of the
           // way — `100%` is the whole window whether or not anybody wants to
@@ -428,7 +439,10 @@ export const WidgetPanel: FC<{
           frame reads as the panel being squeezed rather than put away.
         */}
         <header
-          className="sb-divider-bottom flex h-12 shrink-0 items-center gap-2 px-2"
+          className={cn(
+            "sb-divider-bottom flex h-12 shrink-0 items-center gap-2 px-2",
+            !side && !layer && "h-[calc(3rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top)]",
+          )}
           // Pinned to the panel's width only while the panel *is* that width.
           // While it is a layer the panel is anchored to the right edge and its
           // left edge is what moves, so a header pinned to the narrow width

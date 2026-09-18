@@ -79,12 +79,14 @@ export const App: FC = () => {
             */}
             <div className="contents" inert={takeover}>
               <ConversationSidebar open={navOpen} onOpenChange={setNavOpen} />
-              <div className="sb-chat-shell relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <SessionBar
-                  onOpenNav={() => setNavOpen(true)}
-                  widgetOpen={widget.open}
-                  onToggleWidget={widget.toggle}
-                />
+              <div data-widget-pinned={widget.open && widget.mode === "pinned"} className="sb-chat-shell relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <div className="contents" inert={widget.open && widget.mode === "pinned"}>
+                  <SessionBar
+                    onOpenNav={() => setNavOpen(true)}
+                    widgetOpen={widget.open}
+                    onToggleWidget={widget.toggle}
+                  />
+                </div>
                 <main className="flex-1 overflow-hidden">
                   <Thread />
                 </main>

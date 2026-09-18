@@ -798,6 +798,26 @@
   padding-right: calc(1rem + env(safe-area-inset-right, 0px));
 }
 
+/* The mobile widget covers the session bar; only its spacer occupies the
+ * column. Keep the covered toolbar at the viewport top on browser tabs too,
+ * and give its unused chat lead-in back to the conversation. */
+@media (max-width: 767px) {
+  .sb-chat-shell[data-widget-pinned="true"] .sb-session-bar {
+    position: fixed;
+    top: 0;
+  }
+
+  .sb-chat-shell[data-widget-pinned="true"] [data-slot="chat-viewport"] {
+    padding-top: 1rem;
+    scroll-padding-top: 0;
+  }
+
+  .sb-chat-shell[data-widget-pinned="true"] [data-role="user"] {
+    padding-top: 0;
+    margin-top: 0;
+  }
+}
+
 /* Extend the same image into letterboxed margins, under the sharp preview. */
 .sb-image-ambient {
   position: absolute;
