@@ -11,7 +11,7 @@ const say = vi.fn(async () => true);
 const dismissCommand = vi.fn();
 let form: FormFieldPayload | undefined;
 
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useSession: () => ({ state: { command: undefined, form }, say, dismissCommand }),
   useApprovals: () => ({ inputRequests: [] }),
 }));

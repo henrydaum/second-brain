@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotificationPanel } from "@/components/notification-panel";
 import { SettingsDialogContent } from "@/components/settings-dialog";
 import type { Notification } from "@/lib/notifications";
-import * as provider from "@/runtime/provider";
+import * as provider from "@/runtime/domains";
 
 /**
  * The one Request these links make: "can `/config` open this setting?".

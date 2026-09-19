@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { InputRequestDialog } from "@/components/input-request-dialog";
 import type { InputRequest } from "@/lib/input-requests";
-import * as provider from "@/runtime/provider";
+import * as provider from "@/runtime/domains";
 
 afterEach(cleanup);
 

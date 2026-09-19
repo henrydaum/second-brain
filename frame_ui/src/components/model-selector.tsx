@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { spellModelWord } from "@/lib/model-names";
-import { useModels, useSession, useSettings } from "@/runtime/provider";
+import { useModels, useSession, useSettings } from "@/runtime/domains";
 
 /**
  * One argument of a command line, quoted for the kernel's `shlex` parser.

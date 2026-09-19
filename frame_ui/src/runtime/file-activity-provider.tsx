@@ -14,7 +14,7 @@ import {
   bindByTime, collapse, fileTurns, sameFileTurns, toSections,
   UNATTRIBUTED, type FileEntry, type FileSection,
 } from "@/runtime/file-activity";
-import { useConversations, useSession } from "@/runtime/provider";
+import { useConversations, useSession } from "@/runtime/domains";
 import type { Turn } from "@/runtime/store";
 
 export type Viewing = { paths: string[]; index: number; source?: "explorer" };

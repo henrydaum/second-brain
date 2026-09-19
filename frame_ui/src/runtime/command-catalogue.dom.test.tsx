@@ -48,7 +48,8 @@ vi.mock("@/lib/notifications", () => ({
   markRead: async () => undefined,
 }));
 
-const { SecondBrainProvider, useSettings } = await import("@/runtime/provider");
+const { SecondBrainProvider } = await import("@/runtime/provider");
+const { useSettings } = await import("@/runtime/domains");
 
 const Probe = () => {
   const { commands } = useSettings();

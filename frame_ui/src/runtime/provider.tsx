@@ -21,23 +21,18 @@
  */
 
 import {
-  createContext,
-  use,
   useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
-  type Context,
   type PropsWithChildren,
 } from "react";
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
   type AppendMessage,
-  type AttachmentAdapter,
-  type PendingAttachment,
   type QueueItemState,
 } from "@assistant-ui/react";
 
@@ -65,23 +60,35 @@ import {
 } from "@/lib/conversation-categories";
 import { connect, type StreamStatus } from "@/lib/events";
 import { readConversation } from "@/lib/history";
-import { isPendingInput, type InputRequest } from "@/lib/input-requests";
+import { isPendingInput } from "@/lib/input-requests";
 // `Notification` deliberately shadows the DOM global of that name here. Ours is
 // a row in the kernel's table; the browser's is a desktop popup this app does
 // not use, and leaving the global reachable under the same spelling is how a
 // missing import turns into a type error nobody can read.
-import {
-  listNotifications,
-  markRead,
-  type Notification,
-} from "@/lib/notifications";
-import {
-  attachmentSubmitArgs,
-  extensionOf,
-  uploadToHost,
-} from "@/lib/upload";
+import { listNotifications, markRead } from "@/lib/notifications";
+import { attachmentSubmitArgs, extensionOf } from "@/lib/upload";
 import { getWidget, setWidget, type Binding } from "@/lib/widgets";
+import { attachmentAdapter } from "@/runtime/attachment-adapter";
 import { convertMessage } from "@/runtime/convert";
+import {
+  ApprovalContext,
+  ConversationContext,
+  ModelContext,
+  NotificationContext,
+  SecurityContext,
+  SessionContext,
+  SettingsContext,
+  WidgetContext,
+  type ApprovalDomain,
+  type ConversationDomain,
+  type LlmProfile,
+  type ModelDomain,
+  type NotificationDomain,
+  type SecurityDomain,
+  type SessionDomain,
+  type SettingsDomain,
+  type WidgetDomain,
+} from "@/runtime/domains";
 import {
   initialInputRequests,
   reduceInputRequests,
@@ -92,291 +99,19 @@ import {
   initialNotifications,
   reduceNotifications,
   unreadCount,
-  type QueuedNotification,
 } from "@/runtime/notifications";
 import {
   initialState,
   reduce,
   type FilesPart,
   type MessageAttachment,
-  type State,
 } from "@/runtime/store";
-import {
-  forgetStagedPath,
-  rememberStagedPath,
-  stagedPath,
-} from "@/runtime/staged-attachments";
-
-/* ── Attachments ────────────────────────────────────────────────────────
- *
- * The host path an upload produced, kept beside the attachment rather than
- * inside it. `CompleteAttachment.content` is message content — what the model
- * would see — and a scratch path is not that; it is a detail of how the bytes
- * got across. So it lives in the shared staged-attachment registry, keyed by
- * attachment id, and `onNew` reads it back when the message is actually sent.
- */
+import { stagedPath } from "@/runtime/staged-attachments";
 
 /** The queue adapter's two lanes, which are always empty — see `queue` in the
  *  provider. One frozen array rather than a fresh literal per render, so the
  *  runtime's own memos over it never see a changed identity. */
 const NO_QUEUED_MESSAGES: readonly QueueItemState[] = [];
-
-/** Exported for its own test. Nothing else should reach for it: it is handed
- *  to the runtime below, and the composer is the only thing that drives it. */
-export const attachmentAdapter: AttachmentAdapter = {
-  // Everything.
-  //
-  // **A bare star, not the MIME wildcard.** assistant-ui treats this as a
-  // literal, not a pattern: the single star is special-cased as "no filter",
-  // and anything else goes through `fileMatchesAccept`, which compares MIME
-  // types and extensions against the list. The MIME wildcard matches neither
-  // of those, so *every* file was rejected — and `AddAttachment` swallows that
-  // rejection, which is why picking a file did nothing rather than saying why.
-  // The same string is also handed to the file input's `accept`, so the picker
-  // itself was filtering everything out before we were even asked.
-  accept: "*",
-
-  async *add({ file }) {
-    const id = crypto.randomUUID();
-    const base = {
-      id,
-      type: file.type.startsWith("image/") ? ("image" as const) : ("file" as const),
-      name: file.name,
-      contentType: file.type,
-      file,
-    };
-
-    // **Yielded before anything is attempted.** assistant-ui shows the chip on
-    // the first yield, so work done before it happens behind nothing at all.
-    // Claiming the chip up front is what gives a failure somewhere to be drawn.
-    yield {
-      ...base,
-      status: { type: "running", reason: "uploading", progress: 0 },
-    } satisfies PendingAttachment;
-
-    // **A failure is yielded, never thrown.** Both of assistant-ui's call sites
-    // — the paperclip and the dropzone — await this inside a `try {} catch {}`
-    // with an empty body, so an exception from here is discarded and the chip
-    // is left frozen at whatever it last showed: 0%, forever, with nothing
-    // said. The library's own upload adapter yields an `incomplete` status for
-    // the same reason. That status is what `AttachmentProgress` draws as a red
-    // tile and `AttachmentLabel` explains in the tooltip; without this, both
-    // were unreachable code.
-    try {
-      // Uploading here rather than in `send` so the progress bar means
-      // something: by the time the person hits send, the bytes are already
-      // across and the send is one small Request.
-      const upload = uploadToHost(file);
-      let step = await upload.next();
-      while (!step.done) {
-        yield {
-          ...base,
-          status: { type: "running", reason: "uploading", progress: step.value },
-        } satisfies PendingAttachment;
-        step = await upload.next();
-      }
-      rememberStagedPath(id, step.value);
-    } catch (error) {
-      yield {
-        ...base,
-        status: {
-          type: "incomplete",
-          reason: "error",
-          // The sentence the person reads. `uploadToHost` writes the one about
-          // size; a refused or failed write arrives here as its own Request
-          // failure, which until now was equally silent.
-          message:
-            error instanceof Error
-              ? error.message
-              : "This file could not be attached.",
-        },
-      } satisfies PendingAttachment;
-      return;
-    }
-
-    yield {
-      ...base,
-      status: { type: "requires-action", reason: "composer-send" },
-    } satisfies PendingAttachment;
-  },
-
-  async send(attachment) {
-    // The upload already happened in `add`. All that is left is to promote the
-    // chip to complete; the actual `frontend.submit` happens in `onNew`, which
-    // is the only place that knows the accompanying text.
-    return {
-      ...attachment,
-      status: { type: "complete" },
-      content: [{ type: "text", text: `[attachment: ${attachment.name}]` }],
-    };
-  },
-
-  async remove(attachment) {
-    // The scratch file is left on the host. `fs.delete` is a policy-gated write
-    // and would raise a dialog for something the person did not ask about —
-    // asking permission to tidy up is worse than the stray temp file.
-    forgetStagedPath(attachment.id);
-  },
-};
-
-/* ── The context the non-chat surfaces read ─────────────────────────── */
-
-export type SecondBrain = {
-  status: StreamStatus;
-  state: State;
-  /** A chat submission accepted by the UI but not yet acknowledged by the
-   *  server's turn-lifecycle stream. */
-  submitting: boolean;
-  /** The server's own command catalogue, organized by Settings. */
-  commands: Command[];
-  /** Every conversation this user owns, newest first. */
-  conversations: Conversation[];
-  /** Whether `conversations` has been read yet. An empty list means nothing
-   *  until this is true. */
-  conversationsLoaded: boolean;
-  /** The open conversation itself, read alongside its scrollback rather than
-   *  looked up in `conversations` — which holds one page of one category and
-   *  need not contain it. */
-  openConversationRow: Conversation | null;
-  /** Whether another page exists behind what is shown. */
-  conversationsHasMore: boolean;
-  /** Fetch it and append. */
-  loadMoreConversations: () => Promise<void>;
-  /**
-   * Whether the open conversation continues *above* the scrollback on screen.
-   *
-   * The sidebar's paging one row down is the same shape and exists for
-   * convenience; this one is not optional. `conv.read` answers with a page
-   * because a transcript grows without limit — compaction shrinks what the
-   * model sees and deletes nothing — so there is no size at which the whole
-   * thing can be asked for.
-   */
-  scrollbackHasMore: boolean;
-  /** Whether a page of older messages is in flight. */
-  loadingOlderMessages: boolean;
-  /** Fetch the page above and prepend it. */
-  loadOlderMessages: () => Promise<void>;
-  /** Every category that exists, with how many are in it — counted by the
-   *  server over the whole table, not over the page it sent. */
-  conversationCategories: CategoryCount[];
-  /** Which slice the sidebar is showing. Changing it is a Request, not a
-   *  predicate: the server does the filtering. */
-  conversationFilter: ConversationFilter;
-  setConversationFilter: (filter: ConversationFilter) => void;
-  /** Rename the open conversation. */
-  renameConversation: (id: number, title: string) => Promise<void>;
-  /** File it under a category, or `null` for Main. */
-  categoriseConversation: (id: number, category: string | null) => Promise<void>;
-  /** The one the session is currently pointing at. */
-  conversationId: number | null;
-  /** Point the session at another conversation and show it. */
-  openConversation: (id: number) => Promise<void>;
-  /** Start a fresh conversation and switch to it — or stay where you are, when
-   *  the conversation on screen has never been used. */
-  newConversation: () => Promise<void>;
-  /** Delete one. **Unsafe** — the server raises an approval dialog, which
-   *  arrives on the event stream while this is still in flight. */
-  deleteConversation: (id: number) => Promise<void>;
-  /**
-   * Questions the kernel is blocking on, head first.
-   *
-   * Not part of `state`: a pending question belongs to the *session*, which
-   * outlives any one conversation, and living in the conversation store is
-   * what used to make a page reload throw one away.
-   */
-  inputRequests: InputRequest[];
-  /** Answer one, by the id it was asked under. The value goes to the server;
-   *  the label is the person's business.
-   *
-   *  **The id is passed rather than read**, because between drawing a dialog
-   *  and pressing a button another question can arrive, and "the current one"
-   *  is then a different question than the one on screen. */
-  resolve: (id: string | null, value: unknown) => Promise<void>;
-  /**
-   * Back out of one without answering it.
-   *
-   * **Still an answer, and the conservative one.** `frontend.cancel` in the
-   * approving phase pops the question's own phase frame and settles the request
-   * as cancelled, which every asker reads as the safe outcome: a sandbox
-   * permission gate refuses, `ui.ask` comes back a refusal, a gated command is
-   * dropped without running. So this unblocks the turn rather than walking away
-   * from it — the distinction the dialog's "no dismissal" rule is really about.
-   */
-  cancelInputRequest: (id: string | null) => Promise<void>;
-  /** Send a line of text as if typed — how form steps and quick replies are
-   *  answered, since both are plain submissions. */
-  say: (text: string) => Promise<boolean>;
-  /** Put something in the error banner. For the surfaces that are not Requests
-   *  and so have nowhere else to fail — a refused microphone, say. */
-  report: (error: unknown) => void;
-  dismissError: () => void;
-  /** Put a finished command's panel away. */
-  dismissCommand: () => void;
-  /** Configured LLM profiles and the global default model. */
-  models: LlmProfile[];
-  modelName: string | null;
-  agentProfile: string;
-  modelsLoading: boolean;
-  modelsFailure: boolean;
-  switchingModel: boolean;
-  setModel: (modelName: string) => Promise<void>;
-
-  /**
-   * What the system has told you.
-   *
-   * **`notificationQueue` and `notifications` are two sets, not two views of one.**
-   * Transient progress enters the queue but is never stored, so it is in the first and
-   * not the second; anything from before this page connected is in the second
-   * and never was in the first. See `runtime/notifications.ts`.
-   *
-   * Here rather than in the store for the same reason `inputRequests` is: a
-   * notification belongs to the session, and most of them are not about the open
-   * conversation at all.
-   */
-  notificationQueue: QueuedNotification[];
-  /** The persisted ones, newest first. Backfilled on boot, kept current by the
-   *  stream. */
-  notifications: Notification[];
-  /** How many are still unread — what the bell's dot is drawn from. */
-  unread: number;
-  /** Why the panel is empty, when the reason is not "nothing happened". */
-  notificationsFailure: string | null;
-  /** Remove a completed status message without marking its notification read. */
-  dismissQueuedNotification: (key: string) => void;
-  /** Settle everything held. What opening the panel does. */
-  markNotificationsRead: () => Promise<void>;
-  notificationsOpen: boolean;
-  setNotificationsOpen: (open: boolean) => void;
-
-  settingsOpen: boolean;
-  setSettingsOpen: (open: boolean) => void;
-  /**
-   * Open Settings, optionally at a particular section.
-   *
-   * For the surfaces that know *why* they are sending you there — a "Settings
-   * changed" notification knows the change was configuration — as opposed to the
-   * gear button, which knows nothing and lands on the default page.
-   */
-  openSettings: (page?: SettingsPageId) => void;
-  /** The section Settings was asked to open at, until it has. **One-shot**: the
-   *  dialog consumes it and clears it, so navigating away afterwards is not
-   *  fought by a request that never expired. */
-  settingsRequest: { page: SettingsPageId } | null;
-  clearSettingsRequest: () => void;
-  securityMode: "lockdown" | "ask" | "yolo";
-  setSecurityMode: (mode: "lockdown" | "ask" | "yolo") => Promise<void>;
-  /** The widget bound to the open conversation, or null while the first read
-   *  is in flight. A bound `name` of null means the conversation holds none,
-   *  which is the ordinary state and different from not yet knowing. */
-  widgetBinding: Binding | null;
-  /** Bind a widget to the open conversation, or `null` to bind none. */
-  chooseWidget: (name: string | null) => void;
-};
-
-export type LlmProfile = {
-  model_name: string;
-  loaded?: boolean;
-};
 
 /**
  * One profile as `config.read` returns it, which is not what `llm.list` returns.
@@ -390,116 +125,7 @@ type LlmProfileConfig = {
   [field: string]: unknown;
 };
 
-/**
- * The provider's whole surface, in one type.
- *
- * **A description, not a context.** Nothing subscribes to all of this at once
- * — every consumer takes one of the domain slices below — and publishing it as
- * a context as well meant building a thirty-field object, on every change to
- * any of them, for no reader. The type stays because it is the single place
- * that says what this provider offers, and each domain is a `Pick` of it.
- */
-type SessionDomain = Pick<
-  SecondBrain,
-  | "status"
-  | "state"
-  | "submitting"
-  | "say"
-  | "report"
-  | "dismissError"
-  | "dismissCommand"
->;
-type ModelDomain = Pick<
-  SecondBrain,
-  | "models"
-  | "modelName"
-  | "agentProfile"
-  | "modelsLoading"
-  | "modelsFailure"
-  | "switchingModel"
-  | "setModel"
->;
-type ConversationDomain = Pick<
-  SecondBrain,
-  | "conversations"
-  | "conversationsLoaded"
-  | "conversationId"
-  | "openConversation"
-  | "newConversation"
-  | "deleteConversation"
-  | "openConversationRow"
-  | "renameConversation"
-  | "categoriseConversation"
-  | "conversationsHasMore"
-  | "loadMoreConversations"
-  | "scrollbackHasMore"
-  | "loadingOlderMessages"
-  | "loadOlderMessages"
-  | "conversationCategories"
-  | "conversationFilter"
-  | "setConversationFilter"
->;
-type ApprovalDomain = Pick<
-  SecondBrain,
-  "inputRequests" | "resolve" | "cancelInputRequest"
->;
-type NotificationDomain = Pick<
-  SecondBrain,
-  | "notificationQueue"
-  | "notifications"
-  | "unread"
-  | "notificationsFailure"
-  | "dismissQueuedNotification"
-  | "markNotificationsRead"
-  | "notificationsOpen"
-  | "setNotificationsOpen"
->;
-type SettingsDomain = Pick<
-  SecondBrain,
-  | "commands"
-  | "settingsOpen"
-  | "setSettingsOpen"
-  | "openSettings"
-  | "settingsRequest"
-  | "clearSettingsRequest"
->;
-type SecurityDomain = Pick<SecondBrain, "securityMode" | "setSecurityMode">;
-/**
- * The widget beside this conversation.
- *
- * A domain of its own because the panel is not the only thing that decides
- * what is in it any more. The agent sets one with `sdk.widget.set`, switching
- * conversations swaps it, and a second window of the same conversation moves
- * with both — so the binding belongs where the frames already arrive rather
- * than inside the component that draws it.
- */
-type WidgetDomain = Pick<SecondBrain, "widgetBinding" | "chooseWidget">;
 
-const SessionContext = createContext<SessionDomain | null>(null);
-const ModelContext = createContext<ModelDomain | null>(null);
-const ConversationContext = createContext<ConversationDomain | null>(null);
-const ApprovalContext = createContext<ApprovalDomain | null>(null);
-const NotificationContext = createContext<NotificationDomain | null>(null);
-const SettingsContext = createContext<SettingsDomain | null>(null);
-const SecurityContext = createContext<SecurityDomain | null>(null);
-const WidgetContext = createContext<WidgetDomain | null>(null);
-
-function useDomain<T>(context: Context<T | null>, name: string): T {
-  const value = use(context);
-  if (!value) throw new Error(`${name} outside SecondBrainProvider`);
-  return value;
-}
-
-export const useSession = () => useDomain(SessionContext, "useSession");
-export const useModels = () => useDomain(ModelContext, "useModels");
-export const useConversations = () =>
-  useDomain(ConversationContext, "useConversations");
-export const useApprovals = () => useDomain(ApprovalContext, "useApprovals");
-export const useNotifications = () =>
-  useDomain(NotificationContext, "useNotifications");
-export const useSettings = () => useDomain(SettingsContext, "useSettings");
-export const useSecurity = () => useDomain(SecurityContext, "useSecurity");
-export const useWidget = () => useDomain(WidgetContext, "useWidget");
 
 /* ── The provider ───────────────────────────────────────────────────── */
 
@@ -2502,7 +2128,3 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
     </AssistantRuntimeProvider>
   );
 }
-
-/** Re-exported so callers can tell a refusal from a broken call without
- *  reaching past this module into the transport. */
-export { RequestFailed };

@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { lazyWithPreload } from "@/lib/lazy";
-import { useSession } from "@/runtime/provider";
+import { useSession } from "@/runtime/domains";
 
 const [LazySettingsContent, preloadSettings] = lazyWithPreload(
   () => import("@/components/settings-dialog"),

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { useSurfaceReveal } from "@/components/ui/use-surface-reveal";
 import type { Command } from "@/lib/commands";
 import { cn } from "@/lib/utils";
-import { useSession, useSettings } from "@/runtime/provider";
+import { useSession, useSettings } from "@/runtime/domains";
 
 type SettingsCommandGate = (
   action: () => void | Promise<void>,

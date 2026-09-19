@@ -42,12 +42,7 @@ import {
 } from "@/lib/notifications";
 import { fullTimestamp, shortTimestamp } from "@/lib/time";
 import { cn } from "@/lib/utils";
-import {
-  useConversations,
-  useNotifications,
-  useSession,
-  useSettings,
-} from "@/runtime/provider";
+import { useConversations, useNotifications, useSession, useSettings } from "@/runtime/domains";
 
 export const NotificationPanel: FC = () => {
   const {

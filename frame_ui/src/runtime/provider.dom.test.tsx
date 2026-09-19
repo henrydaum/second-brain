@@ -57,8 +57,11 @@ vi.mock("@/lib/notifications", () => ({
   markRead: async () => undefined,
 }));
 
-const { SecondBrainProvider, attachmentAdapter, useConversations, useModels, useSession } =
-  await import("@/runtime/provider");
+const { SecondBrainProvider } = await import("@/runtime/provider");
+const { attachmentAdapter } = await import("@/runtime/attachment-adapter");
+const { useConversations, useModels, useSession } = await import(
+  "@/runtime/domains"
+);
 
 /** Reads the one field under test out of the context. */
 const Probe = () => {

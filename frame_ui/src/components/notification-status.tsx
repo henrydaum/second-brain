@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { afterTransition } from "@/lib/motion";
-import { useNotifications } from "@/runtime/provider";
+import { useNotifications } from "@/runtime/domains";
 import type { QueuedNotification } from "@/runtime/notifications";
 
 const DISPLAY_MS = 6000;

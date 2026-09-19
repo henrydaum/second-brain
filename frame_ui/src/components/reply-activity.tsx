@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
-import { useApprovals } from "@/runtime/provider";
+import { useApprovals } from "@/runtime/domains";
 import { PRESENTATION } from "@/runtime/convert";
 import { elapsedLabel } from "@/lib/time";
 import { cn } from "@/lib/utils";

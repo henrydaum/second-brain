@@ -26,7 +26,7 @@ import { useAui } from "@assistant-ui/react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { canRecord, record, type Recording } from "@/lib/audio";
-import { useSession } from "@/runtime/provider";
+import { useSession } from "@/runtime/domains";
 
 /** m:ss. Long enough for a voice note, and a number climbing past 9:59 is its
  *  own warning. */

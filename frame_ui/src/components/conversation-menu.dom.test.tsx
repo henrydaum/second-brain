@@ -12,7 +12,7 @@ const deleteConversation = vi.fn();
 let typing = false;
 let status = "open";
 
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useSession: () => ({ say, state: { typing }, status }),
   useConversations: () => ({
     conversationId: 7,

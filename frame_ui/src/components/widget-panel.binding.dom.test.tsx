@@ -32,7 +32,7 @@ const WIDGET: Widget = {
 /** What `useWidget` answers, swapped between renders by the tests. */
 const current: { binding: Binding | null } = { binding: null };
 
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useWidget: () => ({ widgetBinding: current.binding, chooseWidget: () => {} }),
 }));
 

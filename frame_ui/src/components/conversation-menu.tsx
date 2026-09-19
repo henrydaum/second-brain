@@ -59,7 +59,7 @@ import {
 } from "@/lib/conversation-categories";
 import { conversationTitle } from "@/lib/conversations";
 import { cn } from "@/lib/utils";
-import { useConversations, useSession } from "@/runtime/provider";
+import { useConversations, useSession } from "@/runtime/domains";
 
 /** The value a radio item uses for "no category". The empty string is not
  *  usable — Radix treats it as unset — and `null` is not a string. */

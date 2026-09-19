@@ -66,12 +66,7 @@ import {
 import { conversationTitle, type Conversation } from "@/lib/conversations";
 import { MD_QUERY, useMediaQuery } from "@/lib/media";
 import { cn } from "@/lib/utils";
-import {
-  useApprovals,
-  useConversations,
-  useSession,
-  useSettings,
-} from "@/runtime/provider";
+import { useApprovals, useConversations, useSession, useSettings } from "@/runtime/domains";
 
 /** Remembered across reloads. A collapse that undoes itself every time the page
  *  loads is a preference the app keeps overruling. */

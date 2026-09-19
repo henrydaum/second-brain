@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConversationDocumentTitle } from "@/components/conversation-document-title";
 import type { Conversation } from "@/lib/conversations";
-import * as provider from "@/runtime/provider";
+import * as provider from "@/runtime/domains";
 
 afterEach(() => {
   cleanup();

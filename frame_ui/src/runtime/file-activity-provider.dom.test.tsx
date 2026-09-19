@@ -5,7 +5,7 @@ import type { Turn } from "@/runtime/store";
 import type { LedgerRow } from "@/lib/ledger";
 
 const controls = vi.hoisted(() => ({ conversationId: 1, state: { turns: [] as Turn[], typing: false } }));
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useConversations: () => ({ conversationId: controls.conversationId }),
   useSession: () => ({ state: controls.state }),
 }));

@@ -72,7 +72,7 @@ import { VoiceNoteButton } from "@/components/voice-note";
 import { fullTimestamp, shortTimestamp } from "@/lib/time";
 import { FINE_POINTER_QUERY, useMediaQuery } from "@/lib/media";
 import { cn } from "@/lib/utils";
-import { useConversations, useSession } from "@/runtime/provider";
+import { useConversations, useSession } from "@/runtime/domains";
 import { AGENT_FILES, PRESENTATION, SENT_AT } from "@/runtime/convert";
 
 /**

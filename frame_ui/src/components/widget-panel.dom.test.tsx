@@ -28,7 +28,7 @@ import type { WidgetMode } from "@/runtime/widget-mode";
 // both change it, so the panel is no longer the only thing that decides what is
 // in it. These tests are about the panel's geometry and mount nothing that
 // could open a connection, so the one hook it reaches for is stubbed.
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useWidget: () => ({ widgetBinding: null, chooseWidget: () => {} }),
 }));
 

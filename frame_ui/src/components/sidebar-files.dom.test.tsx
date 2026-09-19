@@ -9,7 +9,7 @@ import { FileActivityContext, type FileActivity } from "@/runtime/file-activity-
 const newConversation = vi.fn(async () => {});
 const view = vi.fn();
 let desktop = true;
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useConversations: () => ({
     conversations: [{id: 1, title: "Current chat"}, {id: 2, title: "Another chat"}],
     conversationsLoaded: true, conversationId: 1,

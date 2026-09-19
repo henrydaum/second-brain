@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 const controls = vi.hoisted(() => ({ count: 2, more: true, loading: false, load: vi.fn(async () => {}) }));
-vi.mock("@/runtime/provider", () => ({ useConversations: () => ({
+vi.mock("@/runtime/domains", () => ({ useConversations: () => ({
   scrollbackHasMore: controls.more, loadingOlderMessages: controls.loading,
   loadOlderMessages: controls.load,
 }) }));

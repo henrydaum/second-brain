@@ -52,7 +52,7 @@ import {
 } from "@/components/ui/dialog";
 import { choicesOf } from "@/lib/input-requests";
 import { cn } from "@/lib/utils";
-import { useApprovals } from "@/runtime/provider";
+import { useApprovals } from "@/runtime/domains";
 
 /**
  * Past this, options are prose rather than labels and want a column.

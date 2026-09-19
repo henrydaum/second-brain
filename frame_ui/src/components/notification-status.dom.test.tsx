@@ -6,7 +6,7 @@ import type { QueuedNotification } from "@/runtime/notifications";
 import { NotificationStatus } from "./notification-status";
 
 const state = vi.hoisted(() => ({ notificationQueue: [] as QueuedNotification[], dismissQueuedNotification: vi.fn(), notificationsOpen: false }));
-vi.mock("@/runtime/provider", () => ({ useNotifications: () => state }));
+vi.mock("@/runtime/domains", () => ({ useNotifications: () => state }));
 const queuedNotification = (key: string, level: QueuedNotification["notification"]["level"] = "info"): QueuedNotification => ({ key, notification: { title: key, body: "Detail", source: "runtime", level, sent_at: 1 } });
 beforeEach(() => {
   vi.useFakeTimers();

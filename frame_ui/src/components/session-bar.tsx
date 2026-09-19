@@ -16,7 +16,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { ConversationMenu } from "@/components/conversation-menu";
 import { NotificationPanel } from "@/components/notification-panel";
 import { cn } from "@/lib/utils";
-import { useSession } from "@/runtime/provider";
+import { useSession } from "@/runtime/domains";
 
 const LABELS = {
   connecting: "Connecting…",

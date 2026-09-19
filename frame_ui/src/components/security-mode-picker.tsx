@@ -10,11 +10,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  useApprovals,
-  useSecurity,
-  useSession,
-} from "@/runtime/provider";
+import { useApprovals, useSecurity, useSession } from "@/runtime/domains";
 
 const MODES = [
   {

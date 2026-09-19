@@ -12,7 +12,7 @@ const say = vi.fn();
 // Mutable so a test can put the composer mid-turn without a second mock.
 let typing = false;
 
-vi.mock("@/runtime/provider", () => ({
+vi.mock("@/runtime/domains", () => ({
   useSettings: () => ({ openSettings }),
   useSession: () => ({ say, state: { typing } }),
   useModels: () => ({

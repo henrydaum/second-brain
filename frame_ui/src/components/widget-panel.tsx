@@ -44,7 +44,7 @@ import { WidgetFrame } from "@/components/widget-frame";
 import { WidgetPicker } from "@/components/widget-picker";
 import { useResolvedTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import { useWidget } from "@/runtime/provider";
+import { useWidget } from "@/runtime/domains";
 import type { Widget } from "@/lib/widgets";
 import type { WidgetMode } from "@/runtime/widget-mode";
 

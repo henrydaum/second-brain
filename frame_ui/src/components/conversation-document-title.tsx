@@ -1,7 +1,7 @@
 import { useEffect, type FC } from "react";
 
 import { conversationTitle } from "@/lib/conversations";
-import { useConversations } from "@/runtime/provider";
+import { useConversations } from "@/runtime/domains";
 
 const APP_NAME = "Second Brain";
 

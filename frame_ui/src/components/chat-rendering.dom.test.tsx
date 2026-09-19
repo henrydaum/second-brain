@@ -10,7 +10,7 @@ import { type Frame } from "@/lib/events";
 import type { FileEvent } from "@/lib/ledger";
 
 const controls = vi.hoisted(() => ({ waiting: false, rows: [] as unknown[], listeners: new Set<() => void>() }));
-vi.mock("@/runtime/provider", async () => {
+vi.mock("@/runtime/domains", async () => {
   const { useSyncExternalStore } = await import("react");
   return { useApprovals: () => {
     const waiting = useSyncExternalStore((listener) => {

@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { useSurfaceReveal } from "@/components/ui/use-surface-reveal";
 import { FormPathPicker } from "@/components/form-path-picker";
 import { cn, titleCase } from "@/lib/utils";
-import { useApprovals, useSession } from "@/runtime/provider";
+import { useApprovals, useSession } from "@/runtime/domains";
 
 /** A field's own label. "Value" when the step did not name it — a form control
  *  still needs something to be called. */
