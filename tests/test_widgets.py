@@ -214,7 +214,8 @@ def test_a_session_with_no_conversation_yet_holds_the_pick_itself(db, monkeypatc
 
     binding = H._widget_get(_Ctx(runtime), {}).data
     assert binding == {"name": "clock", "state": None, "path": "/w.html",
-                       "tree": "bundled", "installed": True}
+                       "tree": "bundled", "installed": True,
+                       "conversation_id": None}
     # And nothing was created to hold it. A blank conversation per opened panel
     # is the litter this arrangement exists to avoid, and is the whole reason
     # the slot is on the session rather than a row made on demand.
@@ -458,3 +459,110 @@ def test_the_active_widget_is_named_only_while_one_is_bound(db):
 
     db.set_conversation_widget(cid, "clock")
     assert "clock" in _active_widget(ctx)
+
+
+# ── isolation: the panel follows the conversation ──────────────────────
+#
+# Every test here is about what the *client* is told, because the panel has no
+# other way to find out. A widget that stays on screen after its conversation
+# has gone looks exactly like one that was deliberately kept, and the person is
+# then playing with a document bound to nothing.
+
+@pytest.fixture
+def live(db):
+    """A real runtime, a real bus, and whatever the session was told."""
+    from events.event_bus import bus
+    from events.event_channels import SESSION_WIDGET_CHANGED
+    from tests.support import plain_runtime
+
+    runtime = plain_runtime(db, config={"llm_profiles": {"m": {"backend": "x"}}})
+    runtime.get_session("repl")
+    runtime.active_session_key = "repl"
+    told: list[dict] = []
+    unsubscribe = bus.subscribe(SESSION_WIDGET_CHANGED, told.append)
+    try:
+        yield runtime, told
+    finally:
+        unsubscribe() if callable(unsubscribe) else bus.unsubscribe(
+            SESSION_WIDGET_CHANGED, told.append)
+
+
+def test_starting_a_new_chat_says_the_panel_is_empty(live, db, monkeypatch):
+    """The failure that started this: nothing announced the *absence*.
+
+    ``announce_widget`` is keyed by conversation and answered None for "no
+    conversation", so leaving one told the client nothing at all and the panel
+    went on drawing the widget it had. Worse than a cosmetic stale frame: the
+    person then plays with a document the kernel has no binding for, and their
+    next message adopts an empty slot and wipes it.
+    """
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+    runtime, told = live
+    cid = db.create_conversation("Main")
+    runtime.load_conversation("repl", cid)
+    runtime.set_conversation_widget("repl", cid, "2048")
+    told.clear()
+
+    runtime.new_conversation("repl")
+
+    assert told, "leaving a conversation has to announce the empty panel"
+    assert told[-1]["name"] is None
+    assert told[-1]["session_key"] == "repl"
+
+
+def test_switching_conversations_replaces_the_widget_and_its_state(live, db, monkeypatch):
+    """Two conversations, the same widget, different saved games. The name
+    alone is not the identity — a client keying on it would keep the first
+    board while claiming to show the second."""
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+    runtime, told = live
+    first = db.create_conversation("First")
+    second = db.create_conversation("Second")
+    for cid, score in ((first, 12), (second, 99)):
+        db.set_conversation_widget(cid, "2048")
+        db.set_conversation_widget_state(cid, '{"score": %d}' % score)
+
+    runtime.load_conversation("repl", first)
+    runtime.load_history("repl", second)
+
+    assert told[-1]["name"] == "2048"
+    assert told[-1]["state"] == '{"score": 99}'
+    assert told[-1]["conversation_id"] == second
+
+
+def test_a_pick_made_before_the_first_message_is_announced(live, db, monkeypatch):
+    """The pending slot is only useful if the client hears about it. Without
+    this the panel's own optimistic update is the only record, so a second
+    window — or a re-read — disagrees with what the person is looking at."""
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+    runtime, told = live
+    told.clear()
+
+    H._widget_set(_Ctx(runtime, "repl"), {"name": "2048"})
+
+    assert told[-1]["name"] == "2048"
+    assert told[-1]["conversation_id"] is None
+
+
+def test_deleting_the_open_conversation_empties_the_panel(live, db, monkeypatch):
+    """The other way a session loses its conversation. It detaches to None in
+    place rather than being rebuilt, so it is the one path where a stale
+    binding could survive on the session as well as on the screen."""
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+    runtime, told = live
+    cid = db.create_conversation("Main")
+    runtime.load_conversation("repl", cid)
+    runtime.set_conversation_widget("repl", cid, "2048")
+    told.clear()
+
+    runtime.delete_conversation("repl", cid)
+
+    assert told and told[-1]["name"] is None

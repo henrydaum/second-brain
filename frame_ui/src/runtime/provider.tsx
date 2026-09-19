@@ -857,6 +857,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
           tree: frame.payload.tree ?? "",
           installed: frame.payload.installed ?? false,
           state: frame.payload.state ?? null,
+          conversationId: frame.payload.conversation_id ?? null,
         });
         return;
       }
@@ -2462,7 +2463,8 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
       () => {
         if (live) {
           setWidgetBinding({ name: null, path: "", tree: "",
-                             installed: false, state: null });
+                             installed: false, state: null,
+                             conversationId: null });
         }
       },
     );

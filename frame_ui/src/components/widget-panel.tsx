@@ -484,10 +484,34 @@ export const WidgetPanel: FC<{
           style={side && !layer ? { width } : undefined}
         >
           {widget ? (
-            // Keyed by path, so choosing a different widget builds a new frame
-            // rather than swapping the `srcdoc` under a running document.
+            /*
+              Keyed by conversation *and* path, so a new document is built
+              whenever either changes rather than swapping the `srcdoc` under a
+              running one.
+
+              **The conversation is half the key because state is delivered
+              once, at mount.** The relay resolves its `state` promise on the
+              first announcement and never again, by contract — so the only way
+              to hand a document a different conversation's saved game is to
+              build a new document. Keyed on the path alone, switching between
+              two conversations that both show 2048 kept the first board and
+              claimed it was the second.
+
+              It comes off the *binding* rather than off `conversationId` in
+              the provider, and that is not interchangeable: the conversation
+              frame and the widget frame arrive separately, so a key from the
+              provider can change a render before the new state lands — which
+              rebuilds the document around the *old* state and then cannot
+              correct it, because by then `delivered` is set. Taking both from
+              one object is what makes them change together.
+
+              The cost is one rebuild when a pending widget is adopted by the
+              conversation its first message creates. That is survivable by
+              design — the state it remounts with is the state it just saved —
+              and bounded by the relay's 500ms save debounce.
+            */
             <WidgetFrame
-              key={widget.path}
+              key={`${widgetBinding?.conversationId ?? "new"}:${widget.path}`}
               widget={widget}
               scheme={scheme}
               state={widgetBinding?.state ?? null}

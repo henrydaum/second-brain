@@ -977,6 +977,14 @@ class ConversationRuntime:
             # here or it waits forever for a switch that cannot come.
             _persist.announce_conversation_ended(
                 self, session.key, conversation_id, "deleted")
+            # And the panel empties with it. This is the one detach that
+            # mutates a live session in place rather than building a fresh one,
+            # so without this the widget survives on screen bound to a row that
+            # no longer exists.
+            try:
+                self.announce_widget_to(session)
+            except Exception:
+                logger.exception("could not empty the panel for %s", session.key)
         for user_id, conv in list(self._persisted_active_conv_by_user.items()):
             if conv == conversation_id:
                 self._persisted_active_conv_by_user.pop(user_id, None)
@@ -1098,19 +1106,44 @@ class ConversationRuntime:
     def announce_widget(self, conversation_id: int | None) -> None:
         """Tell every live session on this conversation what widget it holds.
 
-        The one funnel, the way ``runtime.notifications.notify`` is the one door
-        for a notification. Three things reach it — binding a widget, switching
-        conversation, and a frontend asking to be caught up — and a fourth must
-        not be able to arrive by a route that forgets to announce.
+        Keyed by conversation because that is where a binding lives, and
+        delegating per session because that is who is looking. Reached by
+        binding a widget, switching conversation, and a frontend asking to be
+        caught up.
         """
         if conversation_id is None:
             return
-        info = self.conversation_widget(conversation_id) or {"name": None, "state": None}
         for session in list(self.sessions.values()):
-            if session.conversation_id != conversation_id:
-                continue
-            bus.emit(SESSION_WIDGET_CHANGED, dict(
-                info, session_key=session.key, conversation_id=conversation_id))
+            if session.conversation_id == conversation_id:
+                self.announce_widget_to(session)
+
+    def announce_widget_to(self, session) -> None:
+        """Tell one session what its panel is showing, conversation or not.
+
+        **The one funnel, and it has to be keyed on the session rather than on
+        the conversation, because the most important thing it says is
+        "nothing".** ``announce_widget`` answers None for no conversation and
+        returns, so for a long time every route *out* of a conversation — a new
+        chat, a deleted conversation — told the client absolutely nothing. A
+        panel has no other way to find out, so it went on drawing the widget it
+        had. That is worse than a stale frame: the person then plays with a
+        document the kernel holds no binding for, and their next message adopts
+        an empty pending slot and wipes it. Three reported symptoms, one
+        missing emit.
+
+        So the question is "what is this session showing", which is always
+        answerable — the row when it has a conversation, its pending slot when
+        it does not, and an empty binding either way when the answer is none.
+        """
+        from sandbox.handlers.kernel import pending_binding
+
+        cid = getattr(session, "conversation_id", None)
+        info = (self.conversation_widget(cid) if cid is not None
+                else pending_binding(session))
+        bus.emit(SESSION_WIDGET_CHANGED, dict(
+            info or {"name": None, "state": None, "path": "", "tree": "",
+                     "installed": False},
+            session_key=session.key, conversation_id=cid))
 
     def set_conversation_notification_mode(self, session_key: str, conversation_id: int, mode: str, *, override: bool = False) -> str | None:
         """Update notification mode for a live or stored conversation. Returns the

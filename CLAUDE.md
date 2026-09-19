@@ -2853,13 +2853,46 @@ nothing. The gate lives on the **bus handler**, not on `render_widget`:
 so a check inside a default implementation would never run. Same lesson as the
 notification fallback, reaching the opposite answer.
 
-`runtime.announce_widget` is the one funnel, on `SESSION_WIDGET_CHANGED`, and
-it is emitted **per session on that conversation** — a widget is something a
-person is looking at. It rides alongside `announce_session_conversation`, so a
-conversation switch swaps the panel with nothing else having to know widgets
-exist. Storing *state* deliberately does not announce: the only thing that
-writes state is the widget itself, which already holds it, and handing a live
-document its own state back reloads it.
+`runtime.announce_widget_to` is the one funnel, on `SESSION_WIDGET_CHANGED`,
+and it is keyed on the **session** — a widget is something a person is looking
+at. `announce_widget(cid)` finds the sessions on a conversation and delegates;
+`announce_session_conversation` rides alongside it, so a conversation switch
+swaps the panel with nothing else having to know widgets exist. Storing *state*
+deliberately does not announce: the only thing that writes state is the widget
+itself, which already holds it, and handing a live document its own state back
+reloads it.
+
+**It is keyed on the session because the most important thing it says is
+"nothing", and for a long time it could not say that at all.** The funnel took
+a conversation id and answered None by returning, so every route *out* of a
+conversation — `/new`, a deleted conversation — told the client nothing
+whatsoever and the panel went on drawing the widget it had. That is worse than
+a stale frame. The person then plays with a document the kernel holds no
+binding for, and their next message adopts an empty pending slot and wipes it,
+so one missing emit presented as three unrelated bugs: a widget that would not
+clear, a widget that would not switch, and a widget destroyed by sending a
+message. The question a panel needs answered is "what is *this session*
+showing", which is always answerable — the row when it has a conversation, its
+pending slot when it does not. Three call sites emit it directly:
+`reset_conversation`, `_detach_deleted_conversation` (the one path that
+detaches a live session in place rather than rebuilding it), and `widget.set`
+on a pending session.
+
+**Client-side the document's life is keyed on `(conversation, file)`, not on
+the file**, and that is the other half of the same fact. State is delivered
+**once**, at mount — `html-app.ts` resolves its `state` promise on the first
+announcement and is explicitly idempotent afterwards — so the only way to hand
+a document a different conversation's saved game is to build a different
+document. Keyed on the path alone, switching between two conversations both
+showing 2048 kept the first board and claimed it was the second. The key comes
+off the *binding* rather than off the provider's own `conversationId`, because
+the conversation frame and the widget frame arrive separately: a key from the
+provider can change a render before the new state lands, which rebuilds the
+document around the old state and then cannot correct it, since `delivered` is
+already set. One object, so the two change together. The cost is one rebuild
+when a pending widget is adopted — survivable by design, since the state it
+comes back with is the state it just saved, and bounded by the relay's 500ms
+save debounce.
 
 **The state is the only storage a widget has.** The frame is
 `sandbox="allow-scripts"` with no `allow-same-origin`, so the document loads

@@ -413,6 +413,17 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
             "conversation_id": None,
             "title": "New Conversation",
         })
+        # And that the panel is now empty. A conversation switch announces the
+        # widget it arrived at (``announce_session_conversation``); this is the
+        # other half, and it was missing — leaving a conversation said nothing
+        # at all, so a client went on drawing the last one's widget with no way
+        # to learn better. ``session`` is the fresh one built above, so its
+        # pending slot is empty and this answers "nothing" by construction.
+        try:
+            runtime.announce_widget_to(session)
+        except Exception:
+            logger.exception("could not announce the empty panel for %s",
+                             session_key)
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
         "agent_profile": session.active_agent_profile,

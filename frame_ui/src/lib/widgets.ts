@@ -44,6 +44,15 @@ export type Widget = {
  * `state` is the widget's own saved JSON, as a string. Nothing out here parses
  * it — it is handed to the document at mount and is meaningless to anyone
  * else.
+ *
+ * `conversationId` is what makes this a binding rather than a name, and the
+ * panel keys the document's life on it. The same widget open in two
+ * conversations is two documents with two saved games, and state is delivered
+ * **once**, at mount — so a frame keyed on the file alone would go on showing
+ * the first board while claiming to be the second. Null while the session is
+ * between conversations, which is its own distinct life: a widget picked
+ * before the first message is a real document with real state, and sending
+ * that message rebuilds it against the conversation it just created.
  */
 export type Binding = {
   name: string | null;
@@ -51,6 +60,7 @@ export type Binding = {
   tree: string;
   installed: boolean;
   state: string | null;
+  conversationId: number | null;
 };
 
 /** Every widget installed, in the kernel's own precedence order. */
@@ -68,8 +78,15 @@ export function listWidgets(): Promise<Widget[]> {
  * conversation row it follows the conversation, survives a restart, and is
  * readable by the turn that wants to update it.
  */
-export function getWidget(): Promise<Binding> {
-  return sdk<Binding>("widget.get", {});
+export async function getWidget(): Promise<Binding> {
+  // Mapped rather than cast: the wire says `conversation_id` and the rest of
+  // this app says `conversationId`, and a cast would have left the one field
+  // the panel keys on quietly undefined — which reads as "no conversation" and
+  // so never rebuilds the frame.
+  const wire = await sdk<Omit<Binding, "conversationId"> & {
+    conversation_id?: number | null;
+  }>("widget.get", {});
+  return { ...wire, conversationId: wire.conversation_id ?? null };
 }
 
 /** Show a widget beside this conversation, or `null` to show none. */

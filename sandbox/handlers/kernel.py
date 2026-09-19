@@ -1633,8 +1633,12 @@ def _widget_conversation(ctx, args: dict):
     return cid, None, None
 
 
-def _pending_binding(session) -> dict:
+def pending_binding(session) -> dict:
     """What a session with no conversation is showing, in the row's own shape.
+
+    Shared with the runtime, which announces it: a session between
+    conversations still has a panel, and telling it what that panel holds is
+    the same question whether the answer lives on a row or on the session.
 
     The same five keys ``ConversationRuntime.conversation_widget`` answers
     with, resolved the same way, because a caller must not be able to tell
@@ -1675,10 +1679,17 @@ def _widget_get(ctx, args: dict) -> Result:
     if refused is not None:
         return refused
     if pending is not None:
-        return Result(data=_pending_binding(pending))
-    return Result(data=reader(cid) or {"name": None, "state": None,
-                                       "path": "", "tree": "",
-                                       "installed": False})
+        return Result(data=dict(pending_binding(pending), conversation_id=None))
+    # ``conversation_id`` rides along because a binding is only meaningful
+    # against one, and a client has to be able to tell two apart: the same
+    # widget in two conversations is two documents with two saved states, and
+    # one keyed on the name alone would keep the first while claiming to show
+    # the second. It is what ``announce_widget_to`` stamps on the frame, so a
+    # read and a frame answer alike.
+    return Result(data=dict(reader(cid) or {"name": None, "state": None,
+                                            "path": "", "tree": "",
+                                            "installed": False},
+                            conversation_id=cid))
 
 
 def _widget_set(ctx, args: dict) -> Result:
@@ -1712,6 +1723,14 @@ def _widget_set(ctx, args: dict) -> Result:
             # the same reason it does not on the row — the two halves have to
             # answer alike or the first message changes the widget's memory.
             pending.pending_widget_state = None
+        # Announced like any other binding. The panel that asked already knows,
+        # but it is not the only thing looking: a second window on this session
+        # and a re-read both have to agree with it, and routing every change
+        # through one funnel is what stops the pending case being the one that
+        # drifts.
+        announce = getattr(runtime, "announce_widget_to", None)
+        if announce is not None:
+            announce(pending)
         return Result(data={"conversation_id": None, "name": name})
     if not setter(getattr(ctx, "session_key", None), cid, name):
         return Result.refusal(
