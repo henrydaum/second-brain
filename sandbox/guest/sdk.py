@@ -715,6 +715,14 @@ class _Widget(_Namespace):
     conversation you are in needs no approval; naming another conversation
     raises a dialog, because it may be somebody else's.
 
+    **A session between conversations is answered, not refused.** A
+    conversation is created by the first *message*, so a fresh session has no
+    row to write a binding onto; the kernel holds the name and the state on the
+    session and moves both onto the conversation when it is created. Nothing
+    here behaves differently — ``get`` answers the same five keys — except that
+    the ``conversation_id`` in a ``set`` or ``state_set`` reply is None,
+    because there is not one yet.
+
     Only a frontend declaring ``supports_widgets`` draws any of this. On every
     other transport a widget is set, stored and never seen — which is worth
     knowing before spending a turn writing one.

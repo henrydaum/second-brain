@@ -253,6 +253,26 @@ class RuntimeSession:
     # approved plan hands the turn that follows it. Ephemeral for the same
     # reason and more so.
     turn_security_mode: str | None = None
+    # A widget picked before this session had anywhere to put it, and whatever
+    # that widget saved in the meantime. ``ensure_conversation`` writes both
+    # onto the row it creates and clears them; until then they are the whole of
+    # what the widget Requests read and write.
+    #
+    # **This needs no ``_conversation`` companion the way ``security_mode``
+    # does, because a pending pick cannot outlive the stretch it describes.**
+    # The handlers only write here while ``conversation_id`` is None, and every
+    # route out of that stretch either adopts the slot
+    # (``ensure_conversation``) or builds an entirely fresh ``RuntimeSession``
+    # (``reset_conversation``, ``_load_conversation``). So a widget chosen for
+    # one new chat can never appear in the next one, and there is no list of
+    # clear-sites to keep in step — the same structural argument the security
+    # mode makes, reaching it by a different route.
+    #
+    # Ephemeral, deliberately NOT persisted in to_marker(). A widget nobody
+    # bound to anything is not worth surviving a restart, and the state under
+    # it describes a document that is long gone.
+    pending_widget: str | None = None
+    pending_widget_state: str | None = None
     # User messages sent while the agent was mid-turn. The busy guard queues
     # them here instead of rejecting; ConversationLoop drains the list at each
     # loop boundary, and handle_action starts a fresh turn with any leftovers

@@ -739,6 +739,9 @@ def ensure_conversation(runtime, session: RuntimeSession) -> None:
     (``absorb_user_action``) has already run and skipped them. Left alone they
     reach the model but not the table, so the stored transcript begins partway
     through a conversation the agent remembers all of.
+
+    A pending widget is the same sentence about a different thing, and rides
+    along for the same reason — see ``_adopt_pending_widget``.
     """
     if session.conversation_id is not None or not runtime.db:
         return
@@ -750,7 +753,45 @@ def ensure_conversation(runtime, session: RuntimeSession) -> None:
     if session.history:
         runtime.db.replace_conversation_messages(
             session.conversation_id, list(session.history))
+    _adopt_pending_widget(runtime, session)
     announce_session_conversation(runtime, session)
+
+
+def _adopt_pending_widget(runtime, session: RuntimeSession) -> None:
+    """Move a widget picked before this conversation existed onto its row.
+
+    The counterpart to ``session.pending_widget``: the panel can be opened and
+    filled in before anybody sends a message, and this is the moment that
+    choice acquires somewhere durable to live. Clearing the slot is part of the
+    same act — a pick that stayed behind would be adopted a second time by
+    whatever conversation came next.
+
+    **The state is written first, and that ordering is the whole of why this
+    is not racy.** Binding a widget announces and storing state deliberately
+    does not, so the announcement inside ``set_conversation_widget`` is what
+    causes a client to mount the document — and a mount reads the state. Write
+    the name first and the mount races the blob: the widget comes up empty and
+    its own first save overwrites the thing this function exists to carry. The
+    reverse order has nothing to race, because a state column on a conversation
+    holding no widget yet is read by nobody.
+
+    Best effort, like every other non-essential step on the first-message path.
+    A widget that fails to follow is a panel the person re-picks from; a
+    conversation that fails to be created because of one is a message lost.
+    """
+    if not session.pending_widget:
+        session.pending_widget_state = None
+        return
+    name, state = session.pending_widget, session.pending_widget_state
+    session.pending_widget = session.pending_widget_state = None
+    try:
+        if state is not None:
+            runtime.set_conversation_widget_state(
+                session.key, session.conversation_id, state)
+        runtime.set_conversation_widget(
+            session.key, session.conversation_id, name)
+    except Exception:
+        logger.exception("could not adopt the widget pending on %s", session.key)
 
 
 def announce_conversation_ended(runtime, session_key: str,

@@ -179,6 +179,65 @@ def test_what_the_session_said_first_is_carried_in(runtime, db):
     ]
 
 
+def test_a_widget_picked_before_there_was_a_row_moves_onto_it(runtime, db, monkeypatch):
+    """The panel can be opened and filled in before anybody types.
+
+    A conversation is created by the first message, so between "new chat" and
+    that message there is nowhere to write a binding. The session holds the
+    pick — the alternative being a blank row minted for the crime of opening a
+    panel — and this is the moment it acquires somewhere durable to live.
+    Silent when broken: the widget simply is not there afterwards, which looks
+    exactly like never having picked one.
+    """
+    from sandbox.handlers import kernel as H
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+    session = runtime.sessions["repl"]
+    session.pending_widget = "2048"
+    session.pending_widget_state = '{"score": 12}'
+
+    runtime.handle_action("repl", "send_text", {"text": "hello"})
+
+    row = db.get_conversation(session.conversation_id)
+    assert row["widget"] == "2048"
+    assert row["widget_state"] == '{"score": 12}'
+    # Cleared with the move, or the next conversation adopts it a second time.
+    assert session.pending_widget is None
+    assert session.pending_widget_state is None
+
+
+def test_the_state_is_on_the_row_before_the_widget_is_announced(runtime, db, monkeypatch):
+    """Binding announces and storing state deliberately does not, so the
+    announcement is what makes a client mount the document — and a mount reads
+    the state. Write the name first and the mount races the blob: the widget
+    comes up empty and its own first save overwrites what was being carried.
+    This pins the ordering rather than the outcome, because the outcome above
+    is correct either way on a machine fast enough."""
+    from sandbox.handlers import kernel as H
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+    session = runtime.sessions["repl"]
+    session.pending_widget = "2048"
+    session.pending_widget_state = '{"score": 12}'
+
+    seen = []
+    original = runtime.announce_widget
+
+    def record(cid):
+        row = db.get_conversation(cid) or {}
+        seen.append((row.get("widget"), row.get("widget_state")))
+        return original(cid)
+
+    monkeypatch.setattr(runtime, "announce_widget", record)
+    runtime.handle_action("repl", "send_text", {"text": "hello"})
+
+    assert seen, "binding a widget must announce it"
+    assert seen[0] == ("2048", '{"score": 12}')
+
+
+
 # ── The one refusal that stays ───────────────────────────────────────
 
 def test_a_fresh_install_is_still_sent_to_setup(db):

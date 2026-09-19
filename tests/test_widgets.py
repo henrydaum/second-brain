@@ -58,6 +58,8 @@ class _Session:
     def __init__(self, key, conversation_id):
         self.key = key
         self.conversation_id = conversation_id
+        self.pending_widget = None
+        self.pending_widget_state = None
 
 
 class _Runtime:
@@ -182,13 +184,101 @@ def test_an_absent_conversation_id_means_the_one_you_are_in(db, monkeypatch):
     assert result.data["name"] == "clock"
 
 
-def test_a_session_in_no_conversation_says_so(db):
-    """Rather than acting on nothing and reporting success."""
+def test_a_caller_with_no_session_at_all_says_so(db):
+    """Rather than acting on nothing and reporting success. This is a service
+    polling on its own initiative or a background driver: it has no
+    conversation to mean and none coming, which is what separates it from the
+    unbound session below."""
     runtime = _Runtime(db, conversation_id=None)
+    runtime.sessions = {}
 
     result = H._widget_get(_Ctx(runtime), {})
 
     assert not result.ok and result.code == "not_found"
+
+
+# ── before the first message ───────────────────────────────────────────
+
+def test_a_session_with_no_conversation_yet_holds_the_pick_itself(db, monkeypatch):
+    """Pressing "new chat" leaves a session with no row to write a binding
+    onto, because a conversation is created by the first *message*. Failing
+    there made the panel a dead end for the whole gap; the session holds the
+    pick instead, and answers reads from it in the row's own shape so nothing
+    downstream can tell which side of the first message it is on."""
+    runtime = _Runtime(db, conversation_id=None)
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+
+    assert H._widget_set(_Ctx(runtime), {"name": "clock"}).ok
+
+    binding = H._widget_get(_Ctx(runtime), {}).data
+    assert binding == {"name": "clock", "state": None, "path": "/w.html",
+                       "tree": "bundled", "installed": True}
+    # And nothing was created to hold it. A blank conversation per opened panel
+    # is the litter this arrangement exists to avoid, and is the whole reason
+    # the slot is on the session rather than a row made on demand.
+    assert db.list_conversations() == []
+
+
+def test_state_saved_before_there_was_a_conversation_is_kept(db, monkeypatch):
+    """The widget frame has no same-origin credential, so ``widget.state_set``
+    is not that document's preferred storage — it is its only storage. A
+    pre-conversation save that failed would lose a game played before the
+    person typed anything, with nowhere else it could have gone."""
+    runtime = _Runtime(db, conversation_id=None)
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+
+    H._widget_set(_Ctx(runtime), {"name": "2048"})
+    assert H._widget_state_set(_Ctx(runtime), {"value": {"score": 12}}).ok
+
+    assert H._widget_get(_Ctx(runtime), {}).data["state"] == '{"score": 12}'
+
+
+def test_the_pending_state_is_capped_like_the_column(db, monkeypatch):
+    """The cap is about what a mount reads back, which is the same question
+    whether the value is on the row or on its way there. Checking it only on
+    the row would let a session accumulate megabytes that the first message
+    then refuses to store."""
+    runtime = _Runtime(db, conversation_id=None)
+
+    result = H._widget_state_set(
+        _Ctx(runtime), {"value": "x" * (H.WIDGET_STATE_MAX + 1)})
+
+    assert not result.ok and result.code == "too_large"
+    assert runtime.sessions["s"].pending_widget_state is None
+
+
+def test_unbinding_before_a_conversation_drops_the_state_too(db, monkeypatch):
+    """The row clears state when the binding goes; the pending slot has to
+    agree, or the first message restores a session the person deliberately
+    ended."""
+    runtime = _Runtime(db, conversation_id=None)
+    monkeypatch.setattr(H, "widget_named",
+                        lambda name: {"name": name, "path": "/w.html",
+                                      "tree": "bundled"})
+
+    H._widget_set(_Ctx(runtime), {"name": "2048"})
+    H._widget_state_set(_Ctx(runtime), {"value": {"score": 12}})
+    H._widget_set(_Ctx(runtime), {"name": None})
+
+    session = runtime.sessions["s"]
+    assert session.pending_widget is None
+    assert session.pending_widget_state is None
+
+
+def test_an_unknown_widget_is_refused_before_there_is_a_conversation_too(db, monkeypatch):
+    """The typo check must not be something only the row-backed path does, or
+    the pending slot becomes the way to store a name nobody has."""
+    runtime = _Runtime(db, conversation_id=None)
+    monkeypatch.setattr(H, "widget_named", lambda name: None)
+
+    result = H._widget_set(_Ctx(runtime), {"name": "nope"})
+
+    assert not result.ok and result.code == "not_found"
+    assert runtime.sessions["s"].pending_widget is None
 
 
 def test_binding_an_unknown_widget_fails_rather_than_being_stored(db, monkeypatch):

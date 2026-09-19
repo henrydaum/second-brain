@@ -2781,6 +2781,45 @@ the row it is the same kind of fact `category` is — it follows the conversatio
 across sessions, frontends and restarts, and one turn can read it and the next
 can change it. NULL is legal and ordinary; every conversation starts there.
 
+**A session between conversations holds its own, and that is the one place the
+binding is not a column** (`RuntimeSession.pending_widget`, with
+`pending_widget_state` beside it). A conversation is created by the first
+*message* — `persistence.ensure_conversation`, which exists so a conversation
+nobody used never exists at all — so between pressing "new chat" and sending
+something there is no row to write onto. That gap used to answer
+`ERROR_NOT_FOUND`, which made the panel a dead end for its whole duration.
+
+Both repairs that do not involve the session are worse, and knowing why is what
+keeps this from being undone. **Creating a conversation on the pick** would put
+a blank row in the sidebar for the crime of opening a panel, un-titleable
+because `update_titles` has no messages to read, and it inverts the
+relationship — the panel is a *view of* a conversation, not its cause. **Caching
+the pick in the browser** would put the binding back in one window's
+`localStorage`, which is exactly what the paragraph above describes moving out
+of, and it has a second failure the binding alone did not: the widget's *state*
+would have nowhere to go either, because the frame has no same-origin
+credential, so `widget.state_set` is not that document's preferred storage but
+its only storage.
+
+So the session holds both, and `ensure_conversation` adopts them. That is
+**that function's existing job rather than a new one** — it already writes back
+`session.history` for a session that spoke before it had anywhere to put the
+words, and a widget picked before there was a row is the same sentence.
+
+Two details are load-bearing. The slot needs **no `_conversation` companion**
+the way `security_mode` does, because a pending pick cannot outlive the stretch
+it describes: the handlers write there only while `conversation_id` is None, and
+every route out of that stretch either adopts the slot or builds an entirely
+fresh `RuntimeSession` (`reset_conversation`, `_load_conversation`). A widget
+chosen for one new chat therefore cannot appear in the next, structurally, with
+no list of clear-sites to keep in step. And the adoption writes **state before
+name**: binding announces and storing state deliberately does not, so the
+announcement is what makes a client mount the document — and a mount reads the
+state. Name first and the mount races the blob, so the widget comes up empty and
+its own first save overwrites the thing being carried. The reverse order has
+nothing to race, since a state column on a conversation holding no widget yet is
+read by nobody.
+
 `widget_state` is **excluded from every listing** (`database._CONV_COLUMNS`),
 and that is the `conv.read` lesson applied before it cost anything: a sidebar
 refresh reads pages of rows and looks inside none of them. `get_conversation`

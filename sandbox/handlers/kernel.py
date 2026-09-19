@@ -1579,7 +1579,31 @@ def _widget_conversation(ctx, args: dict):
     absent argument is SAFE, a named one raises a dialog — so the two halves
     agree by construction rather than by both being kept in step.
 
-    Answers ``(conversation_id, refusal)``.
+    Answers ``(conversation_id, pending_session, refusal)``, exactly one of
+    which is set.
+
+    **A session with no conversation is answered by its own pending slot, not
+    by a failure**, and that is the whole of what makes the panel usable before
+    anybody has typed. A conversation is created by the first message
+    (``persistence.ensure_conversation``) and deliberately not before, so
+    between pressing "new chat" and sending something there is no row to write
+    a binding onto — and the obvious repairs are both worse than this one.
+    Creating a conversation here would litter the sidebar with blank rows that
+    nothing can title, for the crime of opening a panel. Caching the pick in
+    the browser would put the binding back in one window's ``localStorage``,
+    which is what moving it onto the row just fixed, and it would leave the
+    widget's *state* with nowhere at all to go: the frame has no same-origin
+    credential, so ``widget.state_set`` is not that document's preferred
+    storage, it is its only storage.
+
+    So the session holds both until there is a row, and
+    ``ensure_conversation`` adopts them — which is that function's existing job
+    rather than a new one; it already writes back ``session.history`` for a
+    session that spoke before it had anywhere to put it.
+
+    A caller with no *session* at all still fails. That is a service polling on
+    its own initiative or a background driver, and it genuinely has no
+    conversation to mean — unlike an unbound session, which has one coming.
     """
     cid = args.get("conversation_id")
     if cid is None:
@@ -1591,20 +1615,41 @@ def _widget_conversation(ctx, args: dict):
         runtime = _runtime(ctx)
         key = getattr(ctx, "session_key", None)
         session = getattr(runtime, "sessions", {}).get(key) if (runtime and key) else None
+        if session is None:
+            return None, None, Result.failure(
+                "this caller is not in a conversation",
+                code=ERROR_NOT_FOUND)
         cid = getattr(session, "conversation_id", None)
         if cid is None:
-            return None, Result.failure(
-                "this session is not in a conversation yet",
-                code=ERROR_NOT_FOUND)
-        return cid, None
+            return None, session, None
+        return cid, None, None
     try:
         cid = int(cid)
     except (TypeError, ValueError):
-        return None, Result.failure("conversation_id must be a number",
-                                    code=ERROR_INVALID_ARGUMENT)
+        return None, None, Result.failure("conversation_id must be a number",
+                                          code=ERROR_INVALID_ARGUMENT)
     if (refused := _check_access(ctx, cid)) is not None:
-        return None, refused
-    return cid, None
+        return None, None, refused
+    return cid, None, None
+
+
+def _pending_binding(session) -> dict:
+    """What a session with no conversation is showing, in the row's own shape.
+
+    The same five keys ``ConversationRuntime.conversation_widget`` answers
+    with, resolved the same way, because a caller must not be able to tell
+    which side of the first message it is on. ``installed`` comes from the live
+    listing for the reason it does there: a name can outlive its file, and a
+    client with a name and no path is what says so.
+    """
+    name = session.pending_widget
+    if not name:
+        return {"name": None, "state": None, "path": "", "tree": "",
+                "installed": False}
+    found = widget_named(name) or {}
+    return {"name": name, "state": session.pending_widget_state,
+            "path": found.get("path", ""), "tree": found.get("tree", ""),
+            "installed": bool(found)}
 
 
 def _widget_get(ctx, args: dict) -> Result:
@@ -1626,9 +1671,11 @@ def _widget_get(ctx, args: dict) -> Result:
     reader = getattr(runtime, "conversation_widget", None)
     if (bad := _need(reader, "widgets")) is not None:
         return bad
-    cid, refused = _widget_conversation(ctx, args)
+    cid, pending, refused = _widget_conversation(ctx, args)
     if refused is not None:
         return refused
+    if pending is not None:
+        return Result(data=_pending_binding(pending))
     return Result(data=reader(cid) or {"name": None, "state": None,
                                        "path": "", "tree": "",
                                        "installed": False})
@@ -1647,13 +1694,25 @@ def _widget_set(ctx, args: dict) -> Result:
     setter = getattr(runtime, "set_conversation_widget", None)
     if (bad := _need(setter, "widgets")) is not None:
         return bad
-    cid, refused = _widget_conversation(ctx, args)
+    cid, pending, refused = _widget_conversation(ctx, args)
     if refused is not None:
         return refused
     name = (args.get("name") or "").strip() or None
     if name is not None and widget_named(name) is None:
         return Result.failure(f"no widget named '{name}' is installed",
                               code=ERROR_NOT_FOUND)
+    if pending is not None:
+        pending.pending_widget = name
+        if name is None:
+            # Unbinding takes the saved state with it, exactly as
+            # ``db.set_conversation_widget`` does: state is meaningless without
+            # the widget that wrote it, and keeping it means a later re-bind
+            # silently restores a session the person deliberately ended.
+            # Swapping one name for another deliberately does *not* clear, for
+            # the same reason it does not on the row — the two halves have to
+            # answer alike or the first message changes the widget's memory.
+            pending.pending_widget_state = None
+        return Result(data={"conversation_id": None, "name": name})
     if not setter(getattr(ctx, "session_key", None), cid, name):
         return Result.refusal(
             f"conversation {cid} is not available to this user")
@@ -1672,7 +1731,7 @@ def _widget_state_set(ctx, args: dict) -> Result:
     setter = getattr(runtime, "set_conversation_widget_state", None)
     if (bad := _need(setter, "widgets")) is not None:
         return bad
-    cid, refused = _widget_conversation(ctx, args)
+    cid, pending, refused = _widget_conversation(ctx, args)
     if refused is not None:
         return refused
     value = args.get("value")
@@ -1694,6 +1753,10 @@ def _widget_state_set(ctx, args: dict) -> Result:
                 f"{WIDGET_STATE_MAX} byte limit. Write anything larger to a "
                 f"file of your own and keep the path here instead.",
                 code=ERROR_TOO_LARGE)
+    if pending is not None:
+        pending.pending_widget_state = packed
+        return Result(data={"conversation_id": None,
+                            "bytes": len(packed or "")})
     if not setter(getattr(ctx, "session_key", None), cid, packed):
         return Result.refusal(
             f"conversation {cid} is not available to this user")

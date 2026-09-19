@@ -2454,8 +2454,11 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
     let live = true;
     void getWidget().then(
       (found) => { if (live) setWidgetBinding(found); },
-      // A session in no conversation yet is the ordinary answer on a fresh
-      // page, not a failure worth showing anybody.
+      // A fresh page in no conversation yet is answered rather than refused —
+      // the kernel holds the pick on the session until the first message gives
+      // it a row. So this is a real failure, and the panel still has to open:
+      // an empty binding draws the picker, which is the one thing that can
+      // recover from whatever went wrong.
       () => {
         if (live) {
           setWidgetBinding({ name: null, path: "", tree: "",
