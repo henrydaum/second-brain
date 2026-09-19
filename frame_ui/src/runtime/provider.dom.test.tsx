@@ -193,6 +193,90 @@ describe("a page that loads in the middle of a turn", () => {
   });
 });
 
+/**
+ * The first message in a session, which is also the one that makes the
+ * conversation.
+ *
+ * The server creates it on the way in and announces it, so a `conversation`
+ * frame naming an id this client has never seen arrives *while the turn it
+ * started is opening*. Read back as a switch, the scrollback replaces
+ * everything transient — which is the running turn, the typing flag, and with
+ * them the Thinking line and the Stop button, for the whole of the model's
+ * first think.
+ */
+describe("the message that creates the conversation", () => {
+  it("keeps the turn it started", async () => {
+    sdk.mockImplementation(async (type: string) => {
+      if (type === "session.get") return { mode: "ask", busy: false };
+      return null;
+    });
+    readConversation.mockResolvedValue({
+      turns: [{ id: "stored", role: "user", parts: [], running: false, aborted: false }],
+      conversation: { id: 12, title: "New" },
+      hasMore: false,
+      oldestId: null,
+    });
+    const user = userEvent.setup();
+    render(<SecondBrainProvider><Probe /><SubmitProbe /></SecondBrainProvider>);
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Hello");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // The server names the conversation it just made, then takes the turn.
+    receiveFrame?.({ kind: "conversation", payload: { conversation_id: 12, title: "New" } });
+    receiveFrame?.({ kind: "typing", payload: true });
+
+    await waitFor(() => expect(screen.getByTestId("conversation")).toHaveTextContent("12"));
+    // Long enough for a scrollback read to have landed, had one been made.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByTestId("typing")).toHaveTextContent("true");
+    expect(screen.getByTestId("runtime-running")).toHaveTextContent("true");
+    // The row is still read, for the title — the transcript is what is left
+    // alone, and `limit: 0` is how that is said.
+    expect(readConversation).toHaveBeenCalledWith(12, { limit: 0 });
+  });
+
+  /**
+   * The claim is consumed by the announcement, and the announcement can lose
+   * the race it usually wins — `adoptConversation` asks for the same id and
+   * sometimes answers first. A claim left standing afterwards would be spent
+   * on whatever switched us next, which is the one case that genuinely needs
+   * the scrollback.
+   */
+  it("does not let the claim outlive the message that made it", async () => {
+    let bound: number | null = null;
+    sdk.mockImplementation(async (type: string) => {
+      if (type === "session.get") return { conversation_id: bound, mode: "ask", busy: false };
+      if (type === "frontend.submit") { bound = 12; return true; }
+      return null;
+    });
+    const user = userEvent.setup();
+    render(<SecondBrainProvider><Probe /><SubmitProbe /></SecondBrainProvider>);
+    await waitFor(() => expect(screen.getByTestId("conversation")).toHaveTextContent("null"));
+
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Hello");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    // No `conversation` frame: the ask won, and the claim was never spent.
+    await waitFor(() => expect(screen.getByTestId("conversation")).toHaveTextContent("12"));
+
+    receiveFrame?.({ kind: "conversation", payload: { conversation_id: 20, title: "Other" } });
+    await waitFor(() => expect(readConversation).toHaveBeenCalledWith(20, {}));
+  });
+
+  it("still reads a conversation it was merely pointed at", async () => {
+    sdk.mockImplementation(async (type: string) => {
+      if (type === "session.get") return { mode: "ask", busy: false };
+      return null;
+    });
+    render(<SecondBrainProvider><Probe /></SecondBrainProvider>);
+    await waitFor(() => expect(screen.getByTestId("conversation")).toHaveTextContent("null"));
+
+    receiveFrame?.({ kind: "conversation", payload: { conversation_id: 9, title: "Theirs" } });
+
+    await waitFor(() => expect(readConversation).toHaveBeenCalledWith(9, {}));
+  });
+});
+
 describe("submission acknowledgement", () => {
   it("shows a run before the submit request or first server frame settles", async () => {
     let finishSubmit!: () => void;

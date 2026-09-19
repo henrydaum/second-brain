@@ -653,6 +653,24 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
   const conversationsRef = useRef<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<number | null>(null);
   const conversationIdRef = useRef<number | null>(null);
+  /**
+   * A message is on its way into a session that holds no conversation, so the
+   * next one announced is the one that message just made.
+   *
+   * **Set before the submit, because the announcement beats the answer.** The
+   * server creates the conversation on the way in and emits
+   * `SESSION_CONVERSATION_CHANGED`; that frame reaches the stream in a
+   * fraction of the round trip `adoptConversation` needs to ask for the same
+   * id. So the frame arrives while we are still bound to nothing, and the only
+   * way to tell "the conversation I am talking into" from "somebody pointed me
+   * at a different one" is to have said so beforehand. See the `conversation`
+   * branch of the frame handler for what it buys.
+   *
+   * Only an ordinary message sets it. A slash command and a form step travel
+   * the same path and can *load* a conversation — `/conversations` does
+   * exactly that — where the scrollback is the whole point of the switch.
+   */
+  const creatingConversationRef = useRef(false);
   const renderRevision = useRef(0);
   conversationIdRef.current = conversationId;
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -671,6 +689,10 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
    */
   const scrollbackRef = useRef(state.scrollback);
   scrollbackRef.current = state.scrollback;
+  /** Whether a command is part-way through asking its questions, readable from
+   *  the send callbacks — which are deliberately dependency-free. */
+  const formRef = useRef(state.form);
+  formRef.current = state.form;
   const scrollbackHasMore = state.scrollback.hasMore;
   conversationsRef.current = conversations;
   /**
@@ -842,20 +864,52 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
         const id = frame.payload.conversation_id;
         if (id === null) {
           conversationIdRef.current = null;
+          creatingConversationRef.current = false;
           setConversationId(null);
           setOpenConversationRow(null);
           dispatch({ type: "history", turns: [], hasMore: false, oldestId: null });
           return;
         }
         if (id !== conversationIdRef.current) {
+          /*
+            **A conversation our own message just made is not a switch.**
+
+            The server creates one from the first message sent into a session
+            and announces it immediately, so this frame lands in the middle of
+            the turn that message started — typically between `typing: true`
+            and the model's first word. Reading the scrollback back is what a
+            switch means, and `history` resets everything transient with it:
+            the running turn, and the `typing` flag that puts Stop in the
+            composer and the Thinking line in the transcript. The turn then
+            drew nothing at all until the agent spoke, because
+            `turn_activity` only fires on a phase *change* and the phase had
+            not changed — so the model's entire first think went unaccounted
+            for, uninterruptible, and for a page that had already drawn the
+            indicator, visibly taken back.
+
+            There is also nothing to read. The only thing in that conversation
+            is the line we echoed locally on the way out. So only the row is
+            fetched, for the title the header reads, and the transcript is
+            left alone.
+          */
+          // The null is part of the claim, not a restatement of the `if`
+          // above: a claim outlives its message whenever `adoptConversation`
+          // wins the race, and a switch arriving later — from another session,
+          // or the sidebar — must not inherit it.
+          const ours =
+            creatingConversationRef.current && conversationIdRef.current === null;
+          creatingConversationRef.current = false;
           conversationIdRef.current = id;
           setConversationId(id);
-          void readConversation(id).then((read) => {
+          void readConversation(id, ours ? { limit: 0 } : {}).then((read) => {
             if (conversationIdRef.current !== id) return;
-            dispatch({ type: "history", turns: read.turns,
-                       hasMore: read.hasMore, oldestId: read.oldestId });
+            if (!ours) {
+              dispatch({ type: "history", turns: read.turns,
+                         hasMore: read.hasMore, oldestId: read.oldestId });
+            }
             setOpenConversationRow(read.conversation);
           }).catch((error) => report(error));
+          if (ours) void refreshConversationsRef.current?.();
         }
         return;
       }
@@ -1212,13 +1266,36 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
   /* ── What the person can do ─────────────────────────────────────── */
 
   /**
+   * Claim the conversation the message about to be sent is going to create.
+   *
+   * The counterpart to `adoptConversation` and the half that has to happen
+   * *before* the submit: the server's announcement of the new conversation
+   * outruns the round trip that asks for its id, so by the time we could find
+   * out, the frame that needed the answer has already been handled. See
+   * `creatingConversationRef`.
+   *
+   * Written on every send rather than only on a claiming one, so a claim
+   * cannot outlive the message that made it — a submit that fails leaves the
+   * flag set, and the next thing to arrive would be adopted as ours.
+   */
+  const expectOwnConversation = useCallback((isCommand?: boolean) => {
+    creatingConversationRef.current =
+      conversationIdRef.current === null && !isCommand && formRef.current === null;
+  }, []);
+
+  /**
    * Find out which conversation the message we just sent created.
    *
    * The server makes a conversation from the first message sent into it, so
    * between the submit and this we are bound to nothing and do not know the id.
-   * Nothing on the event stream carries it — the twelve render kinds are about
-   * what to draw, and the kernel's `conversation_changed` bus never reaches a
-   * browser — so it is asked for.
+   *
+   * **A backstop, not the usual route.** The `conversation` render kind carries
+   * the id and normally arrives first, which is the whole reason
+   * `expectOwnConversation` exists — the announcement beats this question's
+   * answer. This covers what a stream cannot: a frame dropped on a connection
+   * that blinked at the wrong moment. It returns immediately once the frame has
+   * already bound us, and the two never disagree because the server is the only
+   * source of the id.
    *
    * Not cosmetic. `FileActivityProvider` and `hydrateSentAttachments` both bail
    * on a null id, so without this the files panel stays empty and sent
@@ -1233,6 +1310,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
       );
       const bound = session?.conversation_id ?? null;
       if (bound === null || conversationIdRef.current !== null) return;
+      creatingConversationRef.current = false;
       conversationIdRef.current = bound;
       setConversationId(bound);
       // The row is brand new, so it is not in the copy of the list we hold, and
@@ -1247,11 +1325,9 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
 
   const say = useCallback(
     async (text: string) => {
-      dispatch({
-        type: "said",
-        text,
-        isCommand: looksLikeCommand(text, commandsRef.current),
-      });
+      const isCommand = looksLikeCommand(text, commandsRef.current);
+      dispatch({ type: "said", text, isCommand });
+      expectOwnConversation(isCommand);
       try {
         await sdk("frontend.submit", { input_kind: "text", text });
         await adoptConversation();
@@ -1261,7 +1337,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
         return false;
       }
     },
-    [adoptConversation, report],
+    [adoptConversation, expectOwnConversation, report],
   );
 
   const resolve = useCallback(
@@ -1837,6 +1913,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
   const openConversation = useCallback(
     async (id: number) => {
       try {
+        creatingConversationRef.current = false;
         const result = await sdk<LoadResult>("conv.load", { id });
         if (!result?.ok) {
           // "No such conversation." is also what a conversation this user does
@@ -1878,6 +1955,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
         input_kind: "action",
         action_type: "new_conversation",
       });
+      creatingConversationRef.current = false;
       // Not a `setState` no-op: `history` also clears a half-answered form and
       // a finished command's panel, which is what "start over" means here.
       dispatch({ type: "history", turns: [], hasMore: false, oldestId: null });
@@ -2084,6 +2162,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
         // there is no such thing as a slash command with an attachment.
         isCommand,
       });
+      expectOwnConversation(isCommand);
 
       // Local interaction feedback must not wait for the external runtime to
       // receive and reinterpret a synthetic server frame. Keep this fact
@@ -2120,7 +2199,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
         report(error);
       }
     },
-    [adoptConversation, hydrateSentAttachments, report],
+    [adoptConversation, expectOwnConversation, hydrateSentAttachments, report],
   );
 
   const onCancel = useCallback(async () => {
