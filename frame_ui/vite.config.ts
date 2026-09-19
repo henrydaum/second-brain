@@ -31,7 +31,12 @@ export default defineConfig(({ mode }) => {
    * but a DOM can answer it. Those files say `@vitest-environment jsdom` at the
    * top, which keeps the requirement next to the code that has it.
    */
-  test: { environment: "node" },
+  test: {
+    environment: "node",
+    // Runs in every file, `node` and `jsdom` alike. It only installs a
+    // `localStorage` when the runtime's own is unusable — see the file.
+    setupFiles: ["./src/test-storage.ts"],
+  },
 
   resolve: {
     // Components import each other as "@/components/...", so the alias is not a
