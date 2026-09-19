@@ -25,11 +25,39 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 
 from .bases import entry_for
 
 PACKAGE_PREFIX = "box_"
+
+#: One lock per qualified member name, and the map that hands them out.
+#:
+#: A module is registered in ``sys.modules`` *before* it is executed, so that a
+#: sibling importing back into it during load finds it rather than running it
+#: twice. That is right on one thread and wrong on two: a second thread asking
+#: for the same member between the registration and the end of ``exec_module``
+#: was handed the half-built module, and read an attribute that the file had
+#: not defined yet. It surfaced as ``command_schedule.py has no
+#: 'ScheduleCommand'`` — a file that plainly does — whenever two sessions asked
+#: one command for its form at the same moment.
+#:
+#: The lock is **reentrant** because the recursion above is the supported case:
+#: a thread already inside this module's load re-enters, finds the partial
+#: module in ``sys.modules``, and gets it, exactly as before. Only a *second*
+#: thread waits. ``import`` itself is built this way for the same reason.
+_LOAD_LOCKS: dict[str, threading.RLock] = {}
+_LOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _load_lock(qualified: str) -> threading.RLock:
+    """The lock for one member, created on first ask."""
+    with _LOAD_LOCKS_GUARD:
+        lock = _LOAD_LOCKS.get(qualified)
+        if lock is None:
+            lock = _LOAD_LOCKS[qualified] = threading.RLock()
+        return lock
 
 
 def install_box(root, box_name: str, extra_roots=()):
@@ -108,23 +136,27 @@ def load_member(module_path, box_name: str = "", root=None, extra_roots=(),
     package = install_box(root, box_name or path.stem, extra_roots)
 
     qualified = f"{package}.{path.stem}"
-    cached = sys.modules.get(qualified)
-    if cached is not None:
-        return cached
+    # The cache is read *inside* the lock, deliberately. A check ahead of it
+    # would be the whole bug back again: what it can see is a module that is
+    # registered but still executing.
+    with _load_lock(qualified):
+        cached = sys.modules.get(qualified)
+        if cached is not None:
+            return cached
 
-    spec = importlib.util.spec_from_file_location(qualified, str(path))
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    # Registered before execution so that a sibling importing back into this
-    # module during load finds it, rather than re-executing it.
-    sys.modules[qualified] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(qualified, None)
-        raise
-    return module
+        spec = importlib.util.spec_from_file_location(qualified, str(path))
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        # Registered before execution so that a sibling importing back into
+        # this module during load finds it, rather than re-executing it.
+        sys.modules[qualified] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(qualified, None)
+            raise
+        return module
 
 
 def install_parsers(paths, box_name: str = "", root=None) -> int:
@@ -236,3 +268,10 @@ def unload_box(box_name: str):
     for key in [k for k in sys.modules
                 if k == package or k.startswith(package + ".")]:
         sys.modules.pop(key, None)
+    # The locks go with the modules they guarded. A load in flight holds its
+    # own lock object and finishes against it; the next load of that name makes
+    # a fresh one, which is correct because there is no longer anything cached
+    # for the two to race over.
+    with _LOAD_LOCKS_GUARD:
+        for key in [k for k in _LOAD_LOCKS if k.startswith(package + ".")]:
+            _LOAD_LOCKS.pop(key, None)
