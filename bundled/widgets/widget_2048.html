@@ -285,7 +285,6 @@
 
   <script>
     const SIZE = 4;
-    const NAMESPACE = "widget_2048";
     const SLIDE = 160;  // Long enough to read, short enough to hold a key down.
 
     const el = (id) => document.getElementById(id);
@@ -585,33 +584,45 @@
     /* ── Remembering ───────────────────────────────────────────────────── */
 
     // A widget has no storage of its own — an opaque origin has no partition to
-    // keep one in — so the board lives in the kernel's per-session scratch
-    // state. Every call here is swallowed: this is a game, and none of it is
-    // worth a visible failure.
-    let queued = null;
+    // keep one in — so the board lives in `brain.state`, which the kernel keeps
+    // against this conversation and hands back at the next mount.
+    //
+    // **This is what saving looks like, and it is the whole of it.** A game is
+    // the clearest case for state because "where was I" is the entire point of
+    // coming back to one, but nothing here is specific to a game: decide what
+    // your widget would need to be itself again, put exactly that in an object,
+    // and call `brain.state.set` whenever it changes.
+    //
+    // Note what is *not* saved. `previous` — the one step of undo — is left out
+    // deliberately: it is a fact about the move you just made rather than about
+    // the game, and restoring it would let you undo a move from last week. The
+    // tiles' DOM nodes are absent for the same reason, one level down; they are
+    // rebuilt from the positions by `repaint`. State is the smallest thing you
+    // could be rebuilt from, not a photograph of the running page.
+    //
+    // No debounce here, because `brain.state.set` already does it — holding an
+    // arrow key down is one write, not one per repeat. Nothing is awaited and
+    // nothing throws: this is a game, and a save that did not happen is not
+    // worth interrupting it for.
 
     function save() {
       best = Math.max(best, score);
       el("best").textContent = best;
-      window.clearTimeout(queued);
-      // Debounced, or holding an arrow key down is one Request per repeat.
-      queued = window.setTimeout(() => {
-        brain.call("session.state_set", {
-          namespace: NAMESPACE,
-          value: {
-            best, score, won, over, seq,
-            tiles: tiles.map(({ id, v, r, c }) => ({ id, v, r, c })),
-          },
-        }).catch(() => {});
-      }, 300);
+      brain.state.set({
+        best, score, won, over, seq,
+        tiles: tiles.map(({ id, v, r, c }) => ({ id, v, r, c })),
+      });
     }
 
-    /** Whether a saved board is a board. Nothing else writes this namespace
-     *  today, so this is not defending against an attacker — it is defending
-     *  against an older version of this file, which is the thing that will
-     *  actually happen. A board that fails is a new game rather than an error,
-     *  so the check can afford to be strict: every position on the grid and
-     *  unshared, every value a real tile, every id usable as a key. */
+    /** Whether a saved board is a board.
+     *
+     *  **Check what comes back.** This is not defending against an attacker —
+     *  nothing else writes this widget's state — it is defending against an
+     *  *older version of this file*, which is the thing that will actually
+     *  happen: you change what you save, and a conversation is still holding
+     *  last month's shape. A board that fails the check is a new game rather
+     *  than an error, so it can afford to be strict: every position on the
+     *  grid and unshared, every value a real tile, every id usable as a key. */
     function sane(saved) {
       if (!saved || typeof saved !== "object" || !Array.isArray(saved.tiles)) return false;
       if (!saved.tiles.length || saved.tiles.length > SIZE * SIZE) return false;
@@ -629,12 +640,16 @@
     }
 
     async function restore() {
-      let saved = null;
-      try {
-        saved = await brain.call("session.state_get", { namespace: NAMESPACE });
-      } catch (error) {
-        // No state, no runtime, or a refusal. All three mean "new game".
-      }
+      // Waited on rather than read, and this is the one thing about state that
+      // is easy to get wrong: the saved value arrives a tick after this script
+      // first runs, so `brain.state.get()` at the top of a file is always null
+      // — including for the conversation that had a game in progress.
+      // `brain.state.ready` is what there is to wait for; `get()` is for
+      // reading it again later.
+      //
+      // `null` means this conversation has never played, which is most of them
+      // and is a new game rather than a failure.
+      const saved = await brain.state.ready;
 
       best = Number(saved && saved.best) || 0;
       if (!sane(saved)) { reset(); return; }

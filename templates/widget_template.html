@@ -71,18 +71,79 @@
       brain.scheme             "light" or "dark" — the app's choice, not the
                                operating system's.
 
-      brain.state.get()        Whatever you last saved, or null. Local — the
-                               host delivers it at mount, so this costs no
-                               round trip and is safe to read in a loop.
+      brain.state.ready        A promise, resolving with whatever you last
+                               saved — or null if this conversation has never
+                               used you. Wait on it once, at start-up.
+      brain.state.get()        The same value, synchronously, for reading again
+                               later. Null until `ready` resolves.
       brain.state.set(value)   Save any JSON value against this conversation.
                                Debounced, so saving on every keystroke costs
                                one write. Capped at 64 KB.
 
-  `brain.state` is OPT-IN and has to be: nothing can snapshot your scroll
-  position, your half-typed fields and your open connections on your behalf.
-  A widget that wants to come back as it was is the one that knows what that
-  means. A widget that never calls it simply starts fresh every time, which is
-  right for a clock and wrong for a game.
+  ---------------------------------------------------------------------------
+  SAVING: `brain.state` — optional, and worth doing
+  ---------------------------------------------------------------------------
+
+  You do not have to save anything. A widget that never calls `brain.state`
+  starts fresh every time it is mounted, and for plenty of widgets that is
+  exactly right — a clock, a readout, anything whose whole content comes from
+  somewhere else every time you look at it.
+
+  But a widget is mounted and unmounted a lot: the panel closes, the person
+  switches conversations and comes back, the page reloads. Everything you were
+  holding goes with it, every time. So if there is any answer to "where was I",
+  SAVE IT. A game that forgets the board, a dashboard that forgets which tab
+  you were on, a form that forgets what you typed — each of those is a widget
+  that is slightly annoying to come back to, and each is a few lines away from
+  not being.
+
+  It is OPT-IN and has to be: nothing can snapshot your scroll position, your
+  half-typed fields and your open connections on your behalf. The widget that
+  knows what "as it was" means is you.
+
+  The shape, in full:
+
+      async function start() {
+        // Wait once. This is THE thing to get right — the saved value arrives
+        // a tick after your script first runs, so `brain.state.get()` at the
+        // top of a file is always null, including for somebody who had work in
+        // progress. `ready` is what there is to wait for.
+        const saved = await brain.state.ready;
+
+        // Null means this conversation has never used you. Ordinary, not an
+        // error — most conversations never will.
+        if (!usable(saved)) { fresh(); return; }
+        restore(saved);
+      }
+
+      function changed() {
+        // Whenever something worth keeping changes. No debounce needed here;
+        // `set` already collapses a burst into one write.
+        brain.state.set({ tab, draft, scrolledTo });
+      }
+
+  Three things are worth knowing.
+
+  SAVE THE SMALLEST THING YOU COULD BE REBUILT FROM, not a photograph of the
+  running page. DOM nodes, timers and open connections do not belong in there;
+  neither does anything that is about the moment rather than about the work —
+  `widget_2048.html` saves the board but deliberately not its one step of undo,
+  because restoring that would let you undo a move from last week.
+
+  CHECK WHAT COMES BACK. Not against an attacker — nothing else writes your
+  state — but against an OLDER VERSION OF YOUR OWN FILE, which is the thing
+  that will actually happen: you change what you save, and a conversation is
+  still holding last month's shape. Treat anything that fails the check as a
+  fresh start.
+
+  IT BELONGS TO THE CONVERSATION, not to you. The same widget open in two
+  conversations is two independent things with two saved states, and unbinding
+  it from a conversation throws that conversation's state away. Anything bigger
+  than 64 KB goes in a file of your own — `fs.write` is a Request — with the
+  path in the state.
+
+  `bundled/widgets/widget_2048.html` is the worked example: read its
+  "Remembering" section.
 
   ONE WIDGET PER CONVERSATION. The panel holds the widget the open conversation
   is bound to, and a conversation starts with none. The agent binds one with

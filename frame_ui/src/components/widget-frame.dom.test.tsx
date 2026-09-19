@@ -44,13 +44,13 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
  *  `settle` holds the widget's source back, so a test can decide which of the
  *  two things the delivery needs — the host page, and the file — arrives
  *  first. */
-async function mountFrame({ hold = false } = {}) {
+async function mountFrame({ hold = false, state = null as string | null } = {}) {
   let release = () => {};
   const text = hold
     ? new Promise<string>((resolve) => { release = () => resolve("<main>hi</main>"); })
     : Promise.resolve("<main>hi</main>");
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: () => text }));
-  render(<WidgetFrame widget={WIDGET} scheme="light" />);
+  render(<WidgetFrame widget={WIDGET} scheme="light" state={state} />);
   const frame = await waitFor(() => screen.getByTitle("example") as HTMLIFrameElement);
   const posted = vi.fn();
   Object.defineProperty(frame, "contentWindow", {
@@ -116,6 +116,41 @@ it("tells the widget its box, which is the one thing it cannot measure", async (
   });
 });
 
+
+it("hands the widget its saved state, which is the only storage it has", async () => {
+  // A frame in an opaque origin has no working browser storage, so this
+  // announcement is the *only* route anything a widget kept last time can
+  // reach it by. It goes out with the first size and scheme for the reason
+  // those do — earlier and it lands in a realm with no bridge in it.
+  const { frame, posted } = await mountFrame({ state: '{"tab":"today"}' });
+  frame.dispatchEvent(new Event("load"));
+
+  await waitFor(() => {
+    const [told] = posted.mock.calls
+      .map(([m]) => m)
+      .filter((m) => m?.kind === "tell" && m.what === "state");
+    // Parsed here rather than in the document: a corrupted blob should be one
+    // console line, not a widget that throws before it draws.
+    expect(told.value).toEqual({ tab: "today" });
+  });
+});
+
+it("announces no state as null rather than not announcing", async () => {
+  // A conversation that has never used this widget is the ordinary case, and
+  // it still has to be *said*. The bridge resolves `brain.state.ready` on this
+  // message, so a silence would leave every first-time widget awaiting a
+  // promise that never settles — which presents as a widget that never draws.
+  const { frame, posted } = await mountFrame();
+  frame.dispatchEvent(new Event("load"));
+
+  await waitFor(() => {
+    const told = posted.mock.calls
+      .map(([m]) => m)
+      .filter((m) => m?.kind === "tell" && m.what === "state");
+    expect(told).toHaveLength(1);
+    expect(told[0].value).toBeNull();
+  });
+});
 
 it("sends the whole stylesheet with a scheme, not only the tokens", async () => {
   // The bridge *replaces* `#sb-theme` with whatever a scheme tell carries, and

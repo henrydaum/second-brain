@@ -57,12 +57,24 @@ export function appDocument(
     // after a change keeps it, and long enough that typing costs one write.
     const SAVE_AFTER = 500;
     let saveTimer = 0;
+    // Saved state arrives once, as an announcement, and it cannot arrive any
+    // sooner: the host writes this document synchronously and its scripts run
+    // after that returns, so the first message lands a tick later. A widget
+    // reading state at the top of its first script would therefore always read
+    // null — including the widget that had something saved. So there is a
+    // promise to wait on, resolved by that first announcement and resolved
+    // immediately for anything that asks afterwards.
+    let markReady;
+    const ready = new Promise(resolve => { markReady = resolve; });
     window.addEventListener("message", event => {
       const m = event.data;
       if (event.source !== parent || !m || m.channel !== channel ||
           m.token !== token) return;
       if (m.kind === "tell" && listeners[m.what]) {
         state[m.what] = m.value;
+        // Idempotent: a second resolve is ignored, so a host that announced
+        // twice would not hand anybody a second, different answer.
+        if (m.what === "state") markReady(m.value);
         // The stylesheet for the new scheme arrives with it: the host swaps
         // the sheet it put in rather than rebuilding the document, because a
         // rebuild would reload the widget for a colour change. Note this
@@ -111,6 +123,12 @@ export function appDocument(
         widget's own, with the path kept here.
       */
       state: Object.freeze({
+        // Resolves with whatever was saved, or null for a conversation that
+        // has never used this widget. Wait on it once, at start-up.
+        ready,
+        // The same value, synchronously, for reading again later — after the
+        // promise has resolved it is always current, because nothing but this
+        // document writes it.
         get() { return state.state; },
         set(value) {
           state.state = value;

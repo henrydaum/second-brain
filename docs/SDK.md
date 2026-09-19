@@ -212,8 +212,10 @@ seen.
 SDK; the frame injects `window.brain`, and `brain.call(type, args)` is one
 Request by name. It also gets `brain.state`, which is the only storage it has:
 the frame runs in an opaque origin where browser storage throws or comes back
-empty, so `brain.state.set(value)` (64 KB, JSON, per conversation) is what
-makes a widget survive a reload. Read `templates/widget_template.html` before
+empty, so `await brain.state.ready` / `brain.state.set(value)` (64 KB, JSON,
+per conversation) is what makes a widget survive a reload. Saving is optional
+and encouraged — a widget is mounted and unmounted constantly, and anything
+with an answer to "where was I" should keep one. Read `templates/widget_template.html` before
 writing one — it is the contract, and it is not guessable from here.
 
 ---

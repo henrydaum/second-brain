@@ -291,13 +291,6 @@ class _Frontend:
         return self._box.call("render", session_key=session_key, kind=kind,
                               payload=payload)
 
-    def settle(self, tries=60):
-        """Poll until nothing more happens, for detached work to land."""
-        for _ in range(tries):
-            if not self.poll().data:
-                return
-            time.sleep(0.01)
-
 
 @pytest.fixture
 def running(tmp_path, source, owns_its_token):
@@ -411,16 +404,33 @@ def _read(conn, until=b"\r\n\r\n", timeout=3.0) -> bytes:
     return got
 
 
-def _answered(frontend, conn, tries: int = 200) -> bytes:
+def _answered(frontend, conn, timeout: float = 5.0) -> bytes:
     """Poll until the held request is answered, then hand back the reply.
 
     ``act`` is asynchronous — the answer is collected on a later ``poll`` and
-    only then written to the socket — so reading without polling reads an
-    empty socket. ``settle`` stops at the first quiet poll, which for a Request
-    that has not finished yet is the poll immediately after it was accepted.
+    only then written to the socket — so reading without polling reads an empty
+    socket. **Polling until quiet reads one too**, which is what made eight
+    tests here flaky and is the reason the helper that did it is gone: between
+    the poll that accepts a request and the poll that writes its result there
+    is a window in which a poll legitimately has nothing to report. On an idle
+    machine the detached thread usually finished inside the accepting poll and
+    the next one carried the answer; under load it did not, and the read that
+    followed found an empty socket. A different test failed each run, which is
+    what a race looks like from the outside.
+
+    The only thing that settles this is the reply arriving, so that is what is
+    waited for.
+
+    Bounded by the clock rather than by a number of attempts. A count is a
+    budget in someone's head: each pass costs somewhere between nothing and a
+    socket timeout depending on what the kernel is doing, so 200 of them is
+    anywhere from milliseconds to a minute, and the number that looked generous
+    on a quiet machine is the number that runs out on a busy one. Five seconds
+    is five seconds.
     """
     got = b""
-    for _ in range(tries):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         frontend.poll()
         got += _read(conn, until=b"}", timeout=0.02)
         if b"}" in got:
@@ -591,8 +601,7 @@ def test_first_request_after_session_creation_refreshes_attendance(running):
     request = _open(running, _request(
         "POST", "/sdk/config.read?thread=new-session",
         body=json.dumps({"key": "http_static_dir"})))
-    running.settle()
-    raw = _read(request, until=b"}", timeout=3.0)
+    raw = _answered(running, request)
     request.close()
 
     assert _status(raw) == 200
@@ -608,8 +617,7 @@ def test_a_safe_request_round_trips(running):
     """One POST, one Result. The client never learns it was detached."""
     conn = _open(running, _request("POST", "/sdk/config.read?thread=t1",
                                    body=json.dumps({"key": "http_static_dir"})))
-    running.settle()
-    raw = _read(conn, until=b"}", timeout=3.0)
+    raw = _answered(running, conn)
     conn.close()
 
     assert _status(raw) == 200
@@ -625,8 +633,7 @@ def test_a_refused_request_answers_with_its_code(running):
     """
     conn = _open(running, _request("POST", "/sdk/session.add_tool?thread=t6",
                                    body=json.dumps({"tool": "anything"})))
-    running.settle()
-    raw = _read(conn, until=b"}", timeout=3.0)
+    raw = _answered(running, conn)
     conn.close()
 
     assert _status(raw) == 403
@@ -662,8 +669,7 @@ def test_a_client_cannot_name_its_own_session_or_token(running):
                        "token": "stolen"})
     conn = _open(running, _request("POST", "/sdk/frontend.pending?thread=t7",
                                    body=body))
-    running.settle()
-    raw = _read(conn, until=b"}", timeout=3.0)
+    raw = _answered(running, conn)
     conn.close()
 
     # It resolved *our* adapter with *our* thread, which a spoofed token could
@@ -687,8 +693,7 @@ def test_a_client_cannot_reach_another_frontends_session_by_key(running):
         "POST", "/sdk/session.state_set?thread=t9",
         body=json.dumps({"key": "telegram:12345", "namespace": "sandbox",
                          "value": "reached"})))
-    running.settle()
-    _read(conn, until=b"}", timeout=3.0)
+    _answered(running, conn)
     conn.close()
 
     # Rewritten to our own thread on the way through, so the other session was
@@ -731,8 +736,7 @@ def test_a_key_that_is_not_a_session_is_left_alone(running):
     per-family. Stripping it everywhere would break ordinary reads."""
     conn = _open(running, _request("POST", "/sdk/config.read?thread=t1",
                                    body=json.dumps({"key": "http_static_dir"})))
-    running.settle()
-    raw = _read(conn, until=b"}", timeout=3.0)
+    raw = _answered(running, conn)
     conn.close()
 
     assert _status(raw) == 200
@@ -1124,8 +1128,7 @@ def test_an_undeliverable_answer_is_a_status_rather_than_a_hang(running):
 
     conn = _open(running, _request("POST", "/sdk/config.read?thread=big",
                                    body=json.dumps({"key": "http_static_dir"})))
-    running.settle()
-    raw = _read(conn, until=b"}", timeout=5.0)
+    raw = _answered(running, conn)
     conn.close()
 
     assert _status(raw) == 413
@@ -1151,10 +1154,8 @@ def test_one_undeliverable_answer_does_not_stop_the_other_clients(running):
     ordinary = _open(running, _request(
         "POST", "/sdk/config.read?thread=small",
         body=json.dumps({"key": "http_allowed_origins"})))
-    running.settle()
-
-    doomed_raw = _read(doomed, until=b"}", timeout=5.0)
-    ordinary_raw = _read(ordinary, until=b"}", timeout=5.0)
+    doomed_raw = _answered(running, doomed)
+    ordinary_raw = _answered(running, ordinary)
     doomed.close()
     ordinary.close()
 
