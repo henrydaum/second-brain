@@ -502,7 +502,7 @@ export const ConversationSidebar: FC<ConversationSidebarProps> = ({
         <div className="absolute inset-x-0 top-0 flex h-12 items-center justify-between px-2">
         {!railCollapsed && (
           <div role="group" aria-label="Sidebar view"
-            className="relative isolate flex h-8 items-center px-0.5 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-muted/60 pointer-coarse:h-12 pointer-coarse:before:inset-y-1.5">
+            className="relative isolate ml-[3px] flex h-8 items-center px-0.5 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-muted/60 pointer-coarse:h-12 pointer-coarse:before:inset-y-1.5">
             {([false, true] as const).map(files => (
               <button key={String(files)} type="button" aria-pressed={filesOpen === files}
                 aria-controls={files ? "sidebar-files" : "sidebar-chats"}
