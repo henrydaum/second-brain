@@ -457,6 +457,37 @@ Payload:
     tree:            str
     installed:       bool"""
 
+WIDGET_CATALOG_CHANGED = "widget_catalog_changed"
+"""The set of installed widgets changed — one appeared, was edited, or went.
+
+The catalog twin of SESSION_WIDGET_CHANGED, which is about one session's
+*binding*. This one is about what exists on disk, so it names no session and no
+conversation: the plugin watcher saw a file in a ``widgets/`` root change.
+
+**There is no widget registry, and this channel is not one.** The kernel never
+loads a widget, so ``widget.list`` reads the trees at call time and stays the
+only answer to "what exists". What this adds is the *prompt* — a client caching
+that listing has no way to learn it went stale, and a browser cannot watch a
+disk. Before it, a widget the agent had just written was invisible until
+somebody happened to open the picker, and editing the one on screen left the
+old document running until somebody guessed to reload it. Carrying a name
+rather than a listing is deliberate for the same reason: the listing is a
+Request away, and a second copy of it travelling on a bus is a second copy that
+can be wrong.
+
+``name`` is the widget's name as ``widget.list`` reports it — the file stem
+with the root's ``widget_`` prefix off — because the name is what a client
+holds a binding under, and a payload it has to un-prefix is one it will
+eventually compare unstripped.
+
+Only frontends declaring ``supports_widgets`` are handed the render kind this
+becomes, for the reason SESSION_WIDGET_CHANGED gives.
+Payload:
+    action: str — 'registered' | 'reloaded' | 'removed'
+    name:   str — the widget's name, as ``widget.list`` reports it
+    path:   str — the file that changed
+    tree:   str — 'bundled' | 'installed' | 'workspace', '' when unknown"""
+
 SESSION_CONVERSATION_ENDED = "session_conversation_ended"
 """A live session stopped being in a conversation — the other half of
 SESSION_CONVERSATION_CHANGED, and the one that says which conversation the

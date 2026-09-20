@@ -376,10 +376,14 @@ class _Frontend(BaseFrontend):
         if caps:
             self.capabilities = FrontendCapabilities(**caps)
         self.widgets: list[dict] = []
+        self.catalog: list[tuple] = []
         self.messages: list[str] = []
 
     def render_widget(self, _key, info):
         self.widgets.append(info)
+
+    def render_widget_catalog(self, key, change):
+        self.catalog.append((key, change))
 
     def render_messages(self, _key, messages):
         self.messages.extend(messages)
@@ -414,6 +418,74 @@ def test_declaring_the_capability_is_what_delivers_it():
     assert frontend.widgets[0]["state"] == '{"tz": "UTC"}'
 
 
+# ── the catalog ────────────────────────────────────────────────────────
+
+def test_an_edited_widget_is_announced_under_the_name_the_listing_uses(tmp_path,
+                                                                      monkeypatch):
+    """The watcher sees ``widget_clock.html``; every client holds a binding
+    under ``clock``. Emitting the stem would compare equal to nothing on the
+    other side, and it would do it silently."""
+    from events.event_bus import bus
+    from events.event_channels import WIDGET_CATALOG_CHANGED
+    from plugins.plugin_watcher import PluginWatcher
+
+    directory = tmp_path / "workspace" / "widgets"
+    directory.mkdir(parents=True)
+    path = directory / "widget_clock.html"
+    path.write_text("<main>tick</main>", encoding="utf-8")
+
+    seen: list[dict] = []
+    unsubscribe = bus.subscribe(WIDGET_CATALOG_CHANGED, seen.append)
+    try:
+        watcher = PluginWatcher({})
+        monkeypatch.setattr(watcher, "_notify", lambda *a, **k: None)
+        # Which root a path sits in is the layout's question and has its own
+        # tests; this one is about what the announcement says once it is
+        # answered, and a temporary directory is inside no tree.
+        monkeypatch.setattr(PluginWatcher, "_root_of",
+                            staticmethod(lambda _p: "widgets"))
+
+        assert watcher.register(path, edited=True)["ok"]
+        watcher.unregister(path)
+    finally:
+        unsubscribe()
+
+    assert [(e["action"], e["name"]) for e in seen] == [
+        ("reloaded", "clock"), ("removed", "clock")]
+    assert seen[0]["path"] == str(path.resolve())
+    # Outside every tree, which a temporary directory is: said as unknown
+    # rather than guessed at.
+    assert seen[0]["tree"] == ""
+
+
+def test_a_frontend_that_cannot_draw_a_widget_is_not_told_about_the_catalog():
+    """Same gate as the binding, and on the bus handler for the same reason —
+    a check inside the default method never runs for a sandboxed frontend."""
+    change = {"action": "registered", "name": "clock",
+              "path": "/w/widget_clock.html", "tree": "workspace"}
+
+    blind = _Frontend()
+    blind.on_bus_widget_catalog_changed(dict(change))
+    assert blind.catalog == []
+
+    drawing = _Frontend(supports_widgets=True)
+    drawing.on_bus_widget_catalog_changed(dict(change))
+    assert drawing.catalog == [("s", change)]
+
+
+def test_the_catalog_announcement_carries_no_listing():
+    """``widget.list`` stays the one answer to what exists. A copy of it
+    travelling on a bus is a copy that can be wrong — and a client that trusted
+    it would be showing a listing nothing rebuilt."""
+    frontend = _Frontend(supports_widgets=True)
+
+    frontend.on_bus_widget_catalog_changed(
+        {"action": "reloaded", "name": "clock", "path": "/w/widget_clock.html",
+         "tree": "bundled"})
+
+    assert set(frontend.catalog[0][1]) == {"action", "name", "path", "tree"}
+
+
 def test_the_kind_and_its_method_name_each_other():
     """A kind in one half and not the other shows a person nothing and raises
     nothing."""
@@ -423,6 +495,9 @@ def test_the_kind_and_its_method_name_each_other():
     assert "widget" in KINDS
     assert RENDER_METHODS["widget"] == "render_widget"
     assert hasattr(BaseFrontend, "render_widget")
+    assert "widget_catalog" in KINDS
+    assert RENDER_METHODS["widget_catalog"] == "render_widget_catalog"
+    assert hasattr(BaseFrontend, "render_widget_catalog")
 
 
 # ── the prompt ─────────────────────────────────────────────────────────

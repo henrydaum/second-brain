@@ -454,6 +454,35 @@ that does not declare it is sent the kind never rather than badly. A client
 drawing no frames of its own has nothing to do here and should leave the
 capability alone.
 
+#### `widget_catalog` — `dict`
+
+That the set of installed widgets moved.
+
+```json
+{"action": "reloaded", "name": "dashboard",
+ "path": "/…/widget_dashboard.html", "tree": "workspace"}
+```
+
+`action` is `registered`, `reloaded` or `removed`. The kernel watches the
+`widgets/` roots; you cannot, so this is how a client holding a cached listing
+learns to ask again — after an agent writes one, after a package installs one,
+after somebody edits the one you are showing.
+
+**It says what moved, never what exists.** `widget.list` remains the only
+answer to that, and a listing travelling on a stream is a second copy of it
+that can be wrong. So re-ask; this frame is the prompt.
+
+`name` is the name `widget.list` uses (the file stem with `widget_` off), which
+is the name a binding is held under — compare it against what you have mounted.
+A match is a reason to *offer* a reload, not to perform one: the watcher fires
+on modification time, and a file saved unchanged is not an edit, so fetch it
+and compare before telling somebody their document is stale. Reloading also
+costs the document whatever it was holding, which is the person's business
+rather than the file system's.
+
+Rides on `supports_widgets`, like `widget`, and has no fallback for the same
+reason.
+
 #### Filling the panel on a fresh load
 
 The stream only ever answers "what happened since you connected". A panel that

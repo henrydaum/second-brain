@@ -43,6 +43,7 @@ from events.event_channels import (
     NOTIFICATION_PUSHED,
     SESSION_CONVERSATION_CHANGED,
     SESSION_WIDGET_CHANGED,
+    WIDGET_CATALOG_CHANGED,
     SESSION_TURN_ACTIVITY,
     SESSION_TURN_CHANGED,
     TASKS_CHANGED,
@@ -491,6 +492,7 @@ class BaseFrontend:
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
             bus.subscribe(SESSION_CONVERSATION_CHANGED, self.on_bus_session_conversation_changed),
             bus.subscribe(SESSION_WIDGET_CHANGED, self.on_bus_session_widget_changed),
+            bus.subscribe(WIDGET_CATALOG_CHANGED, self.on_bus_widget_catalog_changed),
             bus.subscribe(CONVERSATION_CHANGED, self.on_bus_conversation_catalog_changed),
             bus.subscribe(SESSION_TURN_CHANGED, self.on_bus_session_turn_changed),
             bus.subscribe(SESSION_TURN_ACTIVITY, self.on_bus_session_turn_activity),
@@ -1117,6 +1119,41 @@ class BaseFrontend:
         find the file with, ``installed``, and ``state`` — the widget's own
         saved JSON string, handed over at mount because a widget frame has no
         storage of its own to keep anything in.
+        """
+        return
+
+    def on_bus_widget_catalog_changed(self, payload: dict) -> None:
+        """Tell every live session that the set of installed widgets moved.
+
+        Session-scoped on the way out although the fact is global, because a
+        render is always to somebody: a frontend serving four people delivers
+        four frames, and each client decides what to do with it.
+
+        Gated on ``supports_widgets`` here rather than in ``render_widget_
+        catalog``, for the reason ``on_bus_session_widget_changed`` gives at
+        length — ``residency.RENDER_METHODS`` replaces the method wholesale on
+        every sandboxed frontend, so a check written inside the default
+        implementation never runs for any of them.
+        """
+        if not getattr(self.capabilities, "supports_widgets", False):
+            return
+        payload = payload or {}
+        if not payload.get("name"):
+            return
+        for key in self._live_session_keys():
+            try:
+                self.render_widget_catalog(key, dict(payload))
+            except Exception:
+                logger.exception(
+                    f"render_widget_catalog failed for '{self.name}'")
+
+    def render_widget_catalog(self, session_key: str, change: dict) -> None:
+        """Default no-op; frontends with ``supports_widgets`` override.
+
+        ``change`` carries ``action`` (``registered``/``reloaded``/
+        ``removed``), the widget's ``name``, the ``path`` that changed and its
+        ``tree``. It says what moved, never what exists — ``widget.list`` is
+        still the only answer to that, and a client re-asks.
         """
         return
 

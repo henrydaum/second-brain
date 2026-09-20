@@ -188,35 +188,61 @@ it("delivers whichever arrives last, the host page or the file", async () => {
   await waitFor(() => expect(mountMessages(posted)).toHaveLength(1));
 });
 
-it("detects source edits and reversions without reloading the running frame", async () => {
-  vi.useFakeTimers();
+it("checks for source edits only when the kernel says the file moved", async () => {
+  // The prompt is the watcher's; the *answer* is still a content comparison,
+  // because a file can be saved without being edited. What must not happen is
+  // either half alone: polling re-read the whole document every three seconds
+  // to learn a boolean the kernel already knew, and trusting the announcement
+  // without comparing would offer to reload a file somebody reverted.
   let html = "<main>original</main>";
   const fetchSource = vi.fn().mockImplementation(async () => ({ ok: true, text: async () => html }));
   vi.stubGlobal("fetch", fetchSource);
   const changed = vi.fn();
   let view!: ReturnType<typeof render>;
-  await act(async () => {
-    view = render(<WidgetFrame widget={WIDGET} scheme="light" watchSource onSourceChange={changed} />);
-  });
-  expect(changed).toHaveBeenLastCalledWith(false);
+  const render_ = (sourceCheck: number, watch = true) => (
+    <WidgetFrame widget={WIDGET} scheme="light" watchSource={watch}
+                 sourceCheck={sourceCheck} onSourceChange={changed} />
+  );
+  await act(async () => { view = render(render_(0)); });
   const frame = screen.getByTitle("example");
 
+  // Nothing is asked until something says to ask, and the document this frame
+  // was built from is never compared with itself.
+  expect(changed).not.toHaveBeenCalled();
+  expect(fetchSource).toHaveBeenCalledTimes(1);
+
   html = "<main>edited</main>";
-  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  await act(async () => { view.rerender(render_(1)); });
   expect(changed).toHaveBeenLastCalledWith(true);
+  // Still the same document: an edit offers a reload, it does not perform one.
   expect(screen.getByTitle("example")).toBe(frame);
 
+  // Reverted to what is running, announced again: nothing to refresh after all.
   html = "<main>original</main>";
-  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  await act(async () => { view.rerender(render_(2)); });
   expect(changed).toHaveBeenLastCalledWith(false);
 
+  // A re-render for any other reason costs nothing.
+  fetchSource.mockClear();
+  await act(async () => { view.rerender(render_(2)); });
+  expect(fetchSource).not.toHaveBeenCalled();
+
+  // A missing file or a dropped connection is not evidence of new source.
   fetchSource.mockRejectedValue(new Error("Unavailable"));
   changed.mockClear();
-  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  await act(async () => { view.rerender(render_(3)); });
   expect(changed).not.toHaveBeenCalled();
 
-  view.rerender(<WidgetFrame widget={WIDGET} scheme="light" watchSource={false} onSourceChange={changed} />);
+  // A closed panel is not watching. The announcement it missed is answered
+  // when it opens, because the token it compares against is the last one it
+  // actually checked.
+  fetchSource.mockImplementation(async () => ({ ok: true, text: async () => html }));
+  await act(async () => { view.rerender(render_(3, false)); });
   fetchSource.mockClear();
-  await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+  await act(async () => { view.rerender(render_(4, false)); });
   expect(fetchSource).not.toHaveBeenCalled();
+
+  html = "<main>edited again</main>";
+  await act(async () => { view.rerender(render_(4)); });
+  expect(changed).toHaveBeenLastCalledWith(true);
 });

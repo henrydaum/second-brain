@@ -45,7 +45,7 @@ import { WidgetPicker } from "@/components/widget-picker";
 import { useResolvedTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { useWidget } from "@/runtime/domains";
-import { getWidget, type Binding, type Widget } from "@/lib/widgets";
+import { getWidget, listWidgets, type Binding, type Widget } from "@/lib/widgets";
 import type { WidgetMode } from "@/runtime/widget-mode";
 
 const WIDTH_KEY = "second-brain:widget-width";
@@ -120,7 +120,7 @@ export const WidgetPanel: FC<{
    * conversation switch. The last two arrive as render frames, which reach the
    * provider and not this file.
    */
-  const { widgetBinding, chooseWidget: choose } = useWidget();
+  const { widgetBinding, chooseWidget: choose, widgetCatalog } = useWidget();
   const chosen = widgetBinding?.name ?? null;
 
   /**
@@ -143,6 +143,36 @@ export const WidgetPanel: FC<{
   bindingRef.current = widgetBinding;
   const frameKey = `${widgetBinding?.conversationId ?? "new"}:${widget?.path ?? ""}:${refresh?.version ?? 0}`;
   const [changedSource, setChangedSource] = useState<string | null>(null);
+  /**
+   * Re-read the listing whenever the kernel says a widget file moved.
+   *
+   * The picker refreshes at mount and when it is opened, which answers "what
+   * is installed" for somebody who goes looking. It cannot answer it for
+   * somebody who is *not* looking — and that is the case that matters, because
+   * the agent writing a widget and then binding it is the ordinary way one
+   * appears. Without this the panel says "No widget named …" about a file that
+   * is right there on disk, until the person happens to open the menu.
+   */
+  useEffect(() => {
+    if (widgetCatalog.version === 0) return;
+    let live = true;
+    listWidgets().then(
+      (found) => { if (live) setWidgets(found); },
+      // The picker reports a failed listing; this one is a background refresh
+      // of something already on screen, and it is retried at the next change.
+      () => {},
+    );
+    return () => { live = false; };
+  }, [widgetCatalog.version]);
+  /**
+   * The prompt the mounted frame compares its source against.
+   *
+   * Only for changes naming the widget on screen, so editing an unrelated file
+   * costs the mounted document nothing at all. Zero while nothing has named
+   * it, which is also what the frame is seeded with.
+   */
+  const sourceCheck = widgetCatalog.name && widgetCatalog.name === chosen
+    ? widgetCatalog.version : 0;
   const onSourceChange = useCallback((changed: boolean) => {
     setChangedSource(changed ? frameKey : null);
   }, [frameKey]);
@@ -575,6 +605,7 @@ export const WidgetPanel: FC<{
               scheme={scheme}
               state={refresh?.binding === widgetBinding ? refresh.state : widgetBinding?.state ?? null}
               watchSource={open}
+              sourceCheck={sourceCheck}
               onSourceChange={onSourceChange}
             />
           ) : (

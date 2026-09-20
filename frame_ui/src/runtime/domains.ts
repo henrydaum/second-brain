@@ -181,6 +181,20 @@ export type SecondBrain = {
   widgetBinding: Binding | null;
   /** Bind a widget to the open conversation, or `null` to bind none. */
   chooseWidget: (name: string | null) => Promise<void>;
+  /**
+   * The last change to the set of installed widgets, as the kernel saw it.
+   *
+   * `version` counts announcements rather than describing one, so anything
+   * caching the listing can depend on it and re-ask; `name` is the widget that
+   * moved, which is what lets the panel notice that the file it is *showing*
+   * was the one edited. Null until something changes, which is the ordinary
+   * state of a session.
+   *
+   * The kernel deliberately sends no listing here — `widget.list` stays the
+   * one answer to what exists, and a copy of it on a bus is a copy that can be
+   * wrong. This says only that asking again is worth it.
+   */
+  widgetCatalog: { version: number; name: string | null };
 };
 
 export type LlmProfile = {
@@ -271,7 +285,10 @@ export type SecurityDomain = Pick<SecondBrain, "securityMode" | "setSecurityMode
  * with both — so the binding belongs where the frames already arrive rather
  * than inside the component that draws it.
  */
-export type WidgetDomain = Pick<SecondBrain, "widgetBinding" | "chooseWidget">;
+export type WidgetDomain = Pick<
+  SecondBrain,
+  "widgetBinding" | "chooseWidget" | "widgetCatalog"
+>;
 
 export const SessionContext = createContext<SessionDomain | null>(null);
 export const ModelContext = createContext<ModelDomain | null>(null);

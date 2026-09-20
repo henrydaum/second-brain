@@ -29,7 +29,10 @@ import type { WidgetMode } from "@/runtime/widget-mode";
 // in it. These tests are about the panel's geometry and mount nothing that
 // could open a connection, so the one hook it reaches for is stubbed.
 vi.mock("@/runtime/domains", () => ({
-  useWidget: () => ({ widgetBinding: null, chooseWidget: () => {} }),
+  useWidget: () => ({
+    widgetBinding: null, chooseWidget: () => {},
+    widgetCatalog: { version: 0, name: null },
+  }),
 }));
 
 vi.mock("@/components/assistant-ui/tooltip-icon-button", () => ({

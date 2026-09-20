@@ -207,6 +207,20 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
    * another window, or a conversation switch changes it.
    */
   const [widgetBinding, setWidgetBinding] = useState<Binding | null>(null);
+  /**
+   * That the set of installed widgets moved, and which one moved.
+   *
+   * The kernel's watcher sees the file change; this page caches a listing and
+   * can watch no disk, so without the announcement a widget the agent just
+   * wrote stays invisible until somebody opens the picker, and an edit to the
+   * one on screen leaves the old document running. Counted rather than
+   * described: what to *do* about it is the panel's business, and both things
+   * it does start with asking the kernel again.
+   */
+  const [widgetCatalog, setWidgetCatalog] = useState<{
+    version: number;
+    name: string | null;
+  }>({ version: 0, name: null });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRequest, setSettingsRequest] = useState<{
     page: SettingsPageId;
@@ -485,6 +499,16 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
           state: frame.payload.state ?? null,
           conversationId: frame.payload.conversation_id ?? null,
         });
+        return;
+      }
+      // What exists, as opposed to what this conversation holds. Kept apart
+      // from the binding above because the two answer different questions and
+      // a widget can be edited without any binding changing at all.
+      if (frame.kind === "widget_catalog") {
+        const name = frame.payload.name;
+        if (typeof name === "string" && name) {
+          setWidgetCatalog((current) => ({ version: current.version + 1, name }));
+        }
         return;
       }
       if (frame.kind === "conversation") {
@@ -2096,8 +2120,8 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
     [securityMode, setSecurityMode],
   );
   const widgetValue = useMemo<WidgetDomain>(
-    () => ({ widgetBinding, chooseWidget }),
-    [widgetBinding, chooseWidget],
+    () => ({ widgetBinding, chooseWidget, widgetCatalog }),
+    [widgetBinding, chooseWidget, widgetCatalog],
   );
 
   return (

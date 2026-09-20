@@ -472,6 +472,13 @@ class BaseFrontend(BasePlugin):
         is no plain-text path: a widget flattens into nothing, so a transport
         that does not declare the capability is never sent the kind and the
         agent is never told widgets exist here.
+
+        ``widget_catalog`` rides on the same capability and says the *set* of
+        installed widgets moved: ``action`` (``registered``/``reloaded``/
+        ``removed``), the widget's ``name``, the ``path`` and its ``tree``. It
+        never carries a listing — ``widget.list`` is still the one answer to
+        what exists — so a client holding one re-asks, and a client holding a
+        mounted document compares the ``name`` against what it is showing.
         """
         raise NotImplementedError
 

@@ -49,8 +49,23 @@ export const WidgetFrame: FC<{
    */
   state?: string | null;
   watchSource?: boolean;
+  /**
+   * Bumped when the kernel says this widget's file changed.
+   *
+   * **A prompt to look, not the answer.** The kernel watches the disk and this
+   * page cannot, so the announcement is the only way a mounted document learns
+   * its source moved — but the watcher fires on *mtime*, and saving a file
+   * unchanged is not an edit. So one fetch and a content comparison follow,
+   * which is what keeps reverting a file to what is running from leaving a
+   * Refresh button offering to reload the same bytes.
+   *
+   * This used to be a 3-second poll that re-read the whole document — a
+   * multi-megabyte fetch on a timer to learn a boolean, which the watcher
+   * already knew.
+   */
+  sourceCheck?: number;
   onSourceChange?: (changed: boolean) => void;
-}> = ({ ref, widget, scheme, state = null, watchSource = false, onSourceChange }) => {
+}> = ({ ref, widget, scheme, state = null, watchSource = false, sourceCheck = 0, onSourceChange }) => {
   const frame = useRef<HTMLIFrameElement>(null);
   const [source, setSource] = useState<string | null>(null);
   const [originalHtml, setOriginalHtml] = useState<string | null>(null);
@@ -120,35 +135,28 @@ export const WidgetFrame: FC<{
     // scheme is read once at build time and told from then on.
   }, [widget.path]);
 
-  // Compare contents rather than timestamps: touching a file is not an edit,
-  // and reverting it to the loaded version makes Refresh unnecessary again.
+  /**
+   * Whether the file this document was built from still says what it said.
+   *
+   * Asked when the kernel says so and at no other time. The token it watches
+   * is seeded at mount, so the announcement that arrives *while* the source is
+   * still loading is not lost — the check simply waits for something to
+   * compare against — and the document this frame was just built from is never
+   * compared with itself.
+   */
+  const checked = useRef(sourceCheck);
   useEffect(() => {
     if (!watchSource || originalHtml === null || !onSourceChange) return;
+    if (sourceCheck === checked.current) return;
+    checked.current = sourceCheck;
     let live = true;
-    let checking = false;
-    const check = async () => {
-      if (checking || document.visibilityState === "hidden") return;
-      checking = true;
-      try {
-        const html = await readWidget({ path: widget.path, name: widget.name });
-        if (live) onSourceChange(html !== originalHtml);
-      } catch {
-        // A missing file or failed connection is not evidence of new source.
-      } finally {
-        checking = false;
-      }
-    };
-    void check();
-    const timer = window.setInterval(() => void check(), 3000);
-    window.addEventListener("focus", check);
-    document.addEventListener("visibilitychange", check);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-      window.removeEventListener("focus", check);
-      document.removeEventListener("visibilitychange", check);
-    };
-  }, [watchSource, originalHtml, widget.path, widget.name, onSourceChange]);
+    readWidget({ path: widget.path, name: widget.name }).then(
+      (html) => { if (live) onSourceChange(html !== originalHtml); },
+      // A missing file or a failed connection is not evidence of new source.
+      () => {},
+    );
+    return () => { live = false; };
+  }, [watchSource, sourceCheck, originalHtml, widget.path, widget.name, onSourceChange]);
 
   /** The relay, for the life of this frame. Closing it stops new calls and
    *  drops late results — it cannot undo work the kernel already accepted. */

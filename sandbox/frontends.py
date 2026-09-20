@@ -52,7 +52,8 @@ _DESK_LOCK = threading.Lock()
 # arrives here too.
 KINDS = ("messages", "attachments", "form_field", "approval", "approval_settled",
          "buttons", "error", "typing", "turn_activity", "tool_status", "stream_delta",
-         "notification", "callable_output", "conversation", "widget")
+         "notification", "callable_output", "conversation", "widget",
+         "widget_catalog")
 
 
 def park(adapter) -> str:

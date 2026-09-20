@@ -24,7 +24,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { WidgetPanel } from "@/components/widget-panel";
 import type { Binding, Widget } from "@/lib/widgets";
-import { getWidget } from "@/lib/widgets";
+import { getWidget, listWidgets } from "@/lib/widgets";
 import type { WidgetFrameHandle } from "@/components/widget-frame";
 
 const actions = vi.hoisted(() => ({
@@ -35,6 +35,7 @@ const actions = vi.hoisted(() => ({
 vi.mock("@/lib/widgets", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/widgets")>(),
   getWidget: vi.fn(),
+  listWidgets: vi.fn(),
 }));
 
 const WIDGET: Widget = {
@@ -43,10 +44,17 @@ const WIDGET: Widget = {
 };
 
 /** What `useWidget` answers, swapped between renders by the tests. */
-const current: { binding: Binding | null; onSourceChange?: (changed: boolean) => void } = { binding: null };
+const current: {
+  binding: Binding | null;
+  catalog: { version: number; name: string | null };
+  onSourceChange?: (changed: boolean) => void;
+} = { binding: null, catalog: { version: 0, name: null } };
 
 vi.mock("@/runtime/domains", () => ({
-  useWidget: () => ({ widgetBinding: current.binding, chooseWidget: actions.choose }),
+  useWidget: () => ({
+    widgetBinding: current.binding, chooseWidget: actions.choose,
+    widgetCatalog: current.catalog,
+  }),
 }));
 
 vi.mock("@/components/assistant-ui/tooltip-icon-button", () => ({
@@ -96,8 +104,10 @@ afterEach(() => {
   localStorage.clear();
   mounts.length = 0;
   current.binding = null;
+  current.catalog = { version: 0, name: null };
   current.onSourceChange = undefined;
   vi.mocked(getWidget).mockReset();
+  vi.mocked(listWidgets).mockReset().mockResolvedValue([WIDGET]);
   actions.flush.mockReset().mockResolvedValue(undefined);
   actions.choose.mockReset().mockResolvedValue(undefined);
 });
@@ -220,4 +230,20 @@ it.each(["Refresh", "Choose clock", "Empty"])("keeps the widget after a failed s
   expect(actions.choose).not.toHaveBeenCalled();
   expect(getWidget).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Choose clock" })).toBeEnabled();
+});
+
+it("re-reads the listing when the kernel says a widget file moved", async () => {
+  // The picker answers "what is installed" for somebody who goes looking. The
+  // case that matters is the one where nobody is: the agent writes a widget
+  // and binds it, and without this the panel says "No widget named …" about a
+  // file sitting on disk until the person opens the menu.
+  current.binding = bind(1, null);
+  const view = render(<Panel />);
+  await waitFor(() => expect(screen.getByTestId("frame")).toBeInTheDocument());
+  expect(listWidgets).not.toHaveBeenCalled();
+
+  current.catalog = { version: 1, name: "clock" };
+  await act(async () => { view.rerender(<Panel />); });
+
+  await waitFor(() => expect(listWidgets).toHaveBeenCalledTimes(1));
 });

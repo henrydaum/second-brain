@@ -494,6 +494,8 @@ def test_every_render_kind_crosses_unchanged(running):
         ("widget", {"conversation_id": 7, "name": "clock",
                     "path": "/w/widget_clock.html", "tree": "bundled",
                     "installed": True, "state": None}),
+        ("widget_catalog", {"action": "reloaded", "name": "clock",
+                            "path": "/w/widget_clock.html", "tree": "bundled"}),
     ]
 
     # Stated once, checked against the kernel: a kind added to ``KINDS`` and

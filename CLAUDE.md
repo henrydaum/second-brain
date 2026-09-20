@@ -2853,6 +2853,31 @@ nothing. The gate lives on the **bus handler**, not on `render_widget`:
 so a check inside a default implementation would never run. Same lesson as the
 notification fallback, reaching the opposite answer.
 
+**The sixteenth is `widget_catalog`, and it exists because the UI cannot
+notice.** `widget` says what this conversation holds; this says the set of
+installed widgets moved — the watcher classifying a changed file in a
+`widgets/` root (`WIDGET_CATALOG_CHANGED`, emitted from `plugin_watcher.
+_announce_widget`). There is deliberately still **no widget registry**: the
+kernel never loads one, so `widget.list` reads the trees at call time and stays
+the only answer to what exists, and the channel carries a *name* rather than a
+listing — a second copy of that answer travelling on a bus is a second copy
+that can be wrong. What it adds is the prompt, which is the half a browser
+cannot supply for itself: it caches the listing and can watch no disk, so a
+widget the agent had just written was invisible until somebody happened to open
+the picker, and an edit to the one on screen left the old document running.
+
+Three details are load-bearing. The name is the **listing's** name — the stem
+with `widget_` off — because that is what a client holds a binding under, and a
+payload it has to un-prefix is one it will eventually compare unstripped, which
+fails by matching nothing silently. The announcement is a **prompt to look, not
+a verdict**: the watcher fires on mtime, so `frame_ui` re-reads the file once
+and compares contents before offering Refresh, which is what stops a save that
+changed nothing — or a revert to what is already running — from claiming the
+document is stale. And that one comparison replaced a **3-second poll that
+re-read the entire document** to learn a boolean the kernel already knew; the
+same shape as every other place here where the kernel routing something is what
+lets the client stop guessing.
+
 `runtime.announce_widget_to` is the one funnel, on `SESSION_WIDGET_CHANGED`,
 and it is keyed on the **session** — a widget is something a person is looking
 at. `announce_widget(cid)` finds the sessions on a conversation and delegates;

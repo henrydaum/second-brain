@@ -7,6 +7,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from events.event_bus import bus
+from events.event_channels import WIDGET_CATALOG_CHANGED
 from runtime.notifications import notify
 import trees
 from plugins.plugin_paths import plugin_info
@@ -156,15 +158,20 @@ class PluginWatcher:
                 "path": str(path),
             }
         if root == "widgets":
-            # Nothing to refresh, and that is the design rather than a gap. A
+            # Nothing to *load*, and that is the design rather than a gap. A
             # widget runs in a browser and the kernel never loads one: the UI
             # asks what exists when it needs to know, and the answer is read
             # off the trees at that moment. A registry here would be a second
-            # copy of a question the disk already answers, and the failure
-            # mode of the second copy is a widget that is installed and
-            # invisible. So registering one is exactly the notification — the
-            # user is told a widget appeared, and the UI finds it next time it
-            # looks.
+            # copy of a question the disk already answers, and the failure mode
+            # of the second copy is a widget that is installed and invisible.
+            #
+            # What the UI cannot do is notice. It caches the listing and it
+            # cannot watch a disk, so the announcement is the whole of how a
+            # newly written widget appears in the picker and how an edit to the
+            # one on screen offers a reload. The listing itself deliberately
+            # does not travel on the channel — that would be the second copy
+            # again — only the name of what moved.
+            self._announce_widget("reloaded" if edited else "registered", path)
             self._notify(f"Widget {verb}", path.stem, level="success")
             return {
                 "ok": True, "name": path.stem, "family": "widget",
@@ -228,6 +235,7 @@ class PluginWatcher:
                 "path": str(path),
             }
         if root == "widgets":
+            self._announce_widget("removed", path)
             self._notify("Widget removed", path.stem)
             return {
                 "ok": True, "names": [path.stem], "family": "widget",
@@ -313,6 +321,36 @@ class PluginWatcher:
         reading to say "✓ Registered plugin: x" in the middle of it.
         """
         notify(title=title, body=body, source="plugin_watcher", level=level)
+
+    def _announce_widget(self, action: str, path: Path) -> None:
+        """Say that the widget catalog moved, so a client can stop guessing.
+
+        Best-effort like ``_notify``, and for the stronger version of the same
+        reason: a bus with nobody on it is the ordinary case here — the channel
+        exists for ``frame_ui``, and the REPL draws no widgets at all — so
+        anything raised on the way out would be a hot-reload failing because
+        nobody was watching.
+
+        The name is stripped of the root's prefix because that is the name
+        ``widget.list`` answers with and therefore the one a client holds a
+        binding under. Emitting ``widget_clock`` here would compare equal to
+        nothing on the other side, and it would do it silently.
+        """
+        root = trees.roots_by_name.get("widgets")
+        name = path.stem[len(root.prefix):] if root else path.stem
+        if not name:
+            return
+        located = trees.locate(path)
+        try:
+            # Guarded because the bus runs its subscribers on *this* thread,
+            # which is the watcher's own — a frontend raising on a render must
+            # not present as a hot reload that did not happen.
+            bus.emit(WIDGET_CATALOG_CHANGED, {
+                "action": action, "name": name, "path": str(path),
+                "tree": located.tree.name if located else "",
+            })
+        except Exception:
+            logger.warning("could not announce widget %s", name, exc_info=True)
 
     def _names_registered_from(self, plugin_type: str, path: Path) -> list[str]:
         """Internal helper to handle names registered from."""
