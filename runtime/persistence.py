@@ -769,7 +769,7 @@ def ensure_conversation(runtime, session: RuntimeSession) -> None:
 
 
 def _adopt_pending_widget(runtime, session: RuntimeSession) -> None:
-    """Move a widget picked before this conversation existed onto its row.
+    """Adopt the pending selection and every widget's state into the database.
 
     The counterpart to ``session.pending_widget``: the panel can be opened and
     filled in before anybody sends a message, and this is the moment that
@@ -783,22 +783,22 @@ def _adopt_pending_widget(runtime, session: RuntimeSession) -> None:
     causes a client to mount the document — and a mount reads the state. Write
     the name first and the mount races the blob: the widget comes up empty and
     its own first save overwrites the thing this function exists to carry. The
-    reverse order has nothing to race, because a state column on a conversation
-    holding no widget yet is read by nobody.
+    reverse order has nothing to race, because saved states are keyed by
+    widget name independently of the selected widget.
 
     Best effort, like every other non-essential step on the first-message path.
     A widget that fails to follow is a panel the person re-picks from; a
     conversation that fails to be created because of one is a message lost.
     """
-    if not session.pending_widget:
-        session.pending_widget_state = None
+    name, states = session.pending_widget, session.pending_widget_states
+    session.pending_widget = None
+    session.pending_widget_states = {}
+    if name is None and not states:
         return
-    name, state = session.pending_widget, session.pending_widget_state
-    session.pending_widget = session.pending_widget_state = None
     try:
-        if state is not None:
+        for widget_name, state in states.items():
             runtime.set_conversation_widget_state(
-                session.key, session.conversation_id, state)
+                session.key, session.conversation_id, state, widget_name=widget_name)
         runtime.set_conversation_widget(
             session.key, session.conversation_id, name)
     except Exception:

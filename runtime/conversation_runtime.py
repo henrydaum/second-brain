@@ -1064,7 +1064,8 @@ class ConversationRuntime:
         return True
 
     def set_conversation_widget_state(self, session_key: str, conversation_id: int,
-                                      state: str | None, *, override: bool = False) -> bool:
+                                      state: str | None, *, widget_name: str | None = None,
+                                      override: bool = False) -> bool:
         """Store the widget's own saved state against a conversation.
 
         Deliberately **not** announced. The only thing that writes state is the
@@ -1077,7 +1078,8 @@ class ConversationRuntime:
         if not allowed:
             return False
         if self.db is not None:
-            self.db.set_conversation_widget_state(conversation_id, state)
+            self.db.set_conversation_widget_state(
+                conversation_id, state, widget_name=widget_name)
         return True
 
     def conversation_widget(self, conversation_id: int | None) -> dict | None:
@@ -1099,7 +1101,7 @@ class ConversationRuntime:
         from sandbox.handlers.kernel import widget_named
 
         found = widget_named(name) or {}
-        return {"name": name, "state": row.get("widget_state"),
+        return {"name": name, "state": self.db.get_conversation_widget_state(conversation_id, name),
                 "path": found.get("path", ""), "tree": found.get("tree", ""),
                 "installed": bool(found)}
 

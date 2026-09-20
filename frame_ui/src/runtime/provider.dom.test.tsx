@@ -17,7 +17,7 @@ import "@testing-library/jest-dom/vitest";
  * server through are mocked instead, so nothing opens a connection.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -59,7 +59,7 @@ vi.mock("@/lib/notifications", () => ({
 
 const { SecondBrainProvider } = await import("@/runtime/provider");
 const { attachmentAdapter } = await import("@/runtime/attachment-adapter");
-const { useConversations, useModels, useSession } = await import(
+const { useConversations, useModels, useSession, useWidget } = await import(
   "@/runtime/domains"
 );
 
@@ -149,6 +149,30 @@ describe("remote conversation handoff", () => {
 });
 
 afterEach(cleanup);
+
+it("keeps the old widget binding until the new name and state arrive together", async () => {
+  bootWith(false);
+  const WidgetProbe = () => {
+    const { widgetBinding, chooseWidget } = useWidget();
+    return <>
+      <span data-testid="binding">{JSON.stringify(widgetBinding)}</span>
+      <button onClick={() => chooseWidget("b")}>Choose B</button>
+    </>;
+  };
+  render(<SecondBrainProvider><WidgetProbe /></SecondBrainProvider>);
+  await waitFor(() => expect(sdk).toHaveBeenCalledWith("widget.get", {}));
+  const binding = { conversation_id: 7, name: "a", path: "/a.html", state: "1", installed: true };
+  await act(async () => receiveFrame?.({ kind: "widget", payload: binding }));
+  await userEvent.click(screen.getByText("Choose B"));
+  expect(sdk).toHaveBeenCalledWith("widget.set", { name: "b" });
+  expect(screen.getByTestId("binding")).toHaveTextContent('"name":"a"');
+  expect(screen.getByTestId("binding")).toHaveTextContent('"state":"1"');
+  await act(async () => receiveFrame?.({ kind: "widget", payload: {
+    ...binding, name: "b", path: "/b.html", state: "2",
+  } }));
+  expect(screen.getByTestId("binding")).toHaveTextContent('"name":"b"');
+  expect(screen.getByTestId("binding")).toHaveTextContent('"state":"2"');
+});
 
 describe("a page that loads in the middle of a turn", () => {
   it("comes up knowing the agent has the turn", async () => {

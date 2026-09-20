@@ -59,7 +59,7 @@ class _Session:
         self.key = key
         self.conversation_id = conversation_id
         self.pending_widget = None
-        self.pending_widget_state = None
+        self.pending_widget_states = {}
 
 
 class _Runtime:
@@ -86,10 +86,10 @@ class _Runtime:
         return ConversationRuntime.set_conversation_widget(
             self, key, cid, name, override=override)
 
-    def set_conversation_widget_state(self, key, cid, state, override=False):
+    def set_conversation_widget_state(self, key, cid, state, override=False, *, widget_name=None):
         from runtime.conversation_runtime import ConversationRuntime
         return ConversationRuntime.set_conversation_widget_state(
-            self, key, cid, state, override=override)
+            self, key, cid, state, override=override, widget_name=widget_name)
 
     def session_user_id(self, _key):
         return 1
@@ -105,9 +105,7 @@ def test_a_conversation_starts_with_no_widget(db):
     assert db.get_conversation(cid)["widget"] is None
 
 
-def test_unbinding_takes_the_saved_state_with_it(db):
-    """State without its widget means nothing, and leaving it behind means a
-    later re-bind silently resumes a session the person deliberately ended."""
+def test_unbinding_preserves_saved_state(db):
     cid = db.create_conversation("Main")
     db.set_conversation_widget(cid, "clock")
     db.set_conversation_widget_state(cid, '{"tz": "UTC"}')
@@ -115,7 +113,8 @@ def test_unbinding_takes_the_saved_state_with_it(db):
     db.set_conversation_widget(cid, None)
 
     row = db.get_conversation(cid)
-    assert row["widget"] is None and row["widget_state"] is None
+    assert row["widget"] is None
+    assert db.get_conversation_widget_state(cid, "clock") == '{"tz": "UTC"}'
 
 
 def test_a_listing_never_carries_the_state_blob(db):
@@ -130,8 +129,8 @@ def test_a_listing_never_carries_the_state_blob(db):
 
     assert "widget_state" not in listed and listed["widget"] == "clock"
     assert "widget_state" not in paged[0]
-    # One row at a time still answers whole — it is the only read that can.
-    assert db.get_conversation(cid)["widget_state"] == '{"big": "x"}'
+    # State is read separately, using both parts of its key.
+    assert db.get_conversation_widget_state(cid, "clock") == '{"big": "x"}'
 
 
 # ── policy ─────────────────────────────────────────────────────────────
@@ -249,13 +248,10 @@ def test_the_pending_state_is_capped_like_the_column(db, monkeypatch):
         _Ctx(runtime), {"value": "x" * (H.WIDGET_STATE_MAX + 1)})
 
     assert not result.ok and result.code == "too_large"
-    assert runtime.sessions["s"].pending_widget_state is None
+    assert runtime.sessions["s"].pending_widget_states == {}
 
 
-def test_unbinding_before_a_conversation_drops_the_state_too(db, monkeypatch):
-    """The row clears state when the binding goes; the pending slot has to
-    agree, or the first message restores a session the person deliberately
-    ended."""
+def test_unbinding_before_a_conversation_preserves_state(db, monkeypatch):
     runtime = _Runtime(db, conversation_id=None)
     monkeypatch.setattr(H, "widget_named",
                         lambda name: {"name": name, "path": "/w.html",
@@ -267,7 +263,7 @@ def test_unbinding_before_a_conversation_drops_the_state_too(db, monkeypatch):
 
     session = runtime.sessions["s"]
     assert session.pending_widget is None
-    assert session.pending_widget_state is None
+    assert session.pending_widget_states == {"2048": '{"score": 12}'}
 
 
 def test_an_unknown_widget_is_refused_before_there_is_a_conversation_too(db, monkeypatch):
@@ -566,3 +562,68 @@ def test_deleting_the_open_conversation_empties_the_panel(live, db, monkeypatch)
     runtime.delete_conversation("repl", cid)
 
     assert told and told[-1]["name"] is None
+
+
+def test_widget_state_migration_preserves_existing_rows_and_does_not_resurrect(tmp_path):
+    path = str(tmp_path / "migration.db")
+    original = Database(path)
+    cid = original.create_conversation("Legacy")
+    original.conn.execute("DROP TABLE conversation_widget_states")
+    original.conn.execute(
+        "UPDATE conversations SET widget = 'clock', widget_state = ? WHERE id = ?",
+        ('{"tz": "UTC"}', cid))
+    original.conn.commit()
+    original.conn.close()
+
+    migrated = Database(path)
+    assert migrated.get_conversation_widget_state(cid, "clock") == '{"tz": "UTC"}'
+    assert migrated.get_conversation(cid)["widget_state"] is None
+    # A pre-existing new-table row wins, including an explicitly cleared value.
+    migrated.set_conversation_widget_state(cid, None, widget_name="clock")
+    migrated.conn.execute("UPDATE conversations SET widget_state = ? WHERE id = ?",
+                          ('{"stale": true}', cid))
+    migrated.conn.commit()
+    migrated.conn.close()
+
+    for _ in range(2):
+        reopened = Database(path)
+        assert reopened.get_conversation_widget_state(cid, "clock") is None
+        assert reopened.get_conversation(cid)["widget_state"] is None
+        reopened.conn.close()
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_switching_widgets_and_late_saves_keep_separate_state(db, monkeypatch, pending):
+    cid = None if pending else db.create_conversation("Main")
+    runtime = _Runtime(db, conversation_id=cid)
+    ctx = _Ctx(runtime)
+    monkeypatch.setattr(H, "widget_named", lambda name: {"name": name, "path": f"/{name}.html"})
+    for name, value in [("a", 1), ("b", 2)]:
+        assert H._widget_set(ctx, {"name": name}).ok
+        assert H._widget_get(ctx, {}).data["state"] is None
+        assert H._widget_state_set(ctx, {"value": value}).ok
+    # A delayed request from A must not write into the currently selected B.
+    assert H._widget_state_set(ctx, {"name": "a", "value": 3}).ok
+    assert H._widget_get(ctx, {}).data["state"] == "2"
+    assert H._widget_set(ctx, {"name": None}).ok
+    for name, expected in [("a", "3"), ("b", "2")]:
+        assert H._widget_set(ctx, {"name": name}).ok
+        assert H._widget_get(ctx, {}).data["state"] == expected
+
+
+def test_conversation_state_is_independent_and_deleted_with_its_conversation(db):
+    first, second = [db.create_conversation(name) for name in ("First", "Second")]
+    for cid, state in [(first, "1"), (second, "2")]:
+        db.set_conversation_widget_state(cid, state, widget_name="clock")
+    assert db.get_conversation_widget_state(first, "clock") == "1"
+    assert db.get_conversation_widget_state(second, "clock") == "2"
+    db.delete_conversation(first)
+    assert db.get_conversation_widget_state(first, "clock") is None
+    assert db.get_conversation_widget_state(second, "clock") == "2"
+
+
+def test_state_write_respects_database_owner_scope(db):
+    cid = db.create_conversation("Owned")
+    owner = db.get_conversation(cid)["user_id"]
+    db.set_conversation_widget_state(cid, "1", user_id=owner + 1, widget_name="clock")
+    assert db.get_conversation_widget_state(cid, "clock") is None

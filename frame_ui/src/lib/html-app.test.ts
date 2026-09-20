@@ -9,11 +9,11 @@ vi.mock("./client", async importOriginal => ({
 
 afterEach(() => { vi.resetAllMocks(); document.body.replaceChildren(); });
 
-function setup() {
+function setup(widgetName?: string) {
   const frame = document.createElement("iframe");
   document.body.append(frame);
   const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-  const close = attachAppRelay(frame, "test-token");
+  const close = attachAppRelay(frame, "test-token", widgetName);
   const send = (data = {}, source: MessageEventSource | null = frame.contentWindow) => {
     window.dispatchEvent(new MessageEvent("message", { origin: "null", source, data: {
       channel: "second-brain-html-v1", token: "test-token", kind: "call",
@@ -24,6 +24,15 @@ function setup() {
 }
 
 describe("HTML App relay", () => {
+  it("saves under the originating widget name", async () => {
+    vi.mocked(sdk).mockResolvedValue(null);
+    const { send, close } = setup("clock");
+    try {
+      send({ type: "widget.state_set", args: { name: "other", value: { tz: "UTC" } } });
+      expect(sdk).toHaveBeenCalledWith("widget.state_set", { name: "clock", value: { tz: "UTC" } });
+    } finally { close(); }
+  });
+
   it("installs the helper before App scripts and preserves the page", () => {
     const html = appDocument('<html><head><script>brain.call("conv.list")</script></head><body><button>Go</button></body></html>', "token");
     expect(html.indexOf("window.brain")).toBeLessThan(html.indexOf('brain.call("conv.list")'));

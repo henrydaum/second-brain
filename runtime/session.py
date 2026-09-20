@@ -253,9 +253,9 @@ class RuntimeSession:
     # approved plan hands the turn that follows it. Ephemeral for the same
     # reason and more so.
     turn_security_mode: str | None = None
-    # A widget picked before this session had anywhere to put it, and whatever
-    # that widget saved in the meantime. ``ensure_conversation`` writes both
-    # onto the row it creates and clears them; until then they are the whole of
+    # A widget picked before the first message, and saved state by widget name.
+    # ``ensure_conversation`` adopts the selection and all saved states into
+    # the database and clears them; until then they are the whole of
     # what the widget Requests read and write.
     #
     # **This needs no ``_conversation`` companion the way ``security_mode``
@@ -272,7 +272,7 @@ class RuntimeSession:
     # bound to anything is not worth surviving a restart, and the state under
     # it describes a document that is long gone.
     pending_widget: str | None = None
-    pending_widget_state: str | None = None
+    pending_widget_states: dict[str, str | None] = field(default_factory=dict)
     # User messages sent while the agent was mid-turn. The busy guard queues
     # them here instead of rejecting; ConversationLoop drains the list at each
     # loop boundary, and handle_action starts a fresh turn with any leftovers

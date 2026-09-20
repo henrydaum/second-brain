@@ -118,8 +118,8 @@ export function appDocument(
         A widget that wants to come back as it was says what that means.
 
         Reading is local, because the host delivers the saved value at mount;
-        writing is debounced and stores against the conversation this widget is
-        bound to, capped at 64 KB. Anything larger belongs in a file of the
+        writing is debounced and stores against this widget name in its
+        conversation, capped at 64 KB. Anything larger belongs in a file of the
         widget's own, with the path kept here.
       */
       state: Object.freeze({
@@ -160,7 +160,7 @@ export function appDocument(
 /** Source and per-document token bind requests to this preview, including
  * across navigation. Cleanup prevents new calls and delivery of late results;
  * it cannot undo work already accepted by the kernel. */
-export function attachAppRelay(frame: HTMLIFrameElement, token: string): () => void {
+export function attachAppRelay(frame: HTMLIFrameElement, token: string, widgetName?: string): () => void {
   let active = true;
   const pending = new Set<number>();
   const receive = (event: MessageEvent) => {
@@ -189,7 +189,12 @@ export function attachAppRelay(frame: HTMLIFrameElement, token: string): () => v
       return;
     }
     pending.add(m.id);
-    void sdk(m.type, m.args).then(
+    // Save against the document that sent this call, even if the selection
+    // has changed while its last request was in flight.
+    const args = m.type === "widget.state_set" && widgetName
+      ? { ...m.args, name: widgetName }
+      : m.args;
+    void sdk(m.type, args).then(
       data => reply({ data }),
       error => reply({ error: {
         message: error instanceof Error ? error.message : "Request failed.",

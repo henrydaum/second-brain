@@ -427,7 +427,11 @@ parse. Hand it to the document at mount and no later. It exists because a
 widget must be contained — an opaque origin, no same-origin credential — and an
 opaque origin has no working browser storage, so this is the only place
 anything it keeps can live. The document saves with `widget.state_set`
-(64 KB, JSON); the kernel never reads into it.
+(64 KB, JSON); the kernel never reads into it. State is stored separately for
+each conversation and widget name. Switching widgets or selecting none preserves
+saved state; deleting the conversation removes it. The browser relay supplies
+the originating widget's `name` on saves, so a late save cannot write into the
+newly selected widget. Callers omitting `name` save to the current selection.
 
 Changing it yourself:
 

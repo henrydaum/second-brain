@@ -195,16 +195,17 @@ def test_a_widget_picked_before_there_was_a_row_moves_onto_it(runtime, db, monke
                                       "tree": "bundled"})
     session = runtime.sessions["repl"]
     session.pending_widget = "2048"
-    session.pending_widget_state = '{"score": 12}'
+    session.pending_widget_states = {"2048": '{"score": 12}', "clock": '{"tz": "UTC"}'}
 
     runtime.handle_action("repl", "send_text", {"text": "hello"})
 
     row = db.get_conversation(session.conversation_id)
     assert row["widget"] == "2048"
-    assert row["widget_state"] == '{"score": 12}'
+    assert db.get_conversation_widget_state(session.conversation_id, "2048") == '{"score": 12}'
+    assert db.get_conversation_widget_state(session.conversation_id, "clock") == '{"tz": "UTC"}'
     # Cleared with the move, or the next conversation adopts it a second time.
     assert session.pending_widget is None
-    assert session.pending_widget_state is None
+    assert session.pending_widget_states == {}
 
 
 def test_the_state_is_on_the_row_before_the_widget_is_announced(runtime, db, monkeypatch):
@@ -220,14 +221,14 @@ def test_the_state_is_on_the_row_before_the_widget_is_announced(runtime, db, mon
                                       "tree": "bundled"})
     session = runtime.sessions["repl"]
     session.pending_widget = "2048"
-    session.pending_widget_state = '{"score": 12}'
+    session.pending_widget_states = {"2048": '{"score": 12}', "clock": '{"tz": "UTC"}'}
 
     seen = []
     original = runtime.announce_widget
 
     def record(cid):
         row = db.get_conversation(cid) or {}
-        seen.append((row.get("widget"), row.get("widget_state")))
+        seen.append((row.get("widget"), db.get_conversation_widget_state(cid, row.get("widget"))))
         return original(cid)
 
     monkeypatch.setattr(runtime, "announce_widget", record)
@@ -253,3 +254,14 @@ def test_a_fresh_install_is_still_sent_to_setup(db):
     assert out.error["code"] == "no_llm"
     assert db.list_conversations() == []
     assert rt.sessions["repl"].conversation_id is None
+
+
+def test_pending_states_are_adopted_even_when_selection_is_empty(runtime, db):
+    session = runtime.sessions["repl"]
+    session.pending_widget_states = {"a": "1", "b": "2"}
+    runtime.handle_action("repl", "send_text", {"text": "hello"})
+    cid = session.conversation_id
+    assert db.get_conversation(cid)["widget"] is None
+    assert db.get_conversation_widget_state(cid, "a") == "1"
+    assert db.get_conversation_widget_state(cid, "b") == "2"
+    assert session.pending_widget_states == {}

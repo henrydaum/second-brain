@@ -2061,16 +2061,10 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
     ],
   );
   /**
-   * Put a widget in the panel, optimistically.
-   *
-   * The kernel announces the change to every live session on this
-   * conversation, so this window would find out regardless — but a menu that
-   * waits for a round trip before showing what you picked reads as a menu that
-   * did not hear you. A refusal or an unknown name re-reads rather than
-   * guessing: whatever the kernel says is what the other windows are showing.
+   * Wait for the kernel's binding, which carries name and state together.
+   * Changing only the name would mount the new widget with the old one's state.
    */
   const chooseWidget = useCallback((name: string | null) => {
-    setWidgetBinding((current) => (current ? { ...current, name } : current));
     void setWidget(name).catch((error: unknown) => {
       report(error);
       void getWidget().then(setWidgetBinding, () => {});

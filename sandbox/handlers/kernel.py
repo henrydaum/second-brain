@@ -1651,7 +1651,7 @@ def pending_binding(session) -> dict:
         return {"name": None, "state": None, "path": "", "tree": "",
                 "installed": False}
     found = widget_named(name) or {}
-    return {"name": name, "state": session.pending_widget_state,
+    return {"name": name, "state": session.pending_widget_states.get(name),
             "path": found.get("path", ""), "tree": found.get("tree", ""),
             "installed": bool(found)}
 
@@ -1714,15 +1714,6 @@ def _widget_set(ctx, args: dict) -> Result:
                               code=ERROR_NOT_FOUND)
     if pending is not None:
         pending.pending_widget = name
-        if name is None:
-            # Unbinding takes the saved state with it, exactly as
-            # ``db.set_conversation_widget`` does: state is meaningless without
-            # the widget that wrote it, and keeping it means a later re-bind
-            # silently restores a session the person deliberately ended.
-            # Swapping one name for another deliberately does *not* clear, for
-            # the same reason it does not on the row — the two halves have to
-            # answer alike or the first message changes the widget's memory.
-            pending.pending_widget_state = None
         # Announced like any other binding. The panel that asked already knows,
         # but it is not the only thing looking: a second window on this session
         # and a re-read both have to agree with it, and routing every change
@@ -1772,11 +1763,17 @@ def _widget_state_set(ctx, args: dict) -> Result:
                 f"{WIDGET_STATE_MAX} byte limit. Write anything larger to a "
                 f"file of your own and keep the path here instead.",
                 code=ERROR_TOO_LARGE)
+    name = args.get("name")
+    if name is None:
+        name = (pending.pending_widget if pending is not None
+                else (runtime.conversation_widget(cid) or {}).get("name"))
+    if not isinstance(name, str) or not name.strip():
+        return Result.failure("name a widget to save state for", code=ERROR_INVALID_ARGUMENT)
     if pending is not None:
-        pending.pending_widget_state = packed
+        pending.pending_widget_states[name] = packed
         return Result(data={"conversation_id": None,
                             "bytes": len(packed or "")})
-    if not setter(getattr(ctx, "session_key", None), cid, packed):
+    if not setter(getattr(ctx, "session_key", None), cid, packed, widget_name=name):
         return Result.refusal(
             f"conversation {cid} is not available to this user")
     return Result(data={"conversation_id": cid, "bytes": len(packed or "")})

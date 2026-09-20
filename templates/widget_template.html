@@ -38,7 +38,7 @@
     * NO BROWSER STORAGE. `localStorage`, `sessionStorage` and cookies either
       throw or are wiped between mounts, because an opaque origin has no
       persistent partition. What you get instead is `brain.state`, below: the
-      kernel keeps one JSON value per conversation for you, hands it back at
+      kernel keeps one JSON value per conversation and widget name for you, hands it back at
       your next mount, and that is what makes a widget survive a reload, a
       conversation switch and a restart. Anything bigger than 64 KB goes in a
       file of your own — `fs.write` is a Request — with the path in the state.
@@ -137,8 +137,8 @@
   fresh start.
 
   IT BELONGS TO THE CONVERSATION, not to you. The same widget open in two
-  conversations is two independent things with two saved states, and unbinding
-  it from a conversation throws that conversation's state away. Anything bigger
+  conversations is two independent things with two saved states. Switching to
+  another widget or choosing Empty preserves your state for next time. Anything bigger
   than 64 KB goes in a file of your own — `fs.write` is a Request — with the
   path in the state.
 

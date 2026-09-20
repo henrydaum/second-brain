@@ -110,8 +110,8 @@ export const WidgetFrame: FC<{
   /** The relay, for the life of this frame. Closing it stops new calls and
    *  drops late results — it cannot undo work the kernel already accepted. */
   const attach = useCallback((element: HTMLIFrameElement | null) => {
-    if (element) return attachAppRelay(element, token.current);
-  }, []);
+    if (element) return attachAppRelay(element, token.current, widget.name);
+  }, [widget.name]);
 
   const announce = useCallback(() => {
     const element = frame.current;

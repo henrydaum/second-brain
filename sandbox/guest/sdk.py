@@ -759,8 +759,8 @@ class _Widget(_Namespace):
 
         An unknown name fails rather than being stored — a typo would
         otherwise present as an empty panel with nothing anywhere explaining
-        it. Unbinding clears the saved state with it, since state without its
-        widget means nothing and a later re-bind should not silently resume it.
+        it. Switching widgets or unbinding preserves each widget's saved state
+        so selecting it again resumes its previous state.
 
         Defaults to the conversation this session is in, which is the spelling
         that needs no approval.

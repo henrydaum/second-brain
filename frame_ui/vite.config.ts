@@ -51,6 +51,16 @@ export default defineConfig(({ mode }) => {
     strictPort: true,
 
     /**
+     * Bound to IPv4 loopback explicitly, because Vite's default resolves to
+     * `[::1]` alone on macOS and a gateway in front dials `127.0.0.1`. The
+     * two never meet: `tailscale serve` answers 502, the kernel's probe
+     * correctly reads that as "nothing is serving", spawns a second dev
+     * server, and that one dies on the port the first is still holding. The
+     * symptom is a UI that exits at every boot and a 502 that blames nobody.
+     */
+    host: "127.0.0.1",
+
+    /**
      * The names this server will answer to, beyond its own localhost.
      *
      * Vite refuses an unrecognised `Host` outright — a plain-text 403 that
