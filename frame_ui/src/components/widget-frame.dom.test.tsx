@@ -15,7 +15,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/client", () => ({
@@ -37,7 +37,7 @@ const WIDGET = {
   extension: ".html",
 };
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 /** Mount, and stand in for the host page so what it is sent can be read.
  *
@@ -186,4 +186,37 @@ it("delivers whichever arrives last, the host page or the file", async () => {
   // The file lands afterwards, and that is what delivers it.
   release();
   await waitFor(() => expect(mountMessages(posted)).toHaveLength(1));
+});
+
+it("detects source edits and reversions without reloading the running frame", async () => {
+  vi.useFakeTimers();
+  let html = "<main>original</main>";
+  const fetchSource = vi.fn().mockImplementation(async () => ({ ok: true, text: async () => html }));
+  vi.stubGlobal("fetch", fetchSource);
+  const changed = vi.fn();
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(<WidgetFrame widget={WIDGET} scheme="light" watchSource onSourceChange={changed} />);
+  });
+  expect(changed).toHaveBeenLastCalledWith(false);
+  const frame = screen.getByTitle("example");
+
+  html = "<main>edited</main>";
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(changed).toHaveBeenLastCalledWith(true);
+  expect(screen.getByTitle("example")).toBe(frame);
+
+  html = "<main>original</main>";
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(changed).toHaveBeenLastCalledWith(false);
+
+  fetchSource.mockRejectedValue(new Error("Unavailable"));
+  changed.mockClear();
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(changed).not.toHaveBeenCalled();
+
+  view.rerender(<WidgetFrame widget={WIDGET} scheme="light" watchSource={false} onSourceChange={changed} />);
+  fetchSource.mockClear();
+  await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+  expect(fetchSource).not.toHaveBeenCalled();
 });

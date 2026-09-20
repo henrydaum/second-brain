@@ -28,13 +28,16 @@
  * host is handed the document by `postMessage` and writes it in.
  */
 
-import { useCallback, useEffect, useRef, useState, type FC } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type FC, type Ref } from "react";
 
-import { appDocument, attachAppRelay, tellApp } from "@/lib/html-app";
+import { appDocument, attachAppRelay, flushAppState, tellApp } from "@/lib/html-app";
 import { widgetStyles } from "@/lib/widget-document";
 import { readWidget, type Widget } from "@/lib/widgets";
 
+export type WidgetFrameHandle = { flush: () => Promise<void> };
+
 export const WidgetFrame: FC<{
+  ref?: Ref<WidgetFrameHandle>;
   widget: Widget;
   scheme: "light" | "dark";
   /**
@@ -45,9 +48,12 @@ export const WidgetFrame: FC<{
    * `brain.state.set` never sees anything but null, which is correct.
    */
   state?: string | null;
-}> = ({ widget, scheme, state = null }) => {
+  watchSource?: boolean;
+  onSourceChange?: (changed: boolean) => void;
+}> = ({ ref, widget, scheme, state = null, watchSource = false, onSourceChange }) => {
   const frame = useRef<HTMLIFrameElement>(null);
   const [source, setSource] = useState<string | null>(null);
+  const [originalHtml, setOriginalHtml] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   /**
    * Whether the host page is up.
@@ -77,6 +83,11 @@ export const WidgetFrame: FC<{
    * anything, on behalf of its successor.
    */
   const token = useRef(crypto.randomUUID());
+  useImperativeHandle(ref, () => ({
+    flush: () => frame.current && delivered.current
+      ? flushAppState(frame.current, token.current)
+      : Promise.resolve(),
+  }), []);
 
   /**
    * The document, built once per widget.
@@ -89,6 +100,7 @@ export const WidgetFrame: FC<{
   useEffect(() => {
     let live = true;
     setSource(null);
+    setOriginalHtml(null);
     setFailure(null);
     delivered.current = false;
     token.current = crypto.randomUUID();
@@ -96,6 +108,7 @@ export const WidgetFrame: FC<{
     readWidget(widget).then(
       (html) => {
         if (!live) return;
+        setOriginalHtml(html);
         setSource(appDocument(html, token.current, { styles: widgetStyles(scheme) }));
       },
       (error: unknown) => {
@@ -106,6 +119,36 @@ export const WidgetFrame: FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above: the
     // scheme is read once at build time and told from then on.
   }, [widget.path]);
+
+  // Compare contents rather than timestamps: touching a file is not an edit,
+  // and reverting it to the loaded version makes Refresh unnecessary again.
+  useEffect(() => {
+    if (!watchSource || originalHtml === null || !onSourceChange) return;
+    let live = true;
+    let checking = false;
+    const check = async () => {
+      if (checking || document.visibilityState === "hidden") return;
+      checking = true;
+      try {
+        const html = await readWidget({ path: widget.path, name: widget.name });
+        if (live) onSourceChange(html !== originalHtml);
+      } catch {
+        // A missing file or failed connection is not evidence of new source.
+      } finally {
+        checking = false;
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 3000);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [watchSource, originalHtml, widget.path, widget.name, onSourceChange]);
 
   /** The relay, for the life of this frame. Closing it stops new calls and
    *  drops late results — it cannot undo work the kernel already accepted. */

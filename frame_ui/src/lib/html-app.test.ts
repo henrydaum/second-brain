@@ -1,13 +1,13 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appDocument, attachAppRelay } from "./html-app";
+import { appDocument, attachAppRelay, flushAppState } from "./html-app";
 import { RequestFailed, sdk } from "./client";
 
 vi.mock("./client", async importOriginal => ({
   ...await importOriginal<typeof import("./client")>(), sdk: vi.fn(),
 }));
 
-afterEach(() => { vi.resetAllMocks(); document.body.replaceChildren(); });
+afterEach(() => { vi.resetAllMocks(); vi.useRealTimers(); document.body.replaceChildren(); });
 
 function setup(widgetName?: string) {
   const frame = document.createElement("iframe");
@@ -24,6 +24,32 @@ function setup(widgetName?: string) {
 }
 
 describe("HTML App relay", () => {
+  it("accepts a flush acknowledgement only from the matching document", async () => {
+    const { frame, reply, send, close } = setup();
+    try {
+      let finished = false;
+      const flushing = flushAppState(frame, "test-token").then(() => { finished = true; });
+      const request = reply.mock.calls[0][0];
+      send({ kind: "flushed", id: request.id, token: "other" });
+      send({ kind: "flushed", id: request.id }, window);
+      await Promise.resolve();
+      expect(finished).toBe(false);
+      send({ kind: "flushed", id: request.id });
+      await flushing;
+      expect(finished).toBe(true);
+    } finally { close(); }
+  });
+
+  it("rejects a flush when the widget cannot respond", async () => {
+    vi.useFakeTimers();
+    const { frame, close } = setup();
+    try {
+      const failure = expect(flushAppState(frame, "test-token")).rejects.toThrow("Widget save did not finish");
+      await vi.advanceTimersByTimeAsync(10000);
+      await failure;
+    } finally { close(); }
+  });
+
   it("saves under the originating widget name", async () => {
     vi.mocked(sdk).mockResolvedValue(null);
     const { send, close } = setup("clock");

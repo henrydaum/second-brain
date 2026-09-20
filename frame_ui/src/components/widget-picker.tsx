@@ -31,7 +31,8 @@ export const WidgetPicker: FC<{
   chosen: string | null;
   onRefresh: (widgets: Widget[]) => void;
   onChoose: (name: string | null) => void;
-}> = ({ widgets, chosen, onRefresh, onChoose }) => {
+  disabled?: boolean;
+}> = ({ widgets, chosen, onRefresh, onChoose, disabled = false }) => {
   const [failure, setFailure] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -54,6 +55,7 @@ export const WidgetPicker: FC<{
       <DropdownMenuTrigger asChild>
         <button
           type="button"
+          disabled={disabled}
           className="hover:bg-accent/60 -ms-1 flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-(--ring)"
         >
           <span className="truncate">{current?.name ?? "Widget"}</span>
@@ -76,7 +78,7 @@ export const WidgetPicker: FC<{
 
         <DropdownMenuRadioGroup
           value={chosen ?? ""}
-          onValueChange={(value) => onChoose(value || null)}
+          onValueChange={(value) => { if (!disabled) onChoose(value || null); }}
         >
           {widgets.map((widget) => (
             <DropdownMenuRadioItem
@@ -102,7 +104,7 @@ export const WidgetPicker: FC<{
         {chosen && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => onChoose(null)}>
+            <DropdownMenuItem disabled={disabled} onSelect={() => onChoose(null)}>
               Empty
             </DropdownMenuItem>
           </>

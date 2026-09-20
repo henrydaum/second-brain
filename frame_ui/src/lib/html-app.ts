@@ -52,11 +52,13 @@ export function appDocument(
     const state = { size: { width: 0, height: 0 }, scheme: "light", state: null };
     let next = 0;
     // How long a burst of saves is collapsed into one write. A widget saving
-    // on every keystroke would otherwise be one database write and one bus
-    // emit per character; half a second is short enough that a reload right
-    // after a change keeps it, and long enough that typing costs one write.
+    // on every keystroke would otherwise be one database write per character.
+    // The host flushes this delay before refreshing or changing the selection.
     const SAVE_AFTER = 500;
     let saveTimer = 0;
+    let saveVersion = 0;
+    let savedVersion = 0;
+    let saving = null;
     // Saved state arrives once, as an announcement, and it cannot arrive any
     // sooner: the host writes this document synchronously and its scripts run
     // after that returns, so the first message lands a tick later. A widget
@@ -70,6 +72,14 @@ export function appDocument(
       const m = event.data;
       if (event.source !== parent || !m || m.channel !== channel ||
           m.token !== token) return;
+      if (m.kind === "flush" && typeof m.id === "string") {
+        const reply = (error) => parent.postMessage({
+          channel, token, kind: "flushed", id: m.id,
+          ...(error ? { error: { message: error.message || String(error) } } : {}),
+        }, "*");
+        flushState().then(() => reply(), reply);
+        return;
+      }
       if (m.kind === "tell" && listeners[m.what]) {
         state[m.what] = m.value;
         // Idempotent: a second resolve is ignored, so a host that announced
@@ -102,6 +112,18 @@ export function appDocument(
       try { parent.postMessage({ channel, token, kind: "call", id, type, args }, "*"); }
       catch (error) { pending.delete(id); reject(error); }
     });
+    // Serialize writes so an older response cannot finish after a newer save.
+    // Failed writes stay dirty and can be retried by the next flush.
+    const flushState = () => {
+      clearTimeout(saveTimer);
+      if (saving) return saving.then(flushState);
+      if (savedVersion === saveVersion) return Promise.resolve();
+      const version = saveVersion;
+      saving = call("widget.state_set", { value: state.state })
+        .then(() => { savedVersion = version; })
+        .finally(() => { saving = null; });
+      return saving.then(flushState);
+    };
     window.brain = Object.freeze({
       call,
       /*
@@ -132,9 +154,10 @@ export function appDocument(
         get() { return state.state; },
         set(value) {
           state.state = value;
+          saveVersion++;
           clearTimeout(saveTimer);
           saveTimer = setTimeout(() => {
-            call("widget.state_set", { value }).catch(error => {
+            flushState().catch(error => {
               // Reported rather than thrown: a save that could not happen must
               // not take down a widget that is working.
               console.error("Could not save widget state", error);
@@ -204,6 +227,36 @@ export function attachAppRelay(frame: HTMLIFrameElement, token: string, widgetNa
   };
   window.addEventListener("message", receive);
   return () => { active = false; window.removeEventListener("message", receive); };
+}
+
+/** Ask the injected bridge to save now and acknowledge all outstanding writes. */
+export function flushAppState(frame: HTMLIFrameElement, token: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const source = frame.contentWindow;
+    if (!source) return reject(new Error("Widget is not available to save."));
+    const id = crypto.randomUUID();
+    const finish = (error?: Error) => {
+      window.clearTimeout(timer);
+      window.removeEventListener("message", receive);
+      if (error) reject(error);
+      else resolve();
+    };
+    const receive = (event: MessageEvent) => {
+      const m = event.data;
+      if (event.source !== source || event.origin !== "null" || !m ||
+          m.channel !== CHANNEL || m.token !== token || m.kind !== "flushed" || m.id !== id) return;
+      finish(m.error ? new Error(m.error.message || "Could not save widget state.") : undefined);
+    };
+    const timer = window.setTimeout(() => {
+      finish(new Error("Widget save did not finish. Please try again."));
+    }, 10000);
+    window.addEventListener("message", receive);
+    try {
+      source.postMessage({ channel: CHANNEL, token, kind: "flush", id }, "*");
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
 }
 
 

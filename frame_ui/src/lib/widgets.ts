@@ -114,8 +114,8 @@ export function setWidgetState(value: unknown): Promise<unknown> {
  * in an opaque origin — pointing an iframe at `/files` would hand the widget
  * this page's origin and the proxy's bearer token with it.
  */
-export async function readWidget(widget: Widget): Promise<string> {
-  const response = await fetch(fileUrl(widget.path));
+export async function readWidget(widget: Pick<Widget, "path" | "name">): Promise<string> {
+  const response = await fetch(fileUrl(widget.path), { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Could not read ${widget.name} (${response.status})`);
   }

@@ -2064,8 +2064,8 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
    * Wait for the kernel's binding, which carries name and state together.
    * Changing only the name would mount the new widget with the old one's state.
    */
-  const chooseWidget = useCallback((name: string | null) => {
-    void setWidget(name).catch((error: unknown) => {
+  const chooseWidget = useCallback(async (name: string | null) => {
+    await setWidget(name).catch((error: unknown) => {
       report(error);
       void getWidget().then(setWidgetBinding, () => {});
     });

@@ -37,15 +37,15 @@ import {
   useCallback, useEffect, useLayoutEffect, useRef, useState,
   type FC, type KeyboardEvent, type PointerEvent,
 } from "react";
-import { Minimize2Icon, Maximize2Icon, XIcon } from "lucide-react";
+import { Minimize2Icon, Maximize2Icon, RefreshCwIcon, XIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { WidgetFrame } from "@/components/widget-frame";
+import { WidgetFrame, type WidgetFrameHandle } from "@/components/widget-frame";
 import { WidgetPicker } from "@/components/widget-picker";
 import { useResolvedTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { useWidget } from "@/runtime/domains";
-import type { Widget } from "@/lib/widgets";
+import { getWidget, type Binding, type Widget } from "@/lib/widgets";
 import type { WidgetMode } from "@/runtime/widget-mode";
 
 const WIDTH_KEY = "second-brain:widget-width";
@@ -134,6 +134,52 @@ export const WidgetPanel: FC<{
    * as empty, which looks identical to a panel nobody has filled in.
    */
   const widget = widgets.find((entry) => entry.name === chosen) ?? null;
+  const [refreshing, setRefreshing] = useState(false);
+  const transitionPending = useRef(false);
+  const widgetFrame = useRef<WidgetFrameHandle>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState<{ binding: Binding; state: string | null; version: number } | null>(null);
+  const bindingRef = useRef(widgetBinding);
+  bindingRef.current = widgetBinding;
+  const frameKey = `${widgetBinding?.conversationId ?? "new"}:${widget?.path ?? ""}:${refresh?.version ?? 0}`;
+  const [changedSource, setChangedSource] = useState<string | null>(null);
+  const onSourceChange = useCallback((changed: boolean) => {
+    setChangedSource(changed ? frameKey : null);
+  }, [frameKey]);
+
+  const afterSaving = async (action: () => Promise<void>) => {
+    if (transitionPending.current) return;
+    const binding = widgetBinding;
+    transitionPending.current = true;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      await widgetFrame.current?.flush();
+      if (bindingRef.current === binding) await action();
+    } catch (error) {
+      if (bindingRef.current === binding) {
+        setRefreshError(error instanceof Error ? error.message : "Could not save widget state.");
+      }
+    } finally {
+      transitionPending.current = false;
+      setRefreshing(false);
+    }
+  };
+  const refreshWidget = async () => {
+    if (!widget || !widgetBinding) return;
+    const binding = widgetBinding;
+    await afterSaving(async () => {
+      // Binding announcements do not track saves. Read the newly saved state
+      // after flushing, before replacing the frame.
+      const saved = await getWidget();
+      if (bindingRef.current !== binding || saved.name !== binding.name ||
+          saved.conversationId !== binding.conversationId) return;
+      setRefresh(current => ({ binding, state: saved.state, version: (current?.version ?? 0) + 1 }));
+    });
+  };
+  const chooseAfterSaving = (name: string | null) => {
+    if (name !== chosen) void afterSaving(() => choose(name));
+  };
   const full = mode === "full";
   const side = mode === "side";
 
@@ -456,9 +502,19 @@ export const WidgetPanel: FC<{
               widgets={widgets}
               chosen={chosen}
               onRefresh={setWidgets}
-              onChoose={choose}
+              onChoose={chooseAfterSaving}
+              disabled={refreshing}
             />
           </div>
+          {changedSource === frameKey && <TooltipIconButton
+            tooltip="Refresh"
+            side="bottom"
+            className="text-muted-foreground size-8"
+            disabled={!widget || refreshing}
+            onClick={() => void refreshWidget()}
+          >
+            <RefreshCwIcon className={cn("size-3.5", refreshing && "motion-safe:animate-spin")} />
+          </TooltipIconButton>}
           <TooltipIconButton
             tooltip={full ? "Exit fullscreen" : "Fullscreen"}
             side="bottom"
@@ -472,6 +528,7 @@ export const WidgetPanel: FC<{
             <XIcon className="size-4" />
           </TooltipIconButton>
         </header>
+        {refreshError && <p role="alert" className="text-muted-foreground px-4 py-2 text-xs">{refreshError}</p>}
 
         {/*
           The widget gets this box entirely: no padding, no border, no scroll
@@ -481,6 +538,7 @@ export const WidgetPanel: FC<{
         */}
         <div
           className="min-h-0 w-full flex-1 overflow-hidden"
+          inert={refreshing}
           style={side && !layer ? { width } : undefined}
         >
           {widget ? (
@@ -511,10 +569,13 @@ export const WidgetPanel: FC<{
               and bounded by the relay's 500ms save debounce.
             */
             <WidgetFrame
-              key={`${widgetBinding?.conversationId ?? "new"}:${widget.path}`}
+              ref={widgetFrame}
+              key={frameKey}
               widget={widget}
               scheme={scheme}
-              state={widgetBinding?.state ?? null}
+              state={refresh?.binding === widgetBinding ? refresh.state : widgetBinding?.state ?? null}
+              watchSource={open}
+              onSourceChange={onSourceChange}
             />
           ) : (
             <p className="text-muted-foreground p-4 text-xs">

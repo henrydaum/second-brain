@@ -180,7 +180,7 @@ export type SecondBrain = {
    *  which is the ordinary state and different from not yet knowing. */
   widgetBinding: Binding | null;
   /** Bind a widget to the open conversation, or `null` to bind none. */
-  chooseWidget: (name: string | null) => void;
+  chooseWidget: (name: string | null) => Promise<void>;
 };
 
 export type LlmProfile = {
