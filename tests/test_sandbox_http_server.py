@@ -342,6 +342,58 @@ def test_stop_closes_it(server):
         socket.create_connection(("127.0.0.1", port), timeout=1).close()
 
 
+def test_a_burst_of_connections_is_queued_rather_than_reset(server):
+    """A client asking several things at once must not be refused for it.
+
+    Every reply says ``Connection: close``, so a client cannot pool and each
+    Request is its own TCP connect. The web UI's ``syncSession`` asks four
+    things in one ``Promise.allSettled``, on every stream reconnect, from
+    every open tab — so simultaneous connects are the ordinary case here
+    rather than a load test.
+
+    ``socketserver`` listens with a backlog of **5** and this process has
+    other work, so the queue overflowed; BSD-derived stacks answer that with
+    a reset rather than a drop, which the client neither retries nor times
+    out on. What made it hard to place is that nothing survives the handshake
+    to be logged: the kernel sees no request, and a proxy in front turns the
+    reset into a bare ``502`` blamed on whichever Request lost the race.
+
+    So this asserts every connection in the burst gets a *reply*, not merely
+    that the server is up — reaching the 503 means the handshake completed
+    and the listener accepted. Twenty-four is comfortably over the old
+    default and far under ``SOMAXCONN``.
+    """
+    server.start(0)
+    assert server.port
+    outcomes: list[object] = []
+    entered = threading.Barrier(24)
+
+    def dial():
+        try:
+            # Released together, because the queue is an accept *backlog*
+            # rather than a rate: connecting one at a time never fills it
+            # however many times it is done.
+            entered.wait(timeout=5)
+            conn = socket.create_connection(("127.0.0.1", server.port),
+                                            timeout=5)
+            with conn:
+                conn.sendall(b"GET /sdk/conv.list HTTP/1.1\r\nHost: h\r\n\r\n")
+                outcomes.append(conn.recv(200)[:12])
+        except OSError as exc:
+            outcomes.append(exc)
+
+    dialers = [threading.Thread(target=dial) for _ in range(24)]
+    for thread in dialers:
+        thread.start()
+    for thread in dialers:
+        thread.join(timeout=15)
+
+    refused = [o for o in outcomes if isinstance(o, OSError)]
+    assert not refused, f"{len(refused)} of 24 never got a reply: {refused[:3]}"
+    assert len(outcomes) == 24
+    assert all(b"503" in o for o in outcomes)
+
+
 def test_an_oversized_request_is_refused_rather_than_truncated(server):
     """413 on the declared length, before a byte of body is read.
 

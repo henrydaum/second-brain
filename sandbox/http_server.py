@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 import uuid
 from collections import deque
@@ -256,6 +257,33 @@ class _Handler(BaseHTTPRequestHandler):
         _fail(_Response(self._write, lambda: None), status, message)
 
 
+class _Listener(ThreadingHTTPServer):
+    """The socket, with a backlog deep enough for the way this is talked to.
+
+    Every reply here says ``Connection: close`` — one request per connection,
+    for the reason ``_Response.send`` gives — so a client cannot pool. *Every*
+    Request is therefore a fresh TCP connect, and a client that asks four
+    things at once connects four times at once. ``syncSession`` in the web UI
+    does exactly that, on every stream reconnect, from every open tab.
+
+    ``socketserver`` listens with a backlog of **5**, which is the accept queue
+    rather than a rate: it overflows when connects land faster than the
+    serving thread calls ``accept``, and this process is busy doing other
+    things. BSD-derived stacks answer an overflow with a **reset**, so the
+    client does not retry and does not time out — it is refused mid-handshake,
+    and everything in front reports that as somebody else's fault. Through a
+    dev-server proxy it surfaces as a bare ``502``; the browser blames the
+    Request that happened to lose the race, which is how one full queue reads
+    as ``llm.list failed with 502`` and nothing anywhere mentions a socket.
+
+    The queue is not a resource to ration — it holds connections the kernel is
+    about to accept anyway — so this asks for whatever the platform allows and
+    lets ``listen`` clamp it.
+    """
+
+    request_queue_size = socket.SOMAXCONN
+
+
 class HttpServer:
     """One listener: a serving thread, a buffer, and at most one claimant."""
 
@@ -264,7 +292,7 @@ class HttpServer:
         self._open: dict[str, _Response] = {}
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
-        self._httpd: ThreadingHTTPServer | None = None
+        self._httpd: _Listener | None = None
         self._stopping = threading.Event()
         self._owner: str = ""
         self._wake: threading.Event | None = None
@@ -358,8 +386,7 @@ class HttpServer:
                     # this on a public interface is a decision about exposure,
                     # and it belongs to whoever runs the tunnel — not to a
                     # plugin declaration the kernel reads.
-                    httpd = ThreadingHTTPServer(("127.0.0.1", int(port)),
-                                                _Handler)
+                    httpd = _Listener(("127.0.0.1", int(port)), _Handler)
                 except OSError:
                     logger.exception("could not bind 127.0.0.1:%s", port)
                     return False
