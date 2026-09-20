@@ -508,7 +508,10 @@ def test_every_render_kind_crosses_unchanged(running):
     for kind, payload in sent:
         assert running.render("http:t1", kind, payload).ok
 
-    frames = _frames(_read(conn, until=b"callable_output", timeout=3.0))
+    # Read until the *last* kind sent shows up, derived rather than named:
+    # spelling one out meant adding a kind after it left the read finishing a
+    # frame early, and the failure was about the reader rather than the wire.
+    frames = _frames(_read(conn, until=sent[-1][0].encode(), timeout=3.0))
     conn.close()
 
     assert [f["kind"] for f in frames] == [kind for kind, _ in sent]

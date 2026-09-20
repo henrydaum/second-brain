@@ -283,11 +283,10 @@ def main():
 					logger.debug(f"Service unload error: {e}")
 		logger.info("Saving config...")
 		config_manager.save(config)
-		# Save plugin config separately
-		plugin_keys = {entry[1] for entry in get_plugin_settings()}
-		plugin_vals = {k: v for k, v in config.items() if k in plugin_keys}
-		if plugin_vals:
-			config_manager.save_plugin_config(plugin_vals)
+		# The plugin half goes to the other file, and the split is
+		# ``is_kernel_setting`` — never the declaration alone. See
+		# ``config_manager.persist_plugin_settings``.
+		config_manager.persist_plugin_settings(config)
 		logger.info("Done.")
 		os._exit(0)
 
@@ -339,10 +338,7 @@ def main():
 						except Exception as e:
 							logger.debug(f"Restart: unload '{name}' failed: {e}")
 				config_manager.save(config)
-				plugin_keys = {entry[1] for entry in get_plugin_settings()}
-				plugin_vals = {k: v for k, v in config.items() if k in plugin_keys}
-				if plugin_vals:
-					config_manager.save_plugin_config(plugin_vals)
+				config_manager.persist_plugin_settings(config)
 			except Exception as e:
 				logger.error(f"Restart: graceful shutdown error (forcing exec anyway): {e}")
 			_exec_self()

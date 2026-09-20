@@ -164,6 +164,27 @@ def _emit_config_changed(scope: str, changed_keys=None) -> None:
         pass
 
 
+def _stored_config(path: str = None) -> dict:
+    """What config.json literally holds, with no DEFAULTS merged in.
+
+    ``load`` answers the *effective* config, which is the right answer almost
+    everywhere and the wrong one when the question is who owns a value: it
+    merges the schema, so an untouched key is indistinguishable from one
+    somebody set to its default. ``rehome_kernel_keys`` needs the difference.
+    """
+    if path is None:
+        path = _DEFAULT_CONFIG_PATH
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r") as f:
+            stored = json.load(f)
+    except Exception:
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
 def save(config: dict, path: str = None):
     """Save config dict to JSON file."""
     if path is None:
@@ -185,14 +206,7 @@ def save(config: dict, path: str = None):
     # permanently unable to reach the file that now owns it.
     plugin_keys = ((plugin_setting_keys() | set(load_plugin_config().keys()))
                    - set(DEFAULTS))
-    existing = {}
-    p = Path(path)
-    if p.exists():
-        try:
-            with open(p, "r") as f:
-                existing = json.load(f)
-        except Exception:
-            existing = {}
+    existing = _stored_config(path)
     merged = {**DEFAULTS, **existing, **(config or {})}
     to_save = {k: v for k, v in merged.items()
                 if k != "_root" and k not in plugin_keys and k not in USER_CONFIG_KEYS}
@@ -362,17 +376,46 @@ def rehome_kernel_keys(config: dict) -> list:
 
     Idempotent — once the keys are gone from plugin_config.json there is
     nothing left to move — so it is safe on every boot.
+
+    **A stray copy is discarded, never adopted over a real value.** The move
+    is a *migration*, and a migration that keeps firing is an overwrite: any
+    writer that puts a kernel key back into plugin_config.json turns this
+    function into the thing that reverts config.json on the next boot. That
+    is what un-pinned scheduled subagents — the timekeeper writes the pinned
+    ``conversation_id`` into ``scheduled_jobs`` in config.json, the shutdown
+    snapshot copied the whole setting into plugin_config.json from a runtime
+    dict that predated the pin, and this moved that older copy back on top of
+    it. Every firing then opened a fresh conversation.
+
+    So "does config.json already own a value" decides, and the test is
+    against ``DEFAULTS`` rather than against mere presence: ``load`` persists
+    the merged schema, so every kernel key is *present* in the file whether
+    or not anybody set it, and reading presence as ownership would discard
+    the real value of a key that has genuinely never been written to its new
+    home — the ``llm_profiles`` loss this function exists to repair, in
+    reverse. A file value that still equals the default means nothing was
+    written there, so the plugin copy is adopted; anything else wins, and the
+    stray is dropped.
     """
     saved = load_plugin_config()
     moving = {key: value for key, value in saved.items() if key in DEFAULTS}
     if not moving:
         return []
-    config.update(moving)
-    save(config)
+    stored = _stored_config()
+    adopting = {key: value for key, value in moving.items()
+                if stored.get(key, DEFAULTS[key]) == DEFAULTS[key]}
+    discarding = sorted(set(moving) - set(adopting))
+    if adopting:
+        config.update(adopting)
+        save(config)
     save_plugin_config({k: v for k, v in saved.items() if k not in moving})
-    logger.info("Moved %s from plugin_config.json to config.json: they are "
-                "kernel settings now.", ", ".join(sorted(moving)))
-    return sorted(moving)
+    if adopting:
+        logger.info("Moved %s from plugin_config.json to config.json: they "
+                    "are kernel settings now.", ", ".join(sorted(adopting)))
+    if discarding:
+        logger.info("Dropped a stale plugin_config.json copy of %s; "
+                    "config.json owns these settings.", ", ".join(discarding))
+    return sorted(adopting)
 
 
 def ensure_minted_secrets(config: dict) -> list:
@@ -402,6 +445,45 @@ def ensure_minted_secrets(config: dict) -> list:
     if minted:
         save(config)
     return minted
+
+
+def persist_plugin_settings(config: dict) -> list:
+    """Snapshot the plugin-owned half of a live config dict at shutdown.
+
+    Shutdown and restart write this so a value a plugin only ever held in
+    memory is not lost with the process. Two rules make it safe, and it
+    shipped with neither.
+
+    **``is_kernel_setting`` decides the file, never the declaration alone.**
+    A setting both the kernel and a plugin declare — ``scheduled_jobs``,
+    ``secret_http_token``, the ``http_*`` group — is a kernel setting, and
+    the plugin declaration exists so ``policy._owns_setting`` can match it,
+    not to name a home. Snapshotting by declaration copied those into
+    plugin_config.json on every clean exit, and ``rehome_kernel_keys`` moved
+    the copy back over config.json on the next boot: a scheduled subagent's
+    pinned ``conversation_id`` survived until the next restart and no longer,
+    so the job opened a new conversation every firing. This is the same rule
+    ``save``, ``_config_write`` and ``reconcile_plugin_config`` already apply
+    — the shutdown path was the fourth and last one that did not.
+
+    **A snapshot adds, it does not replace.** The keys come from live
+    discovery, so a plugin that failed to load this boot had its settings
+    erased by a snapshot that could not see them. Merging over what is on
+    disk keeps a value belonging to something temporarily absent.
+
+    User-scoped settings are excluded for the third version of the same
+    reason: their home is the current user's config blob, and
+    ``_config_write`` mirrors the value into the runtime dict on its way
+    past, so snapshotting by declaration published one user's setting as
+    everybody's default.
+    """
+    owned = {key for key in plugin_setting_keys()
+             if not is_kernel_setting(key) and not is_user_scoped(key)}
+    values = {k: v for k, v in (config or {}).items() if k in owned}
+    if not values:
+        return []
+    save_plugin_config({**load_plugin_config(), **values})
+    return sorted(values)
 
 
 def load_plugin_config_early(config: dict):

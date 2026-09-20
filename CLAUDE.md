@@ -885,6 +885,30 @@ the difference between a microkernel and a pile of assumptions:
   moved the stray copy back at every boot. `config_manager.is_kernel_setting`
   is that one rule, and it overrides the caller's `scope`: a plugin cannot
   rehome a setting it does not own.
+
+  **The composition root was the fourth path, and it is the one that was
+  visible to a user.** `main.pyw`'s shutdown and restart handlers each
+  snapshotted the plugin half of the live config, picking their keys off
+  `get_plugin_settings()` with no kernel exception — so every clean exit
+  copied `scheduled_jobs` and the whole `http_*` group into
+  plugin_config.json, and `rehome_kernel_keys` moved that copy back **over**
+  config.json on the next boot. What it cost was a feature nobody would trace
+  to config: a scheduled subagent's conversation is pinned by writing
+  `conversation_id` into its `scheduled_jobs` payload, so the pin survived
+  until the next restart and no longer, and the job opened a *new*
+  conversation on every firing. `config_manager.persist_plugin_settings` is
+  the one snapshot now (both call sites), and it also *merges* rather than
+  replaces — the keys come from live discovery, so a replacing snapshot
+  erased the settings of any plugin that failed to load that boot.
+
+  **And rehoming stopped being able to lose a value.** A migration that keeps
+  firing is an overwrite, so it now adopts a stray copy only where config.json
+  does not already own a value, and drops it otherwise. Ownership is tested
+  against `DEFAULTS`, never against presence: `load` persists the merged
+  schema, so every kernel key is *present* in config.json whether or not
+  anybody set it, and reading presence as ownership would discard the real
+  value of a key that genuinely never reached its new home — the
+  `llm_profiles` loss the function exists to repair, in reverse.
 - **An announcement names what a person changed, not what a file gained.**
   `save` merges `DEFAULTS`, so the first write after a schema addition
   persists settings nobody touched; diffing against the *file* called every one

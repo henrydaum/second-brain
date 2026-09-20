@@ -889,13 +889,30 @@ class SubagentRegistry:
             ).start()
 
     def _valid_conversation_id(self, value) -> int | None:
-        """Return a live scheduled conversation id, never a stale binding."""
+        """Return a live scheduled conversation id, never a stale binding.
+
+        It logs what it rejected, because everything downstream of a rejection
+        reads as ordinary behaviour: opening a fresh conversation is exactly
+        what a job firing for the first time does. A recurring job that had
+        quietly lost its pin was therefore indistinguishable from one that had
+        never been pinned, and the only visible symptom was a sidebar filling
+        with one conversation per day.
+        """
         try:
             cid = int(value) if value is not None else None
         except (TypeError, ValueError):
+            logger.warning("scheduled subagent: ignoring a malformed pinned "
+                           "conversation id %r; opening a new conversation",
+                           value)
+            return None
+        if cid is None:
             return None
         db = getattr(self.runtime, "db", None)
-        return cid if cid is not None and db and db.get_conversation(cid) else None
+        if db is not None and db.get_conversation(cid):
+            return cid
+        logger.warning("scheduled subagent: pinned conversation #%s is gone "
+                       "(or no database); opening a new conversation", cid)
+        return None
 
     def _guard_scheduled_conversation(self, cid: int | None) -> None:
         """Refuse to erase or concurrently drive a conversation in use."""

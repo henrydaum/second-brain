@@ -667,6 +667,189 @@ def test_reconcile_leaves_kernel_settings_out_of_plugin_config(tmp_path, monkeyp
     assert config["secret_http_token"] == "the-real-one"
 
 
+def test_the_shutdown_snapshot_leaves_kernel_settings_alone(tmp_path,
+                                                            monkeypatch):
+    """The fourth path, and the one that cost a scheduled agent its home.
+
+    Shutdown and restart snapshot the plugin half of the live config. Both
+    picked their keys off ``get_plugin_settings()`` alone, so a setting the
+    kernel *also* declares went into plugin_config.json on every clean exit —
+    and ``rehome_kernel_keys`` moved that copy back over config.json on the
+    next boot. The timekeeper pins a scheduled subagent's conversation by
+    writing it into ``scheduled_jobs``; the pin therefore survived until the
+    next restart and no longer, and the job opened a fresh conversation every
+    single firing.
+    """
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        str(tmp_path / "plugin_config.json"))
+    monkeypatch.setattr(config_manager, "plugin_setting_keys",
+                        lambda: {"scheduled_jobs", "secret_http_token",
+                                 "demo_setting_config_test"})
+    pinned = {"daily": {"channel": "subagent.spawn",
+                        "payload": {"conversation_id": 587}}}
+
+    written = config_manager.persist_plugin_settings({
+        "scheduled_jobs": pinned,
+        "secret_http_token": "minted",
+        "demo_setting_config_test": "blue",
+    })
+
+    assert written == ["demo_setting_config_test"]
+    on_disk = config_manager.load_plugin_config()
+    assert on_disk == {"demo_setting_config_test": "blue"}
+
+
+def test_the_composition_root_snapshots_through_the_one_rule():
+    """Stated structurally, because the two copies were the whole bug.
+
+    Shutdown and restart each had their own hand-rolled snapshot, and both
+    were wrong the same way. Routing them through one function is the fix;
+    this is what stops a third one being written beside it.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "main.pyw").read_text(encoding="utf-8")
+
+    assert source.count("config_manager.persist_plugin_settings(config)") == 2
+    assert "save_plugin_config" not in source, (
+        "the composition root must not write plugin_config.json itself — "
+        "persist_plugin_settings is where is_kernel_setting is applied")
+
+
+def test_a_snapshot_adds_and_never_replaces(tmp_path, monkeypatch):
+    """A plugin that failed to load must not lose its settings.
+
+    The keys come from live discovery, so a snapshot that *replaces* the file
+    erases everything belonging to something absent this boot — which is the
+    boot where its settings matter most, since fixing it is how you get it
+    back.
+    """
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    config_manager.save_plugin_config({"absent_plugin_setting": "keep me",
+                                       "demo_setting_config_test": "old"},
+                                      plugin_path)
+    monkeypatch.setattr(config_manager, "plugin_setting_keys",
+                        lambda: {"demo_setting_config_test"})
+
+    config_manager.persist_plugin_settings({
+        "demo_setting_config_test": "new"})
+
+    assert config_manager.load_plugin_config() == {
+        "absent_plugin_setting": "keep me",
+        "demo_setting_config_test": "new",
+    }
+
+
+def test_a_snapshot_leaves_one_users_setting_out_of_the_global_file(
+        tmp_path, monkeypatch):
+    """A user-scoped setting's home is that user's config blob.
+
+    ``_config_write`` mirrors the value into the runtime dict on its way
+    past, so a snapshot taken by declaration published whoever wrote last as
+    everybody's default.
+    """
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        str(tmp_path / "plugin_config.json"))
+    monkeypatch.setattr(config_manager, "plugin_setting_keys",
+                        lambda: {"per_user_setting", "demo_setting_config_test"})
+    monkeypatch.setattr(config_manager, "is_user_scoped",
+                        lambda key: key == "per_user_setting")
+
+    written = config_manager.persist_plugin_settings(
+        {"per_user_setting": "henry's", "demo_setting_config_test": "blue"})
+
+    assert written == ["demo_setting_config_test"]
+    assert config_manager.load_plugin_config() == {
+        "demo_setting_config_test": "blue"}
+
+
+def test_rehoming_never_overwrites_a_value_config_json_owns(tmp_path,
+                                                            monkeypatch):
+    """The other half of the same bug: a migration that keeps firing.
+
+    Whatever puts a kernel key back into plugin_config.json, rehoming must
+    not be the thing that reverts config.json on the next boot. config.json
+    is the home, so its value wins and the stray is dropped.
+    """
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    pinned = {"daily": {"channel": "subagent.spawn",
+                        "payload": {"conversation_id": 587}}}
+    stale = {"daily": {"channel": "subagent.spawn", "payload": {}}}
+    config_manager.save({"scheduled_jobs": pinned}, _cfg(tmp_path))
+    config_manager.save_plugin_config({"scheduled_jobs": stale}, plugin_path)
+
+    runtime = {"scheduled_jobs": pinned}
+    assert config_manager.rehome_kernel_keys(runtime) == []
+
+    assert runtime["scheduled_jobs"] == pinned
+    assert json.loads(open(_cfg(tmp_path)).read())["scheduled_jobs"] == pinned
+    # ...and the stray is gone rather than left to be moved again next boot.
+    assert config_manager.load_plugin_config() == {}
+
+
+def test_rehoming_still_adopts_a_value_config_json_never_had(tmp_path,
+                                                             monkeypatch):
+    """Ownership is tested against the default, not against presence.
+
+    ``load`` persists the merged schema, so every kernel key is *present* in
+    config.json whether or not anybody set it. Reading presence as ownership
+    would discard the real value of a setting that has genuinely never been
+    written to its new home — the ``llm_profiles`` loss this function exists
+    to repair, in reverse.
+    """
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    config_manager.save(dict(config_manager.DEFAULTS), _cfg(tmp_path))
+    assert "llm_profiles" in json.loads(open(_cfg(tmp_path)).read())
+    config_manager.save_plugin_config({"llm_profiles": {"m": {}}}, plugin_path)
+
+    runtime = {}
+    assert config_manager.rehome_kernel_keys(runtime) == ["llm_profiles"]
+    assert runtime["llm_profiles"] == {"m": {}}
+    assert json.loads(
+        open(_cfg(tmp_path)).read())["llm_profiles"] == {"m": {}}
+
+
+def test_a_pinned_schedule_survives_a_restart(tmp_path, monkeypatch):
+    """The whole round trip, which is where this was only ever visible.
+
+    Pin, exit, boot. Each half looked correct on its own and the pair lost
+    the value, so the regression is stated end to end rather than as two
+    unit tests that both pass while the feature is broken.
+    """
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    monkeypatch.setattr(config_manager, "plugin_setting_keys",
+                        lambda: {"scheduled_jobs"})
+    pinned = {"daily": {"channel": "subagent.spawn",
+                        "payload": {"conversation_id": 587}}}
+
+    # The timekeeper pins the conversation the job ran in...
+    config = config_manager.load(_cfg(tmp_path))
+    config["scheduled_jobs"] = pinned
+    config_manager.save(config, _cfg(tmp_path))
+    # ...the process exits some time later, from a runtime dict that may be
+    # older than the pin...
+    config_manager.persist_plugin_settings(
+        {"scheduled_jobs": {"daily": {"channel": "subagent.spawn",
+                                      "payload": {}}}})
+    # ...and the next boot reads its schedules back.
+    booted = config_manager.load(_cfg(tmp_path))
+    config_manager.load_plugin_config_early(booted)
+
+    assert booted["scheduled_jobs"] == pinned
+
+
 def test_the_http_frontend_still_declares_the_settings_it_reveals():
     """A declaration that looks like a duplicate and is a permission.
 
