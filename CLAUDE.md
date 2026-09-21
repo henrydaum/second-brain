@@ -44,9 +44,60 @@ ever reached by something naming the file. Eight roots:
 **Who put it here.** Four trees holding the same eight roots: `bundled/` (ships
 with the app), `DATA_DIR/installed` (the store's), `DATA_DIR/workspace` (the
 agent's), and `origin/store` itself, which is the same shape reached over git.
-Discovery precedence is bundled → installed → workspace and **first match
-wins**; resolution *by filename* (`isolation.resolve_script`) deliberately runs
-the other way, because there the agent means the file it wrote.
+Discovery precedence is workspace → installed → bundled and **first match
+wins**: **the most specific tree wins**, and resolution *by filename*
+(`isolation.resolve_script`) reads the same direction, which is why the
+`reversed` it used to carry is gone.
+
+**It ran the other way, and turning it round is what makes a kernel capability
+revisable.** An installed package can be uninstalled and replaced; a bundled
+one cannot, so under bundled-first there was no way to try a change to a
+kernel tool except by editing the kernel's own tree — editing the app rather
+than writing a plugin. Overriding buys **no authority**: a workspace file is
+subprocessed whatever it is called (`isolation.required_isolation` reads the
+tree, not the name), and every effect it has arrives at the gate like anybody
+else's. What an override replaces is the *answer*, never the permission — so
+a shadowing `/permissions` could misreport what is granted, and could not
+grant anything.
+
+Two properties keep it usable. **Failure falls back**, as a property of the
+loop rather than a rule written anywhere: a shadowing file that will not load
+never reaches the seen-set, so the tree below it registers as though the draft
+were not there — a half-written override cannot take a working kernel tool off
+the air. And **shadowing is reported**: `plugin_discovery._shadowed` names both
+sides ("`x` in bundled is shadowed by workspace"), because "skipped" alone
+reads as a failure and an author who meant to override wants to see that it
+took. `plugin.list(source="widgets")` says the same thing structurally, in its
+`shadowed` key.
+
+**Reverting is deleting the draft, and it does not need a restart.**
+`PluginWatcher._restore_shadowed` re-registers whatever the deleted file was
+shadowing. Unloading alone unregisters by source path and re-scans nothing, so
+the capability was simply *gone* until the next boot — which made overriding a
+kernel plugin a one-way door in exactly the case you most want out of. The
+other roots were already right and are the argument for it: a deleted parser or
+LLM backend is answered with a full `discover()` rescan, so the shadowed file
+comes straight back; only the five families took the targeted unload and
+stopped there.
+
+It looks for **the same filename one tree down**, not a family rescan. A rescan
+would rebuild every service in the process — discarding live adapters without
+calling `unload()` on them, leaking the resident boxes they hold — to answer a
+question about one file, and the same filename is what an override *is* in
+practice: you copy the file you mean to revise and edit the copy. Only trees
+strictly below the deleted one are searched, since a same-named file above it
+would have won the name to begin with; an empty `names` means the deleted file
+held nothing and there is nothing to give back. The residual is a draft filed
+under a different name than the plugin it shadowed — nothing restores that, and
+nothing can say which file ought to win without loading candidates to find out,
+so a restart resolves it and the log says so rather than leaving it silent.
+
+`plugin.validate`'s duplicate-name check is the one place that had to learn the
+rule rather than inherit it: `_known_names` drops any name this file
+*outranks*, or the validator would refuse the exact thing the ordering exists
+to allow. The reverse collision is still reported, and is the one worth
+reporting — there the file being checked is the one that loses, and its author
+cannot otherwise see it.
 
 **A root is declared only when the kernel itself routes it.** That is the test
 to apply before adding a ninth: it is a claim that core code needs standing

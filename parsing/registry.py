@@ -274,8 +274,9 @@ def discover() -> int:
     """Rebuild the registry by importing every installed parser helper.
 
     Scans ``parsers/parse_*.py`` at each tree's root in precedence order
-    (bundled first, so the kernel's text parser always wins) and imports each,
-    firing its module-level ``register(...)`` calls. Heavy parsers guard their
+    (workspace first, so a draft overrides the parser it is a draft of, and
+    the kernel's text parser is the last word rather than the first) and
+    imports each, firing its module-level ``register(...)`` calls. Heavy parsers guard their
     own imports, so a missing optional dependency leaves those extensions
     unregistered rather than failing the scan.
 
@@ -294,7 +295,7 @@ def discover() -> int:
             continue
         for py_file in sorted(parsers.glob("parse_*.py")):
             if py_file.stem in seen:
-                continue          # an earlier, higher-precedence root won
+                continue          # a more specific tree already claimed it
             module_name = f"{root.module}.parsers.{py_file.stem}"
             drain_registrations()          # discard anything left by a failure
             module = import_tree_module(module_name, py_file, root.builtin,

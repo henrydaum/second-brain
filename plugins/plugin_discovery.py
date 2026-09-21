@@ -139,6 +139,27 @@ def _purge_plugin_settings(plugin_types: set[str]):
     _plugin_setting_types.update(kept_types)
 
 
+# ── Shadowing ────────────────────────────────────────────────────────
+
+def _shadowed(kind: str, name: str, plugin_dir, winner: str) -> None:
+    """Report a name a higher-precedence tree already claimed.
+
+    Precedence is most-specific-first (``trees.TREES``), so the file being
+    skipped here is the *more general* one — the store's copy behind a
+    workspace draft, or the kernel's own behind either. That is the point of
+    the ordering rather than an accident of it, which is why this names both
+    sides: "skipped" alone reads as a failure, and an author who meant to
+    override wants to see that the override took.
+
+    A log line rather than a notification, because this fires per collision
+    during a bulk discovery that already logs its own summary. The listing is
+    where a person looks for it — ``plugin.list`` reports a shadowed widget
+    the same way, for the same reason.
+    """
+    logger.warning("%s '%s': the %s copy wins; the one in %s is skipped",
+                   kind, name, winner, plugin_dir.root.name)
+
+
 # ── Per-type configuration ───────────────────────────────────────────
 
 def _discovery_config(plugin_type: str) -> dict:
@@ -172,7 +193,7 @@ def discover_commands(command_registry, reload: bool = False):
     cfg = _COMMAND_CONFIG
     t0 = time.time()
     count = 0
-    seen_names = set()
+    seen_names: dict[str, str] = {}
 
     if reload:
         _purge_plugin_settings({"command"})
@@ -188,12 +209,13 @@ def discover_commands(command_registry, reload: bool = False):
                 if not getattr(instance, "name", ""):
                     continue
                 if instance.name in seen_names:
-                    logger.warning(f"Command '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
+                    _shadowed("Command", instance.name, plugin_dir,
+                              seen_names[instance.name])
                     continue
                 instance._source_path = _source_path(py_file)
                 command_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="command")
-                seen_names.add(instance.name)
+                seen_names[instance.name] = plugin_dir.root.name
                 count += 1
 
     logger.info(f"Discovered {count} command(s) in {time.time() - t0:.2f}s")
@@ -211,7 +233,7 @@ def discover_frontends(reload: bool = False) -> dict[str, type]:
     cfg = _FRONTEND_CONFIG
     t0 = time.time()
     found: dict[str, type] = {}
-    seen_names: set[str] = set()
+    seen_names: dict[str, str] = {}
 
     if reload:
         _purge_plugin_settings({"frontend"})
@@ -228,12 +250,12 @@ def discover_frontends(reload: bool = False) -> dict[str, type]:
                 if not name:
                     continue
                 if name in seen_names:
-                    logger.warning(f"Frontend '{name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
+                    _shadowed("Frontend", name, plugin_dir, seen_names[name])
                     continue
                 cls._source_path = _source_path(py_file)
                 found[name] = cls
                 _collect_config_settings(cls, plugin_type="frontend")
-                seen_names.add(name)
+                seen_names[name] = plugin_dir.root.name
 
     logger.info(f"Discovered {len(found)} frontend(s) in {time.time() - t0:.2f}s")
     return found
@@ -245,7 +267,7 @@ def discover_tools(tool_registry, reload: bool = False):
     cfg = _TOOL_CONFIG
     t0 = time.time()
     count = 0
-    seen_names = set()
+    seen_names: dict[str, str] = {}
 
     if reload:
         _purge_plugin_settings({"tool"})
@@ -259,12 +281,13 @@ def discover_tools(tool_registry, reload: bool = False):
                 continue
             for instance in _find_subclass_instances(module, BaseTool):
                 if instance.name in seen_names:
-                    logger.warning(f"Tool '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
+                    _shadowed("Tool", instance.name, plugin_dir,
+                              seen_names[instance.name])
                     continue
                 instance._source_path = _source_path(py_file)
                 tool_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="tool")
-                seen_names.add(instance.name)
+                seen_names[instance.name] = plugin_dir.root.name
                 count += 1
 
     logger.info(f"Discovered {count} tool(s) in {time.time() - t0:.2f}s")
@@ -276,7 +299,7 @@ def discover_tasks(orchestrator, reload: bool = False):
     cfg = _TASK_CONFIG
     t0 = time.time()
     count = 0
-    seen_names = set()
+    seen_names: dict[str, str] = {}
 
     if reload:
         _purge_plugin_settings({"task"})
@@ -290,12 +313,13 @@ def discover_tasks(orchestrator, reload: bool = False):
                 continue
             for instance in _find_subclass_instances(module, BaseTask):
                 if instance.name in seen_names:
-                    logger.warning(f"Task '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
+                    _shadowed("Task", instance.name, plugin_dir,
+                              seen_names[instance.name])
                     continue
                 instance._source_path = _source_path(py_file)
                 orchestrator.register_task(instance)
                 _collect_config_settings(instance, plugin_type="task")
-                seen_names.add(instance.name)
+                seen_names[instance.name] = plugin_dir.root.name
                 count += 1
 
     logger.info(f"Discovered {count} task(s) in {time.time() - t0:.2f}s")
@@ -308,7 +332,7 @@ def discover_services(config: dict) -> dict:
     cfg = _SERVICE_CONFIG
     t0 = time.time()
     services = {}
-    seen_names = set()
+    seen_names: dict[str, str] = {}
 
     for plugin_dir in cfg["dirs"]:
         if not plugin_dir.path.exists():
@@ -327,12 +351,13 @@ def discover_services(config: dict) -> dict:
             built_names = [n for n in built if n not in seen_names]
             for svc_name, svc in built.items():
                 if svc_name in seen_names:
-                    logger.warning(f"Service '{svc_name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
+                    _shadowed("Service", svc_name, plugin_dir,
+                              seen_names[svc_name])
                     continue
                 svc._source_path = _source_path(py_file)
                 _collect_config_settings(svc, service_names=built_names, plugin_type="service")
                 services[svc_name] = svc
-                seen_names.add(svc_name)
+                seen_names[svc_name] = plugin_dir.root.name
 
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
     return services

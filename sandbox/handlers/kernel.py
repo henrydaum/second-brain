@@ -1509,10 +1509,11 @@ def _widget_list() -> Result:
     is a widget that is installed and invisible.
 
     **First match wins, per name**, the same rule every other discoverer
-    follows — bundled shadows installed shadows workspace — so a draft in the
-    workspace does not silently replace what the store put there. The shadowed
-    file is reported rather than dropped, since "my widget is not showing up"
-    is otherwise unanswerable from the browser.
+    follows — workspace shadows installed shadows bundled — so a draft is how
+    you revise a widget you cannot uninstall. The shadowed file is reported
+    rather than dropped, since "my widget is not showing up" is otherwise
+    unanswerable from a browser that can read no disk, and an override that
+    took silently looks the same as one that did not.
 
     Answers facts, never a URL. Fetching one is ``GET /files?path=``, which is
     ``frontend_http``'s route and not the kernel's to name — a client knows
@@ -2042,16 +2043,52 @@ def _plugin_describe(ctx, args: dict) -> Result:
     return Result.failure(f"no plugin named {name!r}")
 
 
+def _tree_rank(path) -> int:
+    """How specific a file's tree is: 0 for workspace, rising to the bundled
+    tree, and past every tree for a path the layout does not hold.
+
+    The index into ``trees.TREES``, which *is* precedence order, so "wins a
+    collision" is ``<``. Unknown sits last so a file in no tree overrides
+    nothing — the fail-closed end, and the one a temp file or a test fixture
+    lands on.
+    """
+    import trees
+
+    found = trees.locate(path)
+    if found is None:
+        return len(trees.TREES)
+    for index, tree in enumerate(trees.TREES):
+        if tree.name == found.tree.name:
+            return index
+    return len(trees.TREES)
+
+
 def _known_names(ctx, path) -> list:
-    """Every registered plugin name, minus the ones this file already owns.
+    """Every registered plugin name this file may not take.
 
     The validator's duplicate-name check exists to stop a new plugin
-    shadowing an existing one. Re-validating a file that is *already*
-    registered would otherwise report it as a duplicate of itself — the
-    single most common case, since the point of the check is to run it after
-    every edit. So entries whose ``_source_path`` is this file are dropped.
+    shadowing an existing one *by accident*. Two kinds of name are therefore
+    dropped before it runs, and both are cases where the collision is the
+    intended outcome rather than the mistake.
+
+    The first is the file's own names. Re-validating something already
+    registered would otherwise report it as a duplicate of itself — the single
+    most common case, since the point of the check is to run it after every
+    edit.
+
+    The second is anything this file **outranks**. Precedence is
+    most-specific-first (``trees.TREES``), so a workspace draft of an
+    installed tool is how you revise a package you would otherwise have to
+    uninstall, and a draft of a bundled one is how you revise something that
+    cannot be uninstalled at all. Reporting the name it deliberately takes
+    would make the validator refuse the one thing the ordering exists to
+    allow. A collision the other way is still reported, and is worth
+    reporting: there the file being checked is the one that loses, which is
+    the case an author cannot otherwise see — their plugin simply never
+    appears.
     """
     target = str(path)
+    rank = _tree_rank(path)
     names = []
     registries = (
         getattr(getattr(ctx, "tool_registry", None), "tools", None),
@@ -2061,8 +2098,12 @@ def _known_names(ctx, path) -> list:
     )
     for registry in registries:
         for name, obj in dict(registry or {}).items():
-            if str(getattr(obj, "_source_path", "") or "") != target:
-                names.append(name)
+            source = str(getattr(obj, "_source_path", "") or "")
+            if source == target:
+                continue
+            if source and _tree_rank(source) > rank:
+                continue          # this file legitimately overrides it
+            names.append(name)
     return names
 
 

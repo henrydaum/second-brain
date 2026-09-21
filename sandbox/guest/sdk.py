@@ -734,8 +734,8 @@ class _Widget(_Namespace):
         Each row carries ``name``, ``stem``, ``tree``, ``path`` and
         ``extension``, plus ``shadowed`` listing any same-named file a
         higher-precedence tree hid. This is the only way to learn a widget
-        exists: a browser can reach no disk, and bundled beats installed beats
-        workspace exactly as it does for plugins.
+        exists: a browser can reach no disk, and workspace beats installed
+        beats bundled exactly as it does for plugins.
 
         It answers no URL. Read the file at ``path`` however your transport
         does — over HTTP that is ``GET /files?path=``.

@@ -800,10 +800,10 @@ def test_the_store_installs_a_widget_and_checks_it_against_its_own_root():
 def test_the_sdk_lists_widgets_from_every_tree_first_match_winning(tmp_path, monkeypatch):
     """``plugin.list(source="widgets")`` is how the browser learns what exists.
 
-    Precedence is every other discoverer's — bundled over installed over
-    workspace — but the shadowed file is *reported* rather than dropped,
+    Precedence is every other discoverer's — workspace over installed over
+    bundled — but the shadowed file is *reported* rather than dropped,
     because "my widget is not showing up" cannot be answered from a browser
-    that can read no disk.
+    that can read no disk, and neither can "did my override take".
 
     """
     from tests.support import retarget_trees
@@ -820,10 +820,234 @@ def test_the_sdk_lists_widgets_from_every_tree_first_match_winning(tmp_path, mon
     rows = _plugin_list(None, {"source": "widgets"}).data
 
     assert [row["name"] for row in rows] == ["file_explorer", "notes"]
-    assert rows[0]["tree"] == "installed"
+    assert rows[0]["tree"] == "workspace"
     assert rows[0]["shadowed"] == [
-        str(roots["workspace"] / "widgets" / "widget_file_explorer.html")]
+        str(roots["installed"] / "widgets" / "widget_file_explorer.html")]
     assert rows[1]["extension"] == ".html"
     # No URL. Fetching one is the transport's business, and a second client
     # would have a different one.
     assert not any("url" in row for row in rows)
+
+
+# ── Precedence: the most specific tree wins ──────────────────────────
+#
+# One ordering, read by everything: ``trees.TREES``. The tests below pin the
+# table itself, then the three behaviours that hang off it — a draft
+# overriding what it is a draft of, a *broken* draft not taking anything down
+# with it, and the validator not calling a deliberate override a mistake.
+
+
+def _tool_source(name: str, label: str) -> str:
+    return ("from guest.bases import BaseTool\n\n"
+            "class SameTool(BaseTool):\n"
+            f"    name = '{name}'\n"
+            f"    description = '{label}'\n"
+            "    parameters = {}\n"
+            "    def run(self, sdk, **kwargs):\n"
+            "        return sdk.ok(None)\n")
+
+
+def _discover_over_trees(monkeypatch, roots):
+    """Run tool discovery across real retargeted trees, in table order."""
+    import trees
+    import plugins.plugin_paths as paths
+
+    _patch_tool_discovery(
+        monkeypatch,
+        tuple((tree.name, roots[tree.name], tree.module, tree.builtin)
+              for tree in trees.TREES),
+    )
+    registry = _ToolRegistry()
+    plugin_discovery.discover_tools(registry, reload=True)
+    return registry
+
+
+def test_the_layout_table_ranks_the_workspace_first():
+    """Precedence is a property of ``TREES`` and nothing restates it.
+
+    Every discoverer walks this tuple and keeps a seen-set, so the order here
+    *is* the answer to "who wins a name collision". Pinned as a literal
+    because the direction was reversed deliberately: the more specific tree
+    wins, which is what makes a workspace draft the way to revise a bundled
+    capability that cannot be uninstalled.
+    """
+    import trees
+
+    assert [tree.name for tree in trees.TREES] == [
+        "workspace", "installed", "bundled"]
+
+
+def test_script_resolution_reads_the_same_direction_as_discovery():
+    """``resolve_script`` used to reverse the table and no longer may.
+
+    It resolves a *filename* an agent typed, and the agent means the one it
+    wrote — which used to disagree with discovery resolving a *capability
+    name*. The two agree now, so a ``reversed`` here would silently hand back
+    the bundled copy of a script the agent had just drafted.
+    """
+    import inspect
+
+    from sandbox import isolation
+
+    assert "reversed" not in inspect.getsource(isolation.resolve_script)
+
+
+def test_a_workspace_draft_overrides_the_bundled_tool_it_revises(
+        tmp_path, monkeypatch):
+    """The whole point: shadowing is how you revise what you cannot uninstall.
+
+    An installed package can be removed and replaced. A bundled one cannot, so
+    without this there is no way to try a change to a kernel tool except by
+    editing the kernel's own tree — which is editing the app rather than
+    writing a plugin.
+    """
+    from tests.support import retarget_trees
+
+    roots = retarget_trees(monkeypatch, tmp_path)
+    for tree in ("bundled", "installed", "workspace"):
+        tools = roots[tree] / "tools"
+        tools.mkdir(parents=True)
+        (tools / "tool_same.py").write_text(
+            _tool_source("same_tool", tree), encoding="utf-8")
+
+    registry = _discover_over_trees(monkeypatch, roots)
+
+    assert registry.tools["same_tool"].description == "workspace"
+
+
+def test_a_draft_that_will_not_load_shadows_nothing(tmp_path, monkeypatch):
+    """Failure falls back, and it is the loop that says so rather than a rule.
+
+    A file that does not load never reaches the seen-set, so the tree below it
+    registers as though the draft were not there. That is what keeps a
+    half-written override from taking a working kernel tool off the air —
+    the failure mode that would otherwise make overriding too sharp to use.
+    """
+    from tests.support import retarget_trees
+
+    roots = retarget_trees(monkeypatch, tmp_path)
+    for tree in ("bundled", "workspace"):
+        (roots[tree] / "tools").mkdir(parents=True)
+    (roots["bundled"] / "tools" / "tool_same.py").write_text(
+        _tool_source("same_tool", "bundled"), encoding="utf-8")
+    (roots["workspace"] / "tools" / "tool_same.py").write_text(
+        "class Broken(:\n", encoding="utf-8")
+
+    registry = _discover_over_trees(monkeypatch, roots)
+
+    assert registry.tools["same_tool"].description == "bundled"
+
+
+def test_the_validator_does_not_call_a_deliberate_override_a_duplicate(
+        tmp_path, monkeypatch):
+    """``plugin.validate`` must not refuse the one thing precedence allows.
+
+    Its duplicate-name check exists to catch an *accidental* collision. A
+    workspace file taking a bundled name is not one — it is the override the
+    ordering is for — so the name is dropped before the check runs. The
+    reverse is still reported: there the file being checked is the one that
+    loses, which is the case an author cannot otherwise see.
+    """
+    from types import SimpleNamespace
+
+    from sandbox.handlers.kernel import _known_names
+    from tests.support import retarget_trees
+
+    roots = retarget_trees(monkeypatch, tmp_path)
+    bundled = roots["bundled"] / "tools" / "tool_same.py"
+    workspace = roots["workspace"] / "tools" / "tool_same.py"
+    for path in (bundled, workspace):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    registry = SimpleNamespace(tools={})
+    ctx = SimpleNamespace(tool_registry=registry)
+
+    registry.tools = {"same_tool": SimpleNamespace(_source_path=str(bundled))}
+    assert _known_names(ctx, workspace) == []
+
+    registry.tools = {"same_tool": SimpleNamespace(_source_path=str(workspace))}
+    assert _known_names(ctx, bundled) == ["same_tool"]
+
+
+class _LiveToolRegistry(_ToolRegistry):
+    """A registry that actually forgets, unlike the recording double above."""
+
+    def unregister(self, name):
+        super().unregister(name)
+        self.tools.pop(name, None)
+
+
+def test_deleting_an_override_restores_what_it_was_shadowing(
+        tmp_path, monkeypatch):
+    """Reverting is deleting the draft, and it must not need a restart.
+
+    Unloading alone unregisters by source path and re-scans nothing, so the
+    capability was simply *gone* until the next boot — which makes overriding
+    a kernel plugin a one-way door in exactly the case you most want to back
+    out of. A deleted parser or LLM backend already came back, because those
+    watcher paths answer with a full rescan; only the five families stopped at
+    the unload.
+    """
+    import trees
+
+    roots = {}
+    for tree in trees.TREES:
+        tools = tmp_path / tree.name / "tools"
+        tools.mkdir(parents=True)
+        roots[tree.name] = tmp_path / tree.name
+        (tools / "tool_same.py").write_text(
+            _tool_source("same_tool", tree.name), encoding="utf-8")
+
+    _patch_tool_discovery(
+        monkeypatch,
+        tuple((tree.name, roots[tree.name], tree.module, tree.builtin)
+              for tree in trees.TREES),
+    )
+    registry = _LiveToolRegistry()
+    plugin_discovery.discover_tools(registry, reload=True)
+    assert registry.tools["same_tool"].description == "workspace"
+
+    draft = roots["workspace"] / "tools" / "tool_same.py"
+    draft.unlink()
+    watcher = PluginWatcher({}, tool_registry=registry)
+    outcome = watcher.unregister(draft)
+
+    assert outcome["restored"] == "same_tool"
+    # One tree down, not all the way to bundled: reverting a draft hands back
+    # the package it was a draft *of*.
+    assert registry.tools["same_tool"].description == "installed"
+
+
+def test_deleting_a_shadowed_file_restores_nothing(tmp_path, monkeypatch):
+    """A file that held no name had nothing to give back.
+
+    Deleting the *bundled* copy while a workspace draft is live must not
+    reload anything: the draft is still registered and still correct, and a
+    restore here would either be a no-op or would quietly demote it.
+    """
+    import trees
+
+    roots = {}
+    for tree in trees.TREES:
+        tools = tmp_path / tree.name / "tools"
+        tools.mkdir(parents=True)
+        roots[tree.name] = tmp_path / tree.name
+        (tools / "tool_same.py").write_text(
+            _tool_source("same_tool", tree.name), encoding="utf-8")
+
+    _patch_tool_discovery(
+        monkeypatch,
+        tuple((tree.name, roots[tree.name], tree.module, tree.builtin)
+              for tree in trees.TREES),
+    )
+    registry = _LiveToolRegistry()
+    plugin_discovery.discover_tools(registry, reload=True)
+
+    bundled = roots["bundled"] / "tools" / "tool_same.py"
+    bundled.unlink()
+    outcome = PluginWatcher({}, tool_registry=registry).unregister(bundled)
+
+    assert outcome["names"] == []
+    assert outcome["restored"] is None
+    assert registry.tools["same_tool"].description == "workspace"

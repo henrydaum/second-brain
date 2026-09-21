@@ -11,7 +11,7 @@ from events.event_bus import bus
 from events.event_channels import WIDGET_CATALOG_CHANGED
 from runtime.notifications import notify
 import trees
-from plugins.plugin_paths import plugin_info
+from plugins.plugin_paths import plugin_dirs, plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin
 
 logger = logging.getLogger("PluginWatcher")
@@ -271,18 +271,97 @@ class PluginWatcher:
             command_registry=self._runtime.get("command_registry"),
             frontend_manager=self._runtime.get("frontend_manager"),
         )
+        restored = self._restore_shadowed(info, path, names)
         if info.plugin_type == "service":
             self._refresh_llm_backends()
         if info.plugin_type == "command":
             self._refresh_commands()
         self._reconcile_plugin_config()
-        for name in names:
-            self._notify("Plugin removed", str(name))
+        if restored:
+            source = self._tree_name(restored, info)
+            self._notify("Plugin reverted",
+                         f"{restored} is back to the {source} copy"
+                         if source else str(restored))
+        else:
+            for name in names:
+                self._notify("Plugin removed", str(name))
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
         return {
             "ok": True, "names": names, "family": info.plugin_type,
-            "path": str(path),
+            "path": str(path), "restored": restored,
         }
+
+    def _tree_name(self, name: str, info) -> str | None:
+        """Which tree the now-registered plugin came from, for the notice."""
+        item = self._items(info.plugin_type).get(name)
+        found = trees.locate(getattr(item, "_source_path", "") or "")
+        return found.tree.name if found else None
+
+    def _restore_shadowed(self, info, path: Path, names: list) -> str | None:
+        """Re-register whatever the deleted file was shadowing, if anything.
+
+        Precedence is most-specific-first, so deleting a workspace draft is how
+        you revert to the package — or the kernel capability — it was
+        overriding. Unloading alone never did that: it unregisters by source
+        path and nothing re-scans the trees underneath, so the capability was
+        simply *gone* until the next restart. The gap is older than overriding
+        being useful; what changed is that reverting is now the ordinary way
+        out of an override rather than an oddity.
+
+        The other roots are the argument that this is the right shape. A
+        deleted parser or LLM backend is answered with a full ``discover()``
+        rescan, so the shadowed file comes straight back; only the five
+        families took the targeted unload path and then stopped.
+
+        **The same filename one tree down**, rather than a family rescan. A
+        rescan would rebuild every service in the process — discarding live
+        adapters without calling ``unload()`` on them, and leaking the resident
+        boxes they hold — to answer a question about one file. It is also what
+        an override *is* in practice: you copy the file you mean to revise and
+        edit the copy.
+
+        Only trees strictly *below* the deleted one are searched, because a
+        same-named file above it would have won the name in the first place.
+        An empty ``names`` says the deleted file held nothing — it was itself
+        shadowed — so there is nothing to give back.
+
+        The residual is a draft filed under a different name than the plugin it
+        shadowed. Nothing restores that, and nothing can say which file ought
+        to win without loading candidates to find out. A restart resolves it,
+        and the log says so rather than leaving it silent.
+        """
+        if not names:
+            return None
+        dirs = plugin_dirs(info.plugin_type)
+        try:
+            below = next(index for index, candidate in enumerate(dirs)
+                         if candidate.path.resolve() == path.parent)
+        except (StopIteration, OSError):
+            return None
+        for plugin_dir in dirs[below + 1:]:
+            candidate = plugin_dir.path / path.name
+            if not candidate.is_file():
+                continue
+            name, error = load_single_plugin(
+                info.plugin_type, candidate,
+                tool_registry=self._runtime.get("tool_registry"),
+                orchestrator=self._runtime.get("orchestrator"),
+                services=self.services,
+                config=self.config,
+                command_registry=self._runtime.get("command_registry"),
+                frontend_manager=self._runtime.get("frontend_manager"),
+                runtime=self._runtime.get("runtime"),
+            )
+            if error:
+                logger.warning("Could not restore %s shadowed by deleted %s: %s",
+                               candidate, path.name, error)
+                return None
+            logger.info("Restored %s '%s' from %s after %s was deleted",
+                        info.plugin_type, name, plugin_dir.root.name, path.name)
+            return name
+        logger.info("Nothing shadowed by %s to restore; %s left unregistered "
+                    "(a restart re-scans by name)", path.name, ", ".join(names))
+        return None
 
     def resolve_registered(self, name: str, family: str = "") -> tuple:
         """Resolve a registered name to one unambiguous source path."""

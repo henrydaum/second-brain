@@ -123,12 +123,13 @@ def resolve_script(raw) -> Path | None:
         return None
     try:
         import trees
-        # Reversed against discovery order on purpose. Discovery resolves a
-        # *capability name* and lets the bundled tree win, so the app's own
-        # tool is not shadowed by a draft. This resolves a *filename* an agent
-        # typed, and the agent means the one it wrote — so the workspace is
-        # searched first and the bundled tree last.
-        script_dirs = tuple(reversed(trees.dirs_for(SCRIPTS_DIRNAME)))
+        # Plain precedence order, which this used to have to reverse. Discovery
+        # once let the bundled tree win a *capability name* while this resolves
+        # a *filename* an agent typed — and the agent means the one it wrote,
+        # so the two answers pointed opposite ways. Precedence is
+        # most-specific-first now (``trees.TREES``), so the workspace is
+        # searched first here because it is searched first everywhere.
+        script_dirs = trees.dirs_for(SCRIPTS_DIRNAME)
     except Exception:
         return None
     for _tree, directory in script_dirs:

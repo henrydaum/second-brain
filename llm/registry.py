@@ -99,8 +99,9 @@ def _entry_from(source: str) -> str:
 def discover() -> int:
     """Rebuild the backend catalogue by scanning every plugin tree.
 
-    Scans ``llm/llm_*.py`` at each tree's root in precedence order (bundled
-    first). A file that will not validate is skipped with a logged reason
+    Scans ``llm/llm_*.py`` at each tree's root in precedence order (workspace
+    first, so a draft backend overrides the installed one it is revising).
+    A file that will not validate is skipped with a logged reason
     rather than failing the scan — one broken backend must not take the others
     with it, because one of the others may be the only way to reach a model at
     all.
@@ -124,7 +125,7 @@ def discover() -> int:
                 continue
             for py_file in sorted(backends.glob(f"{BACKEND_PREFIX}*.py")):
                 if py_file.stem in seen:
-                    continue          # a higher-precedence tree won
+                    continue          # a more specific tree already claimed it
                 seen.add(py_file.stem)
                 report = validate_file(py_file)
                 if not report.ok:

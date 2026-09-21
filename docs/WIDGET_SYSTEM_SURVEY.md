@@ -257,7 +257,8 @@ Provide screenshots, bounded DOM/accessibility snapshots, console exceptions,
 request traces, and source locations to the authoring agent. Add a preview mode
 with mock data and effects disabled, plus narrow/wide and light/dark checks.
 Keep versions and a restore action. Let users fork an installed app into a
-workspace draft with explicit identity rather than fighting discovery precedence.
+workspace draft — discovery precedence now carries that rather than fighting
+it, since a workspace copy shadows the installed one under the same name.
 
 ### Presentation and composition
 

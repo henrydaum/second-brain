@@ -10,10 +10,13 @@ distinction between ``tools/`` and ``scripts/``, and it is why a script needs no
 ``script_`` prefix: the directory is already the declaration, and taxing the
 cheapest capability only pushes work back through ``proc.run``.
 
-**Who put it here.** Three local trees — the app's own (``bundled``), the
-store's (``installed``), the agent's (``workspace``) — plus the store branch
+**Who put it here.** Three local trees — the agent's (``workspace``), the
+store's (``installed``), the app's own (``bundled``) — plus the store branch
 itself, which is the same shape reached over git rather than a filesystem.
-Precedence runs bundled → installed → workspace, matching discovery order.
+Precedence runs workspace → installed → bundled: **the most specific tree
+wins**, so a draft overrides the package it is a draft of, and a package
+overrides the kernel's own. There is one order and everything reads it in the
+same direction.
 
 A root is declared here **only when the kernel itself routes it**. That test
 admits ``parsers/`` and ``llm/`` (kernel registries live in ``parsing/`` and
@@ -99,13 +102,33 @@ WORKSPACE = Tree("workspace", DATA_DIR / "workspace", "workspace")
 #: isolation all iterate that tuple and none of them can reach a git ref.
 STORE = Tree("store", ref="origin/store")
 
-#: Local trees in discovery precedence order. **First match wins**: every
-#: discoverer (``plugin_discovery``, ``parsing.discover``, ``llm.discover``)
-#: keeps a seen-set and skips a later collision with a warning, so a bundled
-#: capability shadows an installed one of the same name and both shadow a
-#: workspace draft. Resolution *by filename* runs the other way — see
-#: ``isolation.resolve_script``.
-TREES: tuple[Tree, ...] = (BUNDLED, INSTALLED, WORKSPACE)
+#: Local trees in precedence order. **First match wins**: every discoverer
+#: (``plugin_discovery``, ``parsing.discover``, ``llm.discover``, and the
+#: widget listing) keeps a seen-set and skips a later collision with a
+#: warning, so a workspace draft shadows an installed package of the same name
+#: and both shadow the bundled original.
+#:
+#: It used to run the other way, and the reason for turning it round is that
+#: shadowing is the only way to *revise* something you cannot uninstall. An
+#: installed package can be removed and replaced; a bundled one cannot, so
+#: under bundled-first there was no way to try a change to a kernel tool
+#: except by editing the kernel's own tree — which is to say by editing the
+#: app rather than by writing a plugin. Overriding buys no authority: a
+#: workspace file is subprocessed whatever it is called
+#: (``isolation.required_isolation``) and every effect it has arrives at the
+#: gate like anybody else's, so what the override replaces is the *answer*,
+#: never the permission.
+#:
+#: Failure falls back, and that is a property of the loop rather than a rule
+#: written anywhere: a shadowing file that will not load never reaches the
+#: seen-set, so the tree below it registers as though the draft were not
+#: there. A file that loads and then misbehaves is the author's problem.
+#:
+#: Resolution *by filename* (``isolation.resolve_script``) reads the same
+#: direction and used to be the one exception — it reversed this tuple,
+#: because an agent naming a file means the one it wrote. Those two answers
+#: agree now, which is why that ``reversed`` is gone.
+TREES: tuple[Tree, ...] = (WORKSPACE, INSTALLED, BUNDLED)
 
 def tree(name: str) -> Tree | None:
     """Look a tree up by name, or None.
