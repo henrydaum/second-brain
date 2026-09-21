@@ -68,7 +68,7 @@ Second Brain runs on your own machine. Two things to install: **the app** (requi
 
 ## 1. Install the app
 
-You need [Python 3.11+](https://www.python.org/downloads/) and [git](https://git-scm.com/downloads).
+You need [Python 3.11+](https://www.python.org/downloads/) and [git](https://git-scm.com/downloads). If you want the web UI as well, you need [Node 20.19+ or 22.12+](https://nodejs.org/) — it ships with `npm`, and there is nothing to add to `requirements.txt`, which is pip's and stays kernel-minimal.
 
 ```bash
 git clone https://github.com/henrydaum/second-brain
@@ -160,11 +160,11 @@ Set **`sync_directories`** to the folders you want indexed. Expect a flood of ta
 
 # Install the UI
 
-The UI lives in this repo, in **`frame_ui/`**. It is being rebuilt: right now it is a page that connects and prints what the kernel sends, not yet a chat interface. The previous UI — a React app on [assistant-ui](https://www.assistant-ui.com/), in its own repo at [second-brain-ui](https://github.com/henrydaum/second-brain-ui) — still works and is still the one to use if you want a finished app today.
+The UI lives in this repo, in **`frame_ui/`** — a React app on [assistant-ui](https://www.assistant-ui.com/) with conversations, attachments, settings, notifications and widget panels. It used to be a second repository you cloned separately; it is not any more, so a pull of Second Brain is a pull of the UI and the two halves of the protocol cannot drift apart.
 
 Works on Windows, macOS and Linux. Takes about two minutes.
 
-**Before you start:** Second Brain has to be *running* while you use the UI — the UI is just a face for it. Leave it going in its terminal and open a **second terminal** for everything below. You'll also need [Node 20.19+ or 22.12+](https://nodejs.org/).
+**Before you start:** Second Brain has to be *running* while you use the UI — the UI is just a face for it. Leave it going in its terminal and open a **second terminal** for everything below. You'll also need [Node 20.19+ or 22.12+](https://nodejs.org/); `npm` comes with it.
 
 ### 1. Turn the HTTP frontend on
 
@@ -202,6 +202,8 @@ No notification at all means the UI never came up: `web_ui.log` in your data dir
 
 Prefer to run it yourself? Set `ui_autostart` to off in `/config` and use `npm run dev` as before. Anything already serving is left alone either way, so a dev server you keep running is adopted rather than duplicated.
 
+Keeping it current is `/update`: it pulls the repo (the UI comes with it), runs `npm install`, and rebuilds and reactivates the deployment on platforms that have one.
+
 ### Reaching it from another machine
 
 One setting, in the REPL:
@@ -227,7 +229,7 @@ Open that URL in your phone's browser, then add it to your home screen — on iP
 
 ### Why the dev server?
 
-Because it's the only thing that works on every platform today. `npm run build` produces a `dist` folder that `frontend_http` can serve directly (the `http_static_dir` setting), but a build served that way has to get its token from somewhere, and putting it in the bundle hands the credential to every browser that loads the page. Serving a build properly needs a reverse proxy that adds the token on its own hop — which today exists only in the old UI repo's [macOS deployment](https://github.com/henrydaum/second-brain-ui/blob/main/docs/MACOS_DEPLOYMENT.md). The dev server is perfectly fine for personal use.
+Because it's the only thing that works on every platform today. `npm run build` produces a `dist` folder that `frontend_http` can serve directly (the `http_static_dir` setting), but a build served that way has to get its token from somewhere, and putting it in the bundle hands the credential to every browser that loads the page. Serving a build properly needs a reverse proxy that adds the token on its own hop — which today exists for macOS only, as a Caddy gateway: [frame_ui/docs/MACOS_DEPLOYMENT.md](frame_ui/docs/MACOS_DEPLOYMENT.md), with the scripts in `frame_ui/deploy/macos/`. The dev server is perfectly fine for personal use.
 
 ---
 
