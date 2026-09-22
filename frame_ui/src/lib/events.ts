@@ -55,9 +55,21 @@ type StreamDeltaPayload = {
   kind?: string;
 };
 
+/** A background agent whose report was just handed to the waiting turn. */
+export type ReturnedAgent = {
+  title: string;
+  state: "done" | "failed" | "cancelled";
+  conversation_id: number;
+};
+
 type TurnActivityPayload = {
   turn_id?: string | null;
-  phase: "waiting" | "thinking";
+  /** Absent on a frame that only announces `returned` — a report arriving is
+   *  an event within the wait, not a change of phase. */
+  phase?: "waiting" | "thinking";
+  /** How many agents the wait is still on. Only on `waiting`. */
+  count?: number;
+  returned?: ReturnedAgent[];
 };
 
 /** Fires for tool calls and slash commands alike. */

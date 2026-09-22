@@ -12,18 +12,21 @@ export function ReplyActivity() {
   );
   const presentation = useAuiState((s) =>
     s.message.metadata.custom[PRESENTATION] as
-      { phase?: string; since?: number } | undefined,
+      { phase?: string; since?: number; count?: number } | undefined,
   );
   const phase = !active ? "none" : inputRequests.length ? "awaiting_input"
     : presentation?.phase === "writing" ? "writing"
       : presentation?.phase === "working" ? "working"
         : presentation?.phase === "waiting" ? "waiting" : "thinking";
-  return <ActivityLine phase={phase} since={presentation?.since} />;
+  return <ActivityLine phase={phase} since={presentation?.since} count={presentation?.count} />;
 }
 
-export function ActivityLine({ phase, since }: {
+export function ActivityLine({ phase, since, count }: {
   phase: "none" | "awaiting_input" | "waiting" | "writing" | "working" | "thinking";
   since?: number;
+  /** Agents still being waited on. Absent from an older kernel, which says
+   *  only that it is waiting. */
+  count?: number;
 }) {
   const [intervalStart, setIntervalStart] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
@@ -40,7 +43,8 @@ export function ActivityLine({ phase, since }: {
   const showsElapsed = phase === "waiting" || phase === "working" || phase === "thinking";
   const label = phase === "writing" ? "Writing" :
     phase === "awaiting_input" ? "Waiting for your response" :
-      phase === "waiting" ? "Waiting" : phase === "thinking" ? "Thinking" : "Working";
+      phase === "waiting" ? (count ? `Waiting on ${count} ${count === 1 ? "agent" : "agents"}` : "Waiting")
+        : phase === "thinking" ? "Thinking" : "Working";
   return (
     <div data-slot="reply-activity" data-phase={phase}
       className="text-muted-foreground my-2 flex min-h-6 items-center gap-2 text-sm"

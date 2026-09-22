@@ -18,6 +18,8 @@ import type { MessageAttachment, Turn } from "@/runtime/store";
  *  maps this name to the component that names them. */
 export const SENT_ATTACHMENTS = "sentAttachments";
 export const AGENT_FILES = "agentFiles";
+/** A background agent reporting back. See `AgentReturnedPart` in the store. */
+export const AGENT_RETURNED = "agentReturned";
 export const PRESENTATION = "presentation";
 
 /** Key under `metadata.custom` holding the turn's time in epoch milliseconds.
@@ -100,6 +102,13 @@ export function convertMessage(turn: Turn): ThreadMessageLike {
               name: AGENT_FILES,
               data: { paths: part.paths, id: part.id ?? `${turn.id}:files:${index}`, receivedAt: part.receivedAt },
             }];
+
+      case "agent_returned":
+        return [{
+          type: "data" as const,
+          name: AGENT_RETURNED,
+          data: { id: part.id, title: part.title, state: part.state, conversationId: part.conversationId },
+        }];
     }
   });
 
@@ -132,6 +141,7 @@ export function convertMessage(turn: Turn): ThreadMessageLike {
         turn.parts.some((part) => part.kind === "tool" && part.status !== "finished")
           ? "working" : "thinking",
       since: turn.activity?.since ?? turn.createdAt,
+      count: turn.activity?.phase === "waiting" ? turn.activity.count : undefined,
     };
   }
   if (turn.createdAt !== undefined) custom[SENT_AT] = turn.createdAt;

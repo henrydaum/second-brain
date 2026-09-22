@@ -148,6 +148,30 @@ function prose(raw: string): string | null {
 }
 
 /**
+ * Who a stored subagent report came from, and how it ended.
+ *
+ * The live frame carries this structured; the stored row carries only the
+ * sentence the model read, so it is read back out of that. The shape is
+ * `Handle.notice` in `runtime/subagents.py`, and a test on each side pins it.
+ * A report worded some other way yields null — no marker rather than a wrong
+ * one.
+ */
+export function agentReport(
+  text: string,
+): { title: string; state: "done" | "failed" | "cancelled"; conversationId: number } | null {
+  const head = /^\[Background agent '(.*?)' (finished|FAILED|TIMED OUT)\b/s.exec(text);
+  const ids = [...text.matchAll(/conversation #(\d+)/g)];
+  if (!head || !ids.length) return null;
+  return {
+    title: head[1],
+    state: head[2] === "finished" ? "done" : head[2] === "FAILED" ? "failed" : "cancelled",
+    // The last mention: a report's own body may name other conversations, and
+    // the kernel always puts the child's own at the end.
+    conversationId: Number(ids[ids.length - 1][1]),
+  };
+}
+
+/**
  * The marker a compaction leaves behind, or null for any other system row.
  *
  * The kernel packs one of these when it folds the history into a summary —
@@ -267,6 +291,19 @@ export function toTurns(stored: StoredMessage[]): Turn[] {
       // Kernel notes deliberately wear the user's role because they are
       // addressed to the model. `author` is the wire's attribution; rendering
       // these as something the person said would misrepresent the transcript.
+      if (message.author === "subagent_report") {
+        // The one kernel note a person is meant to see — not its words, which
+        // are the model's to summarise, but that an agent came back. It sits
+        // inside the turn that was waiting, where the live frame put it.
+        const returned = agentReport(typeof message.content === "string" ? message.content : "");
+        const owner = (message.turn_id
+          ? turns.findLast((turn) => turn.role === "assistant" && turn.turnId === message.turn_id)
+          : undefined) ?? open ?? undefined;
+        if (returned && owner) {
+          owner.parts.push({ kind: "agent_returned", id: `stored-${message.id}`, ...returned });
+        }
+        continue;
+      }
       if (message.author) continue;
       open = null;
       if (!message.turn_id) pending = new Map();

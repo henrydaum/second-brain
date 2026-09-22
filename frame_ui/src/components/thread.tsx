@@ -73,7 +73,8 @@ import { fullTimestamp, shortTimestamp } from "@/lib/time";
 import { FINE_POINTER_QUERY, useMediaQuery } from "@/lib/media";
 import { cn } from "@/lib/utils";
 import { useConversations, useSession } from "@/runtime/domains";
-import { AGENT_FILES, PRESENTATION, SENT_AT } from "@/runtime/convert";
+import { AGENT_FILES, AGENT_RETURNED, PRESENTATION, SENT_AT } from "@/runtime/convert";
+import { AgentReturned, type AgentReturnedData } from "@/components/agent-returned";
 
 /**
  * How a user message's parts are drawn.
@@ -551,6 +552,9 @@ export const AssistantMessage: FC = () => {
               case "tool-call":
                 return part.toolUI ?? <ToolFallback {...part} />;
               case "data":
+                if (part.name === AGENT_RETURNED) {
+                  return <AgentReturned {...(part.data as AgentReturnedData)} />;
+                }
                 return part.name === AGENT_FILES ? null : part.dataRendererUI;
               default:
                 return null;

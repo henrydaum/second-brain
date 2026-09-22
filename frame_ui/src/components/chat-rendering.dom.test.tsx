@@ -234,6 +234,16 @@ describe("assembled assistant-ui reply", () => {
   });
 });
 
+it("says how many agents a wait is on, and keeps its clock as the count drops", () => {
+  vi.useFakeTimers();
+  const { rerender } = render(<ActivityLine phase="waiting" since={1} count={3} />);
+  expect(screen.getByRole("status", { name: "Waiting on 3 agents" })).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(4000));
+  rerender(<ActivityLine phase="waiting" since={1} count={1} />);
+  expect(screen.getByRole("status", { name: "Waiting on 1 agent" })).toBeInTheDocument();
+  expect(screen.getByText("4s")).toBeInTheDocument();
+});
+
 it("restarts Working elapsed time after Writing and waiting", () => {
   vi.useFakeTimers();
   const { rerender } = render(<ActivityLine phase="working" />);

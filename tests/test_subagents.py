@@ -514,8 +514,65 @@ def test_the_barrier_announces_waiting_then_thinking():
         assert registry.barrier(session) is BarrierOutcome.REPORTS_DELIVERED
     finally:
         unsubscribe()
-    assert [(event["turn_id"], event["phase"]) for event in seen] == [
-        ("parent-turn", "waiting"), ("parent-turn", "thinking")]
+    assert [(event["turn_id"], event.get("phase")) for event in seen] == [
+        ("parent-turn", "waiting"), ("parent-turn", None),
+        ("parent-turn", "thinking")]
+    assert seen[0]["count"] == 1
+    # A return is announced between the two, naming the child, without
+    # claiming a phase change.
+    [returned] = seen[1]["returned"]
+    assert returned["state"] == "done"
+    assert {"title", "conversation_id"} <= returned.keys()
+
+
+def test_a_delivered_report_is_attributed_so_it_is_not_the_persons_words():
+    from runtime.subagents import REPORT_AUTHOR
+
+    registry, runtime = registry_for()
+    session = FakeSession("repl", 7)
+    settle(registry, registry.spawn("job", owner="repl",
+                                    owner_conversation_id=7))
+    registry.barrier(session)
+    assert [m["author"] for m in session.pending_user_inputs] == [REPORT_AUTHOR]
+
+
+def test_the_notice_keeps_the_shape_the_web_ui_reads_back():
+    # frame_ui/src/lib/history.ts `agentReport` parses this sentence to draw
+    # the "agent returned" marker on reload. Change one, change the other.
+    from runtime.subagents import Handle
+    for state, word in ((DONE, "finished"), (FAILED, "FAILED"),
+                        (CANCELLED, "TIMED OUT")):
+        notice = Handle(id="h", conversation_id=17, title="Price check",
+                        timeout=1, state=state, text="x", error="x").notice()
+        assert notice.startswith(f"[Background agent 'Price check' {word}")
+        assert notice.rstrip("])").endswith("conversation #17")
+
+
+def test_the_waiting_count_ticks_down_as_children_report(monkeypatch):
+    import runtime.subagents as subagents
+    from events.event_bus import bus
+    from events.event_channels import SESSION_TURN_ACTIVITY
+
+    monkeypatch.setattr(subagents, "BARRIER_POLL_SECONDS", 0.05)
+    release = [threading.Event(), threading.Event()]
+    def turn(key, prompt, **_):
+        release[int(prompt[0])].wait(5)
+        return SimpleNamespace(ok=True, messages=["ok"], error=None)
+    registry, _ = registry_for(turn=turn)
+    session = FakeSession("repl", 7)
+    for i in range(2):
+        registry.spawn(str(i), owner="repl", owner_conversation_id=7)
+    seen = []
+    unsubscribe = bus.subscribe(SESSION_TURN_ACTIVITY, seen.append)
+    try:
+        releaser = threading.Timer(0.2, release[0].set)
+        finisher = threading.Timer(0.6, release[1].set)
+        releaser.start(); finisher.start()
+        registry.barrier(session)
+    finally:
+        unsubscribe()
+    counts = [e["count"] for e in seen if e.get("phase") == "waiting"]
+    assert counts == [2, 1]
 
 
 def test_the_barrier_abstains_on_the_redriven_half():

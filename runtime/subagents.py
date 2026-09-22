@@ -64,6 +64,8 @@ NOTICE_CAP = 16000
 
 RUNNING, DONE, FAILED, CANCELLED = "running", "done", "failed", "cancelled"
 TERMINAL = {DONE, FAILED, CANCELLED}
+# The ``author`` a delivered report's history row carries.
+REPORT_AUTHOR = "subagent_report"
 
 
 class BarrierOutcome(Enum):
@@ -716,9 +718,10 @@ class SubagentRegistry:
         Never raises: a barrier that breaks a turn is worse than one that
         misses a report.
         """
-        waiting = bool(self.pending_for(str(getattr(session, "key", "") or "")))
+        count = len(self.pending_for(str(getattr(session, "key", "") or "")))
+        waiting = bool(count)
         if waiting:
-            self._emit_activity(session, "waiting")
+            self._emit_activity(session, "waiting", count)
         try:
             return self._barrier(session)
         except Exception:
@@ -729,15 +732,27 @@ class SubagentRegistry:
                 self._emit_activity(session, "thinking")
 
     @staticmethod
-    def _emit_activity(session, phase: str) -> None:
-        """Announce only the barrier interval; it is presentation, not state."""
+    def _emit_activity(session, phase: str | None, count: int | None = None,
+                       returned: list[dict] | None = None) -> None:
+        """Announce only the barrier interval; it is presentation, not state.
+
+        ``count`` is how many children the wait is still on, so a client can
+        say "waiting on 3 agents" and tick it down as each one reports.
+        ``returned`` names children whose reports were just delivered; a frame
+        carrying it may omit ``phase``, since a return is not a phase change."""
         from events.event_bus import bus
         from events.event_channels import SESSION_TURN_ACTIVITY
-        bus.emit(SESSION_TURN_ACTIVITY, {
+        payload = {
             "session_key": getattr(session, "key", None),
             "turn_id": getattr(session, "turn_id", None),
-            "phase": phase,
-        })
+        }
+        if phase is not None:
+            payload["phase"] = phase
+        if count is not None:
+            payload["count"] = count
+        if returned:
+            payload["returned"] = returned
+        bus.emit(SESSION_TURN_ACTIVITY, payload)
 
     @staticmethod
     def _has_user_input(session) -> bool:
@@ -773,6 +788,7 @@ class SubagentRegistry:
 
         cancel_event = getattr(session, "cancel_event", None)
         delivered = []
+        announced = len(pending)
         while pending:
             # Clear before inspecting state. A completion/input racing with
             # the checks below then remains set when we enter the wait.
@@ -794,6 +810,9 @@ class SubagentRegistry:
                     pending.remove(handle)
             if not pending:
                 break
+            if len(pending) != announced:
+                announced = len(pending)
+                self._emit_activity(session, "waiting", announced)
             if self._has_user_input(session):
                 # A person speaking outranks passive waiting. Deliver anything
                 # that happened to finish in the same polling slice, but keep
@@ -822,22 +841,33 @@ class SubagentRegistry:
         conversation guard is what keeps a notice from leaking into a
         conversation the session moved to after the spawn was made.
         """
-        notices = [
-            handle.notice() for handle in handles
+        reports = [
+            handle for handle in handles
             if handle.owner_conversation_id is None
             or getattr(session, "conversation_id", None)
             == handle.owner_conversation_id
         ]
-        if not notices:
+        if not reports:
             return False
+        # ``author`` is what keeps the row from reading as something the person
+        # typed: it is addressed to the model, so it wears the user role, and
+        # the column is the only thing that tells a client otherwise.
         try:
             with session.lock:
                 session.pending_user_inputs.extend(
-                    {"action_type": "send_text", "payload": notice}
-                    for notice in notices)
+                    {"action_type": "send_text", "payload": handle.notice(),
+                     "author": REPORT_AUTHOR}
+                    for handle in reports)
         except Exception:
             logger.exception("could not queue subagent reports")
             return False
+        # The live half of the marker. A drained row reaches a client only
+        # when it next reads the transcript, which is a reload; announcing the
+        # return on the turn's activity is what lets it appear as it happens.
+        # No ``phase``: this is an event within the wait, not a change of it.
+        self._emit_activity(session, None, returned=[
+            {"title": h.title, "state": h.state,
+             "conversation_id": h.conversation_id} for h in reports])
         return True
 
     # --- scheduled spawns -----------------------------------------------

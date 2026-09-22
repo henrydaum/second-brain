@@ -127,7 +127,24 @@ export type CommandRun = {
   outcome: string[];
 };
 
-export type Part = TextPart | ToolPart | FilesPart;
+/**
+ * A background agent's report reaching this turn.
+ *
+ * The report itself is addressed to the model and is never drawn — it is the
+ * model's to summarise. What the person needs is that it arrived, and where the
+ * whole transcript is. A part rather than a turn of its own because it lands
+ * *inside* a running turn: a separate row would sit below the reply that is
+ * still being written above it.
+ */
+export type AgentReturnedPart = {
+  kind: "agent_returned";
+  id: string;
+  title: string;
+  state: "done" | "failed" | "cancelled";
+  conversationId: number;
+};
+
+export type Part = TextPart | ToolPart | FilesPart | AgentReturnedPart;
 
 export type Turn = {
   id: string;
@@ -135,7 +152,7 @@ export type Turn = {
   turnId?: string;
   continues?: boolean;
   source?: "live" | "history";
-  activity?: { phase: "waiting" | "thinking" | "working" | "writing"; since: number; streamId?: string };
+  activity?: { phase: "waiting" | "thinking" | "working" | "writing"; since: number; streamId?: string; count?: number };
   /**
    * Who this turn is from — and `system`, which is nobody.
    *
@@ -824,10 +841,25 @@ function applyFrame(state: State, frame: Frame): State {
     case "turn_activity": {
       const turn = state.turns.findLast((item) => item.role === "assistant" &&
         item.running && (!frame.payload.turn_id || item.turnId === frame.payload.turn_id));
-      if (!turn || turn.activity?.phase === frame.payload.phase) return state;
-      return { ...state, turns: replace(state.turns, turn.id, {
-        ...turn, activity: { phase: frame.payload.phase, since: Date.now() },
-      }) };
+      if (!turn) return state;
+      const { phase, count, returned } = frame.payload;
+      let next = turn;
+      if (returned?.length) {
+        next = { ...next, parts: [...next.parts, ...returned.map((agent) => ({
+          kind: "agent_returned" as const,
+          id: nextId(),
+          title: agent.title,
+          state: agent.state,
+          conversationId: agent.conversation_id,
+        }))] };
+      }
+      if (phase && (next.activity?.phase !== phase || next.activity?.count !== count)) {
+        // A count dropping is the same wait going on, so the elapsed clock
+        // keeps running; only a change of phase restarts it.
+        const since = next.activity?.phase === phase ? next.activity.since : Date.now();
+        next = { ...next, activity: { phase, since, ...(count === undefined ? {} : { count }) } };
+      }
+      return next === turn ? state : { ...state, turns: replace(state.turns, turn.id, next) };
     }
 
     /* The agent takes or hands back the turn. */

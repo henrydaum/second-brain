@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { toTurns, type StoredMessage } from "@/lib/history";
+import { agentReport, toTurns, type StoredMessage } from "@/lib/history";
 
 const user = (over: Partial<StoredMessage> = {}): StoredMessage => ({
   id: 1,
@@ -140,6 +140,26 @@ describe("stored message authorship", () => {
 
     expect(turns).toHaveLength(1);
     expect(turns[0]).toMatchObject({ id: "stored-2", role: "user" });
+  });
+
+  it("draws a stored subagent report as a return marker, not a user bubble", () => {
+    const turns = toTurns([
+      user({ id: 1, role: "assistant", turn_id: "t", content: JSON.stringify({ content: "Spawning." }) }),
+      user({ id: 2, turn_id: "t", author: "subagent_report", content:
+        "[Background agent 'Price check' finished] Found it in conversation #3. (full transcript: conversation #17)" }),
+    ]);
+
+    expect(turns.some((turn) => turn.role === "user")).toBe(false);
+    expect(turns.flatMap((turn) => turn.parts)).toContainEqual(expect.objectContaining({
+      kind: "agent_returned", title: "Price check", state: "done", conversationId: 17 }));
+  });
+
+  it("reads each way a subagent report can end", () => {
+    expect(agentReport("[Background agent 'a' FAILED] boom (full transcript: conversation #2)"))
+      .toMatchObject({ state: "failed", conversationId: 2 });
+    expect(agentReport("[Background agent 'b' TIMED OUT and was cancelled — … Partial transcript: conversation #5]"))
+      .toMatchObject({ title: "b", state: "cancelled", conversationId: 5 });
+    expect(agentReport("Something the person typed")).toBeNull();
   });
 
   it("keeps old rows whose author field is absent", () => {

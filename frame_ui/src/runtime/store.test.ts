@@ -43,6 +43,28 @@ describe("reply presentation ownership", () => {
     expect(resumed.turns[0].activity?.phase).toBe("thinking");
   });
 
+  it("ticks the waiting count down without restarting the wait", () => {
+    const state = run(typing(true),
+      { kind: "turn_activity", payload: { phase: "waiting", count: 3 } });
+    const since = state.turns[0].activity?.since;
+    const fewer = reduce(state, { type: "frame", frame: {
+      kind: "turn_activity", payload: { phase: "waiting", count: 2 },
+    } });
+    expect(fewer.turns[0].activity).toMatchObject({ phase: "waiting", count: 2, since });
+  });
+
+  it("puts a returned agent inside the turn that was waiting on it", () => {
+    const state = run(typing(true),
+      { kind: "turn_activity", payload: { phase: "waiting", count: 1 } },
+      { kind: "turn_activity", payload: { returned: [
+        { title: "Research", state: "done", conversation_id: 42 }] } });
+    expect(state.turns).toHaveLength(1);
+    expect(state.turns[0].parts).toEqual([expect.objectContaining({
+      kind: "agent_returned", title: "Research", state: "done", conversationId: 42 })]);
+    // A return is not a change of phase.
+    expect(state.turns[0].activity?.phase).toBe("waiting");
+  });
+
   it("does not leave an earlier segment writing when another stream completes", () => {
     const state = run(typing(true),
       { kind: "stream_delta", payload: { stream_id: "first", seq: 1, delta: "Earlier text", done: false } },

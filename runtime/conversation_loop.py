@@ -1709,6 +1709,10 @@ class ConversationLoop:
                 msg = {"role": "user", "content": (
                     payload if isinstance(payload, str)
                     else str((payload or {}).get("text") or ""))}
+            # A queued item the kernel wrote (a subagent report) says so, and
+            # the row keeps it — see the ``author`` column.
+            if item.get("author"):
+                msg["author"] = item["author"]
             # _record emits the SESSION_MESSAGE for each drained row.
             self._record(msg, history, new_messages,
                          self._active_db, self._active_conversation_id)
