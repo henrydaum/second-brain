@@ -1649,7 +1649,8 @@ class _Parse(_Namespace):
     def modality(self, extension: str, detail: bool = False):
         """Resolve an extension's modality.
 
-        ``detail=True`` answers ``{"modality", "known", "generic"}`` rather
+        ``detail=True`` answers ``{"modality", "known", "generic",
+        "modalities"}`` rather
         than the bare string, which is what a caller deciding *whether to
         parse at all* needs:
 
@@ -1658,6 +1659,10 @@ class _Parse(_Namespace):
                 text = sdk.parse.file(path)     # the parser owns this format
             else:
                 text = sdk.fs.read(path)        # the bytes are the content
+
+        ``modalities`` lists every registered route. ``parse.file`` asks for
+        text, so a format whose default is ``"tabular"`` or ``"image"`` can be
+        read this way only when ``"text"`` is among them.
 
         ``generic`` is true only for the kernel's text parser. Without it a
         caller cannot tell ``.py`` from ``.gdoc`` -- both register as "text",

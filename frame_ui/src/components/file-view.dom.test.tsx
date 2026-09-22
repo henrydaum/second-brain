@@ -226,15 +226,19 @@ describe("a file only a parser can read", () => {
 
   /** Answers `/sdk/<type>` the way the HTTP frontend does: `{data}` on 200,
    *  `{error, code}` otherwise. */
-  function answer(parseFile: { status: number; body: unknown }) {
+  function answer(
+    parseFile: { status: number; body: unknown },
+    route: Record<string, unknown> = {
+      modality: "text",
+      known: true,
+      generic: false,
+    },
+  ) {
     fetchMock.mockImplementation(async (url: URL | string) => {
       const type = String(url).split("/sdk/")[1]?.split("?")[0];
       const reply =
         type === "parse.modality"
-          ? {
-              status: 200,
-              body: { data: { modality: "text", known: true, generic: false } },
-            }
+          ? { status: 200, body: { data: route } }
           : parseFile;
       return {
         ok: reply.status < 300,
@@ -268,5 +272,82 @@ describe("a file only a parser can read", () => {
     expect(
       await screen.findByText("Second Brain would not hand this file over."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("a tabular file or an archive, read by the kernel", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  function answer(route: Record<string, unknown>, data: unknown) {
+    fetchMock.mockImplementation(
+      async (url: URL | string, init?: RequestInit) => {
+        const type = String(url).split("/sdk/")[1]?.split("?")[0];
+        const body =
+          type === "parse.modality"
+            ? { data: route }
+            : { data, asked: JSON.parse(String(init?.body ?? "{}")) };
+        return { ok: true, status: 200, json: async () => body };
+      },
+    );
+  }
+
+  it("draws each sheet of a workbook as a table, one at a time", async () => {
+    answer(
+      {
+        modality: "tabular",
+        known: true,
+        generic: false,
+        modalities: ["tabular", "text"],
+      },
+      [
+        "=== Budget (2 rows) ===",
+        "item,cost",
+        "rent,900",
+        "food,300",
+        "",
+        "=== Notes (1 row) ===",
+        "note",
+        "pay early",
+      ].join("\n"),
+    );
+    render(<FileView path="/srv/money.xlsx" />);
+
+    expect(await screen.findByText("rent")).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "cost" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("pay early")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(await screen.findByText("pay early")).toBeInTheDocument();
+    expect(screen.queryByText("rent")).not.toBeInTheDocument();
+  });
+
+  it("lists what an archive holds, asking for the container route", async () => {
+    answer(
+      {
+        modality: "container",
+        known: true,
+        generic: false,
+        modalities: ["container"],
+      },
+      ["/tmp/x/readme.txt", "/tmp/x/photo.png"],
+    );
+    render(<FileView path="/srv/bundle.zip" />);
+
+    expect(await screen.findByText("readme.txt")).toBeInTheDocument();
+    expect(screen.getByText("photo.png")).toBeInTheDocument();
+    const parseCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/sdk/parse.file"),
+    );
+    expect(JSON.parse(String(parseCall?.[1]?.body))).toMatchObject({
+      modality: "container",
+    });
   });
 });

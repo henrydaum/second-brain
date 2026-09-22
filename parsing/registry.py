@@ -204,6 +204,12 @@ def describe_extension(extension: str) -> dict:
     text", which the modality alone also blurs -- ``get_modality`` answers the
     string "unknown", and a caller comparing that against real modalities gets
     it right only by accident.
+
+    ``modalities`` is every route registered, not just the default. The
+    default is what a file *is* -- ``.xlsx`` is tabular -- and it says nothing
+    about whether the file can also be had as text, which is the one question
+    a caller outside a box can act on: only text and containers cross. Empty
+    for an extension answered from the native defaults alone.
     """
     ext = _normalize(extension)
     modality = get_modality(ext)
@@ -211,6 +217,7 @@ def describe_extension(extension: str) -> dict:
         "modality": modality,
         "known": modality != "unknown",
         "generic": (ext, modality) in _GENERIC,
+        "modalities": get_modalities_for(ext),
     }
 
 

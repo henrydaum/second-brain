@@ -10,7 +10,8 @@ const sdk = vi.fn();
 vi.mock("@/lib/client", () => ({
   sdk: (type: string, args: Record<string, unknown>) => sdk(type, args),
   authHeaders: () => ({ Authorization: "Bearer test" }),
-  fileUrl: (path: string) => `http://host/files?path=${encodeURIComponent(path)}`,
+  fileUrl: (path: string) =>
+    `http://host/files?path=${encodeURIComponent(path)}`,
 }));
 
 const {
@@ -24,6 +25,7 @@ const {
   guessIconKind,
   kindOf,
   nameOf,
+  readSheets,
   readText,
   resolveAgainst,
   suffixOf,
@@ -88,7 +90,9 @@ describe("resolveAgainst", () => {
     expect(resolveAgainst("/srv/vault/daily", "../plan.md")).toBe(
       "/srv/vault/plan.md",
     );
-    expect(resolveAgainst("/srv/vault", "./here.md")).toBe("/srv/vault/here.md");
+    expect(resolveAgainst("/srv/vault", "./here.md")).toBe(
+      "/srv/vault/here.md",
+    );
   });
 
   it("leaves an already-absolute path alone", () => {
@@ -150,7 +154,9 @@ describe("kindOf", () => {
     // person should read it.
     sdk.mockResolvedValue(route("text"));
     await expect(kindOf("/srv/vault/plan.md")).resolves.toBe("markdown");
-    await expect(kindOf("/srv/vault/README.markdown")).resolves.toBe("markdown");
+    await expect(kindOf("/srv/vault/README.markdown")).resolves.toBe(
+      "markdown",
+    );
     // Never even asked: the extension decided it.
     expect(sdk).not.toHaveBeenCalled();
 
@@ -183,12 +189,38 @@ describe("kindOf", () => {
     // go to the parser, never to the raw file.
     sdk.mockResolvedValueOnce(route("text", false));
     await expect(kindOf("/srv/plan.gdoc")).resolves.toBe("parsed");
-    sdk.mockResolvedValueOnce(route("container"));
-    await expect(kindOf("/srv/bundle.zip")).resolves.toBe("parsed");
     expect(sdk).toHaveBeenCalledWith("parse.modality", {
-      extension: ".zip",
+      extension: ".gdoc",
       detail: true,
     });
+  });
+
+  it("lists an archive rather than asking it for text it has no route to", async () => {
+    sdk.mockResolvedValueOnce({
+      ...route("container"),
+      modalities: ["container"],
+    });
+    await expect(kindOf("/srv/bundle.zip")).resolves.toBe("contents");
+  });
+
+  it("draws a tabular file as tables when it has a text route", async () => {
+    sdk.mockResolvedValueOnce({
+      ...route("tabular"),
+      modalities: ["tabular", "text"],
+    });
+    await expect(kindOf("/srv/budget.xlsx")).resolves.toBe("sheet");
+  });
+
+  it("offers a download when no route can cross", async () => {
+    // A DataFrame or a decoded image stays in the kernel; without a text route
+    // there is nothing to show, and asking would only fail.
+    sdk.mockResolvedValueOnce({
+      ...route("tabular"),
+      modalities: ["tabular"],
+    });
+    await expect(kindOf("/srv/old.parquet")).resolves.toBe("download");
+    sdk.mockResolvedValueOnce({ ...route("image"), modalities: ["image"] });
+    await expect(kindOf("/srv/scan.jp2")).resolves.toBe("image");
   });
 
   it("does not remember a failed ask", async () => {
@@ -223,6 +255,45 @@ describe("kindOf", () => {
     sdk.mockImplementation(() => Promise.reject(new Error("offline")));
     await expect(kindOf("/srv/photo.heic")).resolves.toBe("image");
     await expect(kindOf("/srv/thing.qqq")).resolves.toBe("download");
+  });
+});
+
+describe("readSheets", () => {
+  it("splits a tabular parser's text into its tables", () => {
+    const sheets = readSheets(
+      [
+        "=== First (2 rows) ===",
+        "a,b",
+        "1,x",
+        '2,"y, z"',
+        "",
+        "=== Big (1000 of 1500 rows) ===",
+        "n",
+        "0",
+      ].join("\n"),
+      "book.xlsx",
+    );
+    expect(sheets.map((s) => s.name)).toEqual(["First", "Big"]);
+    expect(sheets[0].rows).toEqual([
+      ["a", "b"],
+      ["1", "x"],
+      ["2", "y, z"],
+    ]);
+    expect(sheets[0].of).toBeNull();
+    expect(sheets[1].of).toBe(1500);
+  });
+
+  it("reads text with no section line as one table named for the file", () => {
+    const [only] = readSheets("a,b\r\n1,2", "t.parquet");
+    expect(only.name).toBe("t.parquet");
+    expect(only.rows).toEqual([
+      ["a", "b"],
+      ["1", "2"],
+    ]);
+  });
+
+  it("takes a singular row count", () => {
+    expect(readSheets("=== t (1 row) ===\nk\n1", "x")[0].name).toBe("t");
   });
 });
 

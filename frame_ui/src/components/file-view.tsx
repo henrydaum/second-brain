@@ -35,6 +35,7 @@ import { DownloadIcon, FileIcon, MusicIcon } from "lucide-react";
 
 import { HighlightedCode } from "@/components/assistant-ui/code-block";
 import { DotMatrix } from "@/components/assistant-ui/dot-matrix";
+import { FileKindIcon } from "@/components/file-kind-icon";
 import { useMarkdownMode } from "@/components/markdown-mode";
 import { MarkdownPreview } from "@/components/markdown-preview";
 import { fileUrl, RequestFailed } from "@/lib/client";
@@ -48,9 +49,11 @@ import {
   nameOf,
   probeStatus,
   readParsed,
+  readSheets,
   readText,
   suffixOf,
   type FileKind,
+  type Parsed,
 } from "@/lib/files";
 import { useRememberedScroll } from "@/lib/scroll-memory";
 import { cn } from "@/lib/utils";
@@ -265,7 +268,10 @@ function useMediaFailure(path: string) {
 
 /* ── The renderers ──────────────────────────────────────────────────── */
 
-const ImageView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => {
+const ImageView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
   const { failure, onError } = useMediaFailure(path);
   if (failure) return <Unavailable path={path} reason={failure} size={size} />;
 
@@ -286,7 +292,10 @@ const ImageView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => 
   );
 };
 
-const VideoView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => {
+const VideoView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
   const { failure, onError } = useMediaFailure(path);
   if (failure) return <Unavailable path={path} reason={failure} size={size} />;
 
@@ -306,7 +315,10 @@ const VideoView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => 
   );
 };
 
-const AudioView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => {
+const AudioView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
   const { failure, onError } = useMediaFailure(path);
   if (failure) return <Unavailable path={path} reason={failure} size={size} />;
 
@@ -327,7 +339,10 @@ const AudioView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => 
   );
 };
 
-const TableView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => {
+const TableView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
   const { loaded, failure } = useText(path);
   const scroller = useScroller(path, size, size);
   if (failure) return <Unavailable path={path} reason={failure} size={size} />;
@@ -338,12 +353,7 @@ const TableView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => 
     return <Unavailable path={path} reason="This file is empty." size={size} />;
   }
 
-  // The first row is the header, which is what a spreadsheet export always
-  // means by it — and being wrong costs one misnamed column rather than a
-  // misread table.
-  const [header, ...body] = rows;
-  const shown = body.slice(0, ROW_CAP);
-
+  const body = rows.length - 1;
   return (
     <div className={cn("flex w-full flex-col", size === "full" && "h-full")}>
       {/* The scroll lives here, not on the page: a table thirty columns wide
@@ -353,43 +363,58 @@ const TableView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => 
         scrolls={nameOf(path)}
         className="document-scrollbar block w-full min-h-0 flex-1 overflow-auto"
       >
-        <table className="w-full border-collapse text-xs">
-          <thead className="bg-muted/60 sticky top-0">
-            <tr>
-              {header.map((cell, i) => (
-                <th
-                  key={i}
-                  className="border-b px-2.5 py-1.5 text-start font-medium whitespace-nowrap"
-                >
-                  {cell}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((row, r) => (
-              <tr key={r} className="even:bg-muted/20">
-                {header.map((_, c) => (
-                  <td
-                    key={c}
-                    className="max-w-64 truncate border-b px-2.5 py-1 align-top"
-                    title={row[c] ?? ""}
-                  >
-                    {row[c] ?? ""}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable rows={rows} />
       </Frame>
       <p className="text-muted-foreground mt-1.5 shrink-0 text-[11px]">
-        {body.length} {body.length === 1 ? "row" : "rows"}
-        {shown.length < body.length && ` · showing ${shown.length}`}
+        {body} {body === 1 ? "row" : "rows"}
+        {body > ROW_CAP && ` · showing ${ROW_CAP}`}
         {loaded.truncated &&
           ` · read the first ${formatBytes(loaded.text.length)} of ${formatBytes(loaded.total)}`}
       </p>
     </div>
+  );
+};
+
+/**
+ * Rows as a table, the first of them the header — which is what a spreadsheet
+ * export always means by it, and being wrong costs one misnamed column rather
+ * than a misread table. Shared by delimited files read from disk and tabular
+ * files the kernel parsed, so a `.csv` and an `.xlsx` look like one thing.
+ */
+const DataTable: FC<{ rows: string[][] }> = ({ rows }) => {
+  const [header, ...body] = rows;
+  const shown = body.slice(0, ROW_CAP);
+
+  return (
+    <table className="w-full border-collapse text-xs">
+      <thead className="bg-muted/60 sticky top-0">
+        <tr>
+          {header.map((cell, i) => (
+            <th
+              key={i}
+              className="border-b px-2.5 py-1.5 text-start font-medium whitespace-nowrap"
+            >
+              {cell}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {shown.map((row, r) => (
+          <tr key={r} className="even:bg-muted/20">
+            {header.map((_, c) => (
+              <td
+                key={c}
+                className="max-w-64 truncate border-b px-2.5 py-1 align-top"
+                title={row[c] ?? ""}
+              >
+                {row[c] ?? ""}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 };
 
@@ -548,7 +573,9 @@ const PdfView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) => {
       try {
         const whole = await fetchWholeBytes(path, PDF_CAP);
         if (whole.truncated) {
-          throw new Error("This PDF is too large to preview; download it instead.");
+          throw new Error(
+            "This PDF is too large to preview; download it instead.",
+          );
         }
         if (cancelled) return;
         objectUrl = URL.createObjectURL(
@@ -626,42 +653,72 @@ const EmbedView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) =>
   );
 
 /**
- * A file the browser cannot draw, shown as what the kernel's parser made of it
- * — a `.docx`, a `.gdoc`, a spreadsheet the tabular parser flattens.
- *
- * **Plain, not highlighted.** This is extracted text, not source: colouring it
- * by the original's extension would dress a Word document as code. And the
- * original is one click away in the footer, because an extraction is a
- * reading of the file rather than the file.
+ * `parse.file`, asked once per path and modality, as a hook every parsed view
+ * shares. The same `Loading`/`Unavailable` frame as a file read from disk, so a
+ * parse failing reads as a fact about the file rather than a broken pane.
  */
-const ParsedView: FC<{ path: string; size: FileViewSize }> = ({
-  path,
-  size,
-}) => {
-  const [text, setText] = useState<string | null>(null);
+function useParsed(
+  path: string,
+  modality: "text" | "container",
+): { answer: Parsed | null; failure: string | null } {
+  const [answer, setAnswer] = useState<Parsed | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const scroller = useScroller(path, size, size);
 
   useEffect(() => {
     let cancelled = false;
-    setText(null);
+    setAnswer(null);
     setFailure(null);
-    void readParsed(path).then(
-      (answer) => {
-        if (!cancelled) setText(answer.text);
+    void readParsed(path, modality).then(
+      (parsed) => {
+        if (!cancelled) setAnswer(parsed);
       },
       (error) => {
-        if (cancelled) return;
-        setFailure(describeParseFailure(error));
+        if (!cancelled) setFailure(describeParseFailure(error));
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, modality]);
+
+  return { answer, failure };
+}
+
+/** The line under every parsed view. An extraction is a reading of the file
+ *  rather than the file, so the original is always one click away. */
+const Original: FC<{ path: string; children: ReactNode }> = ({
+  path,
+  children,
+}) => (
+  <p className="text-muted-foreground mt-1.5 shrink-0 text-[11px]">
+    {children} ·{" "}
+    <a
+      href={fileUrl(path)}
+      download={nameOf(path)}
+      className="underline underline-offset-2"
+    >
+      download the original
+    </a>
+  </p>
+);
+
+/**
+ * A file the browser cannot draw, shown as what the kernel's parser made of it
+ * — a `.docx`, a `.gdoc`, a `.pptx`.
+ *
+ * **Plain, not highlighted.** This is extracted text, not source: colouring it
+ * by the original's extension would dress a Word document as code.
+ */
+const ParsedView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
+  const { answer, failure } = useParsed(path, "text");
+  const scroller = useScroller(path, size, size);
 
   if (failure) return <Unavailable path={path} reason={failure} size={size} />;
-  if (text === null) return <Loading path={path} size={size} />;
+  if (answer === null) return <Loading path={path} size={size} />;
+  const text = "text" in answer ? answer.text : "";
   if (!text.trim()) {
     return (
       <Unavailable
@@ -686,16 +743,150 @@ const ParsedView: FC<{ path: string; size: FileViewSize }> = ({
           {text}
         </pre>
       </Frame>
-      <p className="text-muted-foreground mt-1.5 shrink-0 text-[11px]">
-        Text extracted by Second Brain ·{" "}
-        <a
-          href={fileUrl(path)}
-          download={nameOf(path)}
-          className="underline underline-offset-2"
+      <Original path={path}>Text extracted by Second Brain</Original>
+    </div>
+  );
+};
+
+/**
+ * A spreadsheet, a Parquet file, a SQLite database — the tabular parser's text
+ * route, which is CSV per table, drawn back into tables.
+ *
+ * **One table at a time, picked from a row of names.** A workbook is its
+ * sheets, and stacking them would put the second one below two hundred rows
+ * of the first where nobody finds it. The pick is per mount: which sheet was
+ * open is not worth remembering across files.
+ */
+const SheetView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
+  const { answer, failure } = useParsed(path, "text");
+  const [picked, setPicked] = useState(0);
+  const scroller = useScroller(path, `${size}:${picked}`, size);
+  useEffect(() => setPicked(0), [path]);
+
+  if (failure) return <Unavailable path={path} reason={failure} size={size} />;
+  if (answer === null) return <Loading path={path} size={size} />;
+
+  const sheets = readSheets(
+    "text" in answer ? answer.text : "",
+    nameOf(path),
+  ).filter((sheet) => sheet.rows.length > 0);
+  if (!sheets.length) {
+    return <Unavailable path={path} reason="This file is empty." size={size} />;
+  }
+
+  const sheet = sheets[Math.min(picked, sheets.length - 1)];
+  const body = sheet.rows.length - 1;
+  const total = sheet.of ?? body;
+
+  return (
+    <div className={cn("flex w-full flex-col", size === "full" && "h-full")}>
+      {sheets.length > 1 && (
+        <div
+          role="tablist"
+          aria-label="Sheets"
+          className="mb-1.5 flex shrink-0 gap-1 overflow-x-auto"
         >
-          download the original
-        </a>
-      </p>
+          {sheets.map((each, i) => (
+            <button
+              key={i}
+              type="button"
+              role="tab"
+              aria-selected={each === sheet}
+              onClick={() => setPicked(i)}
+              className={cn(
+                "rounded-md border px-2 py-0.5 text-[11px] whitespace-nowrap",
+                each === sheet
+                  ? "bg-accent font-medium"
+                  : "text-muted-foreground hover:bg-accent/50",
+              )}
+            >
+              {each.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <Frame
+        ref={scroller}
+        scrolls={`${nameOf(path)} — ${sheet.name}`}
+        className={cn(
+          "document-scrollbar block w-full overflow-auto",
+          size === "full" ? "min-h-0 flex-1" : "max-h-80",
+        )}
+      >
+        <DataTable rows={sheet.rows} />
+      </Frame>
+      <Original path={path}>
+        {total} {total === 1 ? "row" : "rows"}
+        {Math.min(body, ROW_CAP) < total &&
+          ` · showing ${Math.min(body, ROW_CAP)}`}
+      </Original>
+    </div>
+  );
+};
+
+/**
+ * An archive, shown as what the container parser extracted from it.
+ *
+ * Each entry opens in the same viewer — the paths are real files the parser
+ * wrote out, so they are ordinary host files from here on. Outside the
+ * file-activity provider there is nothing to open them with, and they are
+ * listed as text.
+ */
+const ContentsView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
+  const { answer, failure } = useParsed(path, "container");
+  const scroller = useScroller(path, size, size);
+  const activity = useFileActivityMaybe();
+
+  if (failure) return <Unavailable path={path} reason={failure} size={size} />;
+  if (answer === null) return <Loading path={path} size={size} />;
+  const contents = "contents" in answer ? answer.contents : [];
+  if (!contents.length) {
+    return (
+      <Unavailable path={path} reason="This archive is empty." size={size} />
+    );
+  }
+
+  return (
+    <div className={cn("flex w-full flex-col", size === "full" && "h-full")}>
+      <Frame
+        ref={scroller}
+        scrolls={nameOf(path)}
+        className={cn(
+          "document-scrollbar block w-full overflow-auto p-1.5",
+          size === "full" ? "min-h-0 flex-1" : "max-h-80",
+        )}
+      >
+        <ul className="text-xs">
+          {contents.map((child, i) => (
+            <li key={child}>
+              {activity ? (
+                <button
+                  type="button"
+                  onClick={() => activity.view(contents, i)}
+                  className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1 text-start"
+                >
+                  <FileKindIcon path={child} className="size-3.5 shrink-0" />
+                  <span className="truncate">{nameOf(child)}</span>
+                </button>
+              ) : (
+                <span className="flex items-center gap-2 px-2 py-1">
+                  <FileKindIcon path={child} className="size-3.5 shrink-0" />
+                  <span className="truncate">{nameOf(child)}</span>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </Frame>
+      <Original path={path}>
+        {contents.length} {contents.length === 1 ? "file" : "files"}
+      </Original>
     </div>
   );
 };
@@ -756,6 +947,10 @@ export const FileView: FC<{ path: string; size?: FileViewSize }> = ({
       return <EmbedView path={path} size={size} />;
     case "parsed":
       return <ParsedView path={path} size={size} />;
+    case "sheet":
+      return <SheetView path={path} size={size} />;
+    case "contents":
+      return <ContentsView path={path} size={size} />;
     case "download":
       return <DownloadView path={path} />;
   }

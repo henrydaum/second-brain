@@ -25,6 +25,7 @@
  */
 
 import { authHeaders, fileUrl, sdk } from "@/lib/client";
+import { parseDelimited } from "@/lib/csv";
 import { forgetPlaces } from "@/lib/scroll-memory";
 
 /* ── Naming ─────────────────────────────────────────────────────────── */
@@ -131,6 +132,8 @@ export type FileKind =
   | "text"
   | "embed"
   | "parsed"
+  | "sheet"
+  | "contents"
   | "download";
 
 /** The renderer kinds plus the one visual-only distinction worth making.
@@ -247,10 +250,21 @@ const STATIC: Record<string, string> = {
   ".flac": "audio",
 };
 
-/** How the kernel routes an extension — `parse.modality` with `detail`.
- *  `generic` is true only for `parse_text`, whose text *is* the file; any
- *  other known route is a specialist that turns the file into text. */
-type Route = { modality: string; known: boolean; generic: boolean };
+/**
+ * How the kernel routes an extension — `parse.modality` with `detail`.
+ *
+ * `generic` is true only for `parse_text`, whose text *is* the file; any other
+ * known route is a specialist. `modalities` is every route registered, which
+ * is what says whether a file can be had *as text* at all: `.xlsx` is tabular
+ * by default, and a DataFrame never leaves the kernel. Absent from a kernel
+ * older than the field, which is read as "trust the default".
+ */
+type Route = {
+  modality: string;
+  known: boolean;
+  generic: boolean;
+  modalities?: string[];
+};
 
 /**
  * The kernel's own answer for an extension, asked once per extension.
@@ -270,7 +284,10 @@ function routeOf(suffix: string): Promise<Route> {
   const known = routes.get(suffix);
   if (known) return known;
 
-  const asked = sdk<Route>("parse.modality", { extension: suffix, detail: true })
+  const asked = sdk<Route>("parse.modality", {
+    extension: suffix,
+    detail: true,
+  })
     .then((answer) => {
       if (answer && typeof answer.modality === "string") return answer;
       throw new Error("malformed parse.modality answer");
@@ -299,10 +316,14 @@ function routeOf(suffix: string): Promise<Route> {
  * 5. text through the *generic* parser → the raw bytes, shown as source. Not
  *    the parser's output: `parse_text` cleans and caps, and a viewer showing
  *    source must show what is on disk.
- * 6. anything else a parser is registered for → `"parsed"`, the kernel's text
- *    extraction. This is `.docx`, `.gdoc`, `.zip` — and it is *before* any
- *    bytes are read, because a `.gdoc` is valid JSON that is not the document.
- * 7. anything left is a download, which is what `/files` would serve it as.
+ * 6. a container → `"contents"`, the paths the parser extracted.
+ * 7. anything with a text route → `"parsed"`, the kernel's text extraction —
+ *    or `"sheet"` when the file is tabular, whose text is CSV per table. This
+ *    is `.docx`, `.gdoc`, `.xlsx`, and it is *before* any bytes are read,
+ *    because a `.gdoc` is valid JSON that is not the document.
+ * 8. anything left is a download, which is what `/files` would serve it as —
+ *    including a file whose only routes cannot cross, like a `.heic` image
+ *    parser.
  */
 export async function kindOf(path: string): Promise<FileKind> {
   const suffix = suffixOf(path);
@@ -320,7 +341,14 @@ export async function kindOf(path: string): Promise<FileKind> {
       return "audio";
   }
   if (route.modality === "text" && route.generic) return "text";
-  return route.known ? "parsed" : "download";
+  if (route.modality === "container") return "contents";
+
+  const asText = route.modalities
+    ? route.modalities.includes("text")
+    : route.known;
+  if (!asText) return "download";
+  // The text route of a tabular format is CSV per table — see `readSheets`.
+  return route.modality === "tabular" ? "sheet" : "parsed";
 }
 
 /**
@@ -538,46 +566,105 @@ export function readText(path: string): Promise<WholeText> {
   return asked;
 }
 
-/**
- * What a parser made of a file.
- *
- * Text only. A container parser also answers `also_contains`, but the HTTP
- * route hands a client `data` and nothing else, so the child paths never
- * reach the browser — a zip shows whatever text its parser wrote about it.
- */
-export type Parsed = { text: string };
+/** What a parser made of a file: its text, or for a container the paths of
+ *  what it held. */
+export type Parsed = { text: string } | { contents: string[] };
 
 /** Parser output, cached beside `texts` and forgotten with it. */
 const parsed = new Map<string, Promise<Parsed>>();
 
 /**
- * The kernel's text extraction for a file, through `parse.file`.
+ * The kernel's extraction of a file, through `parse.file`.
  *
  * Over the SDK rather than `/files`, because the parser runs kernel-side and
  * the bytes never need to reach the browser. The answer is bounded by the
- * parser's own char cap and, past that, by the wire — `interpreter.
- * _deliverable` degrades an oversized one to `ERROR_TOO_LARGE`, which the
- * viewer words as "download it".
+ * parser's own caps and, past that, by the wire — `interpreter._deliverable`
+ * degrades an oversized one to `too_large`, which the viewer words as
+ * "download it".
+ *
+ * `"container"` answers a list of extracted paths and has no text route, so a
+ * zip asked for text would simply fail.
  */
-export function readParsed(path: string): Promise<Parsed> {
-  const known = parsed.get(path);
+export function readParsed(
+  path: string,
+  modality: "text" | "container" = "text",
+): Promise<Parsed> {
+  const key = `${modality}:${path}`;
+  const known = parsed.get(key);
   if (known) {
-    parsed.delete(path);
-    parsed.set(path, known);
+    parsed.delete(key);
+    parsed.set(key, known);
     return known;
   }
 
-  const asked = sdk<unknown>("parse.file", { path, modality: "text" }).then(
-    (data) => ({ text: typeof data === "string" ? data : "" }),
+  const asked = sdk<unknown>("parse.file", { path, modality }).then(
+    (data): Parsed =>
+      modality === "container"
+        ? {
+            contents: Array.isArray(data)
+              ? data.filter((p): p is string => typeof p === "string")
+              : [],
+          }
+        : { text: typeof data === "string" ? data : "" },
   );
-  parsed.set(path, asked);
-  void asked.catch(() => parsed.delete(path));
+  parsed.set(key, asked);
+  void asked.catch(() => parsed.delete(key));
 
   for (const oldest of parsed.keys()) {
     if (parsed.size <= TEXT_CACHE) break;
     parsed.delete(oldest);
   }
   return asked;
+}
+
+/** One table out of a tabular file's text route. */
+export type Sheet = {
+  name: string;
+  rows: string[][];
+  /** Rows in the table, when the parser cut it short; otherwise null. */
+  of: number | null;
+};
+
+/** `=== name (N rows) ===` or `=== name (N of M rows) ===`, the section line
+ *  `parse_tabular`'s text route opens every table with. */
+const SECTION = /^=== (.*) \((\d+)(?: of (\d+))? rows?\) ===$/;
+
+/**
+ * Split a tabular parser's text back into its tables.
+ *
+ * Text without a single section line is read as one unnamed CSV, so a parser
+ * that renders a single table plainly still draws.
+ */
+export function readSheets(text: string, fallbackName: string): Sheet[] {
+  const sheets: Sheet[] = [];
+  let current: { name: string; of: number | null; lines: string[] } | null =
+    null;
+  const close = () => {
+    if (current) {
+      sheets.push({
+        name: current.name,
+        of: current.of,
+        rows: parseDelimited(current.lines.join("\n"), ","),
+      });
+    }
+  };
+
+  for (const line of text.split(/\r?\n/)) {
+    const match = SECTION.exec(line);
+    if (match) {
+      close();
+      current = {
+        name: match[1],
+        of: match[3] === undefined ? null : Number(match[3]),
+        lines: [],
+      };
+    } else {
+      current ??= { name: fallbackName, of: null, lines: [] };
+      current.lines.push(line);
+    }
+  }
+  close();
+  return sheets;
 }
 
 /** Drop what was held for a path, because it is not that file any more. Called
@@ -587,7 +674,8 @@ export function readParsed(path: string): Promise<Parsed> {
  *  rewritten points at whatever happens to be there now. */
 export function forgetFile(path: string): void {
   texts.delete(path);
-  parsed.delete(path);
+  parsed.delete(`text:${path}`);
+  parsed.delete(`container:${path}`);
   forgetPlaces(path);
 }
 

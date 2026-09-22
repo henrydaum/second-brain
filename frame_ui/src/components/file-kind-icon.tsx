@@ -4,6 +4,7 @@ import {
   FileCode2Icon,
   FileIcon,
   FileTextIcon,
+  FolderArchiveIcon,
   ImageIcon,
   MusicIcon,
   SheetIcon,
@@ -28,6 +29,8 @@ const KIND_ICONS: Record<FileIconKind, typeof FileIcon> = {
   text: FileTextIcon,
   embed: FileTextIcon,
   parsed: FileTextIcon,
+  sheet: SheetIcon,
+  contents: FolderArchiveIcon,
   download: FileIcon,
 };
 

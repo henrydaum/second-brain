@@ -484,7 +484,8 @@ def test_an_unregistered_extension_is_neither_known_nor_generic():
     parsing.discover()
     route = parsing.describe_extension(".sbxyz")
 
-    assert route == {"modality": "unknown", "known": False, "generic": False}
+    assert route == {"modality": "unknown", "known": False, "generic": False,
+                     "modalities": []}
 
 
 def test_clearing_the_registry_forgets_generic_registrations():
@@ -512,3 +513,21 @@ def test_registering_a_specialist_over_a_generic_route_clears_the_flag():
 
     assert not parsing.describe_extension(".sbtest")["generic"]
 
+
+
+def test_describing_an_extension_lists_every_route_not_just_the_default():
+    """The default says what a file is; the list says what it can be had as.
+
+    A spreadsheet is tabular first, and a DataFrame cannot cross a boundary --
+    so a caller outside a box needs to know whether a text route exists too,
+    and the default modality alone cannot tell it.
+    """
+    import parsing
+
+    parsing.clear()
+    parsing.register(".sbtest", "tabular", lambda sdk, path, config: None)
+    parsing.register(".sbtest", "text", lambda sdk, path, config: None)
+
+    route = parsing.describe_extension(".sbtest")
+    assert route["modality"] == "tabular"
+    assert sorted(route["modalities"]) == ["tabular", "text"]
