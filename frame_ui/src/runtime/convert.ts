@@ -107,7 +107,7 @@ export function convertMessage(turn: Turn): ThreadMessageLike {
         return [{
           type: "data" as const,
           name: AGENT_RETURNED,
-          data: { id: part.id, title: part.title, state: part.state, conversationId: part.conversationId },
+          data: { id: part.id, title: part.title, state: part.state, text: part.text, conversationId: part.conversationId },
         }];
     }
   });

@@ -59,6 +59,9 @@ type StreamDeltaPayload = {
 export type ReturnedAgent = {
   title: string;
   state: "done" | "failed" | "cancelled";
+  /** The report the agent handed back (the error, for a failure; empty for
+   *  one that timed out). */
+  text?: string;
   conversation_id: number;
 };
 

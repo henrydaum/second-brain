@@ -141,6 +141,8 @@ export type AgentReturnedPart = {
   id: string;
   title: string;
   state: "done" | "failed" | "cancelled";
+  /** The report itself, shown when the row is opened. */
+  text: string;
   conversationId: number;
 };
 
@@ -850,6 +852,7 @@ function applyFrame(state: State, frame: Frame): State {
           id: nextId(),
           title: agent.title,
           state: agent.state,
+          text: agent.text ?? "",
           conversationId: agent.conversation_id,
         }))] };
       }

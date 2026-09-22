@@ -522,6 +522,8 @@ def test_the_barrier_announces_waiting_then_thinking():
     # claiming a phase change.
     [returned] = seen[1]["returned"]
     assert returned["state"] == "done"
+    # The report itself travels, so a client can show it in place.
+    assert returned["text"].startswith("did: job")
     assert {"title", "conversation_id"} <= returned.keys()
 
 

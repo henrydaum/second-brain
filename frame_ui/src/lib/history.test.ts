@@ -151,14 +151,15 @@ describe("stored message authorship", () => {
 
     expect(turns.some((turn) => turn.role === "user")).toBe(false);
     expect(turns.flatMap((turn) => turn.parts)).toContainEqual(expect.objectContaining({
-      kind: "agent_returned", title: "Price check", state: "done", conversationId: 17 }));
+      kind: "agent_returned", title: "Price check", state: "done", conversationId: 17,
+      text: "Found it in conversation #3." }));
   });
 
   it("reads each way a subagent report can end", () => {
     expect(agentReport("[Background agent 'a' FAILED] boom (full transcript: conversation #2)"))
-      .toMatchObject({ state: "failed", conversationId: 2 });
+      .toMatchObject({ state: "failed", conversationId: 2, text: "boom" });
     expect(agentReport("[Background agent 'b' TIMED OUT and was cancelled — … Partial transcript: conversation #5]"))
-      .toMatchObject({ title: "b", state: "cancelled", conversationId: 5 });
+      .toMatchObject({ title: "b", state: "cancelled", conversationId: 5, text: "" });
     expect(agentReport("Something the person typed")).toBeNull();
   });
 

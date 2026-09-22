@@ -57,10 +57,10 @@ describe("reply presentation ownership", () => {
     const state = run(typing(true),
       { kind: "turn_activity", payload: { phase: "waiting", count: 1 } },
       { kind: "turn_activity", payload: { returned: [
-        { title: "Research", state: "done", conversation_id: 42 }] } });
+        { title: "Research", state: "done", text: "The answer", conversation_id: 42 }] } });
     expect(state.turns).toHaveLength(1);
     expect(state.turns[0].parts).toEqual([expect.objectContaining({
-      kind: "agent_returned", title: "Research", state: "done", conversationId: 42 })]);
+      kind: "agent_returned", title: "Research", state: "done", text: "The answer", conversationId: 42 })]);
     // A return is not a change of phase.
     expect(state.turns[0].activity?.phase).toBe("waiting");
   });

@@ -47,6 +47,12 @@ ALLOWED_ABSOLUTE = {
     # their own records, which nothing inside the boundary can otherwise
     # influence. See ``_tame_library_logging``.
     "logging",
+    # ``loader.py`` only, for locks — never to start a thread. An in-process
+    # box serves each call on a fresh kernel worker thread, so two calls can
+    # load the same member at once; a per-member RLock is what stops the
+    # second from seeing a half-executed module. The validator still refuses
+    # ``threading`` in plugin code: the kernel schedules.
+    "threading",
 }
 
 HOST_MODULES = {"policy", "handlers", "interpreter", "runner",

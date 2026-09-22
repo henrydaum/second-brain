@@ -155,13 +155,10 @@ class Handle:
             "profile": self.profile,
         }
 
-    def notice(self) -> str:
-        """The report as one line of prose for the parent's message queue."""
+    def preview(self) -> str:
+        """The report, capped at ``NOTICE_CAP`` — what the parent is handed."""
         if self.state == CANCELLED:
-            return (f"[Background agent '{self.title}' TIMED OUT and was "
-                    f"cancelled — it delivered no result; do not report "
-                    f"anything on its behalf. Partial transcript: "
-                    f"conversation #{self.conversation_id}]")
+            return ""
         body = (self.text if self.state == DONE else self.error).strip()
         if len(body) > NOTICE_CAP:
             # Say what is missing, and how much. A preview the model mistakes
@@ -169,6 +166,16 @@ class Handle:
             body = (body[:NOTICE_CAP]
                     + f" … [report truncated: {len(body):,} chars total, "
                       f"first {NOTICE_CAP:,} shown]")
+        return body
+
+    def notice(self) -> str:
+        """The report as one line of prose for the parent's message queue."""
+        if self.state == CANCELLED:
+            return (f"[Background agent '{self.title}' TIMED OUT and was "
+                    f"cancelled — it delivered no result; do not report "
+                    f"anything on its behalf. Partial transcript: "
+                    f"conversation #{self.conversation_id}]")
+        body = self.preview()
         state = "finished" if self.state == DONE else "FAILED"
         return (f"[Background agent '{self.title}' {state}] {body} "
                 f"(full transcript: conversation #{self.conversation_id})")
@@ -861,12 +868,13 @@ class SubagentRegistry:
         except Exception:
             logger.exception("could not queue subagent reports")
             return False
-        # The live half of the marker. A drained row reaches a client only
+        # The live half of the marker, carrying the report itself so a client
+        # can show it in place. A drained row reaches a client only
         # when it next reads the transcript, which is a reload; announcing the
         # return on the turn's activity is what lets it appear as it happens.
         # No ``phase``: this is an event within the wait, not a change of it.
         self._emit_activity(session, None, returned=[
-            {"title": h.title, "state": h.state,
+            {"title": h.title, "state": h.state, "text": h.preview(),
              "conversation_id": h.conversation_id} for h in reports])
         return True
 

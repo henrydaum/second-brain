@@ -158,13 +158,20 @@ function prose(raw: string): string | null {
  */
 export function agentReport(
   text: string,
-): { title: string; state: "done" | "failed" | "cancelled"; conversationId: number } | null {
-  const head = /^\[Background agent '(.*?)' (finished|FAILED|TIMED OUT)\b/s.exec(text);
+): { title: string; state: "done" | "failed" | "cancelled"; text: string; conversationId: number } | null {
+  const head = /^\[Background agent '(.*?)' (finished|FAILED|TIMED OUT)\]?/s.exec(text);
   const ids = [...text.matchAll(/conversation #(\d+)/g)];
   if (!head || !ids.length) return null;
+  const state = head[2] === "finished" ? "done" : head[2] === "FAILED" ? "failed" : "cancelled";
   return {
     title: head[1],
-    state: head[2] === "finished" ? "done" : head[2] === "FAILED" ? "failed" : "cancelled",
+    state,
+    // Between the bracketed head and the closing transcript pointer. A timeout
+    // carries no report at all — its sentence is instructions to the model.
+    text: state === "cancelled" ? "" : text
+      .slice(head[0].length)
+      .replace(/\s*\(full transcript: conversation #\d+\)\s*$/, "")
+      .trim(),
     // The last mention: a report's own body may name other conversations, and
     // the kernel always puts the child's own at the end.
     conversationId: Number(ids[ids.length - 1][1]),
