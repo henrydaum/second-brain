@@ -593,7 +593,13 @@ def test_a_clean_finish_is_sent_back_once_with_an_ephemeral_note():
     assert type(verdict).__name__ == "SendBack"
     assert verdict.ephemeral
     assert verdict.allow_tools, "saving a memory is a tool call"
+    assert verdict.quiet, "the comeback must never answer the user twice"
     assert "`memory`" in verdict.note
+
+    # And ``quiet`` survives the crossing, which is spelled out field by field.
+    from sandbox.guest.hooks import unwrap
+    from sandbox.hooks import rebuild
+    assert rebuild("end_turn", unwrap(verdict)).quiet
 
 
 def test_the_nudge_never_stacks_and_skips_what_is_not_a_clean_finish():

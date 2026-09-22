@@ -201,6 +201,42 @@ def test_doorman_ephemeral_note_reaches_model_but_not_history():
     assert all(m.get("content") != "secret nudge" for m in history)
 
 
+def test_a_quiet_comeback_keeps_the_reply_it_already_had():
+    """Housekeeping, not a second answer: asked to reflect, a model trained to
+    always reply answered the user's question again. Whatever a quiet
+    comeback ends on is dropped, and the turn's reply is the first one."""
+    llm = _FakeLLM([_response(content="first"), _response(content="Noted.")])
+    loop, cs, session, hooks, _, _ = _rig(llm=llm)
+
+    def doorman(ctx, ending):
+        if ending.doorman_fires == 0:
+            return SendBack("save anything?", ephemeral=True, quiet=True)
+        return None
+
+    hooks.add(END_TURN, doorman)
+    history = [{"role": "user", "content": "hi"}]
+    reply, new_messages, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "first"
+    assert len(llm.calls) == 2
+    assert all(m.get("content") != "Noted." for m in new_messages)
+    assert cs.turn_priority == "user"
+
+
+def test_an_empty_quiet_comeback_is_an_answer_not_a_stall():
+    """The empty-response nudge exists for weak models going silent; here
+    silence is what was asked for, so it must not re-ask."""
+    llm = _FakeLLM([_response(content="first"), _response(content="")])
+    loop, cs, session, hooks, _, _ = _rig(llm=llm)
+
+    hooks.add(END_TURN, lambda ctx, ending: SendBack("save anything?", quiet=True)
+              if ending.doorman_fires == 0 else None)
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert reply == "first"
+    assert len(llm.calls) == 2
+
+
 def test_doorman_fire_budget_frees_a_trapped_agent():
     llm = _FakeLLM([_response(content=f"answer {i}") for i in range(10)])
     loop, cs, session, hooks, _, _ = _rig(llm=llm)

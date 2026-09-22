@@ -260,11 +260,14 @@ class SendBack:
     and asks the model again. ``ephemeral=True`` shows the note to the model
     without recording it in history; ``allow_tools=False`` makes the comeback
     call text-only (how the kernel's over-budget doorman gets a summary
-    without more tool calls)."""
+    without more tool calls). ``quiet=True`` makes the comeback housekeeping:
+    its tool calls run, but the text it ends on is neither streamed, shown nor
+    recorded — empty is a fine answer — and the turn keeps the reply it had."""
 
     note: str
     ephemeral: bool = False
     allow_tools: bool = True
+    quiet: bool = False
 
 
 @dataclass

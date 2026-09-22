@@ -210,12 +210,15 @@ class SendBack:
     """Send the agent back inside with a note.
 
     ``ephemeral`` shows the note to the model without recording it in history;
-    ``allow_tools=False`` makes the comeback call text-only.
+    ``allow_tools=False`` makes the comeback call text-only. ``quiet`` makes
+    it housekeeping: tool calls run, but the text it ends on is never shown or
+    recorded (empty is fine), and the turn keeps the reply it already gave.
     """
 
     note: str
     ephemeral: bool = False
     allow_tools: bool = True
+    quiet: bool = False
 
 
 @dataclass

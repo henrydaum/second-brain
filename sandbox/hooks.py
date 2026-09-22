@@ -274,7 +274,8 @@ def rebuild(moment: str, answer):
     if kind == "send_back":
         return cls(note=str(answer.get("note") or ""),
                    ephemeral=bool(answer.get("ephemeral")),
-                   allow_tools=bool(answer.get("allow_tools", True)))
+                   allow_tools=bool(answer.get("allow_tools", True)),
+                   quiet=bool(answer.get("quiet")))
     if kind == "require_tool":
         return cls(name=str(answer.get("name") or ""),
                    note=str(answer.get("note") or ""))

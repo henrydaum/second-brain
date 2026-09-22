@@ -309,6 +309,10 @@ class ConversationLoop:
         # doorman-demanded call.
         self._doorman_fires = 0
         self._pending_ephemeral_notes: list[str] = []
+        # A quiet SendBack (see ``SendBack.quiet``): while set, the comeback's
+        # text is not streamed or shown, and the reply it holds is the turn's.
+        self._quiet_comeback = False
+        self._kept_final: str | None = None
         self._tools_override_once: list | None = None
         self._tool_choice_once = None
         self._suppress_tools_once = False
@@ -376,6 +380,8 @@ class ConversationLoop:
         self._active_conversation_id = conversation_id
         self._doorman_fires = 0
         self._pending_ephemeral_notes.clear()
+        self._quiet_comeback = False
+        self._kept_final = None
         self._tools_override_once = None
         self._tool_choice_once = None
         self._suppress_tools_once = False
@@ -688,10 +694,20 @@ class ConversationLoop:
             self._assistant_text_for_pending = cleaned or None
             # Surface the model's mid-turn explanatory text to live frontends.
             self._finish_stream(cleaned, "narration")
-            if cleaned and self.runtime is not None and self.session_key:
+            if (cleaned and self.runtime is not None and self.session_key
+                    and not self._quiet_comeback):
                 self.runtime.push_message(self.session_key, cleaned)
             # Recurse to immediately return the first call as an action.
             return self._next_action(cs, history, AttachmentBundle())
+
+        # A quiet comeback is over once it stops calling tools. Whatever it
+        # says is dropped — not rendered, not recorded — and the turn ends on
+        # the reply it already gave, which is already in history.
+        if self._quiet_comeback:
+            self._quiet_comeback = False
+            kept, self._kept_final = self._kept_final, None
+            self._final_text = kept
+            return "end_turn", {"final_text": kept}
 
         # Text-only response: emit `send_text` now; next iteration will end_turn.
         text = _clean(getattr(response, "content", ""))
@@ -931,7 +947,9 @@ class ConversationLoop:
                 return response
             if _clean(getattr(response, "content", "") or ""):
                 return response
-            if self._empty_response_retried:
+            if self._empty_response_retried or self._quiet_comeback:
+                # A quiet comeback answering with nothing is the expected
+                # answer, not a weak model stalling.
                 return response
             self._empty_response_retried = True
             logger.warning("LLM returned an empty response; retrying once with a nudge.")
@@ -1050,7 +1068,8 @@ class ConversationLoop:
         self._last_llm_used = llm
         streaming = (self.on_delta is not None
                      and getattr(llm, "supports_streaming", False)
-                     and not self._retry_without_streaming)
+                     and not self._retry_without_streaming
+                     and not self._quiet_comeback)
         llm_call_started = time.time()
         bus.emit(AGENT_LLM_CALL_STARTED, {
             "session_key": self.session_key,
@@ -1438,6 +1457,9 @@ class ConversationLoop:
                 self._pending_ephemeral_notes.append(note)
             if not verdict.allow_tools:
                 self._suppress_tools_once = True
+            if verdict.quiet:
+                self._quiet_comeback = True
+                self._kept_final = self._final_text
             self._final_text = None
             return "again"
         if isinstance(verdict, RequireTool):
