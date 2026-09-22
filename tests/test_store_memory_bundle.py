@@ -1,30 +1,29 @@
-"""What the kernel reads off the four files that make up memory.
+"""What the kernel reads off the files that make up memory.
 
 Same shape as ``test_store_attachment_tools``: kernel invariants that happen to
 be *about* store files. The subject is the kernel's own verdict — does this
 load, are these Requests real, is the retrieval free of dialogs, can this reach
 outside the folder — and the store file is the input.
 
-The three matter together because each is useless alone, and they divide by
-*when* rather than by verb. ``service_memory_retrieve`` ranks the corpus at
-``turn_start``, injects descriptions and records what it offered.
-``tool_memory`` is the only thing that touches the files — in either direction
-— and records what was opened. ``task_memory_curate`` decides when a curator
-runs. Two automatic halves and one agent-invoked one.
+The two matter together because each is useless alone.
+``service_memory_retrieve`` ranks the corpus at ``turn_start``, injects
+descriptions and records what it offered, and at ``end_turn`` sends the agent
+back once to save anything worth keeping. ``tool_memory`` is the only thing that
+touches the files — in either direction — and records what was opened. The
+curator task that used to reflect on a finished conversation is gone: the agent
+that did the work already holds the turn in its context.
 
 Reading and writing are one tool on purpose. They were two, whose
 *declarations* were disjoint — the writer had no ``fs.read`` — and that bought
-nothing a curator could not get through ``read_file`` one tool over, while
+nothing a writer could not get through ``read_file`` one tool over, while
 costing a revision the ability to keep a description it had just read. What
 confines the tool is that it takes a name and derives every path itself, so the
 tests below pin the character set and the two path templates rather than the
 split.
 
-What connects the three is not an import
-but the *folder* and one table, so the things worth pinning are the
-declarations that decide whether any of it runs at all: the hook moment, the
-trigger channel, the default job, the shared constants, and the profile that
-keeps the curator inside the folder.
+What connects the two is not an import but the *folder* and one table, so
+the things worth pinning are the declarations that decide whether any of it
+runs at all: the hook moments and the shared constants.
 
 Skips cleanly when no store ref is reachable.
 """
@@ -40,11 +39,10 @@ import sandbox  # noqa: F401
 from tests.support import store_source, store_worktree
 
 SERVICE = "services/service_memory_retrieve.py"
-TASK = "tasks/task_memory_curate.py"
 MEMORY = "tools/tool_memory.py"
 BUNDLE = "bundles/bundle_memory.json"
 
-SUITE = [SERVICE, TASK, MEMORY]
+SUITE = [SERVICE, MEMORY]
 
 
 def _source_or_skip(relative: str) -> str:
@@ -127,17 +125,13 @@ def test_both_files_that_hold_a_path_agree_on_where_entries_live():
     one: they are different families, so a ``tools/helpers/`` module could not
     hold the service's copy. Merging the two tools took three copies to two —
     this test is what keeps the last two equal, which is why it survives the
-    merge rather than being retired by it. The task is deliberately not among
-    them: it reaches the corpus only through ``tool.call``, so it holds no path
-    knowledge at all and cannot drift.
+    merge rather than being retired by it.
     """
     for relative in (SERVICE, MEMORY):
         source = _source_or_skip(relative)
         assert 'MEMORY_DIRNAME = "memory"' in source, relative
         assert 'NOTES_DIRNAME = "notes"' in source, relative
         assert 'SKILLS_DIRNAME = "skills"' in source, relative
-
-    assert "NOTES_DIRNAME" not in _source_or_skip(TASK)
 
 
 def test_a_skill_and_a_note_rank_and_render_identically():
@@ -413,7 +407,7 @@ def test_reading_a_skill_points_at_its_resources_without_loading_them():
 # ──────────────────────────────────────────────────────────────────────
 
 def test_offered_and_recalled_are_one_table():
-    """The service offers, the recall tool takes, the task reads.
+    """The service offers, the memory tool takes.
 
     Splitting these was the old design's expense: the offer lived in one table
     and the *take* had to be reconstructed by parsing every assistant message
@@ -422,10 +416,6 @@ def test_offered_and_recalled_are_one_table():
     """
     service = _source_or_skip(SERVICE)
     tool = _source_or_skip(MEMORY)
-    task = _source_or_skip(TASK)
-
-    for source, name in ((service, "service"), (tool, "tool"), (task, "task")):
-        assert "memory_usage" in source, name
 
     # The service defines it and inserts the offer.
     assert "CREATE TABLE IF NOT EXISTS memory_usage" in service
@@ -433,48 +423,23 @@ def test_offered_and_recalled_are_one_table():
     assert "db.define" in _declarations(SERVICE)["requests"]
 
     # The tool fills it in, or records a recall nobody offered. That the same
-    # tool also writes *entries* now changes nothing about this table.
+    # tool also writes *entries* changes nothing about this table.
     assert "SET recalled_at = ?" in tool
     assert "INSERT INTO memory_usage" in tool
 
-    # The task only reads. Its one write is the retention sweep.
-    assert "SELECT DISTINCT name FROM memory_usage" in task
-    assert "UPDATE memory_usage" not in task
 
+def test_recalls_survive_pruning_because_they_are_the_data():
+    """Offers are the volume and are pruned; recalls are rare, small, and kept.
 
-def test_ordering_is_free_so_no_message_ids_are_compared():
-    """Only a *later* recall can fill a NULL, so the pair is ordered by
-    construction. Everything the old design needed to establish that — the
-    offered message id, the id comparison, path absolutization — is gone, and
-    a reappearance would mean the tracking had been reconstructed again.
-
-    Asserted against the code rather than the prose, since the docstrings
-    describe the machinery that was removed and should go on doing so.
+    Which entries earn their place, over time, is the input to any future pass
+    over what nobody has recalled in months. The sweep moved into the service
+    when the curator task that used to run it was retired, and it must still
+    touch only offers nobody took.
     """
-    task = _source_or_skip(TASK)
+    service = _source_or_skip(SERVICE)
 
-    assert "offered_message_id" not in task
-    assert "_read_file_calls" not in task
-    assert '"read_file"' not in task, "no tool-call name is matched any more"
-    assert "tool_calls" not in task
-    assert "import json" not in task
-    assert "sdk.path." not in task
-
-
-def test_recalls_survive_reflection_because_they_are_the_data():
-    """Reflection reads the log and must not consume it.
-
-    Which entries earn their place, over time, is the input to a future pass
-    over what nobody has recalled in months. Clearing per conversation — which
-    is what the old design did — throws that away for a table that was never
-    the problem. Offers are the volume and are pruned; recalls are rare, small,
-    and kept.
-    """
-    task = _source_or_skip(TASK)
-
-    assert "_forget_retrievals" not in task
-    assert "DELETE FROM memory_usage" in task
-    assert "WHERE recalled_at IS NULL AND offered_at < ?" in task
+    assert "DELETE FROM memory_usage" in service
+    assert "WHERE recalled_at IS NULL AND offered_at < ?" in service
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -492,7 +457,8 @@ def test_retrieval_stands_at_the_one_moment_that_runs_per_turn():
     declared = _declarations(SERVICE)
     assert declared["family"] == "service"
     assert declared["name"] == "memory_retrieve"
-    assert declared["hooks"] == {"turn_start": "on_turn_start"}
+    assert declared["hooks"] == {"turn_start": "on_turn_start",
+                                 "end_turn": "on_end_turn"}
     # It contributes guidance but exposes no callable surface: nothing should
     # be reaching into memory through ``service.call``.
     assert declared["exports"] == []
@@ -509,11 +475,7 @@ def test_the_service_can_inject_and_can_search():
     declared = _declarations(SERVICE)
     assert "session.add_prompt_extra" in declared["requests"]
     assert "tool.call" in declared["requests"]
-    # What it calls. The curator's other read tools are declared here as well,
-    # since ``on_install`` writes their names into a whitelist and a name
-    # nobody installed grants nothing — but which file supplies each is the
-    # closure's business, pinned by
-    # ``test_the_bundle_ships_every_tool_the_curator_profile_names``.
+    # What it calls, and what the agent writes with when nudged.
     assert {"tools/tool_hybrid_search.py",
             "tools/tool_memory.py"} <= set(declared["dependencies_files"])
 
@@ -557,12 +519,11 @@ def test_injecting_memory_pointers_raises_no_dialog():
     assert "key=ctx.session_key" not in source
 
 
-def test_the_service_writes_its_two_kernel_settings_only_at_install():
-    """It needs two settings, and there is exactly one moment it may ask.
+def test_the_service_writes_its_kernel_setting_only_at_install():
+    """It needs one setting, and there is exactly one moment it may ask.
 
-    ``sync_directories`` must contain the memory folder or nothing is indexed;
-    ``agent_profiles`` must hold the curator profile or no curator can spawn.
-    Both were attempted from ``start`` — refused, because a service has no
+    ``sync_directories`` must contain the memory folder or nothing is indexed.
+    It was attempted from ``start`` — refused, because a service has no
     session and an unattended unsafe Request is refused rather than asked — and
     then from the ``turn_start`` hook, which was made to work and then reverted
     because it asked at the moment furthest from anything the user chose to do.
@@ -593,7 +554,8 @@ def test_the_service_writes_its_two_kernel_settings_only_at_install():
     assert writers, "something has to do the seeding"
     # Named helpers are fine; being reachable from anything but on_install is
     # not. Nothing in the runtime path may hold this capability.
-    for banned in ("start", "stop", "on_turn_start", "on_uninstall"):
+    for banned in ("start", "stop", "on_turn_start", "on_end_turn",
+                   "on_uninstall"):
         assert banned not in writers, f"{banned} writes config"
 
     for method in ("on_install", "on_uninstall"):
@@ -601,328 +563,62 @@ def test_the_service_writes_its_two_kernel_settings_only_at_install():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# The curator: when it runs, and what it may do while it does.
+# The nudge: once, at the end of a clean turn, and never recorded.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_the_curator_listens_for_the_conversation_that_ended():
-    """``ended``, not ``changed`` — the two name opposite conversations.
+class _Ending:
+    def __init__(self, reason="model_finished", doorman_fires=0):
+        self.reason = reason
+        self.doorman_fires = doorman_fires
+        self.final_text = "done"
 
-    ``session_conversation_changed`` names the one being switched *to*, which
-    is what a frontend redrawing a banner wants and the exact opposite of what
-    reflection needs. Subscribing to the wrong one would reflect on the
-    conversation the user is about to start typing in.
+
+class _Ctx:
+    def __init__(self, session_key="repl"):
+        self.session_key = session_key
+
+
+def _nudge(ending, ctx=None):
+    service = _load_store_class(SERVICE, "MemoryRetrieve")()
+    return service.on_end_turn(None, ctx or _Ctx(), ending)
+
+
+def test_a_clean_finish_is_sent_back_once_with_an_ephemeral_note():
+    """Always, not on a judgement — the agent that lived the turn decides.
+
+    Ephemeral because a transcript with this line after every reply would be
+    the conversation talking to itself; the model sees it, history does not.
     """
-    from events.event_channels import SESSION_CONVERSATION_ENDED
-
-    declared = _declarations(TASK)
-    assert declared["family"] == "task"
-    assert declared["name"] == "memory_curate"
-    assert declared["trigger"] == "event"
-    assert declared["trigger_channels"] == [SESSION_CONVERSATION_ENDED]
-
-
-def test_nothing_here_runs_on_a_clock():
-    """The event covers every ordinary ending, so a sweep finds nothing.
-
-    There was an hourly one, declared as a backstop for an event lost to a
-    crash. The cost is what settles it: this task *spawns subagents*, so a
-    speculative wake-up is the most expensive kind there is, and it bought
-    recovery for a case that leaves exactly one reflection unwritten. A lesson
-    not learned is not a corruption — the watermark table is still consistent —
-    so the gap is accepted rather than paid for twenty-four times a day.
-
-    Stated as a test rather than simply deleted because the way a task gets a
-    schedule has since changed: it is an ``on_install`` that calls the
-    timekeeper, so adding one here would be a method rather than a declaration
-    and would not show up as a stray attribute anybody notices.
-    """
-    from sandbox.bridge import lifecycle_entries
-
-    assert not _declarations(TASK).get("default_jobs"), (
-        "a retired declaration; the validator drops it and nothing reads it")
-    assert not lifecycle_entries(_source_or_skip(TASK), "on_install"), (
-        "nothing here creates a timekeeper job either")
-
-
-def test_the_curator_is_spawned_under_a_profile_that_cannot_reach_edit_file():
-    """The toolset is the safety property, and it is declarative.
-
-    A curator is a real agent turn running unattended. With the default profile
-    it writes notes with ``edit_file``, which reaches every file in the
-    workspace including MEMORY.md. Named profile plus a memory tool that
-    derives its own paths is what confines it — and the two halves have to
-    agree on the profile name or the spawn fails.
-
-    Both halves carry more weight since the merge. The one tool the profile
-    grants both reads and writes, so this blacklist and the tool's own path
-    derivation are now the whole of the confinement.
-    """
-    service = _source_or_skip(SERVICE)
-    task = _source_or_skip(TASK)
-
-    assert 'CURATOR_PROFILE = "memory_curator"' in service
-    assert 'CURATOR_PROFILE = "memory_curator"' in task
-    assert "profile=CURATOR_PROFILE" in task
-
-    namespace = {}
-    exec(compile(service, SERVICE, "exec"), namespace)
-    allowed = set(namespace["CURATOR_TOOLS"])
-    assert "edit_file" not in allowed
-    assert "memory" in allowed
-    # And the two names it replaced are gone, not merely joined by a third.
-    assert not {"memory_recall", "memory_curate"} & allowed
-    # The list grows as the suite learns what a curator needs, and every
-    # addition is a read. Stated as a rule rather than as a fixed list, so a
-    # future writer has to be added deliberately and against this line.
-    assert not {"edit_file", "write_file", "run_command", "delete_file",
-                "spawn_subagent"} & allowed
-
-
-def test_a_top_up_drops_the_tool_names_this_suite_retired():
-    """Additive is right for names the user added, wrong for names we retired.
-
-    ``_top_up_curator_tools`` exists because ``CURATOR_TOOLS`` grows, and it
-    leaves everything else alone on purpose — an unrecognised name the user
-    added is theirs. But ``memory_recall`` and ``memory_curate`` are names this
-    package *published* and then stopped shipping when they became one
-    ``memory`` tool, and a purely additive top-up would leave both in the
-    profile forever. They grant nothing (``scoped_registry`` matches against
-    what is registered), so this is tidiness rather than safety — which is why
-    it is scoped to a list of names the suite itself retired, and not to
-    anything unrecognised.
-    """
-    namespace = {}
-    exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), namespace)
-
-    retired = set(namespace["RETIRED_CURATOR_TOOLS"])
-    assert retired == {"memory_recall", "memory_curate"}
-    # Nothing retired may also be current, or a top-up would drop and re-add it
-    # on every update.
-    assert not retired & set(namespace["CURATOR_TOOLS"])
-
-    source = _source_or_skip(SERVICE)
-    top_up = source.split("def _top_up_curator_tools", 1)[1].split(
-        "\n    def ", 1)[0]
-    assert "RETIRED_CURATOR_TOOLS" in top_up, "the filter must be in the top-up"
-
-
-def test_the_bundle_ships_every_tool_the_curator_profile_names():
-    """A whitelist naming a tool nobody installed silently grants nothing.
-
-    The profile and the manifest are edited in different files, and the failure
-    is invisible from either: ``scoped_registry`` filters against what is
-    *registered*, so an uninstalled name is dropped without a word and the
-    curator simply runs without the capability its prompt describes. That is
-    the same silent-narrowing shape as the missing tools that made a curator
-    unable to search at all.
-
-    The question is asked of the *install closure*, not the manifest, because
-    the manifest deliberately names only the three memory plugins and lets
-    ``dependencies_files`` supply the rest — which is the same walk the package
-    manager does.
-
-    One file now supplies one name where ``tool_memory_recall.py`` and
-    ``tool_memory_curate.py`` used to supply two; the stem derivation below is
-    unchanged by that.
-    """
-    namespace = {}
-    exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), namespace)
-    shipped = {Path(rel).stem.split("_", 1)[1] for rel in _install_closure()
-               if rel.startswith("tools/tool_")}
-
-    missing = sorted(set(namespace["CURATOR_TOOLS"]) - shipped)
-    assert not missing, f"the profile names tools the bundle does not ship: {missing}"
-
-
-def test_a_missing_curator_profile_stops_the_curator_rather_than_widening_it():
-    """Nothing in this suite can create the profile, so the failure has to be
-    loud and it has to be closed.
-
-    ``agent_profiles`` is a kernel setting and no part of a plugin can write
-    one — a task's chain is unattended, and the service's attempt was removed
-    for the same reason. So until the package manager seeds settings at
-    install, the profile is created by hand, and the only thing this code owes
-    is to refuse to run without it: ``_reflect`` returns False, which leaves
-    the watermark where it is so a later sweep retries, rather than spawning an
-    unrestricted curator that can reach ``edit_file``.
-    """
-    task = _source_or_skip(TASK)
-    assert "profile=CURATOR_PROFILE" in task
-
-    reflect = task.split("def _reflect", 1)[1].split("    def ", 1)[0]
-    assert "return False" in reflect
-    # The kernel half — refusing the spawn outright — is
-    # ``test_an_unknown_profile_is_refused_rather_than_widened`` below.
-
-
-def test_an_unknown_profile_is_refused_rather_than_widened():
-    """The kernel half of the same rule.
-
-    Substituting ``default`` for a profile that does not exist would run the
-    child with every installed tool while the caller believed it was confined,
-    and nothing anywhere would say so.
-    """
-    from runtime.subagents import SubagentRegistry
-
-    class Runtime:
-        config = {"agent_profiles": {"default": {}}}
-        sessions = {}
-
-    registry = SubagentRegistry(Runtime(), Runtime.config)
-    with pytest.raises(ValueError, match="memory_curator"):
-        registry.spawn("go", owner="repl", profile="memory_curator")
-
-
-def test_subagent_curation_is_opt_in_and_never_reaches_scheduled_ones():
-    """Three kinds of conversation, separated by the category the kernel sets.
-
-    An interactive ``sdk.agent.spawn`` files its child under ``Subagent``; a
-    scheduled one under ``Scheduled``/``Scheduled (one-time)``
-    (``runtime/subagents.py`` ``_scheduled_category``). The setting opens the
-    first and must never open the second: a scheduled job pins its conversation
-    and reuses it forever, so it has no ending to reflect on and would hand the
-    curator the same growing transcript every hour.
-    """
-    declared = _declarations(TASK)
-    keys = {entry[1] for entry in declared["config_settings"]}
-    assert "memory_curate_include_subagents" in keys
-
-    setting = next(e for e in declared["config_settings"]
-                   if e[1] == "memory_curate_include_subagents")
-    assert setting[3] is False, "opt-in: it costs a curator run per subagent"
-
-    source = _source_or_skip(TASK)
-    assert "NOT LIKE 'Scheduled%'" in source, "unconditional, in both modes"
-
-
-def test_the_curator_cannot_reach_its_own_output_in_either_mode():
-    """Once subagents are curated, the session-key guard cannot fire.
-
-    With subagents off, a child's event is dropped outright. With them on that
-    guard is deliberately bypassed — which is exactly when the curator's own
-    conversation becomes an ordinary candidate. The title filter is what stands
-    in the way, and it is exact rather than fragile because the task sets that
-    title itself when it spawns and matches the same constant when it queries.
-    """
-    source = _source_or_skip(TASK)
-    assert "COALESCE(c.title, '') NOT LIKE ?" in source
-    assert "CURATOR_TITLE}%" in source, "the title must be the bound value"
-
-
-def test_the_curator_does_not_react_to_its_own_children():
-    """One conversation ending produced four runs, and this is why.
-
-    A subagent gets its own conversation and closes its session when it is
-    done, so every curator completion emits the same channel that spawned it.
-    Unfiltered, the curator's own transcript reads as a conversation that has
-    gone quiet — so it reflects on itself, spawns another curator, and only
-    stops when a transcript happens to fall under the message floor.
-    """
-    from runtime.subagents import SESSION_PREFIX
-
-    source = _source_or_skip(TASK)
-    assert SESSION_PREFIX in source, "the event path must skip child sessions"
-    assert "<> 'Subagent'" in source, "the sweep path must skip child conversations"
-
-
-def test_the_curator_sees_the_tool_calls_it_has_to_branch_on():
-    """A user/assistant-only transcript hides where the work happened."""
-    source = _source_or_skip(TASK)
-    assert "tool_name" in source
-    assert "<> 'system'" in source, "everything but system rows belongs in it"
-
-
-def test_reflection_transcript_starts_after_the_previous_watermark():
-    task = _source_or_skip(TASK)
-
-    assert "AS previous_id" in task
-    transcript = task.split("def _transcript", 1)[1]
-    assert "AND id > ?" in transcript
-    assert "[cid, previous_id, max_id, limit]" in transcript
-
-
-def test_installing_the_bundle_does_not_reflect_on_the_whole_archive():
-    """The watermark defaults to zero, so history reads as new.
-
-    On a fresh install every conversation ever held qualifies at once: nobody
-    has reflected on them, so every message counts as unreflected. Observed as
-    six runs draining years of conversations three at a time and writing notes
-    about work from months ago as though it had just happened.
-    """
-    declared = _declarations(TASK)
-    keys = {entry[1] for entry in declared["config_settings"]}
-    assert "memory_curate_max_age_hours" in keys
-
-    source = _source_or_skip(TASK)
-    assert "MAX(COALESCE(m.timestamp, 0)) >= ?" in source
-
-
-def test_a_conversation_the_agent_never_spoke_in_is_skipped():
-    """The corpus records what the agent did, so no agent means nothing to say.
-
-    The message floor does not cover this — someone can reach it without the
-    agent ever answering: messages typed at a turn that failed or was
-    cancelled, or a conversation opened only to run slash commands.
-    """
-    source = _source_or_skip(TASK)
-    assert "LOWER(m.role) = 'assistant'" in source
-    assert "THEN 1 ELSE 0 END) >= 1" in source
-
-
-def test_the_watermark_is_a_table_the_task_owns():
-    """The watermark is what makes reflection idempotent.
-
-    Declaring the table in ``writes`` is not bookkeeping: the orchestrator
-    writes the task's returned rows into it with INSERT OR REPLACE, which is
-    how the watermark advances without the task needing ``db.write`` at all.
-    """
-    declared = _declarations(TASK)
-    assert declared["writes"] == ["memory_curations"]
-    assert "memory_curations" in declared["output_schema"]
-    assert "curated_at" in declared["output_schema"]
-    assert "agent.spawn" in declared["requests"]
-
-    source = _source_or_skip(TASK)
-    assert "db.write" in declared["requests"]
-    assert "INSERT" not in source.upper(), (
-        "the watermark advances through the returned rows, not by hand")
-
-
-def test_the_facts_job_is_gone_and_memory_md_is_the_agents_own():
-    """MEMORY.md is inlined into every prompt and belongs to the agent the
-    user actually talks to. A background subagent pruning it is a thing nobody
-    watches editing the one file everybody reads."""
-    task = _source_or_skip(TASK)
-
-    # Both spellings of the retired setting. The prefix moved from
-    # ``memory_reflect_`` to ``memory_curate_`` when the task was renamed, so
-    # matching only the old one would stop catching a reintroduction — which is
-    # the entire job of this line.
-    assert "memory_reflect_curate_facts" not in task
-    assert "curate_facts" not in task
-    assert "memory_index_cap" not in task
-    assert "Job three" not in task
-    # And no tool the curator holds can address it: ``MEMORY.md`` is not a
-    # legal entry name, which ``test_a_name_cannot_be_a_path`` pins directly —
-    # and that check now covers the writer too, since one tool does both.
-
-
-def test_the_event_task_implements_the_event_entry_point():
-    """``run_event``, not ``run`` — implementing the wrong one fails silently.
-
-    The task template still shows an event task overriding ``run``, so this is
-    a trap worth a test rather than a comment.
-    """
-    source = _source_or_skip(TASK)
-    assert "def run_event(self, sdk, payload)" in source
-    assert "def run(self, sdk" not in source
+    verdict = _nudge(_Ending())
+    assert type(verdict).__name__ == "SendBack"
+    assert verdict.ephemeral
+    assert verdict.allow_tools, "saving a memory is a tool call"
+    assert "`memory`" in verdict.note
+
+
+def test_the_nudge_never_stacks_and_skips_what_is_not_a_clean_finish():
+    """Its own second visit, another doorman's note, a budget wrap-up and a
+    subagent's turn all pass straight through. The first is what stops the
+    nudge being asked again after the agent answers it."""
+    assert _nudge(_Ending(doorman_fires=1)) is None
+    assert _nudge(_Ending(reason="budget_exhausted")) is None
+    assert _nudge(_Ending(), _Ctx("spawn_subagent:12")) is None
+
+
+def test_the_curator_task_is_gone():
+    """Replaced by the nudge, and deliberately not left installable beside it:
+    two writers reflecting on one conversation would disagree about it."""
+    worktree = store_worktree()
+    if worktree is None:
+        pytest.skip("no store worktree")
+    assert not (Path(worktree) / "tasks/task_memory_curate.py").exists()
 
 
 # ──────────────────────────────────────────────────────────────────────
 # The manifest.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_the_manifest_names_the_three_and_lets_the_closure_do_the_rest():
+def test_the_manifest_names_the_two_and_lets_the_closure_do_the_rest():
     """A manifest is what this package *is*, not what it needs on the way.
 
     It listed all sixteen files for a while, which installed correctly and
@@ -950,7 +646,7 @@ def test_the_manifest_names_the_three_and_lets_the_closure_do_the_rest():
     files = manifest["files"]
     assert files == sorted(files), "manifest files must stay sorted"
     assert set(files) == set(SUITE), (
-        "the manifest is the three memory plugins; anything else they need is "
+        "the manifest is the two memory plugins; anything else they need is "
         "reached through dependencies_files")
 
     # Everything the bundle installs is still everything it needs, reached the
@@ -960,9 +656,8 @@ def test_the_manifest_names_the_three_and_lets_the_closure_do_the_rest():
     # read_file is for a skill's own references, which the memory tool names
     # but deliberately does not load.
     assert "tools/tool_read_file.py" in closure
-    # And the one the curator must not have. Its absence is not the guard — the
-    # profile is — but pulling it in here would make the restriction look
-    # accidental.
+    # Memory writes through ``memory`` alone; a general file editor arriving
+    # with it would be a capability nobody installing memory asked for.
     assert "tools/tool_edit_file.py" not in closure
 
     for relative in closure:

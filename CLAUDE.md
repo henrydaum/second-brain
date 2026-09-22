@@ -1257,8 +1257,9 @@ only about `role`, deliberately — see their docstrings.
 
 The column is **advisory**: `sandbox/users.py` neither knows nor cares about it
 (`conversation_messages` is a kernel table, not user-scoped), so nothing forces
-a query to honour it. The store's memory retriever and curator were each
-reading authored rows as user speech and now filter on it; a new consumer
+a query to honour it. The store's memory retriever (and the curator it has
+since replaced) were each reading authored rows as user speech; the retriever
+now filters on it; a new consumer
 must opt in the same way, which is why `tool_sql_query`'s agent prompt says so.
 
 ## Package store V1
@@ -2559,9 +2560,10 @@ nobody asked for. And **an unknown name raises**, because quietly substituting
 caller believed it was confined, and nothing anywhere would say so. Choosing
 among profiles needs no classification of its own — they are the user's own
 config, naming tools the user installed, so the choice can only narrow. The
-store's memory curator is the worked example: a `memory_curator` profile
-whitelisting four tools and not `edit_file` is what makes it safe to let an
-unattended subagent write.
+store's memory curator was the worked example — a `memory_curator` profile
+whitelisting four tools and not `edit_file` is what made it safe to let an
+unattended subagent write — until an end-of-turn nudge to the agent that did
+the work replaced it.
 
 **A deadline measures running, not waiting.** The clock starts when a pool
 worker picks a child up, not when it was submitted: a fan-out wider than
