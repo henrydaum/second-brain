@@ -1,11 +1,13 @@
-"""Automatic memory retrieval — the half nobody has to ask for.
+"""Automatic memory — retrieval at the start of a turn, a nudge at the end.
 
 Every turn, search the memory folder for entries relevant to what the user just
-said and put their names in the prompt.
+said and put their names in the prompt. When the agent is about to finish,
+send it back once with a note asking whether anything from the turn is worth
+saving.
 
-One of three. This service ranks the corpus and puts names in the prompt,
-``tool_memory`` is the only thing that touches the files in either direction,
-and ``task_memory_curate`` decides when a curator runs.
+One of two. This service ranks the corpus, puts names in the prompt, and
+nudges; ``tool_memory`` is the only thing that touches the files in either
+direction.
 
 The folder holds two kinds of entry and retrieval does not distinguish between
 them. A **note** (``notes/<name>.md``) is one situation and what to do about
@@ -21,10 +23,9 @@ description answers exactly that; what to do about it is what the entry is for.
 Injecting the body as well was tried and had to come out — it grew with the
 corpus, truncated long entries into advice stripped of its context, and
 destroyed the one observable signal in the system. With the content already in
-the prompt there is no reason to open anything, and the curator needs to know
-which entries were opened to tell whether it is improving one or writing a new
-one. So this service also records what it surfaced (``memory_usage``);
-``tool_memory`` records the other half.
+the prompt there is no reason to open anything, and which entries were opened is
+the only evidence of which ones earn their place. So this service also records
+what it surfaced (``memory_usage``); ``tool_memory`` records the other half.
 
 The retrieval itself is one ``hybrid_search`` call at ``turn_start``, with the
 user's own message as the query. That is deliberate on both counts. The hook
@@ -33,14 +34,19 @@ reply, so there is no model call and no subagent here. And the user's words
 *are* the retrieval cue — rewriting them into "better" search terms costs a
 round trip to guess at something the person already said.
 
-Writing is not this service's job and cannot be: only ``tool_memory``
-writes entries, whether the caller is the agent mid-conversation or the curator
-subagent ``task_memory_curate`` spawns after one ends.
+**Writing happens at the end of the turn, by the agent that did the work.**
+This replaced a curator subagent that re-read a finished conversation from a
+truncated transcript. The agent at ``end_turn`` already holds the whole turn in
+its context — cached — so the nudge costs one extra model call and loses
+nothing, where the curator paid for a fresh agent to reconstruct a worse copy.
+The note is ephemeral: the model sees it, the transcript does not keep it.
+Writing itself is still only ``tool_memory``'s.
 """
 
 import time
 
 from guest.bases import BaseService
+from guest.hooks import SendBack
 
 #: How much of an entry to read when building its line. Only the frontmatter is
 #: wanted, and that is at the top.
@@ -58,49 +64,30 @@ MEMORY_DIRNAME = "memory"
 NOTES_DIRNAME = "notes"
 SKILLS_DIRNAME = "skills"
 
-#: The agent profile a curator subagent runs under. Seeded by ``on_install``,
-#: which is the one moment a plugin can write a kernel setting: attended, so
-#: the write can be asked about, and caused by somebody deliberately installing
-#: this. Must match ``CURATOR_PROFILE`` in ``task_memory_curate``.
-CURATOR_PROFILE = "memory_curator"
+#: How long an offer nobody took is kept. Long enough to span a conversation
+#: someone comes back to; after that it says nothing.
+USAGE_RETENTION_SECONDS = 7 * 24 * 3600
 
-#: What that profile may do: read widely, write in exactly one place.
-#:
-#: The absence of ``edit_file`` is the point and survives every addition here.
-#: A curator writes through ``memory``, which addresses entries by name
-#: and derives every path itself, so a background agent nobody is watching
-#: cannot touch a file outside the memory folder however much it can *read*.
-#: That asymmetry is what makes a broad read list safe to grant: reading
-#: everything is only dangerous next to a way to send it somewhere, and egress
-#: is gated separately.
-#:
-#: The search tools are listed rather than left to the dependency closure.
-#: ``scoped_registry`` distinguishes *visible* from *callable*: closing over
-#: ``hybrid_search``'s ``dependencies_tools`` made ``lexical_search`` and
-#: ``semantic_search`` callable, but they never appeared in the curator's
-#: catalogue, so it could not reach for one deliberately — a keyword search
-#: for an exact phrase, or a semantic one for a situation it cannot name.
-#:
-#: ``sql_query`` is how the curator reads the conversation record itself
-#: rather than the one transcript it was handed. Its writes are bounded by the
-#: kernel rather than by this list: ``db.write``/``db.define`` refuse every
-#: kernel table outright, so what remains reaches plugin-owned tables only —
-#: ``memory_usage`` among them. A curator that corrupted its own bookkeeping
-#: would be a nuisance, not a breach, and nothing here can reach conversations,
-#: users or the ledger.
-CURATOR_TOOLS = [
-    "memory",                                  # its own one
-    "read_file", "grep", "glob",               # the filesystem, read-only
-    "hybrid_search", "lexical_search", "semantic_search",  # the index
-    "sql_query",                               # the record
-]
+#: Sessions the kernel opens for subagents. Their turns are nudged by nobody:
+#: the work belongs to whoever spawned them, and a background agent writing
+#: memories nobody asked for is the curator this replaced, minus the context.
+SUBAGENT_PREFIX = "spawn_subagent:"
 
-#: Tool names this suite used to ship, dropped from an existing profile on a
-#: top-up. ``memory_recall`` and ``memory_curate`` were the read half and the
-#: write half before they became the one ``memory`` tool above; a profile seeded
-#: before that merge names both and would keep naming them forever, since
-#: ``_top_up_curator_tools`` is otherwise purely additive.
-RETIRED_CURATOR_TOOLS = ("memory_recall", "memory_curate")
+#: What the agent is told when it is about to finish. Written to be declined:
+#: most turns hold nothing, and the one way this goes wrong is an agent that
+#: saves something every time because it was asked every time. The last line
+#: is load-bearing — the comeback reply is shown to the user, and an empty one
+#: is treated as a failure and re-asked for a "substantive reply".
+NUDGE = (
+    "[Memory check — not from the user] Before you finish: did this turn "
+    "teach anything a future conversation would need? A correction the user "
+    "made, something that failed and what fixed it, a procedure that worked, "
+    "or something the user asked you to remember. If so, save it with the "
+    "`memory` tool — update an existing entry when one covers it, including "
+    "any memory you were shown that turned out wrong. Most turns hold "
+    "nothing; if so, do nothing. Either way, then reply with one short line "
+    "only (for example \"Noted.\") — do not repeat your answer."
+)
 
 
 def _memory_root(sdk):
@@ -172,7 +159,7 @@ class MemoryRetrieve(BaseService):
     description = "Finds memory notes and skills relevant to the current message and points the agent at them."
 
     exports = []
-    hooks = {"turn_start": "on_turn_start"}
+    hooks = {"turn_start": "on_turn_start", "end_turn": "on_end_turn"}
     # ``config.write`` is here for ``on_install`` and nowhere else. That is not
     # a convention this file keeps on its honour: everywhere else in this
     # plugin the chain is a service's own, which is unattended, and an unsafe
@@ -181,18 +168,12 @@ class MemoryRetrieve(BaseService):
                 "tool.call", "fs.read", "fs.list", "fs.write",
                 "db.define", "db.query", "db.write",
                 "session.add_prompt_extra"]
-    # The first three are what retrieval and the curator *call*. The last four
-    # are what ``on_install`` writes into the ``memory_curator`` profile, and
-    # naming a tool that is not installed grants nothing and says nothing — the
-    # name is simply dropped, and the curator runs quietly narrower than the
-    # profile claims. So this is the same relationship as the others: files
-    # this plugin needs present to work as described.
+    # What retrieval calls, what the agent writes with when nudged, and what it
+    # reads a skill's references with (``memory read`` names them but
+    # deliberately does not load them).
     dependencies_files = ["tools/tool_hybrid_search.py",
                           "tools/tool_memory.py",
-                          "tools/tool_read_file.py",
-                          "tools/tool_grep.py",
-                          "tools/tool_glob.py",
-                          "tools/tool_sql_query.py"]
+                          "tools/tool_read_file.py"]
     dependencies_pip = []
 
     config_settings = [
@@ -204,10 +185,7 @@ class MemoryRetrieve(BaseService):
     # Says only what this service is the authority on: which folders are
     # searched, and what the list it injects is. How to open an entry, and what
     # earns one, belong to the ``memory`` tool's own block — stating them here
-    # too is how note-vs-skill came to be explained in three files. Nor does
-    # this claim that anything reviews the conversation afterwards: that is
-    # ``task_memory_curate``'s block, and if the task is uninstalled while this
-    # service is not, a copy here would be a promise nothing keeps.
+    # too is how note-vs-skill came to be explained in three files.
     agent_prompt = (
         "## Memory\n"
         "`memory/` in your workspace holds what you have learned, as `notes/` "
@@ -216,35 +194,20 @@ class MemoryRetrieve(BaseService):
     )
 
     def on_install(self, sdk):
-        """Arrange the two kernel settings this suite cannot work without.
+        """Put the memory folder on the sync list, or nothing is ever indexed.
 
-        ``sync_directories`` must contain the memory folder or nothing is ever
-        indexed and retrieval stays empty forever; ``agent_profiles`` must hold
-        ``memory_curator`` or ``task_memory_curate`` cannot spawn a confined
-        curator and refuses to spawn an unconfined one.
+        Attempted from ``start`` and then from the ``turn_start`` hook before
+        landing here. Neither works, and neither should: a service has no
+        session, so its chain is unattended and an unsafe write is refused
+        rather than asked. Typing a message is consent to a reply, not to a
+        config change. Installing this package is.
 
-        Both were attempted from ``start`` and then, when that failed, from the
-        ``turn_start`` hook. Neither works, and neither should: a service has
-        no session, so its chain is unattended and an unsafe write is refused
-        rather than asked — and making the hook attended, which was tried and
-        reverted, only moved the question to the moment *furthest* from
-        anything the user deliberately did. Typing a message is consent to a
-        reply, not to a config change. Installing this package is.
-
-        Read-then-skip rather than write-then-hope, on both. This runs again on
-        every update that changes this file, and a value the user has since
-        edited is theirs.
-
-        The two are attempted independently and neither aborts the other. Each
-        is its own dialog, so letting the first refusal skip the second would
-        make one "no" answer a question that was never asked — and the two
-        settings fail in unrelated ways, one leaving retrieval empty and the
-        other stopping the curator.
+        Read-then-skip rather than write-then-hope. This runs again on every
+        update that changes this file, and a value the user has since edited is
+        theirs.
         """
-        problems = [note for note in (self._seed_sync_directory(sdk),
-                                      self._seed_curator_profile(sdk)) if note]
-        if problems:
-            raise RuntimeError("; ".join(problems))
+        if problem := self._seed_sync_directory(sdk):
+            raise RuntimeError(problem)
 
     def _seed_sync_directory(self, sdk):
         """Put the memory folder on the sync list. Answers with what went wrong."""
@@ -259,82 +222,15 @@ class MemoryRetrieve(BaseService):
         sdk.log(f"memory folder added to sync_directories: {root}")
         return ""
 
-    def _seed_curator_profile(self, sdk):
-        """Define the confined profile the curator runs under. Same shape."""
-        profiles = sdk.config.read("agent_profiles") or {}
-        if CURATOR_PROFILE in profiles:
-            return self._top_up_curator_tools(sdk, profiles)
-        try:
-            sdk.config.write("agent_profiles", {**profiles, CURATOR_PROFILE: {
-                "llm": "default",
-                "prompt_suffix": "",
-                "whitelist_or_blacklist_tools": "whitelist",
-                "tools_list": list(CURATOR_TOOLS),
-            }})
-        except sdk.Failed as error:
-            return f"{CURATOR_PROFILE} profile not created ({error}) — no curator can spawn"
-        sdk.log(f"agent profile {CURATOR_PROFILE} created")
-        return ""
-
-    def _top_up_curator_tools(self, sdk, profiles):
-        """Add tools a newer version needs to a profile that predates them.
-
-        ``CURATOR_TOOLS`` grows as the suite learns what a curator needs, so an
-        install that predates the growth holds a profile that is *correct for a
-        version that is gone*. Doing nothing there was tried and is worse than
-        it sounds: the curator silently does less than the prompt tells it to,
-        the only symptom is work not happening, and updating the package — the
-        one act that means "give me the new version" — changed nothing at all.
-
-        Additive, and only from a package operation. Every other field is left
-        exactly as the user set it, an unrecognised name they added stays, and
-        this cannot run from a boot or a turn, so it is not something that
-        fights an edit every morning — it happens when somebody installs or
-        updates this package, which is when they asked for the new version.
-
-        A blacklist profile is left alone entirely: nothing is being kept out,
-        so there is nothing to top up, and rewriting it into a whitelist would
-        be a narrowing dressed as a repair.
-
-        Names this suite *retired* are the one exception to leaving a list
-        alone, and the distinction is authorship: an unrecognised name the user
-        added is theirs and stays, but one this package published and then
-        stopped shipping is ours to clean up. Dead whitelist entries grant
-        nothing — ``scoped_registry`` matches against what is actually
-        registered — so this is tidiness rather than safety, and without it the
-        two names the merge retired would sit in the user's ``/config``
-        forever.
-        """
-        profile = profiles[CURATOR_PROFILE]
-        if str(profile.get("whitelist_or_blacklist_tools") or "") != "whitelist":
-            return ""
-        listed = [name for name in (profile.get("tools_list") or [])
-                  if name not in RETIRED_CURATOR_TOOLS]
-        missing = [name for name in CURATOR_TOOLS if name not in listed]
-        if not missing and listed == list(profile.get("tools_list") or []):
-            return ""
-        updated = {**profiles,
-                   CURATOR_PROFILE: {**profile, "tools_list": listed + missing}}
-        try:
-            sdk.config.write("agent_profiles", updated)
-        except sdk.Failed as error:
-            return (f"{CURATOR_PROFILE} still missing {', '.join(missing)} "
-                    f"({error}) — the curator will run without them")
-        sdk.log(f"{CURATOR_PROFILE} gained {', '.join(missing)}" if missing
-                else f"{CURATOR_PROFILE} dropped tools this suite retired")
-        return ""
-
     def on_uninstall(self, sdk):
-        """Drop the usage table. Leave the two settings alone.
+        """Drop the usage table. Leave the sync setting alone.
 
         The asymmetry with ``on_install`` is deliberate. ``memory_usage`` is
         unambiguously this plugin's — nothing else writes it and nothing else
         can read anything out of it. A folder the user has been syncing for
-        months and a profile they may have edited are theirs now, whoever put
-        them there first, and an uninstall quietly narrowing what the machine
-        indexes is a worse surprise than a leftover config line. Both are
-        visible and removable in ``/config``; a dropped table is not
-        recoverable at all.
+        months is theirs now, whoever put it there first, and an uninstall
+        quietly narrowing what the machine indexes is a worse surprise than a
+        leftover config line, which is visible and removable in ``/config``.
 
         The notes and skills themselves are never touched. They are the user's
         writing, in the user's workspace.
@@ -346,26 +242,25 @@ class MemoryRetrieve(BaseService):
                     level="warning")
 
     def start(self, sdk):
-        """Make the folder and the usage table. Nothing else, on purpose.
+        """Make the folder and the usage table, and prune stale offers.
 
-        The two kernel settings this needs are ``on_install``'s job, because a
-        service's own chain is unattended and cannot be asked about one. If
-        they are missing — an install predating that hook, or a declined
-        dialog — both fail loudly rather than silently: an unindexed folder
-        logs on the first search, and a missing profile stops the curator with
-        a message naming it.
+        The kernel setting this needs is ``on_install``'s job, because a
+        service's own chain is unattended and cannot be asked about one. If it
+        is missing — an install predating that hook, or a declined dialog —
+        an unindexed folder logs on the first search.
         """
         # Standing misconfigurations already reported. See ``_say_once``.
         self._said = set()
         self._ensure_folder(sdk, _memory_root(sdk))
         self._ensure_usage_table(sdk)
+        self._prune_usage(sdk)
 
     def _ensure_usage_table(self, sdk):
         """The one table that records the life of a memory: offered, then taken.
 
         Defined here because this service is the first writer — it inserts a
-        row per offer. ``tool_memory`` fills ``recalled_at`` and
-        ``task_memory_curate`` only reads. One table rather than three answers
+        row per offer, and ``tool_memory`` fills ``recalled_at``. One table
+        rather than three answers
         every question anyone has asked of it so far: which entries this
         conversation actually used, and — later, when there is a pruning pass
         — which entries nobody has used in months.
@@ -389,6 +284,22 @@ class MemoryRetrieve(BaseService):
         except sdk.Failed as error:
             sdk.log(f"could not create the memory usage table: {error}",
                     level="warning")
+
+    def _prune_usage(self, sdk):
+        """Forget offers nobody took, once they are old enough to mean nothing.
+
+        A row per offer per turn grows without bound, and an untaken offer is
+        only interesting while the conversation it was made in is live. Taken
+        ones are kept: they are the history of which entries earn their place.
+        Once per start is enough — the table grows by a handful of rows a turn.
+        """
+        cutoff = time.time() - USAGE_RETENTION_SECONDS
+        try:
+            sdk.db.write(
+                "DELETE FROM memory_usage"
+                " WHERE recalled_at IS NULL AND offered_at < ?", [cutoff])
+        except sdk.Failed as error:
+            sdk.log(f"could not prune memory offers: {error}", level="warning")
 
     def stop(self, sdk):
         """Nothing is held open."""
@@ -473,20 +384,41 @@ class MemoryRetrieve(BaseService):
             sdk.session.add_prompt(block, slot="memory")
         except sdk.Failed as error:
             # Nothing was shown, so nothing was offered. Recording it anyway
-            # would tell the curator an entry had been surfaced and ignored
-            # when the agent never saw it — a false negative in the one pair
-            # its branch is chosen by.
+            # would say an entry had been surfaced and ignored when the agent
+            # never saw it — a false negative in the one pair that matters.
             sdk.log(f"could not inject memory pointers: {error}", level="warning")
             return None
         self._log_offered(sdk, ctx, offered)
         return None
 
+    def on_end_turn(self, sdk, ctx, ending):
+        """Send the agent back once to save anything worth keeping.
+
+        Always, not on a judgement: whether a turn held a lesson is exactly
+        what the agent that lived it is best placed to say, and it can decline.
+        Three cases pass straight through. A doorman already fired this turn,
+        so this one never stacks on another's note or on its own. The turn is
+        not a clean finish — a budget wrap-up is no moment to reflect. And a
+        subagent's session, whose work belongs to whoever spawned it.
+
+        Ephemeral, so the note is shown to the model and never recorded: a
+        transcript with this line after every reply would be the conversation
+        talking to itself.
+        """
+        if getattr(ending, "doorman_fires", 0):
+            return None
+        if getattr(ending, "reason", "") not in ("", "model_finished"):
+            return None
+        if str(getattr(ctx, "session_key", "")).startswith(SUBAGENT_PREFIX):
+            return None
+        return SendBack(NUDGE, ephemeral=True)
+
     def _log_offered(self, sdk, ctx, offered):
         """Record which entries were surfaced in this conversation.
 
         Half of a pair: ``tool_memory`` fills in ``recalled_at`` if the
-        agent goes on to open one, and that is what tells the curator whether
-        to improve an existing entry or write a new one. The prompt is not
+        agent goes on to open one, and that pair is the evidence of which
+        entries earn their place. The prompt is not
         stored anywhere, so this is the only place the offer is knowable —
         without it a recall can be seen but never what prompted it.
         """
@@ -669,9 +601,9 @@ class MemoryRetrieve(BaseService):
     def _render(self, sdk, hits, offered):
         """Build the block, and record what was offered.
 
-        ``offered`` collects the names so the caller can log them: what the
-        curator needs later is the pair "surfaced, then recalled", and only
-        this half is knowable here.
+        ``offered`` collects the names so the caller can log them: the pair
+        that matters is "surfaced, then recalled", and only this half is
+        knowable here.
         """
         entries = []
         malformed = []
@@ -742,8 +674,8 @@ class MemoryRetrieve(BaseService):
         proportional to the corpus, it truncated long entries into advice with
         no context, and — worst — it destroyed the one observable signal in the
         system: with the content already in the prompt there is no reason to
-        recall anything, and the recall is what tells the curator whether its
-        job this time is to improve an existing entry or write a new one.
+        recall anything, and the recall is the evidence of which entries earn
+        their place.
         """
         try:
             description = _frontmatter(

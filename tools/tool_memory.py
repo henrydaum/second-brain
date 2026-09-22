@@ -3,11 +3,10 @@
 **The only thing in the system that touches the memory folder, in either
 direction.** ``service_memory_retrieve`` ranks the corpus at the start of every
 turn and puts *names and descriptions* in the prompt; this is what turns one of
-those names into the thing itself, and what writes the thing. The main agent
-uses it mid-conversation when it learns something worth keeping; the curator
-subagent that ``task_memory_curate`` spawns after a conversation ends uses the
-same tool for the same job. One tool means one format and one set of rules
-about what belongs where.
+those names into the thing itself, and what writes the thing. The agent uses
+it whenever it learns something worth keeping, and the service's end-of-turn
+nudge asks it to check. One tool means one format and one set of rules about
+what belongs where.
 
 **It takes a name, never a path.** The path is derived from the name after the
 name is checked against the agentskills.io character set, so there is no
