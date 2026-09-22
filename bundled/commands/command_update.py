@@ -138,9 +138,12 @@ class UpdateCommand(BaseCommand):
             return e.error
         if result["code"] == 0:
             return True
-        output = "\n".join(filter(None, [result.get("stdout"),
-                                         result.get("stderr")]))
-        return f"exit {result['code']}\n{output[-4000:]}"
+        # Each stream's tail on its own: a joined tail is whichever stream came
+        # last, and a noisy stderr then pushes the compiler's stdout — the
+        # actual failure — out of the report entirely.
+        output = "\n".join((result.get(stream) or "").strip()[-2000:]
+                           for stream in ("stdout", "stderr"))
+        return f"exit {result['code']}\n{output.strip()}"
 
 
 def _indent(text):

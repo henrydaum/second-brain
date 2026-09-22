@@ -35,7 +35,9 @@ trap cleanup_failed_release EXIT HUP INT TERM
 
 cd "$REPO_ROOT"
 npm ci
-npm test
+# Node 25 warns about `--localstorage-file` once per Vitest worker, dozens of
+# identical lines that bury the one failure worth reading. Tests only.
+NODE_NO_WARNINGS=1 npm test
 npm run lint
 npm run build -- --outDir "$release_dir"
 

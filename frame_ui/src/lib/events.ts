@@ -289,6 +289,13 @@ export type NotificationPayload = {
   notification_id?: number;
 };
 
+/** The set of widgets changed: `name` was added, edited, or removed. Says
+ *  nothing about any conversation's bindings — see `widget` for those. */
+export type WidgetCatalogPayload = {
+  action?: string;
+  name?: string;
+};
+
 /** One frame off the stream, discriminated by `kind`. */
 export type Frame =
   | { kind: "messages"; payload: MessagesPayload }
@@ -305,6 +312,7 @@ export type Frame =
   | { kind: "attachments"; payload: AttachmentsPayload }
   | { kind: "conversation"; payload: ConversationPayload }
   | { kind: "widget"; payload: WidgetPayload }
+  | { kind: "widget_catalog"; payload: WidgetCatalogPayload }
   | { kind: "notification"; payload: NotificationPayload };
 
 /** What the connection itself is doing, for the status line. This is not part
