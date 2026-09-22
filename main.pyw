@@ -49,7 +49,7 @@ for _made in _trees.materialize():
 
 # Preserve the previous run's log before truncating: whatever ended the last
 # generation explains itself there, and an unclean exit is exactly when that
-# traceback is worth having
+# traceback is worth having.
 try:
 	if LOG_FILE.exists():
 		os.replace(LOG_FILE, LOG_FILE.parent / (LOG_FILE.name + ".1"))
