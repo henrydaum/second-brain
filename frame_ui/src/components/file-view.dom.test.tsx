@@ -214,3 +214,59 @@ describe("the Preview/Source picker", () => {
     );
   });
 });
+
+describe("a file only a parser can read", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Answers `/sdk/<type>` the way the HTTP frontend does: `{data}` on 200,
+   *  `{error, code}` otherwise. */
+  function answer(parseFile: { status: number; body: unknown }) {
+    fetchMock.mockImplementation(async (url: URL | string) => {
+      const type = String(url).split("/sdk/")[1]?.split("?")[0];
+      const reply =
+        type === "parse.modality"
+          ? {
+              status: 200,
+              body: { data: { modality: "text", known: true, generic: false } },
+            }
+          : parseFile;
+      return {
+        ok: reply.status < 300,
+        status: reply.status,
+        json: async () => reply.body,
+      };
+    });
+  }
+
+  it("shows the kernel's extraction, with the original a click away", async () => {
+    answer({ status: 200, body: { data: "Quarterly plan\n\nShip it." } });
+    render(<FileView path="/srv/docs/plan.gdoc" />);
+
+    expect(await screen.findByText(/Quarterly plan/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "download the original" }),
+    ).toHaveAttribute("download", "plan.gdoc");
+    // Never read as bytes: a `.gdoc` on disk is a JSON stub, not the document.
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/files")),
+    ).toBe(false);
+  });
+
+  it("says a protected file was refused rather than that parsing broke", async () => {
+    answer({
+      status: 403,
+      body: { error: "not readable", code: "not_permitted" },
+    });
+    render(<FileView path="/srv/docs/secret.gdoc" />);
+
+    expect(
+      await screen.findByText("Second Brain would not hand this file over."),
+    ).toBeInTheDocument();
+  });
+});

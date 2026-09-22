@@ -13,7 +13,7 @@ import pytest
 from sandbox.guest.requests import (COMMAND_CALL, DB_QUERY, DB_WRITE, FS_READ,
                                     FS_READ_BYTES, TOOL_CALL, Request)
 from sandbox.handlers.fs_net import _fs_read, _fs_read_bytes, _fs_search, _fs_stat
-from sandbox.handlers.kernel import (_db_define, _db_write,
+from sandbox.handlers.kernel import (_db_define, _db_write, _parse_file,
                                      _session_add_attachment)
 from sandbox.policy import SAFE, UNSAFE, Chain, classify
 from sandbox.users import KERNEL_TABLES, ScopeError, scope_write
@@ -236,6 +236,16 @@ def test_staging_an_attachment_cannot_reach_a_protected_file():
     assert result.denied
     assert "secret_" in result.error
 
+
+
+def test_parsing_cannot_reach_a_protected_file():
+    """``parse.file`` reads through the kernel's own stand-in SDK, which reads
+    directly — and ``.json`` is registered as text, so without the guard this
+    was a fourth door onto ``config.json``, reachable from the web UI's viewer.
+    """
+    result = _parse_file(None, {"path": _config_path(), "modality": "text"})
+    assert result.denied
+    assert "secret_" in result.error
 
 # ── command.call carries the user's authority, so it is asked about ───
 

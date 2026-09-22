@@ -37,7 +37,7 @@ import { HighlightedCode } from "@/components/assistant-ui/code-block";
 import { DotMatrix } from "@/components/assistant-ui/dot-matrix";
 import { useMarkdownMode } from "@/components/markdown-mode";
 import { MarkdownPreview } from "@/components/markdown-preview";
-import { fileUrl } from "@/lib/client";
+import { fileUrl, RequestFailed } from "@/lib/client";
 import { delimiterFor, parseDelimited } from "@/lib/csv";
 import {
   describeStatus,
@@ -47,6 +47,7 @@ import {
   kindOf,
   nameOf,
   probeStatus,
+  readParsed,
   readText,
   suffixOf,
   type FileKind,
@@ -624,6 +625,96 @@ const EmbedView: FC<{ path: string; size: FileViewSize }> = ({ path, size }) =>
     />
   );
 
+/**
+ * A file the browser cannot draw, shown as what the kernel's parser made of it
+ * — a `.docx`, a `.gdoc`, a spreadsheet the tabular parser flattens.
+ *
+ * **Plain, not highlighted.** This is extracted text, not source: colouring it
+ * by the original's extension would dress a Word document as code. And the
+ * original is one click away in the footer, because an extraction is a
+ * reading of the file rather than the file.
+ */
+const ParsedView: FC<{ path: string; size: FileViewSize }> = ({
+  path,
+  size,
+}) => {
+  const [text, setText] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const scroller = useScroller(path, size, size);
+
+  useEffect(() => {
+    let cancelled = false;
+    setText(null);
+    setFailure(null);
+    void readParsed(path).then(
+      (answer) => {
+        if (!cancelled) setText(answer.text);
+      },
+      (error) => {
+        if (cancelled) return;
+        setFailure(describeParseFailure(error));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  if (failure) return <Unavailable path={path} reason={failure} size={size} />;
+  if (text === null) return <Loading path={path} size={size} />;
+  if (!text.trim()) {
+    return (
+      <Unavailable
+        path={path}
+        reason="The parser found no text in this file."
+        size={size}
+      />
+    );
+  }
+
+  return (
+    <div className={cn("flex w-full flex-col", size === "full" && "h-full")}>
+      <Frame
+        ref={scroller}
+        scrolls={nameOf(path)}
+        className={cn(
+          "document-scrollbar block w-full overflow-auto p-3",
+          size === "full" ? "min-h-0 flex-1" : "max-h-80",
+        )}
+      >
+        <pre className="font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">
+          {text}
+        </pre>
+      </Frame>
+      <p className="text-muted-foreground mt-1.5 shrink-0 text-[11px]">
+        Text extracted by Second Brain ·{" "}
+        <a
+          href={fileUrl(path)}
+          download={nameOf(path)}
+          className="underline underline-offset-2"
+        >
+          download the original
+        </a>
+      </p>
+    </div>
+  );
+};
+
+/** A failed `parse.file`, in the sentence the viewer's other failures use. */
+function describeParseFailure(error: unknown): string {
+  if (error instanceof RequestFailed) {
+    switch (error.code) {
+      case "not_permitted":
+        return describeStatus(403);
+      case "not_found":
+        return describeStatus(404);
+      case "too_large":
+        return "This file is too large to preview; download it instead.";
+    }
+  }
+  return "This file could not be parsed; download it instead.";
+}
+
 /** Everything with no better answer. `/files` serves it as
  *  `application/octet-stream`, which is a download, so this offers one. */
 const DownloadView: FC<{ path: string }> = ({ path }) => (
@@ -663,6 +754,8 @@ export const FileView: FC<{ path: string; size?: FileViewSize }> = ({
       return <TextView path={path} size={size} />;
     case "embed":
       return <EmbedView path={path} size={size} />;
+    case "parsed":
+      return <ParsedView path={path} size={size} />;
     case "download":
       return <DownloadView path={path} />;
   }

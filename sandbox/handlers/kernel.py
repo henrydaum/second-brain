@@ -4104,8 +4104,19 @@ def _parse_file(ctx, args: dict) -> Result:
             f"where the result is usable. Modalities that cross as they are: "
             f"{sorted(CROSSABLE_MODALITIES)}")
 
+    # The ``fs.read`` guard, because a parser reads through ``KERNEL_SDK``,
+    # which reads directly: without this, parsing ``config.json`` as text
+    # returned every ``secret_*`` setting that ``fs.read`` refuses.
+    raw = args.get("path")
+    if not raw:
+        return Result.failure("parse.file requires a path",
+                              code=ERROR_INVALID_ARGUMENT)
+    if (why := reason_for(Path(str(raw)))):
+        return Result.refusal(f"{raw} is not readable: {why}",
+                              code=ERROR_NOT_PERMITTED)
+
     try:
-        parsed = parsing.parse(args.get("path"), modality)
+        parsed = parsing.parse(raw, modality)
     except Exception as exc:
         logger.exception("parse_file failed")
         return Result.failure(f"parse failed: {exc}")

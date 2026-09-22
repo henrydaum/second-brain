@@ -129,11 +129,18 @@ describe("kindOf", () => {
     sdk.mockReset();
   });
 
+  /** A `parse.modality(detail=True)` answer. */
+  const route = (modality: string, generic = modality === "text") => ({
+    modality,
+    known: modality !== "unknown",
+    generic,
+  });
+
   it("shows a .csv as a table even though modality calls it text", () => {
     // `parse_text` claims .csv and the first registration wins, so this answer
     // is permanent — branching on modality alone would render a spreadsheet as
     // a wall of commas forever.
-    sdk.mockResolvedValue("text");
+    sdk.mockResolvedValue(route("text"));
     return expect(kindOf("/srv/report.csv")).resolves.toBe("table");
   });
 
@@ -141,7 +148,7 @@ describe("kindOf", () => {
     // Same disagreement as .csv, and the same resolution: "text" is the right
     // answer to how the model should ingest a note and the wrong one for how a
     // person should read it.
-    sdk.mockResolvedValue("text");
+    sdk.mockResolvedValue(route("text"));
     await expect(kindOf("/srv/vault/plan.md")).resolves.toBe("markdown");
     await expect(kindOf("/srv/vault/README.markdown")).resolves.toBe("markdown");
     // Never even asked: the extension decided it.
@@ -153,30 +160,53 @@ describe("kindOf", () => {
   });
 
   it("embeds a .pdf even though modality calls it unknown", async () => {
-    sdk.mockResolvedValue("unknown");
+    sdk.mockResolvedValue(route("unknown"));
     await expect(kindOf("/srv/paper.pdf")).resolves.toBe("embed");
     // Never even asked: the extension decided it.
     expect(sdk).not.toHaveBeenCalled();
   });
 
   it("takes image, video, audio and text at their word", async () => {
-    sdk.mockResolvedValueOnce("image");
+    sdk.mockResolvedValueOnce(route("image"));
     await expect(kindOf("/srv/a.png")).resolves.toBe("image");
-    sdk.mockResolvedValueOnce("video");
+    sdk.mockResolvedValueOnce(route("video"));
     await expect(kindOf("/srv/a.mp4")).resolves.toBe("video");
-    sdk.mockResolvedValueOnce("audio");
+    sdk.mockResolvedValueOnce(route("audio"));
     await expect(kindOf("/srv/a.wav")).resolves.toBe("audio");
-    sdk.mockResolvedValueOnce("text");
+    sdk.mockResolvedValueOnce(route("text"));
     await expect(kindOf("/srv/a.log")).resolves.toBe("text");
   });
 
+  it("shows a specialist's extraction rather than the bytes", async () => {
+    // `.gdoc` is registered as *text* by `parse_gdoc`, and its bytes are a JSON
+    // stub naming a Drive document — so text through a non-generic parser must
+    // go to the parser, never to the raw file.
+    sdk.mockResolvedValueOnce(route("text", false));
+    await expect(kindOf("/srv/plan.gdoc")).resolves.toBe("parsed");
+    sdk.mockResolvedValueOnce(route("container"));
+    await expect(kindOf("/srv/bundle.zip")).resolves.toBe("parsed");
+    expect(sdk).toHaveBeenCalledWith("parse.modality", {
+      extension: ".zip",
+      detail: true,
+    });
+  });
+
+  it("does not remember a failed ask", async () => {
+    // One dropped connection used to make an extension a download for the
+    // life of the page.
+    sdk.mockImplementationOnce(() => Promise.reject(new Error("offline")));
+    await expect(kindOf("/srv/app.log2")).resolves.toBe("download");
+    sdk.mockResolvedValueOnce(route("text"));
+    await expect(kindOf("/srv/app.log2")).resolves.toBe("text");
+  });
+
   it("offers anything else as a download", async () => {
-    sdk.mockResolvedValue("unknown");
+    sdk.mockResolvedValue(route("unknown"));
     await expect(kindOf("/srv/model.gguf")).resolves.toBe("download");
   });
 
   it("asks once per extension, however many files share it", async () => {
-    sdk.mockResolvedValue("image");
+    sdk.mockResolvedValue(route("image"));
     await Promise.all([
       kindOf("/srv/one.jxl"),
       kindOf("/srv/two.jxl"),

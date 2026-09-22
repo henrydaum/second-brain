@@ -27,6 +27,7 @@ const KIND_ICONS: Record<FileIconKind, typeof FileIcon> = {
   markdown: BookTextIcon,
   text: FileTextIcon,
   embed: FileTextIcon,
+  parsed: FileTextIcon,
   download: FileIcon,
 };
 

@@ -130,6 +130,7 @@ export type FileKind =
   | "markdown"
   | "text"
   | "embed"
+  | "parsed"
   | "download";
 
 /** The renderer kinds plus the one visual-only distinction worth making.
@@ -246,24 +247,41 @@ const STATIC: Record<string, string> = {
   ".flac": "audio",
 };
 
+/** How the kernel routes an extension — `parse.modality` with `detail`.
+ *  `generic` is true only for `parse_text`, whose text *is* the file; any
+ *  other known route is a specialist that turns the file into text. */
+type Route = { modality: string; known: boolean; generic: boolean };
+
 /**
  * The kernel's own answer for an extension, asked once per extension.
  *
  * Memoised on the *promise* rather than the value, so a burst of files sharing
  * an extension — which is the normal case, a folder of screenshots — makes one
- * Request rather than one each. It answers `"unknown"` and never `null`.
+ * Request rather than one each.
+ *
+ * **A failed ask is answered from `STATIC` and then forgotten.** It used to be
+ * memoised like a real answer, so one dropped connection made every `.log`
+ * a download for the life of the page: `STATIC` knows only media, and
+ * "unknown" is where anything else lands.
  */
-const modalities = new Map<string, Promise<string>>();
+const routes = new Map<string, Promise<Route>>();
 
-function modalityOf(suffix: string): Promise<string> {
-  const known = modalities.get(suffix);
+function routeOf(suffix: string): Promise<Route> {
+  const known = routes.get(suffix);
   if (known) return known;
 
-  const asked = sdk<string>("parse.modality", { extension: suffix })
-    .then((answer) => (typeof answer === "string" ? answer : "unknown"))
-    .catch(() => STATIC[suffix] ?? "unknown");
+  const asked = sdk<Route>("parse.modality", { extension: suffix, detail: true })
+    .then((answer) => {
+      if (answer && typeof answer.modality === "string") return answer;
+      throw new Error("malformed parse.modality answer");
+    })
+    .catch((): Route => {
+      routes.delete(suffix);
+      const modality = STATIC[suffix] ?? "unknown";
+      return { modality, known: modality !== "unknown", generic: false };
+    });
 
-  modalities.set(suffix, asked);
+  routes.set(suffix, asked);
   return asked;
 }
 
@@ -275,10 +293,16 @@ function modalityOf(suffix: string): Promise<string> {
  * 1. `.csv`/`.tsv` → a table, because modality says `"text"` and means it.
  * 2. `.md` and friends → Markdown, for the same reason: `"text"` is the right
  *    answer to the question the kernel was asked and the wrong one here.
- * 3. `.pdf`/`.svg` → an embed, because modality says `"unknown"` and the
- *    browser disagrees.
- * 4. then ask, and take image/video/audio/text at their word.
- * 5. anything left is a download, which is what `/files` would serve it as.
+ * 3. `.pdf`/`.svg` → an embed, because the browser draws both itself.
+ * 4. then ask, and take image/video/audio at their word — the browser draws
+ *    those better than any parser describes them.
+ * 5. text through the *generic* parser → the raw bytes, shown as source. Not
+ *    the parser's output: `parse_text` cleans and caps, and a viewer showing
+ *    source must show what is on disk.
+ * 6. anything else a parser is registered for → `"parsed"`, the kernel's text
+ *    extraction. This is `.docx`, `.gdoc`, `.zip` — and it is *before* any
+ *    bytes are read, because a `.gdoc` is valid JSON that is not the document.
+ * 7. anything left is a download, which is what `/files` would serve it as.
  */
 export async function kindOf(path: string): Promise<FileKind> {
   const suffix = suffixOf(path);
@@ -286,18 +310,17 @@ export async function kindOf(path: string): Promise<FileKind> {
   if (MARKDOWN.has(suffix)) return "markdown";
   if (EMBED.has(suffix)) return "embed";
 
-  switch (await modalityOf(suffix)) {
+  const route = await routeOf(suffix);
+  switch (route.modality) {
     case "image":
       return "image";
     case "video":
       return "video";
     case "audio":
       return "audio";
-    case "text":
-      return "text";
-    default:
-      return "download";
   }
+  if (route.modality === "text" && route.generic) return "text";
+  return route.known ? "parsed" : "download";
 }
 
 /**
@@ -515,6 +538,48 @@ export function readText(path: string): Promise<WholeText> {
   return asked;
 }
 
+/**
+ * What a parser made of a file.
+ *
+ * Text only. A container parser also answers `also_contains`, but the HTTP
+ * route hands a client `data` and nothing else, so the child paths never
+ * reach the browser — a zip shows whatever text its parser wrote about it.
+ */
+export type Parsed = { text: string };
+
+/** Parser output, cached beside `texts` and forgotten with it. */
+const parsed = new Map<string, Promise<Parsed>>();
+
+/**
+ * The kernel's text extraction for a file, through `parse.file`.
+ *
+ * Over the SDK rather than `/files`, because the parser runs kernel-side and
+ * the bytes never need to reach the browser. The answer is bounded by the
+ * parser's own char cap and, past that, by the wire — `interpreter.
+ * _deliverable` degrades an oversized one to `ERROR_TOO_LARGE`, which the
+ * viewer words as "download it".
+ */
+export function readParsed(path: string): Promise<Parsed> {
+  const known = parsed.get(path);
+  if (known) {
+    parsed.delete(path);
+    parsed.set(path, known);
+    return known;
+  }
+
+  const asked = sdk<unknown>("parse.file", { path, modality: "text" }).then(
+    (data) => ({ text: typeof data === "string" ? data : "" }),
+  );
+  parsed.set(path, asked);
+  void asked.catch(() => parsed.delete(path));
+
+  for (const oldest of parsed.keys()) {
+    if (parsed.size <= TEXT_CACHE) break;
+    parsed.delete(oldest);
+  }
+  return asked;
+}
+
 /** Drop what was held for a path, because it is not that file any more. Called
  *  with every path a ledger poll turns up — the agent writing a file is exactly
  *  the event that makes a cached copy of it a lie, and it makes a remembered
@@ -522,6 +587,7 @@ export function readText(path: string): Promise<WholeText> {
  *  rewritten points at whatever happens to be there now. */
 export function forgetFile(path: string): void {
   texts.delete(path);
+  parsed.delete(path);
   forgetPlaces(path);
 }
 
