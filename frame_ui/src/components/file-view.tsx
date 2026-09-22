@@ -387,7 +387,9 @@ const DataTable: FC<{ rows: string[][] }> = ({ rows }) => {
 
   return (
     <table className="w-full border-collapse text-xs">
-      <thead className="bg-muted/60 sticky top-0">
+      {/* Opaque: rows scroll underneath a sticky header, and a translucent one
+          lets them show through it. */}
+      <thead className="bg-muted sticky top-0 z-10">
         <tr>
           {header.map((cell, i) => (
             <th
