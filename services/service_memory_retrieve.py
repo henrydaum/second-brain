@@ -75,18 +75,18 @@ SUBAGENT_PREFIX = "spawn_subagent:"
 
 #: What the agent is told when it is about to finish. Written to be declined:
 #: most turns hold nothing, and the one way this goes wrong is an agent that
-#: saves something every time because it was asked every time. The last line
-#: is load-bearing — the comeback reply is shown to the user, and an empty one
-#: is treated as a failure and re-asked for a "substantive reply".
+#: saves something every time because it was asked every time. The comeback is
+#: *quiet*, so nothing the agent says in it reaches the user — the note says so,
+#: or a model trained to always answer will answer the user's question again.
 NUDGE = (
-    "[Memory check — not from the user] Before you finish: did this turn "
-    "teach anything a future conversation would need? A correction the user "
-    "made, something that failed and what fixed it, a procedure that worked, "
-    "or something the user asked you to remember. If so, save it with the "
-    "`memory` tool — update an existing entry when one covers it, including "
-    "any memory you were shown that turned out wrong. Most turns hold "
-    "nothing; if so, do nothing. Either way, then reply with one short line "
-    "only (for example \"Noted.\") — do not repeat your answer."
+    "[Memory check — from the system, not the user. The user will not see "
+    "anything you write in reply to this.] Did this turn teach anything a "
+    "future conversation would need: a correction the user made, something "
+    "that failed and what fixed it, a procedure that worked, or something the "
+    "user asked you to remember? If so, save it with the `memory` tool — "
+    "update an existing entry when one covers it, including any memory you "
+    "were shown that turned out wrong. Most turns hold nothing. Either way, "
+    "do not reply to the user again; end with an empty message."
 )
 
 
@@ -403,7 +403,9 @@ class MemoryRetrieve(BaseService):
 
         Ephemeral, so the note is shown to the model and never recorded: a
         transcript with this line after every reply would be the conversation
-        talking to itself.
+        talking to itself. Quiet, so whatever the agent says once it is done is
+        dropped and the user's reply stays the last word — without it the
+        agent, asked to say something, answered the user's question twice.
         """
         if getattr(ending, "doorman_fires", 0):
             return None
@@ -411,7 +413,7 @@ class MemoryRetrieve(BaseService):
             return None
         if str(getattr(ctx, "session_key", "")).startswith(SUBAGENT_PREFIX):
             return None
-        return SendBack(NUDGE, ephemeral=True)
+        return SendBack(NUDGE, ephemeral=True, quiet=True)
 
     def _log_offered(self, sdk, ctx, offered):
         """Record which entries were surfaced in this conversation.
