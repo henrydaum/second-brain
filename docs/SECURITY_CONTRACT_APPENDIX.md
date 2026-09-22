@@ -411,7 +411,8 @@ and somebody changes it constantly.
 
 The third is the test worth stating, because the settings it excludes read
 exactly like preferences from outside: `net_allowed_hosts` is "which sites",
-`shell_allowed_prefixes` is "which commands", `security_mode` is "how careful",
+`shell_allowed_prefixes` is "which commands", `script_allowed_imports` is
+"which libraries", `security_mode` is "how careful",
 and each is the standing answer to a dialog, so writing one grants you whatever
 it covers. `active_agent_profile` is the near miss — it passes the first two
 and selects a tool whitelist.

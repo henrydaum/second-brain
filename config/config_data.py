@@ -258,6 +258,17 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list"}),
 
+    ("Allowed Script Imports", "script_allowed_imports",
+     "Libraries a script may import without asking you first, named by their "
+     "top-level module — `PIL`, say, or `numpy` — which covers every "
+     "submodule. Scripts are otherwise free to run because everything they do "
+     "comes back to the kernel as a request; a library like these acts on its "
+     "own, where nothing can see or stop it, so importing one is asked about. "
+     "Listing it here allows that for every script that imports it. Names are "
+     "case-sensitive, as Python's are. A plugin cannot add to it.",
+     [],
+     {"type": "json_list"}),
+
     ("Data Retention (Days)", "data_retention_days",
      "Delete data older than this many days: idle conversations (and their "
      "messages), action-ledger rows, and finished task-run records. Anything "

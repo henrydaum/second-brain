@@ -149,7 +149,7 @@ itself, above `classify` — this table is the summary of that comment:
 | # | Mechanism | Question | Used by |
 |---|---|---|---|
 | 1 | **Destination** | is the path inside a scratch root? | `fs.write`, `fs.write_bytes`, `fs.move`, `fs.delete` |
-| 2 | **Allowlist** | is the host in `net_allowed_hosts`? (dot-boundary subdomain match) — or the setting in `policy.FREELY_WRITABLE_SETTINGS`? | `net.http`, `config.write` |
+| 2 | **Allowlist** | is the host in `net_allowed_hosts`? (dot-boundary subdomain match) — or each foreign import in `script_allowed_imports`? — or the setting in `policy.FREELY_WRITABLE_SETTINGS`? | `net.http`, `script.run`, `config.write` |
 | 3 | **Ownership** | did this plugin *declare* this setting? | `secret.reveal`, `config.write` |
 | 4 | **Shape** | does the SQL delete from a kernel table? | `db.write` |
 | 5 | **Polarity** | does this widen or narrow? | `task.pause` (pause safe, unpause unsafe) |
@@ -326,6 +326,7 @@ exactly when whatever ran it was. That is the whole rule.
 | Allow web domain | **exists** — an answer option, writing `net_allowed_hosts` | — |
 | Allow writable folder | **exists** — an answer option, writing `fs_writable_dirs` | — |
 | Allow command prefix | **exists** — an answer option, writing `shell_allowed_prefixes` | matched as `(program, subcommand)`, never a string prefix |
+| Allow script import | **exists** — an answer option, writing `script_allowed_imports` | exact, case-sensitive library root (`PIL`); shared with the launch preflight via `policy.ungranted_imports` |
 | Allow until end of turn | **exists** — an answer option, writing `turn_security_mode` | `options._rest_of_this_turn` |
 | Deny forever | **missing** | an `OPTION_BUILDERS` entry — `build_approver` already runs `remember` for denying options |
 | Auto accept all | **exists** — `/mode yolo` | §6a |

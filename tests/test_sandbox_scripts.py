@@ -805,3 +805,72 @@ def test_the_sdk_reaches_all_of_it_from_inside_a_box(wired, tree):
 
     assert result.ok, result.error
     assert result.data == [1, 2, 3]
+
+
+# ── a standing grant for a library ────────────────────────────────────
+#
+# Approving PIL once and being done. The grant is the library root the
+# validator records, and the classifier, the launch preflight and the dialog
+# read it through one function — a script the classifier calls SAFE that the
+# preflight then refuses runs nowhere, with nothing left to approve.
+
+
+@pytest.fixture
+def granted():
+    """Set ``script_allowed_imports`` for one test, and put it back."""
+    from runtime.context import set_kernel_parts
+
+    def grant(*names):
+        set_kernel_parts(config={"script_allowed_imports": list(names)})
+    yield grant
+    grant()
+
+
+def test_a_granted_library_is_not_asked_about(tree, granted):
+    granted("numpy")
+    decision = _ask(write(tree, "heavy.py", extra="import numpy"))
+    assert decision.level == SAFE
+    assert "numpy" in decision.reason
+
+
+def test_the_grant_is_case_sensitive_like_the_import(tree, granted):
+    granted("NUMPY")
+    assert _ask(write(tree, "heavy.py", extra="import numpy")).level == UNSAFE
+
+
+def test_only_the_ungranted_library_is_named(tree, granted):
+    granted("numpy")
+    decision = _ask(write(tree, "heavy.py",
+                          extra="import numpy\nimport sqlite3"))
+    assert decision.level == UNSAFE
+    assert "sqlite3" in decision.reason
+    assert "numpy" not in decision.reason
+
+
+def test_a_granted_library_launches_without_an_approval(wired, tree, granted):
+    """The preflight honours the same list the classifier did."""
+    from sandbox.handlers.kernel import _script_run
+
+    granted("sqlite3")
+    path = write(tree, extra="import sqlite3")
+    result = _as(Chain(root="user"), _script_run,
+                 {"path": str(path), "args": {"values": [2, 3]}})
+    assert result.ok, result.error
+    assert result.data == 5
+
+
+def test_the_dialog_offers_to_remember_the_libraries(tree, granted):
+    from sandbox import options
+
+    path = write(tree, "heavy.py", extra="import numpy\nimport PIL.Image")
+    request = Request(SCRIPT_RUN, {"path": str(path)})
+    offered = [o for o in options.options_for(Chain(root="user"), request, None)
+               if o.value.startswith("always:import:")]
+    assert [o.label for o in offered] == [
+        "Always allow scripts to import: PIL, numpy"]
+
+    granted("PIL", "numpy")
+    assert not [o for o in options.options_for(Chain(root="user"), request,
+                                               None)
+                if o.value.startswith("always:import:")]
+

@@ -4367,9 +4367,14 @@ def _script_run(ctx, args: dict) -> Result:
         answers must be the same rule and, when they refuse, the same
         sentence.
         """
-        if not current_report.unmediated:
+        # Granted imports through the same function the classifier uses, or a
+        # script it called SAFE would be refused here with nothing to approve.
+        from ..policy import ungranted_imports
+
+        missing = ungranted_imports(current_report.unmediated)
+        if not missing:
             return ""
-        libraries = ", ".join(sorted(current_report.unmediated))
+        libraries = ", ".join(missing)
         return (f"{path.name} imports {libraries}, whose own actions are not "
                 "mediated; script launch was not approved")
 

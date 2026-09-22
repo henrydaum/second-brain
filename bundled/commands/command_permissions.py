@@ -2,8 +2,8 @@
 
 The whole approval design rests on a grant being **enumerable and
 withdrawable**: an answer nobody can find is an answer nobody can take back.
-Three settings hold every standing grant the system has, and before this they
-were three keys among thirty in ``/config``, discoverable only by knowing
+Four settings hold every standing grant the system has, and before this they
+were four keys among thirty in ``/config``, discoverable only by knowing
 their names.
 
 One verb, deliberately. Adding by hand stays in ``/config``; this exists to
@@ -20,14 +20,16 @@ from guest.forms import FormStep
 _NETWORK = "Network"
 _FOLDERS = "Writable folders"
 _COMMANDS = "Commands"
+_IMPORTS = "Script imports"
 _REVOKE_ALL = "Revoke every entry in this list"
 
-#: Category label -> the setting behind it. The only place the three are
+#: Category label -> the setting behind it. The only place the four are
 #: named together outside the policy that reads them.
 SETTINGS = {
     _NETWORK: "net_allowed_hosts",
     _FOLDERS: "fs_writable_dirs",
     _COMMANDS: "shell_allowed_prefixes",
+    _IMPORTS: "script_allowed_imports",
 }
 
 
@@ -129,7 +131,8 @@ def _overview(sdk, granted) -> str:
         return (
             "**No standing permissions.**\n\n"
             "Every request to reach the network, write outside the agent's "
-            "own tree, or run a command is asked about individually. The "
+            "own tree, run a command, or let a script import a library the kernel "
+            "cannot see inside is asked about individually. The "
             "approval dialog offers to remember an answer; anything you keep "
             "that way appears here.\n\n" + _always())
 
@@ -139,6 +142,7 @@ def _overview(sdk, granted) -> str:
         _table(sdk, _NETWORK, granted[_NETWORK], "Host", _COVERS_HOST),
         _table(sdk, _FOLDERS, granted[_FOLDERS], "Folder", _COVERS_FOLDER),
         _table(sdk, _COMMANDS, granted[_COMMANDS], "Command", _COVERS_COMMAND),
+        _table(sdk, _IMPORTS, granted[_IMPORTS], "Library", _COVERS_IMPORT),
         _always(),
     ]
     return "\n\n".join(part for part in parts if part)
@@ -154,6 +158,7 @@ def _overview(sdk, granted) -> str:
 _COVERS_HOST = "this host and its subdomains"
 _COVERS_FOLDER = "create, edit, move and delete, including subfolders"
 _COVERS_COMMAND = "with any arguments"
+_COVERS_IMPORT = "imported by any script; its own actions are not mediated"
 
 
 def _table(sdk, title, entries, heading, covers) -> str:

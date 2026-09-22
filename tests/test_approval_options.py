@@ -44,7 +44,8 @@ def _blank_lists(monkeypatch):
     def blank():
         set_kernel_parts(config={"net_allowed_hosts": [],
                                  "fs_writable_dirs": [],
-                                 "shell_allowed_prefixes": []})
+                                 "shell_allowed_prefixes": [],
+                                 "script_allowed_imports": []})
     blank()
     yield saved
     blank()
@@ -475,3 +476,13 @@ def test_concurrent_grants_do_not_lose_each_other():
 
     from runtime.context import kernel_config
     assert sorted(kernel_config()["net_allowed_hosts"]) == sorted(hosts)
+
+
+def test_an_import_grant_is_exact_and_case_sensitive(_blank_lists):
+    """``PIL`` and ``pil`` are different imports; folding would grant both."""
+    from runtime.context import kernel_config
+
+    assert options.remember("script_allowed_imports", "PIL") is True
+    assert options.remember("script_allowed_imports", "PIL") is False
+    assert options.remember("script_allowed_imports", "pil") is True
+    assert kernel_config()["script_allowed_imports"] == ["PIL", "pil"]

@@ -2177,6 +2177,20 @@ Launch revalidates the current bytes and requires proof that this Request was
 approved before starting newly foreign code, closing the classification/run
 race. Requests made inside the script are still judged one by one.
 
+**A library can be approved once** (`script_allowed_imports`, the fourth
+standing-grant list beside hosts, folders and command prefixes). Without it
+every run of every script importing `PIL` was a dialog, forever — the dialog
+was right to ask the first time and had nothing new to say after. The unit is
+the **library root exactly as the validator records it** in `unmediated`, so
+`PIL` covers `PIL.Image`, and matching is case-sensitive because imports are.
+`policy.ungranted_imports` is the one reader, used by the classifier, the
+launch preflight and the dialog's `_always_allow_import` — a grant the
+classifier honoured and the preflight did not would be a script that runs
+nowhere with nothing left to approve. There is no never-offered list as there
+is for commands: the imports that would make a grant the shell again
+(`subprocess`, `ctypes`, `importlib`) are validator *errors*, so no script
+carrying one reaches a dialog. `/permissions` lists and revokes it.
+
 Ephemeral only, on purpose. The resident half already works
 (`Sandbox.open` on a module, pinned by `test_a_bare_script_opens_as_a_resident_
 server`) and is deliberately not exposed: a script that wants to stay resident

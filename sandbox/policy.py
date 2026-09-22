@@ -999,20 +999,52 @@ def _classify_script(args: dict) -> Decision:
     if not report.ok:
         return Decision(SAFE, f"script launch preflight will report validation "
                              f"errors in {Path(path).name}")
-    if report.unmediated:
+    missing = ungranted_imports(report.unmediated)
+    if missing:
         # The one case that is asked about. An installed package importing a
         # foreign library is subprocessed and *not* asked, because somebody
         # approved it once at ``plugin.install``; a script was never approved
         # by anyone, and a library the validator cannot see inside is the only
         # part of a script whose effects do not come back through this
-        # function. Naming it is most of the value of the dialog.
-        libraries = ", ".join(sorted(report.unmediated))
+        # function. Naming it is most of the value of the dialog — and only
+        # the libraries not already granted are named, since those are the
+        # whole of what is being asked.
+        libraries = ", ".join(missing)
         return Decision(UNSAFE,
                         f"run {Path(path).name}, which imports {libraries} - "
                         f"that library's own actions are not mediated",
                         say=f"It imports {libraries}, whose own actions the "
                             f"kernel cannot see or stop.")
+    if report.unmediated:
+        libraries = ", ".join(sorted(report.unmediated))
+        return Decision(SAFE, f"run the script {Path(path).name}, which "
+                              f"imports {libraries} (allowed imports)")
     return Decision(SAFE, f"run the script {Path(path).name} (contained)")
+
+
+def _allowed_imports() -> set:
+    """Libraries the user has said any script may import.
+
+    Exact and case-sensitive, unlike hosts and command prefixes, because a
+    module name is: ``PIL`` and ``pil`` are different imports, and folding
+    them would grant one by approving the other. The unit is the library
+    *root* — the same string the validator records in ``unmediated`` — so a
+    grant for ``PIL`` covers ``PIL.Image`` exactly as the dialog said it would.
+    """
+    return {entry.strip() for entry in kernel_list("script_allowed_imports")
+            if entry.strip()}
+
+
+def ungranted_imports(unmediated) -> list:
+    """The foreign libraries in ``unmediated`` nobody has granted, sorted.
+
+    One function for the classifier, the launch preflight and the dialog,
+    because the three must agree: a classifier that says SAFE over a preflight
+    that still refuses is a script that runs nowhere, and a button offering
+    what is already granted changes nothing.
+    """
+    allowed = _allowed_imports()
+    return sorted(name for name in (unmediated or ()) if name not in allowed)
 
 
 def _setting_owners(key: str) -> set:
@@ -1147,6 +1179,8 @@ FREELY_WRITABLE_SETTINGS = frozenset({
 #      ``net.http`` against ``net_allowed_hosts``, matched on a dot boundary.
 #      Deliberately config and not a plugin declaration — see the egress
 #      section for why that distinction is the whole of it.
+#      ``script.run`` against ``script_allowed_imports``, matched exactly on
+#      the library root the validator records.
 #      ``config.write`` against ``FREELY_WRITABLE_SETTINGS`` is the same
 #      mechanism with the list in *code*, and the inversion is the point: a
 #      setting naming the settings that need no approval would grant

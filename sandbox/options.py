@@ -88,11 +88,11 @@ ALLOW = Option("allow", "Allow")
 # Adding "Always trust this tool" or "Deny forever" is an entry in this list
 # and a function beside it. It is not a branch in ``build_approver``.
 #
-# Three of the four ship the same thing one layer down — they turn "yes" into
+# Four of the five ship the same thing one layer down — they turn "yes" into
 # an entry in a list the user keeps — so each is really only two questions:
 # what is the grantable unit here, and is it already granted.
 #
-# ``_rest_of_this_turn`` is the fourth and it is the proof the opaque
+# ``_rest_of_this_turn`` is the fifth and it is the proof the opaque
 # ``remember`` closure was worth having: its unit is **time**, so it writes to
 # the session rather than to config, and neither ``options_for`` nor the dialog
 # had to learn that it was different.
@@ -217,6 +217,44 @@ def _always_allow_command(chain, request, decision) -> list:
                                          for p in missing]))]
 
 
+def _always_allow_import(chain, request, decision) -> list:
+    """Offer to remember every foreign library this script imports.
+
+    All or nothing, like :func:`_always_allow_command`: a grant for some of
+    them leaves the dialog appearing anyway. The report is re-derived from the
+    file exactly as ``policy._classify_script`` does, so the libraries offered
+    are the ones that were asked about.
+
+    Nothing here needs a :data:`NEVER_OFFERED` of its own: the imports that
+    would make a grant the shell again (``subprocess``, ``ctypes``,
+    ``importlib``) fail validation outright, so no script carrying one ever
+    reaches a dialog.
+    """
+    from . import policy
+    from .guest import requests as R
+    from .isolation import is_script, resolve_script
+
+    if request.type != R.SCRIPT_RUN:
+        return []
+    path = request.args.get("path")
+    if not path:
+        return []
+    path = resolve_script(path) or path
+    if not is_script(path):
+        return []
+    report = policy._script_report(path)
+    if report is None or not report.ok:
+        return []
+    missing = policy.ungranted_imports(report.unmediated)
+    if not missing:
+        return []
+    named = ", ".join(missing)
+    return [Option(f"always:import:{named}",
+                   f"Always allow scripts to import: {named}",
+                   remember=lambda: all([remember("script_allowed_imports", m)
+                                         for m in missing]))]
+
+
 def _rest_of_this_turn(chain, request, decision) -> list:
     """Offer to stop asking for the remainder of the current agent turn.
 
@@ -279,7 +317,8 @@ def _kernel_runtime():
 
 
 OPTION_BUILDERS: list = [_always_allow_host, _always_allow_folder,
-                         _always_allow_command, _rest_of_this_turn]
+                         _always_allow_command, _always_allow_import,
+                         _rest_of_this_turn]
 
 
 def options_for(chain, request, decision) -> list:
@@ -392,13 +431,26 @@ def _merge_dir(entry: str, existing: list):
     return kept + [resolved]
 
 
-#: setting -> how a new entry joins the list it lives in. The three lists have
-#: three different notions of "already covered", and each one lives here rather
+def _merge_exact(entry: str, existing: list):
+    """Exact, case-*sensitive* de-dupe, for module names.
+
+    Not :func:`_merge_text`: ``PIL`` and ``pil`` are different imports, and a
+    case-folded check would call one granted because the other is.
+    """
+    entry = entry.strip()
+    if not entry or entry in {item.strip() for item in existing}:
+        return None
+    return existing + [entry]
+
+
+#: setting -> how a new entry joins the list it lives in. The four lists have
+#: four different notions of "already covered", and each one lives here rather
 #: than in the builder that offers it.
 MERGERS = {
     "net_allowed_hosts": _merge_host,
     "fs_writable_dirs": _merge_dir,
     "shell_allowed_prefixes": _merge_text,
+    "script_allowed_imports": _merge_exact,
 }
 
 
