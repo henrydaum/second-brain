@@ -817,3 +817,28 @@ describe("the cancellation acknowledgement", () => {
     ]);
   });
 });
+
+describe("a command the page did not see start", () => {
+  const running = { callId: "cmd:update:1", name: "update" };
+
+  it("is stood back up from what session.get says", () => {
+    const state = reduce(initialState, { type: "reconcileCommand", running });
+    expect(state.command).toMatchObject({
+      callId: "cmd:update:1", name: "update", status: "progressed",
+    });
+  });
+
+  it("stops spinning when it finished while nobody was listening", () => {
+    const restored = reduce(initialState, { type: "reconcileCommand", running });
+    const state = reduce(restored, { type: "reconcileCommand", running: null });
+    expect(state.command?.status).toBe("finished");
+  });
+
+  it("leaves a run this page asked for and the server has not started", () => {
+    const asked = reduce(initialState, {
+      type: "said", text: "/update", isCommand: true,
+    });
+    const state = reduce(asked, { type: "reconcileCommand", running: null });
+    expect(state.command?.status).toBe("started");
+  });
+});

@@ -27,6 +27,10 @@ def _nobody_said_yes() -> bool:
     """The default ``ConversationState.auto_approve``: ask, as always."""
     return False
 
+
+def _nobody_listening(request_id: str, reason: str) -> None:
+    """The default ``ConversationState.approval_settled``: nobody to tell."""
+
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
 FormFactory = Callable[[dict[str, Any], Any], list["FormStep"]]
@@ -381,6 +385,13 @@ class ConversationState:
         # needs to know whether it may skip asking. The default asks, so a
         # state machine built without a runtime behind it behaves as before.
         self.auto_approve: Callable[[], bool] = _nobody_said_yes
+        # Called the moment an approval frame comes off the stack, *before*
+        # the action it gated is resumed. The driver announces the question's
+        # end from here because the resumed action can take minutes (`/update`)
+        # — announcing only once ``enact`` returned left every frontend holding
+        # an answered question for the whole run, and a reloaded page drew it
+        # again and got "That request is no longer active" for pressing it.
+        self.approval_settled: Callable[[str, str], None] = _nobody_listening
 
     @property
     def active(self) -> Participant:

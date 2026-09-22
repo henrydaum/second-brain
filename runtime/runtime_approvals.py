@@ -177,7 +177,13 @@ def resolve_answered_request(runtime, session_key: str, request_id: str | None,
     in ``_approval_requests``). The id is what a frontend is holding, so the id
     is what it needs to hear about.
     """
-    if not request_id or not result.ok:
+    if not request_id:
+        return
+    # Already announced when its frame came off the stack (``announce_settled``)
+    # — the approved action is only now returning, possibly minutes later and
+    # possibly failed, and neither changes that the question ended back then.
+    early = _announced(runtime).discard_if_present(request_id)
+    if not result.ok:
         return
     req = runtime._approval_requests.pop(request_id, None)
     cancelled = result.action == "cancel"
@@ -188,9 +194,45 @@ def resolve_answered_request(runtime, session_key: str, request_id: str | None,
             req.resolve(None)
         else:
             req.resolve(data.get("value", True))
-    if runtime.emit_event:
+    if runtime.emit_event and not early:
         runtime.emit_event("approval_settled", {
             "session_key": session_key,
             "request_id": request_id,
             "reason": "cancelled" if cancelled else "answered",
         })
+
+
+class _Announced(set):
+    def discard_if_present(self, item) -> bool:
+        if item in self:
+            self.discard(item)
+            return True
+        return False
+
+
+def _announced(runtime) -> _Announced:
+    held = getattr(runtime, "_settled_early", None)
+    if held is None:
+        held = runtime._settled_early = _Announced()
+    return held
+
+
+def announce_settled(runtime, session_key: str, request_id: str, reason: str) -> None:
+    """Say a question ended the moment its frame is popped.
+
+    Called by the state machine (``ConversationState.approval_settled``) before
+    it resumes the action the answer approved. ``resolve_answered_request``
+    runs only once that action returns — for ``/update``, after the pull, the
+    install and the deploy — and until then every frontend's registration said
+    the question was still open. A page reloaded mid-run drew the dialog again
+    from ``frontend.pending``, and pressing it answered a frame that no longer
+    existed: "That request is no longer active."
+    """
+    if not runtime.emit_event:
+        return
+    _announced(runtime).add(request_id)
+    runtime.emit_event("approval_settled", {
+        "session_key": session_key,
+        "request_id": request_id,
+        "reason": reason,
+    })

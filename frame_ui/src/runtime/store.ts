@@ -320,6 +320,8 @@ export type Action =
    *  has printed something is not done being read just because it is done
    *  running. */
   | { type: "clearCommand" }
+  /** What `session.get` says about the command body running right now. */
+  | { type: "reconcileCommand"; running: { callId: string; name: string } | null }
   /** Closing an approval dialog is already visible. Suppress only the kernel's
    *  next exact cancellation acknowledgement, not arbitrary errors or text. */
   | { type: "suppressNextCancellationNotice" }
@@ -765,6 +767,38 @@ export function reduce(state: State, action: Action): State {
 
     case "clearCommand":
       return { ...state, command: null, form: null };
+    case "reconcileCommand": {
+      /**
+       * **A reload or a dropped stream loses the command, not the kernel.**
+       * The `tool_status` that opened the run was sent before this page
+       * existed, so a page reloaded during `/update` came up believing nothing
+       * was running — and Settings offered to start it again, alongside the
+       * first. Standing the run back up is what puts the panel (and its lock)
+       * back, and gives the progress frames still to come a run to land on.
+       */
+      if (action.running) {
+        return reduce(state, {
+          type: "frame",
+          frame: {
+            kind: "tool_status",
+            payload: {
+              kind: "command",
+              call_id: action.running.callId,
+              command_name: action.running.name,
+              status: "progressed",
+            },
+          },
+        });
+      }
+      // The other direction: it finished while nobody was listening, so its
+      // finished frame is gone too. Left alone, the panel would spin — and
+      // hold Settings shut — forever. A local placeholder is exempt: that run
+      // has been asked for and the server has not started it yet.
+      const run = state.command;
+      if (!run || run.status === "finished" || state.form ||
+          run.callId.startsWith("pending:")) return state;
+      return { ...state, command: { ...run, status: "finished", narration: undefined } };
+    }
     case "suppressNextCancellationNotice":
       return { ...state, suppressNextCancellationNotice: true };
     case "clearError":

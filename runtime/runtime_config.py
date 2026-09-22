@@ -230,6 +230,11 @@ def new_state(
         # a mode set mid-conversation takes effect on the next command instead
         # of at the next time something happens to rebuild the state machine.
         cs.auto_approve = lambda: runtime.security_mode(session.key) == YOLO
+        # Tells frontends a question ended when its frame is popped, not when
+        # the command it approved finishes — see ``approval_settled``.
+        from runtime import runtime_approvals
+        cs.approval_settled = lambda request_id, reason: (
+            runtime_approvals.announce_settled(runtime, session.key, request_id, reason))
     from attachments.attachment import Attachment
     cs.pending_attachments = [
         Attachment.from_dict(a) if isinstance(a, dict) else a

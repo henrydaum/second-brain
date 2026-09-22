@@ -631,6 +631,8 @@ class AnswerApproval(Action):
         )
         self.cs.pop_phase()
         self.cs.set_priority(original_actor)
+        if request_id := (frame.data or {}).get("request_id"):
+            self.cs.approval_settled(request_id, "answered")
         event = self.cs.event("approval_answered", self.actor_id, value=value, approved=bool(value), pending=pending)
 
         if pending and frame.data.get("type", "boolean") == "boolean":

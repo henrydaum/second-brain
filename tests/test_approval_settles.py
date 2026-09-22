@@ -138,3 +138,44 @@ def test_it_settles_even_with_no_live_request_to_fulfil(make_runtime):
     assert _settled(seen) == [{"session_key": "repl",
                                "request_id": "approve_callable",
                                "reason": "answered"}]
+
+
+def test_an_approved_command_settles_before_its_body_runs(tmp_path):
+    """The question ends when its frame comes off the stack, not when the
+    command it approved returns.
+
+    Announcing only after ``enact`` meant a long body — ``/update`` pulling,
+    installing, deploying — left every frontend holding an answered question
+    for the whole run. A page reloaded mid-run drew the dialog again from
+    ``frontend.pending``, and pressing it answered a frame that no longer
+    existed: "That request is no longer active." And a body that *failed*
+    never announced at all.
+    """
+    from state_machine.conversation import CallableSpec
+    from tests.support import plain_runtime
+
+    seen: list[tuple[str, object]] = []
+    settled_while_running: list[list] = []
+
+    def body(_cs, _actor, _args):
+        settled_while_running.append(_settled(seen))
+        raise RuntimeError("the pull failed")
+
+    db = Database(str(tmp_path / "gated.db"))
+    cid = db.create_conversation("x")
+    spec = CallableSpec("update", body, require_approval=True,
+                        approval_actor_id="user")
+    runtime = plain_runtime(db, commands={"update": spec},
+                            emit_event=lambda c, p: seen.append((c, p)))
+    runtime.load_conversation("s", cid)
+    runtime.handle_action("s", "call_command", {"name": "update", "args": {}})
+    # Minted by the first frontend to draw it (``_current_approval_request``).
+    request_id = "approve_r1"
+    runtime.get_session("s").cs.frame.data["request_id"] = request_id
+
+    runtime.handle_action("s", "answer_approval",
+                          {"value": True, "request_id": request_id})
+
+    assert [p["request_id"] for p in settled_while_running[0]] == [request_id]
+    # Once, not again when the body returns.
+    assert [p["request_id"] for p in _settled(seen)] == [request_id]

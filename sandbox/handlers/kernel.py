@@ -713,6 +713,11 @@ def _session_get(ctx, args: dict) -> Result:
         "phase": getattr(machine, "phase", None),
         "busy": bool(getattr(session, "in_flight", getattr(session, "busy", False))),
         "turn_id": getattr(session, "turn_id", None),
+        # The command whose body is running, as ``{call_id, name}``, or None.
+        # ``phase`` says *that* one is; a client reloaded mid-run needs to
+        # know *which*, or it cannot put the panel back and the progress frames
+        # that follow have no run to land on.
+        "running_command": _running_command_of(session),
         "attended": bool(runtime.is_attended(key))
         if hasattr(runtime, "is_attended") else None,
         # Which agent profile is actually driving *this* session, and which
@@ -750,6 +755,14 @@ def _session_get(ctx, args: dict) -> Result:
             ],
         }
     return Result(data=data)
+
+
+def _running_command_of(session) -> dict | None:
+    """``{call_id, name}`` of the command running in ``session``, or None."""
+    running = (getattr(getattr(session, "cs", None), "cache", None) or {}).get("_running_command")
+    if not isinstance(running, dict) or not running.get("call_id"):
+        return None
+    return {"call_id": running["call_id"], "name": running.get("name")}
 
 
 def _session_list(ctx, args: dict) -> Result:

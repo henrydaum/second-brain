@@ -108,6 +108,18 @@ import {
 } from "@/runtime/store";
 import { stagedPath } from "@/runtime/staged-attachments";
 
+/** `session.get`'s `running_command`: the command body running right now. */
+type RunningCommand = { call_id: string; name?: string | null };
+
+function commandReconciliation(running: RunningCommand | null | undefined) {
+  return {
+    type: "reconcileCommand" as const,
+    running: running?.call_id
+      ? { callId: running.call_id, name: running.name ?? "command" }
+      : null,
+  };
+}
+
 /** The queue adapter's two lanes, which are always empty — see `queue` in the
  *  provider. One frozen array rather than a fresh literal per render, so the
  *  runtime's own memos over it never see a changed identity. */
@@ -579,6 +591,7 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
           mode?: "lockdown" | "ask" | "yolo" | null;
           busy?: boolean | null;
           turn_id?: string | null;
+          running_command?: RunningCommand | null;
         } | null>(
           "session.get",
           { details: true },
@@ -626,6 +639,10 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
             ? { type: "resumeTurn", turnId: session.turn_id }
             : { type: "frame", frame: { kind: "typing", payload: true } });
         }
+        // The same for a command body: after the history dispatch, which
+        // would wipe it. It is what brings Settings back to a running
+        // `/update` rather than offering to start a second one.
+        if (!cancelled) dispatch(commandReconciliation(session?.running_command));
 
         // After the conversation, not before: neither Settings nor the sidebar
         // is useful until there is somewhere to run a command, and scrollback
@@ -674,10 +691,17 @@ export function SecondBrainProvider({ children }: PropsWithChildren) {
    */
   const resyncConversation = useCallback(async () => {
     try {
-      const session = await sdk<{ conversation_id?: number | null } | null>(
+      const session = await sdk<{
+        conversation_id?: number | null;
+        running_command?: RunningCommand | null;
+      } | null>(
         "session.get",
         { details: true },
       );
+      // Before the conversation checks, which return early: a command that
+      // finished (or started) while the stream was down is true whichever
+      // conversation is showing.
+      dispatch(commandReconciliation(session?.running_command));
       const bound = session?.conversation_id ?? null;
       const showing = conversationIdRef.current;
       if (bound === showing) return;
