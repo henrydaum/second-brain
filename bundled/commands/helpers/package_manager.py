@@ -905,7 +905,9 @@ def _set_config_list(context, key: str, add: list[str], remove: list[str], label
     if not added and kept == current:
         return
     config[key] = kept + added
-    config_manager.save(config)
+    # One key: ``context.config`` may be a context's copy, and saving the
+    # whole of it writes back every setting as it stood when that copy was made.
+    config_manager.save({key: config[key]})
     runtime = getattr(context, "runtime", None)
     if runtime is not None and getattr(runtime, "config", None) is not None:
         runtime.config[key] = config[key]

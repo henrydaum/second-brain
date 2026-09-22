@@ -445,7 +445,7 @@ def remember(key: str, entry: str) -> bool:
         try:
             from config import config_manager
 
-            config_manager.save(config)
+            config_manager.save({key: merged})
         except Exception:
             # A widening that is live but unpersisted would come back as a
             # surprise at the next restart, in the direction nobody wants.

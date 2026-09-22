@@ -214,7 +214,7 @@ def _forget_frontends(config: dict, names: list) -> None:
                if n not in set(names)]
     config["enabled_frontends"] = enabled
     try:
-        config_manager.save(config)
+        config_manager.save({"enabled_frontends": enabled})
     except Exception:
         logger.exception("could not persist enabled_frontends")
         return

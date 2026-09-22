@@ -952,6 +952,21 @@ the difference between a microkernel and a pile of assumptions:
   replaces — the keys come from live discovery, so a replacing snapshot
   erased the settings of any plugin that failed to load that boot.
 
+  **A context's config is a copy, and that was the fifth path.**
+  `build_context` hands every context `dict(config)`, and a resident box keeps
+  its context for life (`Interpreter._context_for`), so the timekeeper's copy
+  was from boot. `_config_write` saved the context's *whole* dict, so each
+  `scheduled_jobs` write put every setting changed since boot back to its boot
+  value on disk — remembered shell prefixes and hosts, the default model — and
+  the next honest save announced all of them: "Settings changed:
+  autoload_services, default_llm_profile, net_allowed_hosts, scheduled_jobs,
+  shell_allowed_prefixes" for one edit. It looked cosmetic and was data loss
+  for anybody who crashed in between. Writers now save **only their own key**
+  (`save` merges over the file, so `save({key: value})` is exactly that) and
+  mirror it into `kernel_config()`; `config.read` answers machine-wide keys
+  from the live dict (`handlers/kernel._live_config`). Save a whole dict only
+  if it *is* the live config.
+
   **And rehoming stopped being able to lose a value.** A migration that keeps
   firing is an overwrite, so it now adopts a stray copy only where config.json
   does not already own a value, and drops it otherwise. Ownership is tested

@@ -161,7 +161,7 @@ def forget_stale_autoloads(config: dict, services: dict) -> list[str]:
     try:
         from config import config_manager
 
-        config_manager.save(config)
+        config_manager.save({"autoload_services": config["autoload_services"]})
     except Exception:
         logger.exception("could not persist autoload_services")
         return stale

@@ -13,6 +13,22 @@ import pytest
 from tests.support import FakeLLM, make_runtime
 
 
+@pytest.fixture(autouse=True)
+def _isolated_kernel_parts():
+    """Undo whatever a test wired with ``set_kernel_parts``.
+
+    Those parts are process-global, and ``config.read`` answers machine-wide
+    keys from the live kernel config — so a config one test wired would be
+    what the next test's context read, whatever that context was built with.
+    """
+    from runtime import context
+
+    saved = dict(context._KERNEL_PARTS)
+    yield
+    context._KERNEL_PARTS.clear()
+    context._KERNEL_PARTS.update(saved)
+
+
 @pytest.fixture
 def fake_llm():
     """Build a :class:`FakeLLM` from a list of queued responses."""

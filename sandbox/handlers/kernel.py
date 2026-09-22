@@ -1200,9 +1200,36 @@ def _ui_progress(ctx, args: dict) -> Result:
 # Config, users.
 # ──────────────────────────────────────────────────────────────────────
 
+def _live_config(ctx) -> dict:
+    """The context's config with every machine-wide key read live.
+
+    ``ctx.config`` is a *copy* taken when the context was built, and a
+    resident box keeps its context for life (``Interpreter._context_for``), so
+    a service's copy is from boot. Read through it, every setting changed since
+    then — a remembered shell prefix, a switched default model — looked as it
+    did at boot. User-scoped keys stay the context's own, since those are the
+    one thing the copy exists to overlay.
+    """
+    config = dict(getattr(ctx, "config", None) or {})
+    from runtime.context import kernel_config
+
+    live = kernel_config()
+    if not live or live is getattr(ctx, "config", None):
+        return config
+    from config import config_manager
+
+    for key, value in live.items():
+        if key in config_manager.USER_CONFIG_KEYS or config.get(key) == value:
+            continue
+        # Only a key that disagrees pays for the scope lookup.
+        if not config_manager.is_user_scoped(key):
+            config[key] = value
+    return config
+
+
 def _config_read(ctx, args: dict) -> Result:
     """Read a setting, redacting credentials into handles."""
-    config = getattr(ctx, "config", None) or {}
+    config = _live_config(ctx)
     key = args.get("key")
     if args.get("details"):
         from config.config_data import SETTINGS_DATA
@@ -1297,7 +1324,7 @@ def _config_write(ctx, args: dict) -> Result:
     value = config_manager.migrate_secret_keys(
         key, resolve(args.get("value"), lookup_from(ctx)))
     if args.get("merge"):
-        current = config.get(key)
+        current = _live_config(ctx).get(key)
         if current is not None and not isinstance(current, dict):
             return Result.failure(
                 f"config setting {key!r} is not a mapping")
@@ -1305,7 +1332,7 @@ def _config_write(ctx, args: dict) -> Result:
             return Result.failure(
                 "config.write merge requires a mapping value")
         value = {**(current or {}), **value}
-    old = config.get(key)
+    old = _live_config(ctx).get(key)
     # Only what can actually fail stays guarded: the settings
     # catalogue, the database, the config file, and the watcher.
     try:
@@ -1351,7 +1378,15 @@ def _config_write(ctx, args: dict) -> Result:
                     session.active_agent_profile = renames[active]
                 if override in renames:
                     session.profile_override = renames[override]
-        config_manager.save(config)
+        # One key, never the whole dict. ``config`` is this context's copy, and
+        # a resident box's copy is from boot: saving all of it put every
+        # setting changed since then back to its boot value on disk, and the
+        # next honest save announced them all as "changed".
+        from runtime.context import kernel_config
+        live = kernel_config()
+        if live is not config:
+            live[key] = value
+        config_manager.save({key: value})
         # ``is_kernel_setting`` first, and it overrides both the declaration
         # and the caller's ``scope``: a key the kernel declares has one home,
         # and taking this branch as well wrote it to a second file and
@@ -2291,7 +2326,7 @@ def _config_value(ctx, key, entry):
             values = getter(getattr(ctx, "user_id", None)) or {}
             return values.get(
                 key, (getattr(ctx, "config", None) or {}).get(key, entry[3]))
-    return (getattr(ctx, "config", None) or {}).get(key)
+    return _live_config(ctx).get(key)
 
 
 def _clear_task_skip_cache(ctx):

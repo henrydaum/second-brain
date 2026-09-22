@@ -588,6 +588,51 @@ def test_a_kernel_setting_is_written_once_however_it_is_scoped(monkeypatch):
     assert plugin_saves == [], "a kernel setting never reaches plugin_config"
 
 
+def test_a_stale_context_writes_its_own_key_and_nothing_else(tmp_path,
+                                                              monkeypatch):
+    """A resident box's config is a copy from boot; writing through it must
+    not put everything changed since then back.
+
+    ``_config_write`` saved the context's whole dict. The timekeeper's context
+    was built at boot, so persisting ``scheduled_jobs`` reverted every grant
+    remembered since, on disk — and the next honest save announced
+    "Settings changed: autoload_services, default_llm_profile,
+    net_allowed_hosts, scheduled_jobs, shell_allowed_prefixes" for one edit.
+    """
+    from types import SimpleNamespace
+
+    from runtime import context as runtime_context
+    from sandbox.handlers.kernel import _config_read, _config_write
+
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        str(tmp_path / "plugin_config.json"))
+    announced = []
+    monkeypatch.setattr(config_manager, "_emit_config_changed",
+                        lambda scope, keys=None: announced.append(sorted(keys or [])))
+
+    live = config_manager.load()
+    monkeypatch.setitem(runtime_context._KERNEL_PARTS, "config", live)
+    stale = SimpleNamespace(config=dict(live), runtime=None, user_id=None)
+
+    # Something changes after the resident box took its copy.
+    live["shell_allowed_prefixes"] = ["git status"]
+    config_manager.save({"shell_allowed_prefixes": ["git status"]})
+    announced.clear()
+
+    assert _config_read(stale, {"key": "shell_allowed_prefixes"}).data \
+        == ["git status"], "a stale context reads the live value"
+
+    assert _config_write(stale, {"key": "scheduled_jobs",
+                                 "value": {"nightly": {}}}).ok
+
+    on_disk = config_manager._stored_config()
+    assert on_disk["shell_allowed_prefixes"] == ["git status"]
+    assert on_disk["scheduled_jobs"] == {"nightly": {}}
+    assert live["scheduled_jobs"] == {"nightly": {}}
+    assert announced == [["scheduled_jobs"]]
+
+
 def test_a_plugin_setting_still_reaches_plugin_config(monkeypatch):
     """The other half of the same branch, which must keep working.
 

@@ -186,7 +186,14 @@ def _stored_config(path: str = None) -> dict:
 
 
 def save(config: dict, path: str = None):
-    """Save config dict to JSON file."""
+    """Save config dict to JSON file.
+
+    ``config`` is merged over what the file already holds, so pass only the
+    keys you mean to change. Pass a whole dict only if it *is* the kernel's
+    live config: a context's ``config`` is a copy (``build_context``), and a
+    resident box keeps its copy from boot, so saving all of it reverted every
+    setting changed since then — and the next honest save announced them all.
+    """
     if path is None:
         path = _DEFAULT_CONFIG_PATH
     # Strip _root and plugin keys from persisted core config. Include keys
