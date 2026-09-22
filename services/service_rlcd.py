@@ -15,12 +15,37 @@ class RLCD(BaseService):
     name = "rlcd"
     description = "Typed probabilistic decisions via Jev or a compatible endpoint."
     exports = ["status", "evaluate"]
-    requests = ["net.http"]
+    requests = ["net.http", "config.read", "config.write"]
     config_settings = [
         ("Endpoint", "rlcd_endpoint", "Full System One evaluation URL.", "https://api.typesafe.ai/v1/systemone", {"type": "text"}),
         ("Model", "rlcd_model", "Default model ID; pin a version for repeatable experiments.", "jev-1.13.0", {"type": "text"}),
         ("API key", "secret_rlcd_typesafe_api_key", "Optional on unauthenticated local endpoints.", "", {"type": "text"}),
     ]
+
+    def on_install(self, sdk):
+        """Allow the endpoint's host, so callers without a person watching can reach it.
+
+        Jev is called from hooks and tasks, whose chains are unattended, and an
+        unattended request to a host outside ``net_allowed_hosts`` is refused
+        rather than asked. Installing is the one moment the question can be put
+        to somebody. Read-then-skip, so an update never re-asks or edits a list
+        the user has since changed. Pointing ``rlcd_endpoint`` at another host
+        later means allowing that host yourself.
+        """
+        endpoint = sdk.config.read("rlcd_endpoint") or "https://api.typesafe.ai/v1/systemone"
+        host = (urlsplit(endpoint).hostname or "").lower()
+        if not host:
+            return
+        current = list(sdk.config.read("net_allowed_hosts") or [])
+        if any(host == h or host.endswith("." + h)
+               for h in (str(item).strip().lower() for item in current) if h):
+            return
+        try:
+            sdk.config.write("net_allowed_hosts", [*current, host])
+        except sdk.Failed as error:
+            raise RuntimeError(f"{host} not allowed ({error}) — Jev calls from hooks "
+                               "and tasks will be refused") from None
+        sdk.log(f"{host} added to net_allowed_hosts")
 
     def start(self, sdk):
         return True
