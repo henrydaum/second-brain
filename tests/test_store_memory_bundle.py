@@ -630,6 +630,31 @@ def test_the_nudge_names_the_memories_opened_this_turn_so_stale_ones_get_fixed()
     assert "You opened" not in service.on_end_turn(sdk, ctx, _Ending()).note
 
 
+def test_a_turn_that_finds_nothing_clears_the_previous_turns_pointers():
+    """Overlays persist until their slot is rewritten, so abstaining in
+    silence left last turn's list in the prompt, pointing at a situation that
+    had passed. Every empty turn removes the slot instead."""
+    service = _load_store_class(SERVICE, "MemoryRetrieve")()
+    removed = []
+
+    class _Session:
+        def remove_prompt(self, handle, key=""):
+            removed.append(handle)
+
+        def add_prompt(self, *a, **k):
+            raise AssertionError("nothing to add")
+
+    class _Config:
+        def read(self, key):
+            return 0  # retrieval off: the simplest route to an empty turn
+
+    sdk = type("Sdk", (), {"session": _Session(), "config": _Config(),
+                           "Failed": _Failed, "log": lambda *a, **k: None})()
+    service.on_turn_start(sdk, _Ctx(), None)
+    assert removed == ["memory"]
+    assert "session.remove_prompt_extra" in _declarations(SERVICE)["requests"]
+
+
 def test_the_nudge_never_stacks_and_skips_what_is_not_a_clean_finish():
     """Its own second visit, another doorman's note, a budget wrap-up and a
     subagent's turn all pass straight through. The first is what stops the
