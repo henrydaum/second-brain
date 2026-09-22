@@ -33,6 +33,18 @@ export const SettingsDialog: FC<{
   const commandActive = Boolean(activeName);
   const commandRunning =
     commandActive && state.command?.status !== "finished";
+  /**
+   * **The command's body is running, and nothing here can stop it.**
+   *
+   * `/cancel` only pops a *frame* — a form step or a pending approval. Once
+   * the body runs there is no frame, so the cancel this dialog used to send on
+   * close was accepted and did nothing: `/update` went on pulling, the panel
+   * forgot it, and reopening Settings let a second run start alongside the
+   * first — whose approval then answered "That request is no longer active".
+   * So while the body runs, Settings stays put until the command finishes.
+   */
+  const commandExecuting = commandRunning && !state.form;
+  const locked = commandActionPending || commandExecuting;
 
   const afterCurrentCommand = async (
     action: () => void | Promise<void>,
@@ -41,7 +53,7 @@ export const SettingsDialog: FC<{
       await action();
       return true;
     }
-    if (commandActionPendingRef.current) return false;
+    if (commandExecuting || commandActionPendingRef.current) return false;
 
     commandActionPendingRef.current = true;
     setCommandActionPending(true);
@@ -63,6 +75,7 @@ export const SettingsDialog: FC<{
     // Closing while a command is active is also a cancellation. Wait for the
     // server to accept it before hiding Settings so a failed submission does
     // not leave the session waiting on an invisible question.
+    if (!next && commandExecuting) return;
     if (!next && commandActive) {
       void afterCurrentCommand(() => onOpenChange(false));
       return;
@@ -75,7 +88,7 @@ export const SettingsDialog: FC<{
       <DialogContent
         className="sb-glass sb-glass-sheet flex h-[min(94dvh,54rem)] w-[min(calc(100vw-1rem),70rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         overlayClassName="bg-black/45 backdrop-blur-[2px]"
-        closeButtonDisabled={commandActionPending}
+        closeButtonDisabled={locked}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           (event.currentTarget as HTMLElement | null)?.focus();
@@ -95,7 +108,7 @@ export const SettingsDialog: FC<{
 
         <Suspense fallback={<SettingsFallback />}>
           <LazySettingsContent
-            commandActionPending={commandActionPending}
+            commandActionPending={locked}
             afterCurrentCommand={afterCurrentCommand}
           />
         </Suspense>
