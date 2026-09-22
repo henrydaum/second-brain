@@ -602,6 +602,34 @@ def test_a_clean_finish_is_sent_back_once_with_an_ephemeral_note():
     assert rebuild("end_turn", unwrap(verdict)).quiet
 
 
+def test_the_nudge_names_the_memories_opened_this_turn_so_stale_ones_get_fixed():
+    """A memory read and then contradicted is the one moment its staleness is
+    visible. The nudge names what was opened since the turn began — asked by
+    time, since ``recalled_at`` is stamped on every read — and asks for a fix
+    or a delete. A turn that opened nothing gets the plain nudge."""
+    service = _load_store_class(SERVICE, "MemoryRetrieve")()
+    asked = []
+
+    class _Db:
+        def query(self, sql, params, max_rows=None):
+            asked.append((sql, params))
+            return [{"name": "pdf-yields-no-text"}]
+
+    sdk = type("Sdk", (), {"db": _Db(), "Failed": _Failed,
+                           "log": lambda *a, **k: None})()
+    ctx = _Ctx()
+    ctx.conversation_id = 7
+    service._turn_began = {"repl": 100.0}
+
+    note = service.on_end_turn(sdk, ctx, _Ending()).note
+    assert "pdf-yields-no-text" in note
+    assert "`memory update`" in note and "`memory delete`" in note
+    assert asked and asked[0][1] == [7, 100.0]
+
+    # The turn's start is consumed, so a second ending asks nothing.
+    assert "You opened" not in service.on_end_turn(sdk, ctx, _Ending()).note
+
+
 def test_the_nudge_never_stacks_and_skips_what_is_not_a_clean_finish():
     """Its own second visit, another doorman's note, a budget wrap-up and a
     subagent's turn all pass straight through. The first is what stops the
