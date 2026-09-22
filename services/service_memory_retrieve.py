@@ -84,9 +84,17 @@ NUDGE = (
     "future conversation would need: a correction the user made, something "
     "that failed and what fixed it, a procedure that worked, or something the "
     "user asked you to remember? If so, save it with the `memory` tool — "
-    "update an existing entry when one covers it, including any memory you "
-    "were shown that turned out wrong. Most turns hold nothing. Either way, "
-    "do not reply to the user again; end with an empty message."
+    "update an existing entry when one covers it. Most turns hold nothing. "
+    "Either way, do not reply to the user again; end with an empty message."
+)
+
+#: Added to the nudge when the agent opened entries this turn. A memory that
+#: was read and then contradicted by what happened is the one moment its
+#: staleness is visible, and the agent that just saw it is the one to say so.
+STALE_CHECK = (
+    " You opened these memories this turn: {names}. If any turned out wrong "
+    "or outdated, fix it with `memory update`, or `memory delete` it if it no "
+    "longer applies at all."
 )
 
 
@@ -341,6 +349,12 @@ class MemoryRetrieve(BaseService):
         normal state of a fresh install, and neither is a reason for a turn to
         fail.
         """
+        # When this turn began, so the end of it can ask which entries were
+        # opened *during* it. Kept per session: two sessions' turns overlap.
+        began = getattr(self, "_turn_began", None)
+        if began is None:
+            began = self._turn_began = {}
+        began[str(getattr(ctx, "session_key", ""))] = time.time()
         try:
             limit = int(sdk.config.read("memory_max_pointers") or 0)
         except (sdk.Failed, TypeError, ValueError):
@@ -413,7 +427,34 @@ class MemoryRetrieve(BaseService):
             return None
         if str(getattr(ctx, "session_key", "")).startswith(SUBAGENT_PREFIX):
             return None
-        return SendBack(NUDGE, ephemeral=True, quiet=True)
+        note = NUDGE
+        if opened := self._opened_this_turn(sdk, ctx):
+            note += STALE_CHECK.format(names=", ".join(opened))
+        return SendBack(note, ephemeral=True, quiet=True)
+
+    def _opened_this_turn(self, sdk, ctx):
+        """Entries the agent read with ``memory read`` since this turn began.
+
+        ``tool_memory`` stamps ``recalled_at`` on every read, offered or not, so
+        this is one query against the table the two already share. Anything
+        that goes wrong answers with nothing: the nudge still goes out, just
+        without the list.
+        """
+        cid = getattr(ctx, "conversation_id", 0)
+        began = (getattr(self, "_turn_began", None) or {}).pop(
+            str(getattr(ctx, "session_key", "")), None)
+        if not (cid and began):
+            return []
+        try:
+            rows = sdk.db.query(
+                "SELECT DISTINCT name FROM memory_usage"
+                " WHERE conversation_id = ? AND recalled_at >= ?"
+                " ORDER BY name", [int(cid), began], max_rows=20)
+        except sdk.Failed as error:
+            sdk.log(f"memory: could not read this turn's recalls: {error}",
+                    level="warning")
+            return []
+        return [str(row.get("name")) for row in rows or [] if row.get("name")]
 
     def _log_offered(self, sdk, ctx, offered):
         """Record which entries were surfaced in this conversation.
