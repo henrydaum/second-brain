@@ -84,7 +84,8 @@ NUDGE = (
     "future conversation would need: a correction the user made, something "
     "that failed and what fixed it, a procedure that worked, or something the "
     "user asked you to remember? If so, save it with the `memory` tool — "
-    "update an existing entry when one covers it. Most turns hold nothing. "
+    "update an existing entry when one covers it. A lasting fact about the "
+    "user goes in `MEMORY.md` instead. Most turns hold nothing. "
     "Either way, do not reply to the user again; end with an empty message."
 )
 
@@ -175,7 +176,7 @@ class MemoryRetrieve(BaseService):
     requests = ["paths.get", "config.read", "config.write",
                 "tool.call", "fs.read", "fs.list", "fs.write",
                 "db.define", "db.query", "db.write",
-                "session.add_prompt_extra"]
+                "session.add_prompt_extra", "session.remove_prompt_extra"]
     # What retrieval calls, what the agent writes with when nudged, and what it
     # reads a skill's references with (``memory read`` names them but
     # deliberately does not load them).
@@ -355,37 +356,18 @@ class MemoryRetrieve(BaseService):
         if began is None:
             began = self._turn_began = {}
         began[str(getattr(ctx, "session_key", ""))] = time.time()
-        try:
-            limit = int(sdk.config.read("memory_max_pointers") or 0)
-        except (sdk.Failed, TypeError, ValueError):
-            limit = 5
-        if limit <= 0:
-            sdk.log("memory retrieval is disabled (memory_max_pointers is 0)",
-                    level="debug")
-            return None
-
-        query = self._latest_user_message(sdk, ctx)
-        if not query:
-            # Ordinary at the very start of a conversation, and the one case
-            # where an empty result says nothing about the corpus at all.
-            sdk.log("memory: no user message to search on yet", level="debug")
-            return None
-
-        hits = self._search(sdk, query, limit)
-        if not hits:
-            return None  # _search said why
 
         offered = []
-        block = self._render(sdk, hits, offered)
+        block = self._pointers(sdk, ctx, offered)
         if not block:
-            # Entries matched but every one rendered empty, which means their
-            # frontmatter has no description — invisible otherwise, since the
-            # symptom is an absent block either way.
-            self._say_once(
-                sdk, "no-descriptions",
-                f"memory: {len(hits)} entry(ies) matched but none could be "
-                f"described — an entry needs a 'description:' in its "
-                f"frontmatter to be offered.")
+            # The overlay persists until its slot is rewritten, so a turn that
+            # finds nothing has to say so — otherwise the previous turn's list
+            # stays in the prompt, pointing at a situation that has passed.
+            try:
+                sdk.session.remove_prompt("memory")
+            except sdk.Failed as error:
+                sdk.log(f"could not clear memory pointers: {error}",
+                        level="warning")
             return None
         try:
             # No ``key``: naming a session makes this "inject into *that*
@@ -404,6 +386,41 @@ class MemoryRetrieve(BaseService):
             return None
         self._log_offered(sdk, ctx, offered)
         return None
+
+    def _pointers(self, sdk, ctx, offered):
+        """The block for this turn, or ``""`` when there is nothing to show."""
+        try:
+            limit = int(sdk.config.read("memory_max_pointers") or 0)
+        except (sdk.Failed, TypeError, ValueError):
+            limit = 5
+        if limit <= 0:
+            sdk.log("memory retrieval is disabled (memory_max_pointers is 0)",
+                    level="debug")
+            return ""
+
+        query = self._latest_user_message(sdk, ctx)
+        if not query:
+            # Ordinary at the very start of a conversation, and the one case
+            # where an empty result says nothing about the corpus at all.
+            sdk.log("memory: no user message to search on yet", level="debug")
+            return ""
+
+        hits = self._search(sdk, query, limit)
+        if not hits:
+            return ""  # _search said why
+
+        block = self._render(sdk, hits, offered)
+        if not block:
+            # Entries matched but every one rendered empty, which means their
+            # frontmatter has no description — invisible otherwise, since the
+            # symptom is an absent block either way.
+            self._say_once(
+                sdk, "no-descriptions",
+                f"memory: {len(hits)} entry(ies) matched but none could be "
+                f"described — an entry needs a 'description:' in its "
+                f"frontmatter to be offered.")
+            return ""
+        return block
 
     def on_end_turn(self, sdk, ctx, ending):
         """Send the agent back once to save anything worth keeping.
