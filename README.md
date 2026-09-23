@@ -13,10 +13,6 @@
 [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=second-brain) is a full-modal AI inference platform that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to 300+ curated models across all modalities.
 Check out Atlas Cloud's new coding plan promotion for more budget-friendly API access: [https://www.atlascloud.ai/console/coding-plan](https://www.atlascloud.ai/console/coding-plan)
 
-# Second Brain Example
-
-*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
-
 # Head-to-Head Evaluation
 
 Second Brain performs higher than OpenClaw and Hermes on [harness-bench](https://www.harness-bench.ai/), which measures "model-harness configuration effects across 106 sandboxed offline agent tasks". Here are the results:
@@ -24,7 +20,11 @@ Second Brain performs higher than OpenClaw and Hermes on [harness-bench](https:/
 
 The full evaluation framework I used is [available on GitHub](https://github.com/henrydaum/second-brain-evals), and the full results are available [here](https://github.com/henrydaum/second-brain-eval-results). I did this testing because I was curious how Second Brain would stack up against other agents. This provides the real results, but with a few small caveats, which you can read in the links provided.
 
-# What you get
+# Using Second Brain to play DOOM
+
+https://github.com/user-attachments/assets/6c740d80-0830-4703-849a-8f00fab9e865
+
+# How it LOOKS!
 
 <img width="2560" height="1326" alt="Captura de pantalla 2026-09-10 202738" src="https://github.com/user-attachments/assets/cd23560e-717c-4727-aa46-33bcb3ef9f70" />
 
