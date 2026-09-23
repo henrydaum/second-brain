@@ -304,3 +304,57 @@ def parse_gsheet(sdk, path: str, config: dict = None) -> ParseResult:
 
 
 register(".gsheet", "tabular", parse_gsheet)
+
+
+# ===================================================================
+# TEXT — the same tables, as something that can cross a boundary
+# ===================================================================
+
+#: Rows per table in the text rendering. A DataFrame stays in the box that
+#: made it; text is what reaches a model or a viewer, and a viewer shows a
+#: few hundred rows while a model reading ten thousand is paying for noise.
+TEXT_ROWS = 1000
+
+
+def _as_text(result: ParseResult, path: str) -> ParseResult:
+    """Render a tabular result as CSV, one section per table.
+
+    Every table opens with a ``=== name (N rows) ===`` line -- ``(N of M
+    rows)`` when cut short -- including a file holding one, so a reader never
+    has to guess which shape it got. A line like that is not valid CSV for
+    any real header, which is what makes it safe to split on.
+    """
+    if not result.success:
+        return ParseResult.failed(result.error, modality="text")
+
+    sections = []
+    for name, df in (result.output or {}).items():
+        label = basename(path) if name == "default" else str(name)
+        total = len(df)
+        shown = df.head(TEXT_ROWS)
+        rows = "row" if total == 1 else "rows"
+        count = (f"{total} {rows}" if total == len(shown)
+                 else f"{len(shown)} of {total} {rows}")
+        sections.append(f"=== {label} ({count}) ===\n"
+                        + shown.to_csv(index=False, lineterminator="\n").rstrip("\n"))
+
+    text = "\n\n".join(sections)
+    return ParseResult(modality="text", output=text,
+                       metadata={**result.metadata, "char_count": len(text)})
+
+
+def _text_route(parse):
+    """A text parser over one of the tabular ones above."""
+    def parse_text_route(sdk, path: str, config: dict = None) -> ParseResult:
+        return _as_text(parse(sdk, path, config), path)
+    parse_text_route.__name__ = f"{parse.__name__}_text"
+    return parse_text_route
+
+
+# Registered after the tabular routes, so tabular stays each extension's
+# default. CSV/TSV are absent on purpose: the kernel's text parser owns them,
+# and their text already is the file.
+register([".xlsx", ".xls"], "text", _text_route(parse_xlsx))
+register([".parquet", ".feather"], "text", _text_route(parse_parquet))
+register([".sqlite", ".db"], "text", _text_route(parse_sqlite))
+register(".gsheet", "text", _text_route(parse_gsheet))
