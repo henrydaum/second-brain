@@ -2,8 +2,8 @@
 
 The agent writes questions in Jev's own format (noul / score / choice) and a
 target; this tool cuts the target into windows of consecutive chunks, checks
-the questions with ``rlcd.validate``, refuses anything over the token cap, and
-queues the work as ``probe.slice`` events for ``task_probe``. Results arrive
+the questions with ``rlcd.validate``, and queues the work as
+``probe.slice`` events for ``task_probe``. Results arrive
 asynchronously in ``probe_answers``; the agent aggregates them with
 ``sql_query``. Statistics deliberately live there, not here — ``status`` gives
 only the summary that tells a bad question from a good one.
@@ -16,7 +16,7 @@ dependencies_files = ['services/service_rlcd.py', 'tasks/task_probe.py',
                       'tools/tool_sql_query.py']
 dependencies_pip = []
 requests = ["db.query", "db.write", "db.define", "service.call",
-            "event.emit", "session.get", "config.read"]
+            "event.emit", "session.get"]
 
 import json
 import time
@@ -28,7 +28,6 @@ WINDOW_CHARS = 4000     # ~1k tokens: far under Jev's 32k, since irrelevant stat
 SLICE_UNITS = 50        # one task run; keeps a slice well inside the wall ceiling
 INSERT_ROWS = 500       # rows per multi-row INSERT (db.write takes one statement)
 PAGE = 500              # db.query's own row cap
-DEFAULT_MAX_TOKENS = 2_000_000
 
 PROBES_DDL = """CREATE TABLE IF NOT EXISTS probes (
     id INTEGER PRIMARY KEY, questions_json TEXT, state_context TEXT,
@@ -80,11 +79,6 @@ class Probe(BaseTool):
         "required": ["action"],
     }
     requires_services = ["rlcd"]
-    config_settings = [
-        ("Probe token cap", "probe_max_input_tokens",
-         "Largest estimated Jev input (tokens) one probe may spend.",
-         DEFAULT_MAX_TOKENS, {"type": "integer"}),
-    ]
     agent_prompt = (
         "## Corpus probes (tool: probe)\n"
         "Jev answers typed questions about every passage; it never writes prose. "
@@ -161,17 +155,6 @@ class Probe(BaseTool):
 
         question_tokens = len(json.dumps(questions)) // 4 + 1
         estimate = sum(u["chars"] // 4 + question_tokens for u in units)
-        cap = int(sdk.config.read("probe_max_input_tokens") or DEFAULT_MAX_TOKENS)
-        if estimate > cap:
-            by_file = {}
-            for u in units:
-                by_file[u["path"]] = by_file.get(u["path"], 0) + u["chars"]
-            biggest = sorted(by_file, key=by_file.get, reverse=True)[:5]
-            return sdk.fail(
-                f"Estimated ~{estimate:,} input tokens over {len(units)} windows, "
-                f"above probe_max_input_tokens ({cap:,}). Narrow the target, "
-                f"shorten the questions, or raise the setting. Largest files: "
-                + ", ".join(biggest))
 
         session = sdk.session.get() or {}
         probe_id = self._insert_probe(sdk, questions, context, target,
