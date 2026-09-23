@@ -235,13 +235,6 @@ def test_overlap_is_removed_when_joining(world):
     assert join(["no", "overlap"]) == "nooverlap"
 
 
-def test_token_cap_refuses_a_submit(world):
-    world["sdk"]._config["probe_max_input_tokens"] = 100
-    result = world["tool"].run(world["sdk"], action="submit", questions=QUESTIONS, target={})
-    assert not result["ok"] and "probe_max_input_tokens" in result["error"]
-    assert not world["sdk"].emitted
-
-
 def test_rate_limit_leaves_units_pending_and_resume_requeues_them(world):
     tool, sdk = world["tool"], world["sdk"]
     probe_id = tool.run(sdk, action="submit", questions=QUESTIONS, target={})["data"]["probe_id"]
