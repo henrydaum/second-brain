@@ -1,5 +1,5 @@
 {
-  "description": "Durable memory that maintains itself. Notes and skills relevant to what you just said are surfaced at the start of every turn, and at the end of each turn the agent is asked whether anything is worth writing down. Everything is ordinary markdown in your workspace — notes in memory/notes/, agentskills.io skills in memory/skills/ — so you can read and edit it yourself. Brings the text-indexing and search chain it retrieves through, including the embedding model.",
+  "description": "Durable memory that maintains itself. Each turn, Jev (the rlcd service) picks which notes and skills fit what is happening, by asking each entry its own when_to_retrieve questions, and at the end of each turn the agent is asked whether anything is worth writing down. Everything is ordinary markdown in your workspace — notes in memory/notes/, agentskills.io skills in memory/skills/ — so you can read and edit it yourself. Needs a TypeSafe API key for rlcd; nothing is indexed and no embedding model is installed.",
   "files": [
     "services/service_memory_retrieve.py",
     "tools/tool_memory.py"

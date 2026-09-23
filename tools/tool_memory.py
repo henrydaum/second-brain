@@ -12,21 +12,13 @@ what belongs where.
 name is checked against the agentskills.io character set, so there is no
 argument that reaches outside ``workspace/memory`` and none that names
 ``MEMORY.md`` — which is the agent's own file of facts, inlined into every
-prompt by the kernel, and not something a background subagent should be able to
-rewrite. That confinement is why the curator can be given this tool and not
-``edit_file``.
+prompt by the kernel, and not something this tool should be able to rewrite.
+Every ``sdk.fs`` call takes a value from ``_paths_for``, which produces two
+paths per legal name and nothing else; the character set is the boundary.
 
-Reading and writing being one tool does not widen any of that, because there is
-exactly one place a path is derived and it is not from an argument: every
-``sdk.fs`` call takes a value from ``_paths_for``, which produces two paths per
-legal name and nothing else. This was once two tools whose *declarations* were
-disjoint — the writer had no ``fs.read`` — and that bought nothing it could not
-get one tool over, since the curator also holds ``read_file`` and ``grep``. The
-character set is the boundary; the split was only bookkeeping, and it cost a
-revision the ability to keep a description it had just read.
-
-**The tool writes the frontmatter.** The model supplies a name, a description
-and a body; ``updated`` and ``source`` are stamped here. A model asked to
+**The tool writes the frontmatter.** The model supplies a name, a description,
+its ``when_to_retrieve`` questions and a body; ``updated`` and ``source`` are
+stamped here. A model asked to
 produce its own ``---`` fences gets them subtly wrong often enough to matter,
 and a broken block makes an entry unrankable with no symptom at all.
 
@@ -37,6 +29,12 @@ Two kinds, one shape. A **note** is one situation and what to do about it, at
 what lets retrieval rank and render them identically — the distinction is for
 the reader, not for the search.
 
+**``when_to_retrieve`` is what fires an entry.** One to three yes/no (``noul``)
+questions about the current conversation, all of which must come back yes for
+the entry to be suggested. They are checked here with ``rlcd.validate`` before
+anything is written, so a malformed set is handed straight back to the model
+that wrote it rather than surfacing later as an entry that never fires.
+
 **Calling ``read`` is the used-signal**, and it is the reason ``db.write`` is
 here. Whether a memory helped is only knowable as a pair — it was offered, and
 then it was opened — and neither half is available alone. The offer lives in the
@@ -46,15 +44,16 @@ and normalizing the path it named, which is a lot of machinery to infer
 something the agent could simply have told us. It tells us now: one row, written
 here, at the moment it happens. Recording an *unprompted* recall matters as much
 as filling in a prompted one — an entry the agent went looking for without being
-shown it is being used, and the curator should revise it on the same evidence.
+shown it is being used.
 """
 
 dependencies_files = []
 dependencies_pip = []
 requests = ["paths.get", "fs.read", "fs.list", "fs.write", "fs.delete",
             "session.get", "session.push", "db.query", "db.write",
-            "config.read"]
+            "config.read", "service.call"]
 
+import json
 import time
 
 from guest.bases import BaseTool
@@ -85,8 +84,14 @@ NAMED_ACTIONS = ("read", "create", "update", "delete")
 #: spec, so anything near this is a sign the entry should have been split.
 MAX_READ_CHARS = 20_000
 
-#: How much of a file to read when only its frontmatter is wanted.
-HEAD_CHARS = 2000
+#: How much of a file to read when only its frontmatter is wanted. The
+#: frontmatter carries a description of up to 1,024 characters plus up to three
+#: questions. Must match ``service_memory_retrieve``.
+HEAD_CHARS = 4000
+
+#: How many ``when_to_retrieve`` questions an entry may carry. Every one must
+#: be yes for the entry to fire, so each extra one narrows it.
+MAX_QUESTIONS = 3
 
 #: The spec's own ceiling on a description, and the reason to have one here is
 #: that this field goes in every prompt where the entry ranks.
@@ -194,7 +199,7 @@ def _unquote(value):
     return value
 
 
-def _document(name, description, body, source):
+def _document(name, description, questions, body, source):
     """One entry, frontmatter and all.
 
     ``updated`` is stamped rather than accepted, because a model asked for
@@ -202,8 +207,11 @@ def _document(name, description, body, source):
     records the conversation the lesson came from, which is the only way back
     to the evidence once the transcript has scrolled away.
     """
-    lines = ["---", f"name: {name}", f"description: {description}",
-             f"updated: {time.strftime('%Y-%m-%d')}"]
+    lines = ["---", f"name: {name}", f"description: {description}"]
+    if questions:
+        lines.append("when_to_retrieve: "
+                     + json.dumps(questions, ensure_ascii=False))
+    lines.append(f"updated: {time.strftime('%Y-%m-%d')}")
     if source:
         lines.append(f"source: conversation {source}")
     lines.append("---")
@@ -270,6 +278,21 @@ class Memory(BaseTool):
                     "the entry is opened, so write the situation — 'a PDF "
                     "yields no text' — not a topic label. Required to create; "
                     "on update, omit it to keep the one already there."
+                ),
+            },
+            "when_to_retrieve": {
+                "type": "object",
+                "description": (
+                    "1-3 yes/no questions about the *current conversation* "
+                    "that are all true exactly when this entry should be "
+                    "brought back. Keyed by a short id; each value is "
+                    "{\"type\": \"noul\", \"instructions\": \"<question>\"}. "
+                    "E.g. {\"pdf\": {\"type\": \"noul\", \"instructions\": "
+                    "\"Is the user working with a PDF file?\"}}. Every one "
+                    "must be yes for the entry to fire, so make them general "
+                    "enough to hold whenever the situation recurs. Required "
+                    "to create; on update, omit it to keep the ones already "
+                    "there."
                 ),
             },
             "body": {
@@ -383,6 +406,7 @@ class Memory(BaseTool):
             return sdk.ok([], llm_summary="No memory entries yet.")
         lines = [f"- {row['name']}{' (skill)' if row['kind'] == 'skill' else ''}"
                  f" — {row['description'] or '(no description)'}"
+                 f"{'' if row['questions'] else ' (no questions)'}"
                  for row in entries]
         return sdk.ok(entries,
                       llm_summary=f"{len(entries)} memory entries:\n"
@@ -402,9 +426,8 @@ class Memory(BaseTool):
                 continue
             name = sdk.path.stem(entry["name"])
             found.append({"name": name, "kind": "note",
-                          "description": self._stored_description(
-                              sdk, sdk.path.join(root, NOTES_DIRNAME,
-                                                 entry["name"]))})
+                          **self._stored(sdk, sdk.path.join(
+                              root, NOTES_DIRNAME, entry["name"]))})
         try:
             skills = sdk.fs.list(sdk.path.join(root, SKILLS_DIRNAME),
                                  details=True) or []
@@ -415,23 +438,28 @@ class Memory(BaseTool):
                 continue
             name = entry["name"]
             found.append({"name": name, "kind": "skill",
-                          "description": self._stored_description(
-                              sdk, sdk.path.join(root, SKILLS_DIRNAME, name,
-                                                 "SKILL.md"))})
+                          **self._stored(sdk, sdk.path.join(
+                              root, SKILLS_DIRNAME, name, "SKILL.md"))})
         return sorted(found, key=lambda row: row["name"])
 
-    def _stored_description(self, sdk, path):
-        """One entry's description as it stands on disk, or "" for none.
+    def _stored(self, sdk, path):
+        """One entry's description and questions as they stand on disk.
 
         Named for the direction it travels, against ``_supplied_description``
-        below. Two functions called ``_description`` in one file is how a
-        model-supplied string ends up somewhere only a stored one belongs.
+        and ``_supplied_questions`` below. Two functions with one name in one
+        file is how a model-supplied value ends up somewhere only a stored one
+        belongs.
         """
         try:
-            return _frontmatter(sdk.fs.read(path)[:HEAD_CHARS]).get(
-                "description", "")
+            fields = _frontmatter(sdk.fs.read(path)[:HEAD_CHARS])
         except sdk.Failed:
-            return ""
+            return {"description": "", "questions": {}}
+        try:
+            questions = json.loads(fields.get("when_to_retrieve") or "{}")
+        except ValueError:
+            questions = {}
+        return {"description": fields.get("description", ""),
+                "questions": questions if isinstance(questions, dict) else {}}
 
     def _names(self, sdk):
         """Just the names, for a failed lookup to suggest from."""
@@ -456,13 +484,22 @@ class Memory(BaseTool):
                 "applies. It is what retrieval matches on.")
         if not body:
             return sdk.fail("'create' needs a body.")
+        if kwargs.get("when_to_retrieve") is None:
+            return sdk.fail(
+                "'create' needs when_to_retrieve: 1-3 yes/no questions about "
+                "the conversation that are all true when this entry should "
+                "come back. Without them it is only ever found by its "
+                "description.")
+        questions, problem = self._supplied_questions(sdk, kwargs)
+        if problem:
+            return sdk.fail(problem)
 
         kind = (kwargs.get("kind") or "note").strip().lower()
         if kind not in ("note", "skill"):
             return sdk.fail(f"Unknown kind: {kind!r}. Use note or skill.")
         path = _skill_path(sdk, name) if kind == "skill" else _note_path(sdk, name)
 
-        sdk.fs.write(path, _document(name, description, body,
+        sdk.fs.write(path, _document(name, description, questions, body,
                                      self._conversation(sdk)))
         self._notify(sdk, "create", name)
         where = (" Add references/ and scripts/ beside it with your file tools."
@@ -496,15 +533,22 @@ class Memory(BaseTool):
         body = (kwargs.get("body") or "").strip()
         if not body:
             return sdk.fail("'update' needs a body — it replaces the old one.")
-        description = (self._supplied_description(kwargs)
-                       or self._stored_description(sdk, path))
+        stored = self._stored(sdk, path)
+        description = self._supplied_description(kwargs) or stored["description"]
         if not description:
             return sdk.fail(
                 "'update' needs a description: this entry has none on disk to "
                 "keep. Write the situation it should fire on — that is what "
                 "retrieval matches, and an entry without one is never offered.")
 
-        sdk.fs.write(path, _document(name, description, body,
+        if kwargs.get("when_to_retrieve") is None:
+            questions = stored["questions"]
+        else:
+            questions, problem = self._supplied_questions(sdk, kwargs)
+            if problem:
+                return sdk.fail(problem)
+
+        sdk.fs.write(path, _document(name, description, questions, body,
                                      self._conversation(sdk)))
         self._notify(sdk, "update", name)
         return sdk.ok(None, llm_summary=f"Updated {kind} '{name}'.")
@@ -532,6 +576,42 @@ class Memory(BaseTool):
         raw = " ".join((kwargs.get("description") or "").split())
         return raw[:MAX_DESCRIPTION]
 
+    def _supplied_questions(self, sdk, kwargs):
+        """``(questions, "")`` when the model's set is usable, else ``({}, why)``.
+
+        The shape rules this suite needs are checked here — ``noul`` only,
+        because the gate is "every one is yes" — and everything else is Jev's
+        own verdict through ``rlcd.validate``, so the reason handed back is
+        the one the real request would have failed with.
+        """
+        raw = kwargs.get("when_to_retrieve")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                return {}, "when_to_retrieve must be a JSON object of questions."
+        if not isinstance(raw, dict) or not 1 <= len(raw) <= MAX_QUESTIONS:
+            return {}, (f"when_to_retrieve needs 1-{MAX_QUESTIONS} questions, "
+                        "keyed by a short id.")
+        questions = {}
+        for qid, question in raw.items():
+            if not isinstance(question, dict) or question.get("type") != "noul":
+                return {}, (f"when_to_retrieve question {qid!r} must be "
+                            '{"type": "noul", "instructions": "<question>"} — '
+                            "only yes/no questions can gate an entry.")
+            instructions = " ".join(str(question.get("instructions") or "").split())
+            if not instructions:
+                return {}, f"when_to_retrieve question {qid!r} has no instructions."
+            questions[str(qid)] = {"type": "noul", "instructions": instructions}
+        try:
+            verdict = sdk.services.call("rlcd", "validate", questions)
+        except sdk.Failed as error:
+            return {}, (f"Could not check when_to_retrieve: the rlcd service "
+                        f"is not available ({error}). Install rlcd.")
+        if not (verdict or {}).get("ok"):
+            return {}, f"when_to_retrieve was refused: {(verdict or {}).get('reason')}"
+        return questions, ""
+
     def _conversation(self, sdk):
         """Which conversation this is happening in.
 
@@ -549,8 +629,7 @@ class Memory(BaseTool):
 
         Fills the pending offer row when the service surfaced this entry, and
         inserts a bare row when it did not — an entry the agent went looking
-        for on its own is being used just as much as one it was handed, and
-        the curator revises both on the same evidence.
+        for on its own is being used just as much as one it was handed.
 
         Entirely best-effort. The table belongs to ``service_memory_retrieve``,
         and a half-installed suite must degrade to a memory that still reads
@@ -590,17 +669,17 @@ class Memory(BaseTool):
         agent opened a memory, which is the noise that would make the setting
         below get turned off.
 
-        The curator subagent writes to memory after a conversation ends, on a
-        session with no person attached to it. That is the whole point of it —
-        but it means the corpus the agent is retrieved *from* can change with
-        no trace anywhere the user looks, and a memory system quietly editing
-        itself is exactly the thing to be out of the loop about.
+        A subagent or scheduled job can write to memory on a session with no
+        person attached to it, which means the corpus the agent is retrieved
+        *from* can change with no trace anywhere the user looks — and a memory
+        system quietly editing itself is exactly the thing to be out of the
+        loop about.
 
         **``attended`` is the condition, not "is this a subagent".** The kernel
         already owns that question (``runtime.is_attended``), and it is the
         right one: a change the user asked for mid-conversation is already
         visible in the reply, and announcing it again would be the tool talking
-        over itself. Anything else — a curator, a scheduled job, a background
+        over itself. Anything else — a subagent, a scheduled job, a background
         drive — is invisible by construction. Asking the kernel also means this
         stays correct for a concurrent multi-user frontend, which owns its own
         attendance and would defeat any guess made from a session key.
