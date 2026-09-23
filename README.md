@@ -26,43 +26,11 @@ https://github.com/user-attachments/assets/6c740d80-0830-4703-849a-8f00fab9e865
 
 Second Brain has `widgets`, which are essentially like Anthropic Artifacts. Widgets are HTML files that the agent can write. They run in a sandboxed iframe for security. They can even run DOOM!
 
-# How it LOOKS!
+# How it looks
 
 <img width="2560" height="1326" alt="Captura de pantalla 2026-09-10 202738" src="https://github.com/user-attachments/assets/cd23560e-717c-4727-aa46-33bcb3ef9f70" />
 
 <img width="2560" height="1330" alt="Captura de pantalla 2026-09-10 202430" src="https://github.com/user-attachments/assets/1466ada6-0b2e-4563-b195-feb9caf21981" />
-
-# How Second Brain works, in infographic form
-
-## 1. Attachment Parsing
-<img width="1035" height="664" alt="1  Attachment Parsing" src="https://github.com/user-attachments/assets/29d1563f-200e-4617-a2b2-c14bb3816da1" />
-
-## 2. File Parsing
-<img width="775" height="872" alt="2  File Parsing" src="https://github.com/user-attachments/assets/2703d99c-c504-479c-a51c-0b414a56225c" />
-
-## 3. The LLM Loop
-<img width="1080" height="870" alt="3  The LLM Loop" src="https://github.com/user-attachments/assets/2b10e1e4-51aa-4356-baf8-bf3497661b76" />
-
-## 4. Path-Driven Tasks
-<img width="628" height="662" alt="4  Path-Driven Tasks" src="https://github.com/user-attachments/assets/a41f0e5f-7df2-4f60-9ab6-86aa71f5fd26" />
-
-## 5. Event-Driven Tasks
-<img width="1248" height="688" alt="5  Event-Driven Tasks" src="https://github.com/user-attachments/assets/e24c0ed0-08fa-4813-beeb-e4260e720708" />
-
-## 6. Conversation Runtime
-<img width="944" height="715" alt="6  Conversation Runtime" src="https://github.com/user-attachments/assets/2840c28b-557e-47b2-9c30-5207453099e0" />
-
-## 7. Frontends
-<img width="757" height="544" alt="7  Frontends" src="https://github.com/user-attachments/assets/a72ecf8f-4579-42c2-acc7-3675f00d8325" />
-
-## 8. Commands
-<img width="1440" height="658" alt="8  Commands" src="https://github.com/user-attachments/assets/9faaa379-7da7-4973-8974-337fd0c21923" />
-
-## 9. Plugins
-<img width="533" height="874" alt="9  Plugins" src="https://github.com/user-attachments/assets/b8551628-f78a-4170-a92c-33e8be57a915" />
-
-## 10. Sandbox & SDK
-<img width="960" height="720" alt="10  Sandbox   SDK" src="https://github.com/user-attachments/assets/aed96e0d-e4ac-4d1e-9a62-625f2d5f2b6b" />
 
 # Install
 
