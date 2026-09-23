@@ -94,7 +94,7 @@ Say hello. **You're done.** Everything else is a question you can ask Second Bra
 ## Going further
 
 - **More capabilities:** run `/packages install` (or open **Settings** in the web UI) to browse the store. Good ones to start with are `bundle_knowledgebase` (search your own PDFs, Office files, images and audio; a large download), `bundle_memory` (memory that maintains itself, stored as markdown you can edit), and `bundle_gmail`.
-- **Your phone:** Telegram is part of `/setup`. You can also add the web UI to your home screen over [Tailscale](https://tailscale.com/). Ask Second Brain how.
+- **Your phone:** add the web UI to your home screen over [Tailscale](https://tailscale.com/). Prefer a chat app? `/packages install frontend_telegram`. Ask Second Brain how to set up either.
 - **Updating:** run `/update`. It pulls the repo and the UI together.
 - **Docker:** there's a Dockerfile for servers and NAS boxes. See [docs/DOCKER.md](docs/DOCKER.md).
 - **No web UI?** Check `web_ui.log` in your data directory (see below). The usual cause is a skipped `npm install`.

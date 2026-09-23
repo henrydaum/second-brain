@@ -1,19 +1,19 @@
 """Slash command plugin for `/setup` — onboarding ramp.
 
-Three phases, all in one pass, aimed at the fastest route to a working
+Two phases, all in one pass, aimed at the fastest route to a working
 Second Brain. Everything after that is a question the agent can answer.
   1. Packages — a fresh kernel ships no LLM backend, so setup leads by
      installing the `essentials` bundle. Skipped automatically once an LLM
      backend is already installed.
   2. LLM — a ChatGPT account through Codex (no API key), an OpenRouter key
      (one key, most models), or any other provider via the LiteLLM backend.
-  3. Telegram — configure the bot, but only when the Telegram frontend is
-     (being) installed.
 
-There is no web-UI phase. The HTTP frontend is on by default and the kernel
+There is no frontend phase. The HTTP frontend is on by default and the kernel
 starts `frame_ui/` itself, so the only step left is an `npm install` that
 belongs in the install instructions rather than in a wizard running inside
-the thing it would be installing.
+the thing it would be installing. Telegram used to be the third phase, back
+when it was the way off the terminal; the web UI superseded it, so it left the
+essentials bundle and is an ordinary `/packages install frontend_telegram`.
 
 Codex sign-in is deliberately *not* run from here. It is a device-code wait of
 up to several minutes owned by `/codex`, a command this wizard has only just
@@ -39,7 +39,6 @@ CODEX_BUNDLE = "bundle_codex"
 #: What the Codex backend calls itself, which is how "is Codex installed" is
 #: answered — a bundle leaves no receipt of its own, its files do.
 CODEX_BACKEND = "CodexBackend"
-TELEGRAM_PACKAGE = "frontend_telegram"
 #: What each install choice actually installs, in order. A *list* rather than
 #: one name because the second choice is the first plus one — the knowledge
 #: base is what you add to a working instance, not an alternative to it, so
@@ -56,8 +55,8 @@ WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
     "The kernel ships almost nothing on its own — capabilities are installed from a "
     "package store. The `essentials` bundle is the recommended first install: an LLM "
-    "backend, file read/edit/search, shell and script running, SQL, web search, "
-    "subagents, and the Telegram frontend. Adding `knowledgebase` indexes your files "
+    "backend, file read/edit/search, shell and script running, SQL, web search "
+    "and subagents. Adding `knowledgebase` indexes your files "
     "and makes them searchable (a much larger download — fine to add later).\n\n"
     "You can browse and install more anytime with /packages."
 )
@@ -104,18 +103,6 @@ OTHER_CONTEXT_PROMPT = (
     "Context window size in tokens. Use 0 if you don't know — Second Brain will still work, it just won't proactively compact."
 )
 
-TELEGRAM_PROMPT = (
-    "Optional: Telegram. Chat with Second Brain from your phone — push "
-    "notifications, attachments, inline buttons.\n\n"
-    "You'll need:\n"
-    "  1. A bot token from @BotFather on Telegram (https://t.me/BotFather → /newbot)\n"
-    "  2. Your Telegram user ID — message @userinfobot and it will reply with your numeric ID"
-)
-TELEGRAM_TOKEN_PROMPT = "Paste the bot token from @BotFather."
-TELEGRAM_USER_PROMPT = (
-    "Enter your Telegram user ID (a number from @userinfobot). Only this user will be allowed to talk to the bot."
-)
-
 CODEX_NEXT_STEPS = (
     "One step left — sign in:\n"
     "  1. In ChatGPT (chatgpt.com), open Settings → Security and turn on "
@@ -147,7 +134,7 @@ class SetupCommand(BaseCommand):
     require_approval = True
     approval_actor_id = "user"
     requests = [
-        "plugin.list", "plugin.install", "config.read", "config.write",
+        "plugin.install", "config.read", "config.write",
         "paths.get", "net.http", "llm.list",
     ]
 
@@ -174,10 +161,6 @@ class SetupCommand(BaseCommand):
             choice = args.get("install_choice")
             if not choice or choice == "skip":
                 return steps
-            # Both choices include the LiteLLM backend + Telegram frontend.
-            will_have_telegram = True
-        else:
-            will_have_telegram = _package_installed(sdk, TELEGRAM_PACKAGE)
 
         # Phase 2 — LLM.
         steps.append(FormStep(
@@ -193,11 +176,6 @@ class SetupCommand(BaseCommand):
             steps.extend(self._openrouter_steps())
         elif llm_choice == "other":
             steps.extend(self._other_steps(backends))
-
-        # Phase 3 — Telegram, once the LLM branch is satisfied and the frontend
-        # is (being) installed.
-        if will_have_telegram and _llm_steps_complete(args, llm_choice):
-            steps.extend(self._telegram_steps(args))
         return steps
 
     def _openrouter_steps(self):
@@ -221,19 +199,6 @@ class SetupCommand(BaseCommand):
             FormStep("other_api_key", OTHER_KEY_PROMPT, False, default="", prompt_when_missing=True),
             FormStep("other_context_size", OTHER_CONTEXT_PROMPT, False, "integer", default=0, prompt_when_missing=True),
         ]
-
-    def _telegram_steps(self, args):
-        """Telegram bot credential collection."""
-        steps = [FormStep(
-            "telegram_choice", TELEGRAM_PROMPT, True,
-            enum=["setup", "skip"],
-            enum_labels=["Set up Telegram", "Skip — not now"],
-            columns=1,
-        )]
-        if args.get("telegram_choice") == "setup":
-            steps.append(FormStep("telegram_bot_token", TELEGRAM_TOKEN_PROMPT, True))
-            steps.append(FormStep("telegram_allowed_user_id", TELEGRAM_USER_PROMPT, True, "integer"))
-        return steps
 
     def run(self, sdk, args):
         """Execute `/setup` for the active session."""
@@ -282,12 +247,6 @@ class SetupCommand(BaseCommand):
             if result is None:
                 return "Model name is required."
             sections.append(result)
-
-        # Phase 3 — Telegram.
-        if args.get("telegram_choice") == "setup":
-            sections.append(self._save_telegram(sdk, args))
-        elif args.get("telegram_choice") == "skip":
-            sections.append("Telegram: skipped. Run /setup again whenever you want it.")
 
         sections.append(PACKAGES_SECTION)
         sections.append(self._location_section(sdk))
@@ -338,19 +297,6 @@ class SetupCommand(BaseCommand):
             "  Use /llm to edit or add more models."
         )
 
-    def _save_telegram(self, sdk, args):
-        """Persist Telegram credentials into plugin_config."""
-        token = (args.get("telegram_bot_token") or "").strip()
-        user_id = int(args.get("telegram_allowed_user_id") or 0)
-        sdk.config.write(
-            "telegram_bot_token", token, scope="plugin")
-        sdk.config.write(
-            "telegram_allowed_user_id", user_id, scope="plugin")
-        return (
-            f"Telegram: configured for user {user_id}.\n"
-            "  Restart Second Brain to bring the bot online, then send /start to your bot in Telegram."
-        )
-
     def _skip_section(self):
         """Guidance when the user declines the starter install."""
         return (
@@ -380,19 +326,8 @@ class SetupCommand(BaseCommand):
         where = f" The web UI is at {ui}." if ui else ""
         return (
             f"You're ready. {first} and just ask — how Second Brain works, what "
-            f"it can do, how to add Telegram, memory, or a schedule.{where}"
+            f"it can do, how to add memory, Telegram, or a schedule.{where}"
         )
-
-
-def _llm_steps_complete(args, choice):
-    """Return True once the LLM branch has collected enough to move on to Telegram."""
-    if choice == "codex":
-        return True
-    if choice == "openrouter":
-        return bool(args.get("openrouter_api_key") and args.get("openrouter_model"))
-    if choice == "other":
-        return bool(args.get("other_model_name") and args.get("other_service_class"))
-    return False
 
 
 def _install_llm_profile(sdk, name, profile):
@@ -401,17 +336,6 @@ def _install_llm_profile(sdk, name, profile):
         "llm_profiles", {name: profile}, merge=True, scope="plugin")
     sdk.config.write(
         "default_llm_profile", name, scope="plugin")
-
-
-def _package_installed(sdk, package_id):
-    """Whether a package id has an install receipt."""
-    try:
-        return any(
-            p.get("id") == package_id
-            for p in sdk.plugins.list(source="installed")
-        )
-    except sdk.Failed:
-        return False
 
 
 def _codex_installed(sdk):
