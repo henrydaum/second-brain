@@ -119,16 +119,6 @@ Run `/locations` to see the paths on your machine.
 
 **To uninstall Second Brain completely,** quit it, then delete both folders: the kernel folder and `DATA_DIR`. Second Brain installs nothing outside them, with one exception: if you set up the optional macOS deployment, run `sh frame_ui/deploy/macos/manage.sh uninstall` first. If you used Docker, remove the `sb-data` volume instead (`docker volume rm sb-data`). Deleting `DATA_DIR` erases your conversations and settings, so copy anything you want to keep first.
 
-Useful commands once you're up:
-
-| Command | What it does |
-|---|---|
-| `/packages` | Install and remove capabilities |
-| `/config` | Every setting, including plugin settings |
-| `/llm` | Add, switch, or edit model profiles |
-| `/conversations` | Browse and switch conversations |
-| `/commands` | List everything available |
-
 ## Philosophy
 
 Second Brain is inspired by the human brain. Explorations into neurons turned into the creation of artificial neural networks, which then paved the way for attention mechanisms and transformers. From there came LLMs, and then came the agentic abilities: RAG, tool calls, and cron jobs. With each iteration, Second Brain became closer to its biological inspiration.
