@@ -1,17 +1,24 @@
 """Slash command plugin for `/setup` — onboarding ramp.
 
-Four phases, all in one pass:
-  1. Packages — a fresh kernel ships no LLM backend or frontend, so setup leads
-     by installing the `essentials` bundle, and points at /packages for
-     more. Skipped automatically once an LLM backend is already installed.
-  2. LLM — configure a default profile (Atlas Cloud fast-path or another provider,
-     via the LiteLLM backend).
-  3. Telegram — configure the bot, but only when the Telegram frontend is (being)
-     installed.
-  4. Web UI — install the HTTP frontend and mint its token, then print the
-     build steps. The app is a separate repository that has to be cloned and
-     built, so the wizard deliberately stops at what it can actually do:
-     prompting for a `dist` path that does not exist yet would be a dead end.
+Three phases, all in one pass, aimed at the fastest route to a working
+Second Brain. Everything after that is a question the agent can answer.
+  1. Packages — a fresh kernel ships no LLM backend, so setup leads by
+     installing the `essentials` bundle. Skipped automatically once an LLM
+     backend is already installed.
+  2. LLM — a ChatGPT account through Codex (no API key), an OpenRouter key
+     (one key, most models), or any other provider via the LiteLLM backend.
+  3. Telegram — configure the bot, but only when the Telegram frontend is
+     (being) installed.
+
+There is no web-UI phase. The HTTP frontend is on by default and the kernel
+starts `frame_ui/` itself, so the only step left is an `npm install` that
+belongs in the install instructions rather than in a wizard running inside
+the thing it would be installing.
+
+Codex sign-in is deliberately *not* run from here. It is a device-code wait of
+up to several minutes owned by `/codex`, a command this wizard has only just
+installed; nesting it would put that wait, a second approval and a hot-reload
+race inside onboarding. So setup installs Codex and names the one command left.
 """
 
 
@@ -19,11 +26,6 @@ from guest.bases import BaseCommand
 from guest.forms import FormStep
 
 
-ATLAS_BASE_URL = "https://api.atlascloud.ai/v1"
-ATLAS_CODING_PLAN_URL = "https://www.atlascloud.ai/console/coding-plan"
-ATLAS_DEFAULT_MODEL = "minimaxai/minimax-m2.7"
-DEFAULT_ENV_VAR = "ATLAS_API_KEY"
-DEFAULT_CONTEXT_SIZE = 0
 # The name a profile falls back to when discovery has not run or has found
 # nothing. Deliberately the *retired* spelling: the live backend declares
 # ``replaces = ["LiteLLMService"]``, so this still resolves through the alias
@@ -33,17 +35,11 @@ DEFAULT_BACKEND = "LiteLLMService"
 
 ESSENTIALS_BUNDLE = "bundle_essentials"
 KNOWLEDGEBASE_BUNDLE = "bundle_knowledgebase"
+CODEX_BUNDLE = "bundle_codex"
+#: What the Codex backend calls itself, which is how "is Codex installed" is
+#: answered — a bundle leaves no receipt of its own, its files do.
+CODEX_BACKEND = "CodexBackend"
 TELEGRAM_PACKAGE = "frontend_telegram"
-#: The HTTP frontend ships in the kernel tree, so there is nothing to install —
-#: turning it on is a line in ``enabled_frontends``, which is the name the
-#: frontend declares rather than its file stem.
-HTTP_FRONTEND = "http"
-#: The web app ships in this repo, so setting it up is an ``npm`` in a folder
-#: the user already has rather than a clone of somewhere else.
-UI_DIR = "frame_ui"
-#: Matches ``frontend_http``'s own declared default, so the URL this wizard
-#: prints is the one the frontend will actually serve on.
-DEFAULT_HTTP_PORT = 8787
 #: What each install choice actually installs, in order. A *list* rather than
 #: one name because the second choice is the first plus one — the knowledge
 #: base is what you add to a working instance, not an alternative to it, so
@@ -53,42 +49,45 @@ BUNDLE_CHOICES = {
     "essentials_and_knowledgebase": [ESSENTIALS_BUNDLE, KNOWLEDGEBASE_BUNDLE],
 }
 
+OPENROUTER_KEYS_URL = "https://openrouter.ai/settings/keys"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/models"
+
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
     "The kernel ships almost nothing on its own — capabilities are installed from a "
     "package store. The `essentials` bundle is the recommended first install: an LLM "
-    "backend (LiteLLM, which reaches most providers), the Telegram frontend, file "
-    "read/edit/search, shell and script running, SQL, ask-user-question, plugin "
-    "validation, subagents, web search, and auto-titling. Adding `knowledgebase` "
-    "indexes your files and makes them searchable — every file parser, OCR, "
-    "transcription, embeddings and the three search tools (a much larger download, "
-    "and the natural next step once the basics work).\n\n"
-    "You can browse and install more anytime with /packages.\n\n"
-    "Second Brain is sponsored by Atlas Cloud — a fast way to get an API key: "
-    f"{ATLAS_CODING_PLAN_URL}"
+    "backend, file read/edit/search, shell and script running, SQL, web search, "
+    "subagents, and the Telegram frontend. Adding `knowledgebase` indexes your files "
+    "and makes them searchable (a much larger download — fine to add later).\n\n"
+    "You can browse and install more anytime with /packages."
 )
 
 LLM_INTRO_PROMPT = (
-    "Let's set your default LLM profile. Atlas Cloud is the sponsored fast-path "
-    "(300+ models behind one key); or point Second Brain at any other provider."
+    "Now connect a model. This is the only step that really matters — once a "
+    "model answers, you can ask Second Brain itself about everything else.\n\n"
+    "  • ChatGPT account (Codex) — no API key; uses your ChatGPT plan. The "
+    "fastest route if you already pay for ChatGPT.\n"
+    "  • OpenRouter — one API key, hundreds of models, pay as you go.\n"
+    "  • Another provider — OpenAI, Anthropic, Gemini, a local model, any "
+    "OpenAI-compatible endpoint."
 )
 
-KEY_SOURCE_PROMPT = (
-    "To use Atlas Cloud you need an API key. Sign up at "
-    f"{ATLAS_CODING_PLAN_URL} and create an API key, then choose how you want to supply it:"
+OPENROUTER_KEY_PROMPT = (
+    f"Create a key at {OPENROUTER_KEYS_URL} and paste it here. "
+    "(The name of an environment variable holding it works too.)"
 )
-
-ENV_VAR_PROMPT = (
-    "Enter the name of the environment variable that holds your Atlas key. "
-    "You'll need to set this variable in your shell/system before Second Brain can call Atlas (for example on Windows: `setx ATLAS_API_KEY your-key`)."
+OPENROUTER_MODEL_PROMPT = (
+    f"Which model? Copy its id from {OPENROUTER_MODELS_URL} — for example "
+    "`openai/gpt-5` or `anthropic/claude-sonnet-4.5`. You can add more later "
+    "with /llm."
 )
 
 OTHER_MODEL_PROMPT = (
     "Enter the LiteLLM model name, including the provider prefix when needed. "
-    "Examples: `openai/gpt-4o-mini`, `anthropic/claude-3-5-sonnet-latest`, "
-    "`minimax/MiniMax-M2.7`. For an OpenAI-compatible endpoint (set the base URL "
-    "below), a plain id like `deepseek-ai/deepseek-v4-pro` is auto-routed through "
-    "the openai provider."
+    "Examples: `openai/gpt-5`, `anthropic/claude-sonnet-4-5`, "
+    "`gemini/gemini-2.5-pro`, `ollama/qwen3`. For an OpenAI-compatible endpoint "
+    "(set the base URL below), a plain id like `deepseek-ai/deepseek-v4-pro` is "
+    "auto-routed through the openai provider."
 )
 OTHER_SERVICE_PROMPT = (
     "How should Second Brain connect to this model?\n\n"
@@ -106,8 +105,8 @@ OTHER_CONTEXT_PROMPT = (
 )
 
 TELEGRAM_PROMPT = (
-    "Now let's set up Telegram. The Telegram frontend gives you a much better experience than the REPL — "
-    "push notifications, attachments, inline buttons, and access from your phone.\n\n"
+    "Optional: Telegram. Chat with Second Brain from your phone — push "
+    "notifications, attachments, inline buttons.\n\n"
     "You'll need:\n"
     "  1. A bot token from @BotFather on Telegram (https://t.me/BotFather → /newbot)\n"
     "  2. Your Telegram user ID — message @userinfobot and it will reply with your numeric ID"
@@ -117,32 +116,28 @@ TELEGRAM_USER_PROMPT = (
     "Enter your Telegram user ID (a number from @userinfobot). Only this user will be allowed to talk to the bot."
 )
 
-WEB_UI_PROMPT = (
-    "Last thing: the web UI — a ChatGPT-style app you open in a browser or "
-    "install to your phone's home screen. It is a much nicer place to live than "
-    "the REPL.\n\n"
-    "Saying yes now turns the HTTP frontend on. The app itself ships in this "
-    "repo and reads its settings straight out of your config, so all that is "
-    "left is an npm install in a terminal — two commands, printed at the end. "
-    "There is no token to copy: the kernel mints one and the UI's dev server "
-    "reads it."
+CODEX_NEXT_STEPS = (
+    "One step left — sign in:\n"
+    "  1. In ChatGPT (chatgpt.com), open Settings → Security and turn on "
+    "device code authorization for Codex.\n"
+    "  2. Run `/codex` and choose **Sign in**. It shows a code to enter at "
+    "auth.openai.com, then creates your model profile.\n"
+    "  If you already had a default model, use /llm to switch to the Codex one."
 )
 
 PACKAGES_SECTION = (
     "Get more with /packages:\n"
     "  /packages install          — browse by category and pick a package\n"
     "  /packages install <id>     — install a package or bundle by name\n"
-    f"  Next step: `{KNOWLEDGEBASE_BUNDLE}` — parsers, OCR, transcription, "
-    "embeddings and the three search tools, so the agent can find things in "
-    "your own files. Individual packages (gmail, google_drive, mcp, "
-    "plan_mode) install by name."
+    f"  Good next steps: `{KNOWLEDGEBASE_BUNDLE}` (index and search your own "
+    "files), `bundle_memory` (durable memory), `bundle_gmail` (email)."
 )
 
 
 class SetupCommand(BaseCommand):
     """Slash-command handler for `/setup`."""
     name = "setup"
-    description = "Onboarding: install a starter bundle, then configure an LLM and optional frontend"
+    description = "Onboarding: install a starter bundle and connect a model"
     category = "System"
     # No per-action split is available — the wizard has no ``action``
     # argument, and every route through it installs packages or writes
@@ -153,7 +148,7 @@ class SetupCommand(BaseCommand):
     approval_actor_id = "user"
     requests = [
         "plugin.list", "plugin.install", "config.read", "config.write",
-        "paths.get", "env.read", "net.http", "llm.list",
+        "paths.get", "net.http", "llm.list",
     ]
 
     def form(self, sdk, args):
@@ -179,60 +174,41 @@ class SetupCommand(BaseCommand):
             choice = args.get("install_choice")
             if not choice or choice == "skip":
                 return steps
-            # starter and full both include the LiteLLM backend + Telegram frontend.
+            # Both choices include the LiteLLM backend + Telegram frontend.
             will_have_telegram = True
         else:
             will_have_telegram = _package_installed(sdk, TELEGRAM_PACKAGE)
 
-        # Phase 2 — LLM profile.
+        # Phase 2 — LLM.
         steps.append(FormStep(
             "llm_choice", LLM_INTRO_PROMPT, True,
-            enum=["atlas", "other"],
-            enum_labels=["Set up Atlas Cloud", "Use another provider"],
+            enum=["codex", "openrouter", "other"],
+            enum_labels=["Use my ChatGPT account (Codex)",
+                         "Use an OpenRouter API key",
+                         "Use another provider"],
             columns=1,
         ))
         llm_choice = args.get("llm_choice")
-        if llm_choice == "atlas":
-            steps.extend(self._atlas_steps(args))
+        if llm_choice == "openrouter":
+            steps.extend(self._openrouter_steps())
         elif llm_choice == "other":
-            steps.extend(self._other_steps(args, backends))
+            steps.extend(self._other_steps(backends))
 
         # Phase 3 — Telegram, once the LLM branch is satisfied and the frontend
         # is (being) installed.
         if will_have_telegram and _llm_steps_complete(args, llm_choice):
             steps.extend(self._telegram_steps(args))
-
-        # Phase 4 — the web UI, last because it is the only phase whose work
-        # continues outside this wizard. Gated on Telegram being *settled*
-        # rather than merely offered: a form renders every step it is handed,
-        # so asking both at once would present two unrelated questions as one
-        # screen.
-        if (_llm_steps_complete(args, llm_choice)
-                and _telegram_settled(args, will_have_telegram)):
-            steps.extend(self._web_ui_steps())
         return steps
 
-    def _atlas_steps(self, args):
-        """Atlas Cloud key/model collection."""
-        steps = [FormStep(
-            "key_source", KEY_SOURCE_PROMPT, True,
-            enum=["direct", "env_var"],
-            enum_labels=["Paste the key directly", "Use an environment variable (you'll set it yourself)"],
-            columns=1,
-        )]
-        if args.get("key_source") == "direct":
-            steps.append(FormStep("api_key", "Paste your Atlas Cloud API key.", True))
-        elif args.get("key_source") == "env_var":
-            steps.append(FormStep("env_var_name", ENV_VAR_PROMPT, True, default=DEFAULT_ENV_VAR))
-        if args.get("key_source"):
-            steps.append(FormStep(
-                "model_name",
-                "Model name to use as your default profile. You can change this later with /llm.",
-                False, default=ATLAS_DEFAULT_MODEL, prompt_when_missing=True,
-            ))
-        return steps
+    def _openrouter_steps(self):
+        """OpenRouter key and model. Two questions, because that is all a
+        LiteLLM profile for a provider it knows needs — no endpoint to guess."""
+        return [
+            FormStep("openrouter_api_key", OPENROUTER_KEY_PROMPT, True),
+            FormStep("openrouter_model", OPENROUTER_MODEL_PROMPT, True),
+        ]
 
-    def _other_steps(self, args, backends):
+    def _other_steps(self, backends):
         """Generic LLM profile collection (mirrors /llm add)."""
         backends = backends or [(DEFAULT_BACKEND, DEFAULT_BACKEND)]
         names = [name for name, _label in backends]
@@ -251,24 +227,13 @@ class SetupCommand(BaseCommand):
         steps = [FormStep(
             "telegram_choice", TELEGRAM_PROMPT, True,
             enum=["setup", "skip"],
-            enum_labels=["Set up Telegram", "Skip — I'll use the REPL for now"],
+            enum_labels=["Set up Telegram", "Skip — not now"],
             columns=1,
         )]
         if args.get("telegram_choice") == "setup":
             steps.append(FormStep("telegram_bot_token", TELEGRAM_TOKEN_PROMPT, True))
             steps.append(FormStep("telegram_allowed_user_id", TELEGRAM_USER_PROMPT, True, "integer"))
         return steps
-
-    def _web_ui_steps(self):
-        """Ask whether to set the web UI up. Takes no ``args`` — it is one
-        question with no follow-ups, because everything after it happens in a
-        terminal this wizard does not own."""
-        return [FormStep(
-            "web_ui_choice", WEB_UI_PROMPT, True,
-            enum=["setup", "skip"],
-            enum_labels=["Set up the web UI", "Skip — I'll do it later"],
-            columns=1,
-        )]
 
     def run(self, sdk, args):
         """Execute `/setup` for the active session."""
@@ -277,25 +242,29 @@ class SetupCommand(BaseCommand):
             return self._skip_section()
 
         sections = []
-        env_warning = None
+        llm_choice = args.get("llm_choice")
 
-        # Phase 1 — install the chosen bundle before configuring anything that
-        # depends on it. Bail clearly if there's no connectivity or the install
-        # fails, so we don't pretend a half-set-up instance is ready.
-        for bundle in BUNDLE_CHOICES.get(install_choice, ()):
-            if not _has_internet(sdk):
-                return (
-                    f"No internet connection detected. Installing the `{bundle}` "
-                    "bundle needs to download packages and their dependencies. Connect "
-                    "to the internet and run /setup again."
-                )
+        # Phase 1 — install the chosen bundles before configuring anything
+        # that depends on them. Codex rides along here when it was picked, so
+        # one connectivity check and one report cover every download. Bail
+        # clearly on failure, so we don't pretend a half-set-up instance is
+        # ready.
+        bundles = list(BUNDLE_CHOICES.get(install_choice, ()))
+        if llm_choice == "codex" and not _codex_installed(sdk):
+            bundles.append(CODEX_BUNDLE)
+        if bundles and not _has_internet(sdk):
+            return (
+                "No internet connection detected. Setup needs to download "
+                "packages and their dependencies. Connect to the internet and "
+                "run /setup again."
+            )
+        for bundle in bundles:
             try:
                 result = sdk.plugins.install(bundle)
             except sdk.Failed as e:
                 # Reported rather than raised past the remaining bundles: the
                 # essentials install is what everything else depends on, so a
-                # knowledge-base failure must not lose the report of the one
-                # that worked.
+                # later failure must not lose the report of the one that worked.
                 return "\n\n".join(sections + [
                     f"Couldn't install the `{bundle}` bundle: {e.error}\n\n"
                     f"Resolve the issue (or try `/packages install {bundle}`), "
@@ -303,86 +272,57 @@ class SetupCommand(BaseCommand):
             sections.append(f"Installed the `{bundle}` bundle.\n"
                             + _indent(result))
 
-        # Phase 2 — LLM profile.
-        llm_choice = args.get("llm_choice")
-        if llm_choice == "atlas":
-            result = self._save_atlas(sdk, args)
-            if isinstance(result, str):
-                return result
-            sections.append(result[0])
-            env_warning = result[1]
+        # Phase 2 — LLM.
+        if llm_choice == "codex":
+            sections.append("LLM: Codex is installed.\n" + _indent(CODEX_NEXT_STEPS))
+        elif llm_choice == "openrouter":
+            sections.append(self._save_openrouter(sdk, args))
         elif llm_choice == "other":
             result = self._save_other(sdk, args)
-            if isinstance(result, str):
-                return result
+            if result is None:
+                return "Model name is required."
             sections.append(result)
 
         # Phase 3 — Telegram.
         if args.get("telegram_choice") == "setup":
             sections.append(self._save_telegram(sdk, args))
         elif args.get("telegram_choice") == "skip":
-            sections.append("Telegram: skipped. Use /config to add `telegram_bot_token` and `telegram_allowed_user_id` later.")
-
-        # Phase 4 — web UI.
-        if args.get("web_ui_choice") == "setup":
-            sections.append(self._save_web_ui(sdk))
-        elif args.get("web_ui_choice") == "skip":
-            sections.append("Web UI: skipped. Turn it on later with `/frontends enable "
-                            + HTTP_FRONTEND + "`, then see `" + UI_DIR + "/README.md`.")
+            sections.append("Telegram: skipped. Run /setup again whenever you want it.")
 
         sections.append(PACKAGES_SECTION)
         sections.append(self._location_section(sdk))
-        sections.append(self._hint_section())
-        if env_warning:
-            sections.insert(0, env_warning)
+        sections.append(self._hint_section(sdk, llm_choice))
         return "\n\n".join(s for s in sections if s)
 
     # ──────────────────────────────────────────────────────────────────
     # Persistence helpers
     # ──────────────────────────────────────────────────────────────────
 
-    def _save_atlas(self, sdk, args):
-        """Persist an Atlas Cloud LLM profile. Returns (section, warning|None) or error string."""
-        key_source = args.get("key_source")
-        if key_source == "direct":
-            api_key_field = (args.get("api_key") or "").strip()
-            env_var_set = True
-        elif key_source == "env_var":
-            api_key_field = (args.get("env_var_name") or DEFAULT_ENV_VAR).strip() or DEFAULT_ENV_VAR
-            env_var_set = bool(sdk.env.read(api_key_field))
-        else:
-            return "Setup cancelled."
-        if not api_key_field:
-            return "An API key (or environment variable name) is required."
-        model_name = (args.get("model_name") or ATLAS_DEFAULT_MODEL).strip() or ATLAS_DEFAULT_MODEL
-
-        profile = {
-            "llm_endpoint": ATLAS_BASE_URL,
-            "secret_llm_api_key": api_key_field,
-            "llm_context_size": DEFAULT_CONTEXT_SIZE,
+    def _save_openrouter(self, sdk, args):
+        """Persist an OpenRouter profile through the LiteLLM backend."""
+        key = (args.get("openrouter_api_key") or "").strip()
+        model = (args.get("openrouter_model") or "").strip()
+        # The ``openrouter/`` prefix is how LiteLLM picks the provider, and it
+        # is not part of the id the OpenRouter site shows — so it is added
+        # here rather than asked for.
+        if not model.startswith("openrouter/"):
+            model = "openrouter/" + model
+        _install_llm_profile(sdk, model, {
+            "llm_endpoint": "",
+            "secret_llm_api_key": key,
+            "llm_context_size": 0,
             "llm_service_class": DEFAULT_BACKEND,
-        }
-        _install_llm_profile(sdk, model_name, profile)
-
-        section = (
-            f"LLM: Atlas Cloud set up. Default profile: {model_name}\n"
-            f"  Endpoint: {ATLAS_BASE_URL}\n"
-            f"  Coding plan: {ATLAS_CODING_PLAN_URL}\n"
+        })
+        return (
+            f"LLM: OpenRouter set up. Default profile: {model}\n"
             "  Use /llm to edit the profile or add more models."
         )
-        warning = None
-        if key_source == "env_var" and not env_var_set:
-            warning = (
-                f"Note: ${api_key_field} is not currently set in this environment. "
-                "Set it before sending your first message or Atlas calls will fail."
-            )
-        return section, warning
 
     def _save_other(self, sdk, args):
-        """Persist a generic LLM profile. Returns section string or error string."""
+        """Persist a generic LLM profile. None when no model was named."""
         name = (args.get("other_model_name") or "").strip()
         if not name:
-            return "Model name is required."
+            return None
         profile = {
             "llm_endpoint": (args.get("other_endpoint") or "").strip(),
             "secret_llm_api_key": (args.get("other_api_key") or "").strip(),
@@ -411,41 +351,6 @@ class SetupCommand(BaseCommand):
             "  Restart Second Brain to bring the bot online, then send /start to your bot in Telegram."
         )
 
-    def _save_web_ui(self, sdk):
-        """Turn the HTTP frontend on and print the two commands left.
-
-        **Nothing here touches the token.** It is a kernel setting minted at
-        boot, and the UI's dev server reads it out of config.json itself — so
-        there is no value to carry across, which is the whole of why this phase
-        used to print a secret and ask for it to be pasted into a file.
-
-        The remaining work is an npm install in another terminal, so this
-        returns instructions rather than doing it."""
-        enabled = list(sdk.config.read("enabled_frontends") or [])
-        if HTTP_FRONTEND not in enabled:
-            sdk.config.write("enabled_frontends", sorted(enabled + [HTTP_FRONTEND]))
-        # The app lives beside the kernel, so this is a real folder on the
-        # user's disk rather than a repository to go and find. Backslash on
-        # Windows, because the line is one the user retypes into a shell.
-        windows = str(sdk.paths.get("platform") or "").startswith("win")
-        project = str(sdk.paths.get("project"))
-        folder = project + ("\\" if windows else "/") + UI_DIR
-        return (
-            "Web UI: HTTP frontend enabled.\n"
-            "\n"
-            "  Two minutes left. In a terminal (needs Node 20.19+ or 22.12+):\n"
-            f"    cd {folder}\n"
-            "    npm install\n"
-            "    npm run dev\n"
-            "\n"
-            "  Opens at http://localhost:5174. Restart Second Brain first so the "
-            f"HTTP frontend comes online on port {DEFAULT_HTTP_PORT}.\n"
-            "\n"
-            "  To reach it from another machine later, set `http_client_url` in "
-            "/config to this one\'s address (Tailscale, say) and restart the dev "
-            "server. Nothing else moves."
-        )
-
     def _skip_section(self):
         """Guidance when the user declines the starter install."""
         return (
@@ -455,7 +360,7 @@ class SetupCommand(BaseCommand):
             f"  /packages install {ESSENTIALS_BUNDLE}      — the recommended baseline\n"
             f"  /packages install {KNOWLEDGEBASE_BUNDLE}   — then this, to index and search your files\n"
             "  /packages install               — browse the store by category\n\n"
-            "Then run /setup again to configure your LLM and Telegram."
+            "Then run /setup again to connect a model."
         )
 
     def _location_section(self, sdk):
@@ -463,46 +368,30 @@ class SetupCommand(BaseCommand):
         return (
             "Files & data:\n"
             f"  DATA_DIR: {sdk.paths.get('data')}\n"
-            "  Holds your config (config.json, plugin_config.json), the SQLite database, the attachment cache, installed packages, and any sandbox plugins the agent writes for itself.\n"
-            "  Run /locations to see existing plugins, and /config to view and edit your config files."
+            "  Holds your config, the SQLite database, installed packages, and "
+            "anything the agent writes for itself. /locations shows the rest."
         )
 
-    def _hint_section(self):
+    def _hint_section(self, sdk, llm_choice):
         """Closing hint about how to continue."""
+        first = ("Sign in with /codex, then run /new"
+                 if llm_choice == "codex" else "Run /new")
+        ui = str(sdk.config.read("ui_url") or "").strip()
+        where = f" The web UI is at {ui}." if ui else ""
         return (
-            "You're ready. Run /new to start a conversation, then just ask the LLM anything — "
-            "how Second Brain works, what tools are available, how to set up a task, and more!"
+            f"You're ready. {first} and just ask — how Second Brain works, what "
+            f"it can do, how to add Telegram, memory, or a schedule.{where}"
         )
 
 
 def _llm_steps_complete(args, choice):
     """Return True once the LLM branch has collected enough to move on to Telegram."""
-    if choice == "atlas":
-        key_source = args.get("key_source")
-        if key_source == "direct":
-            return bool(args.get("api_key"))
-        if key_source == "env_var":
-            return bool(args.get("env_var_name"))
-        return False
+    if choice == "codex":
+        return True
+    if choice == "openrouter":
+        return bool(args.get("openrouter_api_key") and args.get("openrouter_model"))
     if choice == "other":
         return bool(args.get("other_model_name") and args.get("other_service_class"))
-    return False
-
-
-def _telegram_settled(args, will_have_telegram):
-    """Whether the Telegram phase has nothing further to ask.
-
-    True when there is no Telegram phase at all, when it was declined, or
-    when both credentials are in hand. Anything else means a step is still
-    on screen and the next phase must not crowd it."""
-    if not will_have_telegram:
-        return True
-    choice = args.get("telegram_choice")
-    if choice == "skip":
-        return True
-    if choice == "setup":
-        return bool(args.get("telegram_bot_token")
-                    and args.get("telegram_allowed_user_id"))
     return False
 
 
@@ -523,6 +412,12 @@ def _package_installed(sdk, package_id):
         )
     except sdk.Failed:
         return False
+
+
+def _codex_installed(sdk):
+    """Whether the Codex backend is already present, so setup can skip the
+    download on a second run."""
+    return any(name == CODEX_BACKEND for name, _label in _llm_backends(sdk))
 
 
 def _has_internet(sdk) -> bool:

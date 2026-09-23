@@ -34,11 +34,26 @@ Second Brain has `widgets`, which are essentially like Anthropic Artifacts. Widg
 
 # Install
 
-Second Brain runs on your own machine. Two things to install: **the app** (required, ~2 minutes) and **the UI** (optional, a ChatGPT-style web app you can add to your phone's home screen).
+Second Brain runs on your own machine. You need [Python 3.11+](https://www.python.org/downloads/), [git](https://git-scm.com/downloads), and [Node 20.19+ or 22.12+](https://nodejs.org/) for the web UI.
 
-## 1. Install the app
+## The easy way: let your AI agent do it
 
-You need [Python 3.11+](https://www.python.org/downloads/) and [git](https://git-scm.com/downloads). If you want the web UI as well, you need [Node 20.19+ or 22.12+](https://nodejs.org/) — it ships with `npm`, and there is nothing to add to `requirements.txt`, which is pip's and stays kernel-minimal.
+Paste this into Claude Code, Codex, Cursor, or any coding agent that can run commands on your computer:
+
+```text
+Install Second Brain (https://github.com/henrydaum/second-brain) on this computer for me.
+
+1. Check that Python 3.11+, git, and Node.js (20.19+ or 22.12+, which includes npm) are installed. Install anything missing with the normal installer for my operating system, and tell me before you do.
+2. Clone the repository into my home folder (or ask me where I'd like it).
+3. Inside the clone, create a virtual environment named .venv and run `pip install -r requirements.txt` with that environment's pip.
+4. In the clone's frame_ui folder, run `npm install`.
+5. Don't start Second Brain yourself. It's an interactive program that needs my terminal. Instead, give me the exact commands for my operating system to activate the virtual environment and run `python main.py`.
+6. Tell me that once it's running, the web UI opens at http://localhost:5174, and the next step is to type /setup to connect an AI model.
+
+Don't change any of Second Brain's settings or files beyond these steps. If something fails, show me the error and explain it plainly.
+```
+
+## Or do it yourself
 
 ```bash
 git clone https://github.com/henrydaum/second-brain
@@ -46,160 +61,43 @@ cd second-brain
 python -m venv .venv
 ```
 
-Activate the virtual environment:
-
-| | |
-|---|---|
-| **Windows** | `.venv\Scripts\activate` |
-| **macOS / Linux** | `source .venv/bin/activate` |
-
-Then install and run:
+Activate the virtual environment. On **Windows**, run `.venv\Scripts\activate`. On **macOS / Linux**, run `source .venv/bin/activate`. Then:
 
 ```bash
 pip install -r requirements.txt
+cd frame_ui
+npm install
+cd ..
 python main.py
 ```
 
-That's it — you're in the REPL. `requirements.txt` is nearly pure Python.
+Second Brain starts the web UI for you. After a few seconds it tells you where to find it, usually **http://localhost:5174**. The terminal it runs in works as a chat too. Leave it open: the UI needs Second Brain running.
 
-**There's also a Dockerfile**, if you'd rather not install anything:
+## Connect a model
 
-```bash
-docker build -t second-brain .
-docker run --rm -it --init -v sb-data:/data second-brain
-```
-
-Same REPL, with everything kept in the `sb-data` volume. The path above is
-still the better one for day-to-day use — Second Brain is an assistant for
-*your machine*, and a container starts out unable to see it. Reach for this
-when the machine isn't one you want to install on: a server or a NAS, or a
-reproducible Linux to test against. [docs/DOCKER.md](docs/DOCKER.md) covers it,
-including Docker itself if this is your first time.
-
-## 2. Run `/setup`
+This is the only step that really matters. In the web UI or the terminal, run:
 
 ```
 /setup
 ```
 
-The wizard walks you through everything in one pass:
+It installs the `essentials` bundle (file tools, shell, web search, subagents and more) and asks how you want to connect a model:
 
-1. **Install the `essentials` bundle** — an LLM backend, file read/edit/search, shell and script running, SQL, web search, subagents, and the Telegram frontend.
-2. **Connect a model** — paste an API key. [Atlas Cloud](https://www.atlascloud.ai/console/coding-plan) is the sponsored fast path (300+ models behind one key), but any provider works.
-3. **Telegram (optional)** — chat with your Second Brain from your phone. Needs a bot token from [@BotFather](https://t.me/BotFather) and your user ID from [@userinfobot](https://t.me/userinfobot).
-4. **Web UI (optional)** — installs the HTTP frontend and generates your API token, then prints the exact steps to set the app up. [More below.](#install-the-ui)
-
-Say hello. You now have a working assistant. If you have questions, just ask.
-
-## 3. Get out of the terminal
-
-The REPL works, but it isn't where you want to live. Two much nicer options, in order of effort:
-
-| | Effort | What it's like |
-|---|---|---|
-| **Telegram** | ~5 minutes — `/setup` shows the way | Push notifications, attachments, inline buttons, and available on all major platforms. |
-| **Web UI** | ~10 minutes | A ChatGPT-style app you open in a browser or add to your phone's home screen. [Set it up below.](#install-the-ui) |
-
-Skipped one during `/setup`? Just run `/setup` again.
-
-## 4. Add more (optional)
-
-A fresh install is deliberately small. Add capabilities whenever you want:
-
-```
-/packages install
-```
-
-On the Web UI, you can do this in Settings. That opens a picker — browse by category and choose. The bundles worth knowing:
-
-| Bundle | What you get |
+| Option | What you need |
 |---|---|
-| `bundle_knowledgebase` | Index and search your own files — PDF, Office, images, audio, video, spreadsheets, archives. OCR, transcription, embeddings, and three search tools. **Large download.** |
-| `bundle_memory` | Durable memory that maintains itself. Notes and skills are surfaced when relevant and written down in the background, as plain markdown you can edit. |
-| `bundle_gmail` | Read, send, reply, label. |
+| **ChatGPT account (Codex)** | A ChatGPT plan, and no API key. In ChatGPT, go to **Settings → Security** and turn on **device code authorization for Codex**. Then run `/codex` and choose **Sign in**. |
+| **OpenRouter** | An API key from [openrouter.ai](https://openrouter.ai/settings/keys). One key gets you hundreds of models. |
+| **Another provider** | OpenAI, Anthropic, Gemini, a local model via Ollama, or any OpenAI-compatible endpoint. |
 
-Then tell it which folders to watch:
+Say hello. **You're done.** Everything else is a question you can ask Second Brain itself, like *"how do I use you from my phone?"*, *"index my Documents folder"*, *"set up Telegram"* or *"what can you do?"*.
 
-```
-/config
-```
+## Going further
 
-Set **`sync_directories`** to the folders you want indexed. Expect a flood of task messages while the first sync runs — that's normal, and it stops when it finishes.
-
----
-
-# Install the UI
-
-The UI lives in this repo, in **`frame_ui/`** — a React app on [assistant-ui](https://www.assistant-ui.com/) with conversations, attachments, settings, notifications and widget panels. It used to be a second repository you cloned separately; it is not any more, so a pull of Second Brain is a pull of the UI and the two halves of the protocol cannot drift apart.
-
-Works on Windows, macOS and Linux. Takes about two minutes.
-
-**Before you start:** Second Brain has to be *running* while you use the UI — the UI is just a face for it. Leave it going in its terminal and open a **second terminal** for everything below. You'll also need [Node 20.19+ or 22.12+](https://nodejs.org/); `npm` comes with it.
-
-### 1. Turn the HTTP frontend on
-
-If you said yes to the web UI during `/setup`, this is already done — skip to step 2. Otherwise, in the Second Brain REPL:
-
-```
-/frontends enable http
-/restart
-```
-
-**There is no token to set.** Second Brain mints `secret_http_token` at boot and the UI reads it out of `config.json` itself, so nothing gets copied anywhere.
-
-### 2. Install the UI's dependencies
-
-Once, in your second terminal:
-
-```bash
-cd frame_ui
-npm install
-```
-
-(`frame_ui` is in your Second Brain folder — the same one you cloned to run the server. There is no `.env` file to make.)
-
-From then on **Second Brain starts the UI itself** and tells you where it is:
-
-```
-UI is reachable at: http://localhost:5174
-```
-
-### 3. Open it
-
-Open that address. You should see the thread name, `ok` beside **Request** and `open` beside **Stream** — that is the whole bridge working.
-
-No notification at all means the UI never came up: `web_ui.log` in your data directory is the dev server's own output, and is where that explains itself — most often a missing `npm install`. A `401` on the page means the dev server started before the token existed; `/restart`, since it reads `config.json` once, at startup.
-
-Prefer to run it yourself? Set `ui_autostart` to off in `/config` and use `npm run dev` as before. Anything already serving is left alone either way, so a dev server you keep running is adopted rather than duplicated.
-
-Keeping it current is `/update`: it pulls the repo (the UI comes with it), runs `npm install`, and rebuilds and reactivates the deployment on platforms that have one.
-
-### Reaching it from another machine
-
-One setting, in the REPL:
-
-```
-/config   →  http_client_url = http://my-box.tail1234.ts.net:8787
-```
-
-`/restart` and that's the whole change. The browser never sees that value — it only ever talks to the dev server, which proxies onward and adds the credential itself — so nothing about CORS or tokens moves with it.
-
-### Put it on your phone
-
-Reaching it from your phone means the dev server has to accept connections from other devices. Turn `ui_autostart` off and run it yourself with the flag that does that:
-
-```bash
-cd frame_ui
-npm run dev -- --host
-```
-
-That prints a second URL (a `192.168.x.x` address). To reach it from anywhere rather than just your home Wi-Fi, install [Tailscale](https://tailscale.com/) on both your computer and your phone, and use your machine's Tailscale address instead. Note this exposes the *dev server*, which holds the credential and adds it for whoever connects — fine on a tailnet, not something to put on a café Wi-Fi.
-
-Open that URL in your phone's browser, then add it to your home screen — on iPhone, press the three dots, then **Share**, and scroll down to **Add to Home Screen**. Click it, and you're done. It's like a real app from there.
-
-### Why the dev server?
-
-Because it's the only thing that works on every platform today. `npm run build` produces a `dist` folder that `frontend_http` can serve directly (the `http_static_dir` setting), but a build served that way has to get its token from somewhere, and putting it in the bundle hands the credential to every browser that loads the page. Serving a build properly needs a reverse proxy that adds the token on its own hop — which today exists for macOS only, as a Caddy gateway: [frame_ui/docs/MACOS_DEPLOYMENT.md](frame_ui/docs/MACOS_DEPLOYMENT.md), with the scripts in `frame_ui/deploy/macos/`. The dev server is perfectly fine for personal use.
+- **More capabilities:** run `/packages install` (or open **Settings** in the web UI) to browse the store. Good ones to start with are `bundle_knowledgebase` (search your own PDFs, Office files, images and audio; a large download), `bundle_memory` (memory that maintains itself, stored as markdown you can edit), and `bundle_gmail`.
+- **Your phone:** Telegram is part of `/setup`. You can also add the web UI to your home screen over [Tailscale](https://tailscale.com/). Ask Second Brain how.
+- **Updating:** run `/update`. It pulls the repo and the UI together.
+- **Docker:** there's a Dockerfile for servers and NAS boxes. See [docs/DOCKER.md](docs/DOCKER.md).
+- **No web UI?** Check `web_ui.log` in your data directory (see below). The usual cause is a skipped `npm install`.
 
 ---
 
