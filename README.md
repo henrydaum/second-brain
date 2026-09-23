@@ -24,7 +24,7 @@ The full evaluation framework I used is [available on GitHub](https://github.com
 
 https://github.com/user-attachments/assets/6c740d80-0830-4703-849a-8f00fab9e865
 
-Second Brain has `widgets`, which are essentially like Anthropic Artifacts, interactive and live-updating HTML files.
+Second Brain has `widgets`, which are essentially like Anthropic Artifacts. Widgets are HTML files that the agent can write. They run in a sandboxed iframe for security. They can even run DOOM!
 
 # How it LOOKS!
 
