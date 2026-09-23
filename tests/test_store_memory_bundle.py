@@ -6,8 +6,10 @@ load, are these Requests real, is the retrieval free of dialogs, can this reach
 outside the folder — and the store file is the input.
 
 The two matter together because each is useless alone.
-``service_memory_retrieve`` ranks the corpus at ``turn_start``, injects
-descriptions and records what it offered, and at ``end_turn`` sends the agent
+``service_memory_retrieve`` asks Jev which entries fit at ``turn_start`` — a
+shortlist over every description, then each shortlisted entry's own
+``when_to_retrieve`` questions — injects descriptions and records what it
+offered, and at ``end_turn`` sends the agent
 back once to save anything worth keeping. ``tool_memory`` is the only thing that
 touches the files — in either direction — and records what was opened. The
 curator task that used to reflect on a finished conversation is gone: the agent
@@ -137,47 +139,43 @@ def test_both_files_that_hold_a_path_agree_on_where_entries_live():
 def test_a_skill_and_a_note_rank_and_render_identically():
     """The point of the agentskills.io frontmatter is that there is one shape.
 
-    Both kinds carry ``name`` and ``description``, so retrieval reads one field
-    off both and the prompt line differs by a label and nothing else. A branch
-    on kind anywhere in ranking would mean skills and notes competing in
-    separate pools, which is the separation this design exists to remove.
+    Both kinds compete in one shortlist question and render as one line, which
+    differs by a label and nothing else. Separate pools per kind would be the
+    separation this design exists to remove.
     """
-    service = _source_or_skip(SERVICE)
+    sdk = _FakeSdk()
+    sdk.add_note("stuck-upload", "An upload hangs", {"q": "Is an upload stuck?"})
+    sdk.add_skill("deploy-ui", "Deploying the web UI", {"q": "Is the user deploying?"})
+    block = _turn(sdk)
 
-    assert '"description"' in service
-    # One rendering, one label, no second code path.
-    assert 'f"{name} (skill)" if kind == "skill" else name' in service
-    # Everything under a skill folder collapses onto the skill itself, so a
-    # matched reference file cannot occupy a line of its own.
-    assert "_skill_of" in service
+    criteria = sdk.choice_calls[0]["shortlist"]["criteria"]
+    assert set(criteria) == {"stuck-upload", "deploy-ui"}
+    assert "- stuck-upload — An upload hangs" in block
+    assert "- deploy-ui (skill) — Deploying the web UI" in block
 
 
 def test_the_prompt_carries_descriptions_and_not_the_entries():
     """Inlining the body destroys the signal the whole loop runs on.
 
     With the content already in the prompt there is no reason to recall
-    anything, so nothing downstream can tell which entries were used — and that
-    pair is what selects the curator's job. The description alone answers the
-    only question the prompt has to answer, which is whether a past situation
-    is this one.
+    anything, so nothing downstream can tell which entries were used.
     """
-    service = _source_or_skip(SERVICE)
-
-    assert 'entries.append(f"- {label} — {description}")' in service
-    assert "MAX_DESCRIPTION_CHARS" in service
-    # No body, no excerpt, no chunk fallback.
-    assert 'hit.get("content")' not in service
+    sdk = _FakeSdk()
+    sdk.add_note("stuck-upload", "An upload hangs", {"q": "Is an upload stuck?"},
+                 body="SECRET BODY TEXT")
+    block = _turn(sdk)
+    assert "An upload hangs" in block
+    assert "SECRET BODY TEXT" not in block
 
 
 def test_the_block_says_how_much_it_is_not_showing():
-    """A block of five with no total reads as "this is all you have".
-
-    An agent that believes it has five memories does not go looking for the
-    sixty-two others, so the count is what turns an inventory into a sample.
-    """
-    service = _source_or_skip(SERVICE)
-    assert "Showing {shown} of {total}" in service
-    assert "_corpus_size" in service
+    """A short list with no total reads as "this is all you have"."""
+    sdk = _FakeSdk()
+    sdk.add_note("stuck-upload", "An upload hangs", {"q": "Is an upload stuck?"})
+    sdk.add_note("slow-search", "Search is slow", {"q": "Is search slow?"})
+    sdk.noul = {"slow-search::q": 0.1}
+    block = _turn(sdk)
+    assert "Showing 1 of 2" in block
 
 
 def test_an_entry_with_no_description_is_reported_not_guessed_at():
@@ -350,13 +348,13 @@ def test_update_keeps_the_description_it_was_not_given():
     update = source.split("def _update", 1)[1].split("\n    def ", 1)[0]
 
     assert "_supplied_description(kwargs)" in update
-    assert "_stored_description(sdk, path)" in update, "it must read the old one"
+    assert 'stored["description"]' in update, "it must read the old one"
     assert "needs a description" in update, "and still refuse when there is none"
 
     # The two directions a description travels are named apart. One function
     # called ``_description`` for both is how a model-supplied string ends up
     # somewhere only a stored one belongs.
-    assert "def _stored_description(self, sdk, path)" in source
+    assert "def _stored(self, sdk, path)" in source
     assert "def _supplied_description(self, kwargs)" in source
 
 
@@ -464,20 +462,20 @@ def test_retrieval_stands_at_the_one_moment_that_runs_per_turn():
     assert declared["exports"] == []
 
 
-def test_the_service_can_inject_and_can_search():
+def test_the_service_can_inject_and_can_ask_jev():
     """The two Requests the read half cannot work without.
 
     ``session.add_prompt_extra`` is how pointers reach the prompt at all, and
-    ``tool.call`` is how the search happens — the service deliberately owns no
-    retrieval of its own, so that installing a better search tool improves
-    memory without touching this file.
+    ``service.call`` is how Jev is asked. ``tool.call`` is gone with
+    ``hybrid_search``: memory is not the user's corpus and needs no index.
     """
     declared = _declarations(SERVICE)
     assert "session.add_prompt_extra" in declared["requests"]
-    assert "tool.call" in declared["requests"]
-    # What it calls, and what the agent writes with when nudged.
-    assert {"tools/tool_hybrid_search.py",
-            "tools/tool_memory.py"} <= set(declared["dependencies_files"])
+    assert "service.call" in declared["requests"]
+    assert "tool.call" not in declared["requests"]
+    deps = set(declared["dependencies_files"])
+    assert {"services/service_rlcd.py", "tools/tool_memory.py"} <= deps
+    assert "tools/tool_hybrid_search.py" not in deps
 
 
 def test_injecting_memory_pointers_raises_no_dialog():
@@ -519,47 +517,20 @@ def test_injecting_memory_pointers_raises_no_dialog():
     assert "key=ctx.session_key" not in source
 
 
-def test_the_service_writes_its_kernel_setting_only_at_install():
-    """It needs one setting, and there is exactly one moment it may ask.
+def test_the_service_writes_no_kernel_setting():
+    """Nothing to index means nothing to seed.
 
-    ``sync_directories`` must contain the memory folder or nothing is indexed.
-    It was attempted from ``start`` — refused, because a service has no
-    session and an unattended unsafe Request is refused rather than asked — and
-    then from the ``turn_start`` hook, which was made to work and then reverted
-    because it asked at the moment furthest from anything the user chose to do.
-
-    ``on_install`` is the moment that works: it runs under the chain of the
-    ``/packages`` command the person typed, which is attended, so the write can
-    be *asked* about instead of refused. What this pins is that the capability
-    stays there — a ``config.write`` from ``start`` or from the hook would be
-    the reverted design creeping back, and it would fail silently, which is how
-    it survived so long the first two times.
+    It used to add the memory folder to ``sync_directories`` from
+    ``on_install`` so ``hybrid_search`` could find entries. Retrieval reads
+    the folder directly now, so the service holds no ``config.write`` at all —
+    and a capability it does not need is one that cannot be misused from an
+    unattended hook.
     """
-    import ast
-
     declared = _declarations(SERVICE)
-    assert "config.write" in declared["requests"]
-    assert "config.read" in declared["requests"]
-
+    assert "config.write" not in declared["requests"]
     source = _source_or_skip(SERVICE)
-    tree = ast.parse(source)
-    writers = {
-        node.name for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-        and any(isinstance(inner, ast.Attribute) and inner.attr == "write"
-                and isinstance(inner.value, ast.Attribute)
-                and inner.value.attr == "config"
-                for inner in ast.walk(node))
-    }
-    assert writers, "something has to do the seeding"
-    # Named helpers are fine; being reachable from anything but on_install is
-    # not. Nothing in the runtime path may hold this capability.
-    for banned in ("start", "stop", "on_turn_start", "on_end_turn",
-                   "on_uninstall"):
-        assert banned not in writers, f"{banned} writes config"
-
-    for method in ("on_install", "on_uninstall"):
-        assert f"def {method}(self, sdk)" in source, method
+    assert "def on_install(self, sdk)" not in source
+    assert "def on_uninstall(self, sdk)" in source
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -711,7 +682,10 @@ def test_the_manifest_names_the_two_and_lets_the_closure_do_the_rest():
     # Everything the bundle installs is still everything it needs, reached the
     # way the package manager reaches it.
     closure = _install_closure()
-    assert "tools/tool_hybrid_search.py" in closure
+    assert "services/service_rlcd.py" in closure
+    # No index, no embedder: memory is not the user's corpus.
+    assert "tools/tool_hybrid_search.py" not in closure
+    assert "services/service_embed.py" not in closure
     # read_file is for a skill's own references, which the memory tool names
     # but deliberately does not load.
     assert "tools/tool_read_file.py" in closure
@@ -914,3 +888,369 @@ def test_only_the_three_writes_announce():
 
     for method in ("_read", "_list", "_rendered", "_entries"):
         assert not notifies(method), f"{method} is a read and must stay silent"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Retrieval: a Jev shortlist, then each entry's own questions.
+# ──────────────────────────────────────────────────────────────────────
+
+class _Path:
+    @staticmethod
+    def join(*parts):
+        return "/".join(parts)
+
+    @staticmethod
+    def normalize(path):
+        return path
+
+    @staticmethod
+    def stem(name):
+        return name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+class _FakeSdk:
+    """Just enough SDK to drive a turn, with Jev scripted.
+
+    ``choice`` maps an entry name to a weight (uniform when absent), ``noul``
+    maps a namespaced question id to its probability (0.9 when absent).
+    """
+
+    Failed = _Failed
+
+    def __init__(self, config=None):
+        self.config_values = {"memory_max_pointers": 3, "memory_candidates": 5,
+                              "memory_question_threshold": 0.5, **(config or {})}
+        self.files = {}
+        self.choice = {}
+        self.noul = {}
+        self.choice_calls, self.gate_calls = [], []
+        self.jev_down = False
+        self.logs, self.prompts, self.removed, self.writes = [], [], [], []
+        self.user_row = {"id": 10, "content": "my upload is stuck"}
+        self.context_rows = []
+        self.paths = type("P", (), {"get": staticmethod(lambda key: "/w")})()
+        self.path = _Path()
+        sdk = self
+        self.config = type("C", (), {
+            "read": staticmethod(lambda key: sdk.config_values.get(key))})()
+        self.fs = type("F", (), {"list": staticmethod(self._list),
+                                 "read": staticmethod(self._read),
+                                 "write": staticmethod(lambda p, t: None)})()
+        self.db = type("D", (), {"query": staticmethod(self._query),
+                                 "write": staticmethod(
+                                     lambda sql, params=None: sdk.writes.append(params)),
+                                 "define": staticmethod(lambda sql: None)})()
+        self.services = type("S", (), {"call": staticmethod(self._call)})()
+        self.session = type("Z", (), {
+            "add_prompt": staticmethod(
+                lambda text, slot=None: sdk.prompts.append(text)),
+            "remove_prompt": staticmethod(lambda slot: sdk.removed.append(slot)),
+        })()
+
+    def log(self, message, level="info"):
+        self.logs.append((level, message))
+
+    def _entry(self, name, description, questions, body):
+        lines = ["---", f"name: {name}", f"description: {description}"]
+        if questions:
+            lines.append("when_to_retrieve: " + json.dumps(
+                {qid: {"type": "noul", "instructions": text}
+                 for qid, text in questions.items()}))
+        return "\n".join(lines) + "\n---\n\n" + body + "\n"
+
+    def add_note(self, name, description, questions=None, body="Do the thing."):
+        self.files[f"/w/memory/notes/{name}.md"] = self._entry(
+            name, description, questions, body)
+
+    def add_skill(self, name, description, questions=None, body="Step one."):
+        self.files[f"/w/memory/skills/{name}/SKILL.md"] = self._entry(
+            name, description, questions, body)
+
+    def _list(self, path, pattern=None, details=False):
+        prefix = path.rstrip("/") + "/"
+        children = {}
+        for full in self.files:
+            if full.startswith(prefix):
+                rest = full[len(prefix):]
+                head, _, tail = rest.partition("/")
+                children[head] = bool(tail)
+        if not children:
+            raise _Failed(f"not found: {path}")
+        if pattern == "*.md":
+            children = {k: v for k, v in children.items() if k.endswith(".md")}
+        return [{"name": k, "is_dir": v} for k, v in sorted(children.items())]
+
+    def _read(self, path):
+        if path not in self.files:
+            raise _Failed(f"not found: {path}")
+        return self.files[path]
+
+    def _query(self, sql, params=None, max_rows=None):
+        if "SELECT id, content" in sql:
+            return [self.user_row] if self.user_row else []
+        if "SELECT role, content, author" in sql:
+            return list(self.context_rows)
+        return []
+
+    def _call(self, service, method, *args):
+        assert (service, method) == ("rlcd", "evaluate")
+        if self.jev_down:
+            raise _Failed("rlcd is not loaded")
+        state, questions = args
+        answers = {}
+        if "shortlist" in questions:
+            self.choice_calls.append(questions)
+            options = questions["shortlist"]["criteria"]
+            weights = {n: self.choice.get(n, 1.0) for n in options}
+            total = sum(weights.values())
+            answers["shortlist"] = {"type": "choice", "probabilities":
+                                    {n: w / total for n, w in weights.items()}}
+        else:
+            self.gate_calls.append(questions)
+            for qid in questions:
+                answers[qid] = {"type": "noul", "noul": self.noul.get(qid, 0.9)}
+        self.last_state = state
+        return {"ok": True, "answers": answers}
+
+
+class _TurnCtx:
+    session_key = "repl"
+    conversation_id = 7
+
+
+def _turn(sdk, service=None):
+    service = service or _load_store_class(SERVICE, "MemoryRetrieve")()
+    before = len(sdk.prompts)
+    service.on_turn_start(sdk, _TurnCtx(), {})
+    return sdk.prompts[-1] if len(sdk.prompts) > before else ""
+
+
+def test_an_entry_fires_only_when_every_question_clears_the_threshold():
+    """The gate is the *minimum*: one confident no vetoes two confident yeses."""
+    sdk = _FakeSdk()
+    sdk.add_note("alpha", "Alpha situation", {"a": "A?", "b": "B?", "c": "C?"})
+    sdk.add_note("bravo", "Bravo situation", {"a": "A?", "b": "B?"})
+    sdk.noul = {"alpha::a": 0.9, "alpha::b": 0.9, "alpha::c": 0.4,
+                "bravo::a": 0.9, "bravo::b": 0.8}
+    block = _turn(sdk)
+    assert "bravo" in block and "alpha" not in block
+    # The usage row carries the probability that let it through.
+    offered = [row for row in sdk.writes if row and row[0] == "bravo"]
+    assert offered and offered[0][-1] == 0.8
+
+
+def test_the_threshold_and_the_shortlist_size_are_settings():
+    sdk = _FakeSdk({"memory_question_threshold": 0.3, "memory_candidates": 1})
+    sdk.add_note("alpha", "Alpha situation", {"a": "A?"})
+    sdk.add_note("bravo", "Bravo situation", {"a": "A?"})
+    sdk.choice = {"alpha": 3.0, "bravo": 1.0}
+    sdk.noul = {"alpha::a": 0.4}
+    block = _turn(sdk)
+    # Only the top candidate was asked its questions, and 0.4 clears 0.3.
+    assert set(sdk.gate_calls[0]) == {"alpha::a"}
+    assert "alpha" in block and "bravo" not in block
+
+
+def test_the_prompt_is_capped_at_the_pointer_setting():
+    sdk = _FakeSdk({"memory_max_pointers": 2, "memory_candidates": 10})
+    for i in range(10):
+        sdk.add_note(f"entry-{i}", f"Situation {i}", {"q": "Q?"})
+    block = _turn(sdk)
+    assert block.count("\n- entry-") == 2
+
+
+def test_one_gate_request_asks_every_candidate_with_namespaced_ids():
+    """Two entries may both call a question ``q``; the ids must not collide."""
+    sdk = _FakeSdk()
+    sdk.add_note("alpha", "Alpha situation", {"q": "A?"})
+    sdk.add_note("bravo", "Bravo situation", {"q": "B?"})
+    _turn(sdk)
+    assert len(sdk.gate_calls) == 1
+    assert set(sdk.gate_calls[0]) == {"alpha::q", "bravo::q"}
+
+
+def test_the_shortlist_question_is_identical_turn_to_turn():
+    """Sorted options keep the request byte-stable, which is what caches."""
+    sdk = _FakeSdk()
+    for name in ("zulu", "alpha", "mike"):
+        sdk.add_note(name, f"{name} situation", {"q": "Q?"})
+    service = _load_store_class(SERVICE, "MemoryRetrieve")()
+    _turn(sdk, service)
+    _turn(sdk, service)
+    first, second = sdk.choice_calls
+    assert first == second
+    assert list(first["shortlist"]["criteria"]) == ["alpha", "mike", "zulu"]
+
+
+def test_a_corpus_past_one_choice_question_is_chunked_then_compared():
+    """Probabilities from two questions do not compare, so winners meet again."""
+    sdk = _FakeSdk()
+    for i in range(300):
+        sdk.add_note(f"entry-{i:03d}", f"Situation {i}", {"q": "Q?"})
+    _turn(sdk)
+    sizes = [len(call["shortlist"]["criteria"]) for call in sdk.choice_calls]
+    assert sizes == [255, 45, 10]
+
+
+def test_an_unquestioned_entry_needs_a_strong_shortlist_win():
+    """Entries from before ``when_to_retrieve`` still work while migrating."""
+    sdk = _FakeSdk()
+    sdk.add_note("old", "Old situation")
+    sdk.add_note("other", "Other situation")
+    sdk.add_note("third", "Third situation")
+    block = _turn(sdk)  # a three-way tie, 0.33 each: too weak
+    assert block == "" and sdk.removed == ["memory"]
+    assert sdk.gate_calls == [], "nothing had questions, so no gate request"
+
+    sdk.choice = {"old": 8.0}
+    assert "old" in _turn(sdk)
+
+
+def test_jev_being_down_offers_nothing_and_says_so_once():
+    sdk = _FakeSdk()
+    sdk.add_note("alpha", "Alpha situation", {"q": "A?"})
+    sdk.jev_down = True
+    service = _load_store_class(SERVICE, "MemoryRetrieve")()
+    assert _turn(sdk, service) == "" and _turn(sdk, service) == ""
+    assert sdk.removed == ["memory", "memory"], "the old list must be cleared"
+    warnings = [m for level, m in sdk.logs if level == "warning" and "rlcd" in m]
+    assert len(warnings) == 1
+
+
+def test_the_state_is_the_request_plus_the_agent_turn_without_tool_results():
+    sdk = _FakeSdk()
+    sdk.add_note("alpha", "Alpha situation", {"q": "A?"})
+    call = {"function": {"name": "edit_file", "arguments": json.dumps(
+        {"path": "a.py", "new_text": "x" * 5000,
+         "narration": "fixing the upload retry"})}}
+    # Newest first, as the query returns them.
+    sdk.context_rows = [
+        {"role": "assistant", "content": "Retried it for you.", "author": None},
+        {"role": "tool", "content": "TOOL RESULT PAYLOAD", "author": None},
+        {"role": "assistant", "content": json.dumps(
+            {"content": "Looking.", "tool_calls": [call]}), "author": None},
+        {"role": "user", "content": "[cancel notice]", "author": "cancel_notice"},
+        {"role": "user", "content": "an older message", "author": None},
+        {"role": "assistant", "content": "ANCIENT REPLY", "author": None},
+    ]
+    _turn(sdk)
+    state = sdk.last_state
+    assert state["request"] == "my upload is stuck"
+    context = state["recent_context"]
+    assert "TOOL RESULT PAYLOAD" not in context
+    assert "ANCIENT REPLY" not in context, "only the latest agent turn"
+    assert "tool: edit_file(" in context and "fixing the upload retry" in context
+    assert "x" * 400 not in context, "a long argument is clipped"
+    assert context.index("Looking.") < context.index("Retried it for you.")
+
+
+def test_both_files_read_the_same_amount_of_frontmatter():
+    for relative in (SERVICE, MEMORY):
+        assert "HEAD_CHARS = 4000" in _source_or_skip(relative), relative
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Writing ``when_to_retrieve``.
+# ──────────────────────────────────────────────────────────────────────
+
+class _ToolSdk:
+    Failed = _Failed
+
+    def __init__(self, verdict=None, existing=None):
+        self.verdict = verdict or {"ok": True}
+        self.files = dict(existing or {})
+        self.validated = []
+        self.paths = type("P", (), {"get": staticmethod(lambda key: "/w")})()
+        self.path = _Path()
+        sdk = self
+        self.fs = type("F", (), {
+            "list": staticmethod(self._list),
+            "read": staticmethod(self._read),
+            "write": staticmethod(lambda p, t: sdk.files.__setitem__(p, t)),
+        })()
+        self.services = type("S", (), {"call": staticmethod(self._call)})()
+        self.session = type("Z", (), {
+            "get": staticmethod(lambda: {"conversation_id": 3, "attended": True}),
+            "push": staticmethod(lambda *a, **k: None)})()
+        self.config = type("C", (), {"read": staticmethod(lambda key: None)})()
+
+    def _list(self, path, **_):
+        if path in self.files:
+            return [{"name": path}]
+        raise _Failed(path)
+
+    def _read(self, path):
+        if path not in self.files:
+            raise _Failed(path)
+        return self.files[path]
+
+    def _call(self, service, method, questions):
+        assert (service, method) == ("rlcd", "validate")
+        self.validated.append(questions)
+        return self.verdict
+
+    def fail(self, message):
+        return ("fail", message)
+
+    def ok(self, value, llm_summary=""):
+        return ("ok", llm_summary)
+
+    def log(self, *a, **k):
+        pass
+
+
+def _memory_tool():
+    return _load_store_class(MEMORY, "Memory")()
+
+
+_Q = {"pdf": {"type": "noul", "instructions": "Is the user working with a PDF?"}}
+
+
+def test_create_requires_questions_and_passes_them_to_jev_validate():
+    sdk = _ToolSdk()
+    tool = _memory_tool()
+    args = {"action": "create", "name": "pdf-empty",
+            "description": "A PDF yields no text", "body": "Check the parser."}
+    assert tool.run(sdk, **args)[0] == "fail"
+    assert tool.run(sdk, **args, when_to_retrieve=_Q)[0] == "ok"
+    assert sdk.validated == [_Q]
+
+    written = sdk.files["/w/memory/notes/pdf-empty.md"]
+    service = {}
+    exec(compile(_source_or_skip(SERVICE), SERVICE, "exec"), service)
+    fields = service["_frontmatter"](written)
+    assert service["_questions"](fields["when_to_retrieve"]) == _Q
+
+
+def test_only_one_to_three_yes_no_questions_are_accepted():
+    tool = _memory_tool()
+    base = {"action": "create", "name": "x", "description": "d", "body": "b"}
+    bad = [
+        {"q": {"type": "score", "instructions": "How bad?", "criteria": ["a", "b"]}},
+        {f"q{i}": {"type": "noul", "instructions": "Q?"} for i in range(4)},
+        {},
+        {"q": {"type": "noul", "instructions": ""}},
+    ]
+    for questions in bad:
+        sdk = _ToolSdk()
+        result = tool.run(sdk, **base, when_to_retrieve=questions)
+        assert result[0] == "fail", questions
+        assert sdk.validated == [], "shape errors never reach Jev"
+
+
+def test_jevs_refusal_is_handed_back_to_the_model():
+    sdk = _ToolSdk(verdict={"ok": False, "reason": "too many tokens"})
+    result = _memory_tool().run(sdk, action="create", name="x", description="d",
+                                body="b", when_to_retrieve=_Q)
+    assert result[0] == "fail" and "too many tokens" in result[1]
+
+
+def test_update_keeps_the_questions_it_was_not_given():
+    path = "/w/memory/notes/pdf-empty.md"
+    existing = {path: ("---\nname: pdf-empty\ndescription: A PDF yields no text\n"
+                       "when_to_retrieve: " + json.dumps(_Q) + "\n---\n\nold\n")}
+    sdk = _ToolSdk(existing=existing)
+    result = _memory_tool().run(sdk, action="update", name="pdf-empty", body="new")
+    assert result[0] == "ok"
+    assert json.dumps(_Q) in sdk.files[path]
+    assert sdk.validated == [], "keeping what is on disk needs no re-check"
