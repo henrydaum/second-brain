@@ -101,7 +101,7 @@ Say hello. **You're done.** Everything else is a question you can ask Second Bra
 
 ---
 
-# Where things live
+# Where things live / Uninstall
 
 Second Brain lives in two folders.
 
