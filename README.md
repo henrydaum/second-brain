@@ -103,7 +103,11 @@ Say hello. **You're done.** Everything else is a question you can ask Second Bra
 
 # Where things live
 
-Second Brain creates its data directory on first run. Config, database, installed packages, and the agent's workspace all live there:
+Second Brain lives in two folders.
+
+**The kernel** is the folder you cloned (`second-brain/`, wherever you ran `git clone`). It holds the app's code, the web UI in `frame_ui/`, and the `.venv` with every Python library Second Brain or its packages installed.
+
+**The data directory** (`DATA_DIR`) is created on first run. Your config, database, conversations, installed packages, and the agent's workspace all live there:
 
 | | |
 |---|---|
@@ -111,7 +115,11 @@ Second Brain creates its data directory on first run. Config, database, installe
 | **macOS** | `~/Library/Application Support/Second Brain/` |
 | **Linux** | `~/.local/share/Second Brain/` |
 
-Run `/locations` to see the paths on your machine. Useful commands once you're up:
+Run `/locations` to see the paths on your machine.
+
+**To uninstall Second Brain completely,** quit it, then delete both folders: the kernel folder and `DATA_DIR`. Second Brain installs nothing outside them, with one exception: if you set up the optional macOS deployment, run `sh frame_ui/deploy/macos/manage.sh uninstall` first. If you used Docker, remove the `sb-data` volume instead (`docker volume rm sb-data`). Deleting `DATA_DIR` erases your conversations and settings, so copy anything you want to keep first.
+
+Useful commands once you're up:
 
 | Command | What it does |
 |---|---|
