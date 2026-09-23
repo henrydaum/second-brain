@@ -24,6 +24,8 @@ The full evaluation framework I used is [available on GitHub](https://github.com
 
 https://github.com/user-attachments/assets/6c740d80-0830-4703-849a-8f00fab9e865
 
+Second Brain has `widgets`, which are essentially like Anthropic Artifacts, interactive and live-updating HTML files.
+
 # How it LOOKS!
 
 <img width="2560" height="1326" alt="Captura de pantalla 2026-09-10 202738" src="https://github.com/user-attachments/assets/cd23560e-717c-4727-aa46-33bcb3ef9f70" />
