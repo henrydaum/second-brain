@@ -1,0 +1,12 @@
+{
+  "name": "Corpus Probes",
+  "description": "Ask typed questions of every passage in your synced files, answered by the Jev model (TypeSafe System One), then aggregate the answers with SQL. For questions that would mean reading everything. Needs a TypeSafe API key (secret_rlcd_typesafe_api_key); stdlib only.",
+  "files": [
+    "services/service_rlcd.py",
+    "tasks/task_extract_text.py",
+    "tasks/task_chunk_text.py",
+    "tasks/task_probe.py",
+    "tools/tool_probe.py",
+    "tools/tool_sql_query.py"
+  ]
+}

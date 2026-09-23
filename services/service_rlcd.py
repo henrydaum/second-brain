@@ -4,17 +4,34 @@ The service contract is evaluate(state, questions, model=None). The initial
 wire adapter is TypeSafe System One; compatible local servers use the same
 contract. Future incompatible providers belong in _request, not callers.
 Credentials stay SDK handles. Provider errors never echo submitted state.
+
+validate(questions, state=None) answers the same checks evaluate makes before
+I/O, as a verdict rather than an exception, so a caller holding questions an
+LLM wrote can hand the reason straight back to it.
 """
 import json
 import math
 from urllib.parse import urlsplit
 from guest.bases import BaseService
 
+# Jev's documented request budget: 64k tokens in total, of which the state
+# plus the longest single question may use 32k. Characters/4 is an estimate,
+# deliberately generous to the caller — the provider's refusal is the
+# authority; this only catches the questions that could never fit.
+MAX_TOTAL_TOKENS = 64_000
+MAX_STATE_PLUS_QUESTION_TOKENS = 32_000
+
+
+def _tokens(value) -> int:
+    """Rough token count of a JSON-able value."""
+    text = value if isinstance(value, str) else json.dumps(value)
+    return len(text) // 4 + 1
+
 
 class RLCD(BaseService):
     name = "rlcd"
     description = "Typed probabilistic decisions via Jev or a compatible endpoint."
-    exports = ["status", "evaluate"]
+    exports = ["status", "evaluate", "validate"]
     requests = ["net.http", "config.read", "config.write"]
     config_settings = [
         ("Endpoint", "rlcd_endpoint", "Full System One evaluation URL.", "https://api.typesafe.ai/v1/systemone", {"type": "text"}),
@@ -151,6 +168,34 @@ class RLCD(BaseService):
         if key:
             headers["Authorization"] = f"Bearer {key}"
         return sdk.net.http(endpoint, method="POST", headers=headers, json=payload)
+
+    def validate(self, sdk, questions, state=None):
+        """Return {ok: True} or {ok: False, reason} for questions and a state.
+
+        Never raises and makes no network call. ``state`` defaults to a short
+        placeholder; pass one the size of the real states to have the budget
+        checked against them.
+        """
+        state = "x" if state is None else state
+        try:
+            self._validate_questions(state, questions)
+        except (ValueError, TypeError) as error:
+            return {"ok": False, "reason": str(error)}
+        state_tokens = _tokens(state)
+        sizes = {name: _tokens(q) for name, q in questions.items()}
+        longest = max(sizes, key=sizes.get)
+        if state_tokens + sizes[longest] > MAX_STATE_PLUS_QUESTION_TOKENS:
+            return {"ok": False, "reason":
+                    f"State (~{state_tokens} tokens) plus question '{longest}' "
+                    f"(~{sizes[longest]}) exceeds Jev's {MAX_STATE_PLUS_QUESTION_TOKENS}-token "
+                    "limit for state plus one question. Shorten that question or the state."}
+        total = state_tokens + sum(sizes.values())
+        if total > MAX_TOTAL_TOKENS:
+            return {"ok": False, "reason":
+                    f"State plus all questions is ~{total} tokens, over Jev's "
+                    f"{MAX_TOTAL_TOKENS}-token request limit. Split the questions "
+                    "across two requests."}
+        return {"ok": True}
 
     def evaluate(self, sdk, state, questions, model=None):
         """Return {ok, provider, model, answers, usage} or {ok:false, error}.
