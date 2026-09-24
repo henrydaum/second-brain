@@ -50,7 +50,7 @@ class CodexBackend(BaseLLMBackend):
         token = sdk.services.call("codex_auth", "access_token")
         payload = self._payload(request)
         self._attach_media(sdk, request, payload)
-        headers = self._headers(token)
+        headers = self._headers(token, getattr(request, "cache_key", ""))
         pieces = []
         calls = {}
         usage = {}
@@ -244,11 +244,18 @@ class CodexBackend(BaseLLMBackend):
         if verbosity is not None:
             payload["text"] = {"verbosity": verbosity}
         payload.update(params)
+        # Without a key, OpenAI routes cache lookups by hashing the prompt's
+        # head, which is the same system prompt for every conversation — so
+        # calls scatter across machines and only that head ever hits. One key
+        # per conversation keeps its growing history on one warm machine.
+        cache_key = getattr(request, "cache_key", "")
+        if cache_key:
+            payload["prompt_cache_key"] = cache_key
         payload["stream"] = True
         payload["store"] = False
         return payload
 
-    def _headers(self, token):
+    def _headers(self, token, cache_key=""):
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "text/event-stream",
@@ -257,6 +264,13 @@ class CodexBackend(BaseLLMBackend):
             "User-Agent": "SecondBrain/1",
             "originator": "second-brain",
         }
+        if cache_key:
+            # The ChatGPT backend keys cache affinity on these headers,
+            # independently of the body's ``prompt_cache_key`` (openai/codex
+            # #44716), so the Codex CLI sends all three with one value. The
+            # names are hyphenated; the value must stay under 64 characters.
+            headers["session-id"] = cache_key
+            headers["thread-id"] = cache_key
         try:
             part = token.split(".")[1]
             claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
