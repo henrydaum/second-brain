@@ -286,8 +286,8 @@ class Memory(BaseTool):
                     "1-3 yes/no questions about the current conversation; "
                     "the entry fires only if all are yes. E.g. {\"pdf\": "
                     "{\"type\": \"noul\", \"instructions\": \"Is the user "
-                    "working with a PDF?\"}}. Broad entry: fewer, looser "
-                    "questions. Narrow entry: more, sharper ones. Required "
+                    "working with a PDF?\"}}. General memory: fewer, looser "
+                    "questions. Specific memory: more, sharper ones. Required "
                     "to create; omit on update to keep the existing ones."
                 ),
             },
