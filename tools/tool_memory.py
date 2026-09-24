@@ -283,16 +283,12 @@ class Memory(BaseTool):
             "when_to_retrieve": {
                 "type": "object",
                 "description": (
-                    "1-3 yes/no questions about the *current conversation* "
-                    "that are all true exactly when this entry should be "
-                    "brought back. Keyed by a short id; each value is "
-                    "{\"type\": \"noul\", \"instructions\": \"<question>\"}. "
-                    "E.g. {\"pdf\": {\"type\": \"noul\", \"instructions\": "
-                    "\"Is the user working with a PDF file?\"}}. Every one "
-                    "must be yes for the entry to fire, so make them general "
-                    "enough to hold whenever the situation recurs. Required "
-                    "to create; on update, omit it to keep the ones already "
-                    "there."
+                    "1-3 yes/no questions about the current conversation; "
+                    "the entry fires only if all are yes. E.g. {\"pdf\": "
+                    "{\"type\": \"noul\", \"instructions\": \"Is the user "
+                    "working with a PDF?\"}}. Broad entry: fewer, looser "
+                    "questions. Narrow entry: more, sharper ones. Required "
+                    "to create; omit on update to keep the existing ones."
                 ),
             },
             "body": {
