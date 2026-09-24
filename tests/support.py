@@ -98,7 +98,8 @@ class FakeLLM:
         self.records.append({"messages": list(request.messages),
                              "tools": request.tools,
                              "attachments": request.attachments,
-                             "kwargs": dict(request.params or {})})
+                             "kwargs": dict(request.params or {}),
+                             "cache_key": request.cache_key})
         self.attachments.append(request.attachments)
         if self._responses:
             return self._responses.pop(0)

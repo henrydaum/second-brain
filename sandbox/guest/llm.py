@@ -153,6 +153,13 @@ class LLMRequest:
     # backend that cannot stream ignores it; the response shape is identical
     # either way, which is what lets the kernel decide per call.
     stream: bool = False
+    # An opaque, stable handle for "calls that share a prefix" — one per
+    # conversation. Providers that route prompt caching by key (OpenAI's
+    # ``prompt_cache_key``) need it, or every call is hashed on the shared
+    # system-prompt head and scattered across machines, so only that head
+    # ever hits. A backend with no such notion ignores it. It is a hash, not
+    # the conversation id: it leaves the machine.
+    cache_key: str = ""
 
     def to_dict(self) -> dict:
         """Serialize for the wire."""
@@ -161,6 +168,7 @@ class LLMRequest:
             "tools": self.tools, "attachments": self.attachments,
             "params": self.params, "api_key": self.api_key,
             "base_url": self.base_url, "stream": self.stream,
+            "cache_key": self.cache_key,
         }
 
     @classmethod
@@ -169,7 +177,7 @@ class LLMRequest:
         data = data or {}
         known = {f: data.get(f) for f in (
             "model_name", "messages", "tools", "attachments", "params",
-            "api_key", "base_url", "stream")}
+            "api_key", "base_url", "stream", "cache_key")}
         return cls(
             model_name=known["model_name"] or "",
             messages=known["messages"] or [],
@@ -179,6 +187,7 @@ class LLMRequest:
             api_key=known["api_key"] or "",
             base_url=known["base_url"] or "",
             stream=bool(known["stream"]),
+            cache_key=known["cache_key"] or "",
         )
 
 

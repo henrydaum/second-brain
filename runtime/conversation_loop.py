@@ -1183,7 +1183,7 @@ class ConversationLoop:
             llm, request.messages, request.attachments)
         outgoing = LLMRequest(
             messages=messages, tools=request.tools, attachments=native,
-            params=kwargs, stream=streaming)
+            params=kwargs, stream=streaming, cache_key=self._cache_key())
         try:
             if streaming:
                 import uuid
@@ -1207,6 +1207,23 @@ class ConversationLoop:
             err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
             raise RuntimeError(err)
         return response
+
+    def _cache_key(self) -> str:
+        """The prompt-cache handle for this drive's calls: one per conversation.
+
+        Hashed because it is sent to the provider, and neither a conversation
+        id nor a frontend-built session key is anybody else's business. Falls
+        back to the session key for a turn that has no conversation yet; with
+        neither there is nothing stable to name, and ``""`` means "no key".
+        """
+        import hashlib
+        if self._active_conversation_id is not None:
+            basis = f"conversation:{self._active_conversation_id}"
+        elif self.session_key:
+            basis = f"session:{self.session_key}"
+        else:
+            return ""
+        return "sb-" + hashlib.sha256(basis.encode()).hexdigest()[:32]
 
     # ──────────────────────────────────────────────────────────────────────
     # Streaming (AGENT_TEXT_DELTA emission; only active when both on_delta
