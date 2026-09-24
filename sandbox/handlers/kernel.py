@@ -46,6 +46,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               HTTP_PUSH, HTTP_RESPOND,
                               LEDGER_READ, LEDGER_RECORD,
                               NOTIFICATION_LIST, NOTIFICATION_MARK_READ,
+                              USAGE_READ,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
                               PLUGIN_REGISTER, PLUGIN_RELOAD,
@@ -854,6 +855,61 @@ def _notification_list(ctx, args: dict) -> Result:
     return Result(data=_rows(db.get_notifications(
         user_id=getattr(ctx, "user_id", None), since_id=since_id,
         unread_only=bool(args.get("unread_only")), limit=limit)))
+
+
+def _usage_read(ctx, args: dict) -> Result:
+    """Token usage totals for this user, optionally split into groups.
+
+    Scoped to ``ctx.user_id`` in SQL, like ``notification.list``: there is no
+    user argument to get wrong. ``conversation_id="current"`` means the
+    conversation the caller's session is in, and answers with no totals when
+    it is in none, so a command can ask unconditionally. Naming a conversation
+    needs no ownership check — rows are filtered by user, so somebody else's
+    conversation simply has no usage for you.
+
+    When a conversation is named, ``latest`` is its last call that reported
+    input: how full the context window was, which no sum can say.
+    """
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    group_by = args.get("group_by") or None
+    if group_by not in (None, "none", "model", "origin", "day", "conversation"):
+        return Result.failure(
+            f"unknown group_by {group_by!r}; use model, origin, day or "
+            "conversation", code=ERROR_INVALID_ARGUMENT)
+    limit, bad = int_arg(args, "limit", 20, lo=1, hi=500)
+    if bad is not None:
+        return bad
+    since = None
+    if args.get("since") not in (None, ""):
+        since, bad = float_arg(args, "since", 0.0, lo=0.0)
+        if bad is not None:
+            return bad
+    user_id = getattr(ctx, "user_id", None)
+    conversation_id = args.get("conversation_id")
+    if conversation_id == "current":
+        from runtime.ledger import identity_of
+
+        conversation_id = identity_of(ctx)[1]
+        if conversation_id is None:
+            return Result(data={"conversation_id": None, "totals": None,
+                                "groups": [], "latest": None})
+    elif conversation_id not in (None, ""):
+        conversation_id, bad = int_arg(args, "conversation_id", 0, lo=1)
+        if bad is not None:
+            return bad
+    else:
+        conversation_id = None
+    summary = db.llm_usage_summary(
+        user_id=user_id, conversation_id=conversation_id, since=since,
+        group_by=None if group_by == "none" else group_by, limit=limit)
+    latest = None
+    if conversation_id is not None:
+        latest = db.latest_llm_usage(user_id=user_id,
+                                     conversation_id=conversation_id)
+    return Result(data={"conversation_id": conversation_id, **summary,
+                        "latest": latest})
 
 
 def _notification_mark_read(ctx, args: dict) -> Result:
@@ -2807,9 +2863,19 @@ def _agent_complete(ctx, args: dict) -> Result:
         prompt = args.get("prompt") or ""
         messages = [{"role": "user", "content": prompt}]
     try:
+        from llm.usage import record as record_usage
+        from runtime.ledger import identity_of
         from sandbox.guest.llm import LLMRequest
 
+        started = time.time()
         response = brain.chat(LLMRequest(messages=list(messages)))
+        # A plugin's completion is billed like an agent's, so it is metered
+        # like one — attributed to the plugin that asked, in the conversation
+        # it asked from.
+        record_usage(getattr(ctx, "db", None), identity=identity_of(ctx),
+                     brain=brain, response=response,
+                     origin=_notification_source(), ok=not response.is_error,
+                     duration_s=time.time() - started)
         return Result(ok=not response.is_error,
                       data={"content": response.content or "",
                             "tool_calls": list(response.tool_calls or []),
@@ -4644,6 +4710,7 @@ HANDLERS = {
     PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
     LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,
     NOTIFICATION_LIST: _notification_list,
+    USAGE_READ: _usage_read,
     NOTIFICATION_MARK_READ: _notification_mark_read,
     SCRIPT_RUN: _script_run, SCRIPT_COLLECT: _script_collect,
     SCRIPT_STOP: _script_stop,

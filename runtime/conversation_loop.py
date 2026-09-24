@@ -36,6 +36,8 @@ from events.event_channels import (
     SESSION_MESSAGE,
 )
 from state_machine.serialization import save_history_message
+from llm.usage import record as record_usage
+from sandbox.guest.llm import USAGE_FIELDS
 from runtime.ledger import record_enact
 from runtime.token_stripper import ModelTextFilter, filter_text
 
@@ -1104,7 +1106,7 @@ class ConversationLoop:
     def _emit_llm_finished(self, llm, started_at, *, ok, response=None, error=None):
         """Announce the outcome of one LLM call (paired with AGENT_LLM_CALL_STARTED).
 
-        The three token counts are the provider's own, taken from the ``usage``
+        The token counts are the provider's own, taken from the ``usage``
         block of its response rather than computed here — no tokenizer is
         involved, and none would be as accurate, since only the provider knows
         how it serialised the chat template and tool schemas.
@@ -1114,7 +1116,7 @@ class ConversationLoop:
         reports nothing, and a consumer that averages a missing count as zero
         would understate cost without ever looking wrong.
 
-        ``prompt_tokens`` is also recorded on the session, because it is the
+        ``input_tokens`` is also recorded on the session, because it is the
         only measurement of how full the context window is that anybody in the
         process has — no tokenizer here could match the provider's own count of
         a chat template it serialised itself. The prompt does not read this
@@ -1122,22 +1124,29 @@ class ConversationLoop:
         See ``RuntimeSession.last_prompt_tokens``.
         """
         session = self._session()
-        tokens = getattr(response, "prompt_tokens", None)
+        tokens = getattr(response, "input_tokens", None)
         if session is not None and tokens is not None:
             session.last_prompt_tokens = tokens
+        duration_s = time.time() - started_at
+        # The durable half of the same figures: one ``llm_usage`` row per
+        # call, attributed the way this loop's ledger rows are.
+        record_usage(
+            self._active_db,
+            identity=(self.session_key, self._active_conversation_id,
+                      getattr(session, "user_id", None)),
+            brain=llm, response=response, origin="agent", ok=ok,
+            duration_s=duration_s)
         bus.emit(AGENT_LLM_CALL_FINISHED, {
             "session_key": self.session_key,
             "model": getattr(llm, "model_name", None),
             "ok": ok,
             "error": error,
-            "duration_s": round(time.time() - started_at, 3),
-            # Billed input for this one call: the whole conversation so far,
-            # which is why the value climbs across a turn. Summing it over a
-            # task gives total billed input, not context size.
-            "prompt_tokens": getattr(response, "prompt_tokens", None),
-            # The discounted share of ``prompt_tokens``, not an addition to it.
-            "cached_prompt_tokens": getattr(response, "cached_prompt_tokens", None),
-            "completion_tokens": getattr(response, "completion_tokens", None),
+            "duration_s": round(duration_s, 3),
+            # The four ``USAGE_FIELDS``. Input is billed input for this one
+            # call — the whole conversation so far, which is why it climbs
+            # across a turn — and the cache counts are shares of it, never
+            # additions to it.
+            **{name: getattr(response, name, None) for name in USAGE_FIELDS},
             "has_tool_calls": bool(getattr(response, "has_tool_calls", False)),
         })
 
@@ -1359,7 +1368,7 @@ class ConversationLoop:
         # (post-escort), not the loop's default.
         """Internal helper to compact if needed."""
         llm = self._brain(request.llm)
-        ctx, tok = getattr(llm, "context_size", 0), getattr(response, "prompt_tokens", 0)
+        ctx, tok = getattr(llm, "context_size", 0), getattr(response, "input_tokens", 0)
         if not ctx or not tok or tok / ctx < 0.80 or len(history) <= 2:
             return
         self._compact(history)

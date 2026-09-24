@@ -23,7 +23,7 @@ from .registry import (DEFAULT_BACKEND, Brain, backend_aliases,
                        info_for, load_default, models_at, param_options_for,
                        providers, refresh, resolve, unload_all, usable_brain)
 from sandbox.guest.llm import (BaseLLMBackend, LLMProviderError, LLMRequest,
-                               LLMResponse, extract_llm_error_text,
+                               LLMResponse, USAGE_FIELDS, extract_llm_error_text,
                                is_context_limit_error)
 
 __all__ = [
@@ -34,5 +34,5 @@ __all__ = [
     "extract_llm_error_text", "is_context_limit_error", "load_default",
     "info_for", "models_at", "param_options_for", "providers", "refresh",
     "resolve",
-    "unload_all", "usable_brain",
+    "unload_all", "usable_brain", "USAGE_FIELDS",
 ]

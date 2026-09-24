@@ -116,7 +116,7 @@ class SomeProviderBackend(BaseLLMBackend):
             tool_calls=[{"id": call.id, "name": call.name,
                          "arguments": call.arguments}
                         for call in (answer.tool_calls or [])],
-            prompt_tokens=answer.usage.prompt_tokens,
+            **self._usage(sdk, answer.usage),
         )
 
     def _stream(self, sdk, client, request, messages):
@@ -135,7 +135,7 @@ class SomeProviderBackend(BaseLLMBackend):
         """
         pieces = []
         tool_calls = {}
-        prompt_tokens = None
+        usage = {}
 
         for chunk in client.chat_stream(
                 model=request.model_name, messages=messages,
@@ -150,7 +150,7 @@ class SomeProviderBackend(BaseLLMBackend):
                 entry["name"] = entry["name"] or call.name
                 entry["arguments"] += call.arguments or ""
             if chunk.usage:
-                prompt_tokens = chunk.usage.prompt_tokens
+                usage = self._usage(sdk, chunk.usage)
 
         return LLMResponse(
             content="".join(pieces),
@@ -159,8 +159,49 @@ class SomeProviderBackend(BaseLLMBackend):
                          "arguments": entry["arguments"] or "{}"}
                         for index, entry in sorted(tool_calls.items())
                         if entry["name"]],
-            prompt_tokens=prompt_tokens,
+            **usage,
         )
+
+    # What this provider's usage block calls each of the kernel's four counts.
+    # Everything else it reports is either known-irrelevant (listed as None)
+    # or new — and new is worth a log line, not silence.
+    _USAGE_FIELDS = {
+        "prompt_tokens": "input_tokens",
+        "cached_tokens": "cache_read_tokens",
+        "cache_creation_tokens": "cache_write_tokens",
+        "completion_tokens": "output_tokens",
+        "total_tokens": None,
+    }
+
+    def _usage(self, sdk, raw):
+        """Translate the provider's usage block into the kernel's four counts.
+
+        Returns keyword arguments for ``LLMResponse`` — the names in
+        ``guest.llm.USAGE_FIELDS``, which are also the ``llm_usage`` columns.
+
+        This is the backend's job and nobody else's: the kernel defines four
+        counts and knows no provider's spelling of them. Two rules decide
+        whether a figure is right. ``input_tokens`` includes cached input — a
+        provider that reports input *excluding* the cache (Anthropic does)
+        must have the cache counts added back here. And a count the provider
+        did not report stays ``None``; writing 0 claims it said zero.
+
+        A non-zero field this mapping does not recognise is logged, because a
+        provider that starts billing for something new should be noticed the
+        first time, not discovered on an invoice.
+        """
+        fields = dict(getattr(raw, "__dict__", None) or raw or {})
+        counts = {}
+        for name, value in fields.items():
+            if name not in self._USAGE_FIELDS:
+                if value:
+                    sdk.log(f"unrecognised usage field {name}={value!r}",
+                            level="warning")
+                continue
+            target = self._USAGE_FIELDS[name]
+            if target is not None:
+                counts[target] = value
+        return counts
 
     def _with_attachments(self, sdk, request):
         """Attach the media the kernel already decided this model can read.

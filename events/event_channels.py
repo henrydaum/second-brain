@@ -395,8 +395,14 @@ Payload:
     ok:             bool
     error:          str | None
     duration_s:     float
-    prompt_tokens:  int | None
-    has_tool_calls: bool"""
+    input_tokens:       int | None
+    cache_read_tokens:  int | None
+    cache_write_tokens: int | None
+    output_tokens:      int | None
+    has_tool_calls: bool
+
+The four counts are ``sandbox.guest.llm.USAGE_FIELDS``: None means the provider
+did not say, and the cache counts are shares of input, not additions to it."""
 
 SESSION_AGENT_PROFILE_CHANGED = "session_agent_profile_changed"
 """A plugin or command changed the agent profile pinned to a session.

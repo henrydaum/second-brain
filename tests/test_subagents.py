@@ -797,7 +797,7 @@ def _turn_harness(tmp_path, responses, turn=None):
     def _resp(content="", tool_calls=None):
         return SimpleNamespace(content=content, tool_calls=tool_calls or [],
                                has_tool_calls=bool(tool_calls),
-                               is_error=False, prompt_tokens=0, error=None)
+                               is_error=False, input_tokens=0, error=None)
 
     seen = []
 

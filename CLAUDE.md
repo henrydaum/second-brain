@@ -330,7 +330,7 @@ future store) — *not* by deleting them. What remains:
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
   wizard), `llm`, `conversations`, `clear`, `cancel`, `compact`, `debug`,
   `frontends`, `locations`, `commands`, `tools`, `services`, `tasks`,
-  `packages`, `permissions`, `mode`, `schedule`, `quit`, `restart`.
+  `packages`, `permissions`, `mode`, `schedule`, `usage`, `quit`, `restart`.
   `quit` and `restart` used to be
   native `_HostCommand` instances built in the composition root, holding
   `shutdown_fn` and the scaffold directly; they are ordinary sandboxed
@@ -347,6 +347,10 @@ future store) — *not* by deleting them. What remains:
   `compact` is kernel on that same argument: it triggers the loop's own
   context-safety mechanism, and a lever for the one thing that keeps a long
   conversation alive must not disappear with a package.
+  `usage` reads the kernel's `llm_usage` table (one row per model call, the
+  four `USAGE_FIELDS` counts, written by the loop and by `agent.complete`)
+  through the SAFE `usage.read`; a meter that vanishes with a package is
+  worse than none.
   Profile/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 

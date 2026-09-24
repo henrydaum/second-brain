@@ -46,7 +46,7 @@ class StreamBackend(BaseLLMBackend):
             return LLMResponse(content="".join(words))
         for word in words:
             sdk.llm.delta(word)
-        return LLMResponse(content="".join(words), prompt_tokens=7)
+        return LLMResponse(content="".join(words), input_tokens=7)
 '''
 
 LEAKY = '''
@@ -110,7 +110,7 @@ def test_fragments_arrive_in_order(tree, isolation):
     # The accumulated response is what gets recorded; the deltas were only
     # ever for the user's eyes.
     assert response.content == "Hello there world"
-    assert response.prompt_tokens == 7
+    assert response.input_tokens == 7
     target.unload()
 
 

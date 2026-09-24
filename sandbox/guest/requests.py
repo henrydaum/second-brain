@@ -96,6 +96,12 @@ SESSION_SET_MODE = "session.set_mode"
 NOTIFICATION_LIST = "notification.list"
 NOTIFICATION_MARK_READ = "notification.mark_read"
 
+# ── token usage ───────────────────────────────────────────────────────
+# What model calls consumed, read back from the ``llm_usage`` table. Its own
+# type for the reason ``notification.list`` is one: a targeted query against a
+# kernel-owned table that no existing Request has as its subject.
+USAGE_READ = "usage.read"
+
 # ── user interaction ──────────────────────────────────────────────────
 UI_ASK = "ui.ask"
 UI_APPROVE = "ui.approve"
@@ -335,7 +341,7 @@ ALL_TYPES = {
     SESSION_ADD_TOOL, SESSION_REMOVE_TOOL,
     SESSION_ADD_PROMPT, SESSION_REMOVE_PROMPT, SESSION_ADD_ATTACHMENT,
     SESSION_SET_MODE,
-    NOTIFICATION_LIST, NOTIFICATION_MARK_READ,
+    NOTIFICATION_LIST, NOTIFICATION_MARK_READ, USAGE_READ,
     WIDGET_LIST, WIDGET_GET, WIDGET_SET, WIDGET_STATE_SET,
     UI_ASK, UI_APPROVE, UI_RENDER, UI_PROGRESS,
     CONFIG_READ, CONFIG_WRITE, PATH_GET,
@@ -378,6 +384,8 @@ READ_ONLY = {
     # A notification panel refills on every reconnect and may poll besides, so
     # this is the same per-tick Request the entries below are here for.
     NOTIFICATION_LIST,
+    # Reading what the caller's own model calls consumed changes nothing.
+    USAGE_READ,
     # Taking a finished child's report changes nothing about the world; the
     # child already did whatever it was going to do. Listed here mainly so the
     # ledger's sandbox sink drops it: ``collect(timeout=0)`` is a poll, and a

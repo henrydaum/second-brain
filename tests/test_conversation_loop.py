@@ -244,13 +244,13 @@ def test_llm_call_events_bracket_each_request():
 
 
 def test_llm_call_finished_publishes_every_token_count():
-    """All three provider-reported counts reach the bus, and absence stays absent.
+    """Every provider-reported count reaches the bus, and absence stays absent.
 
     The counts come from the provider's own ``usage`` block, so the loop's
     only job is to pass them along unedited. ``None`` has to survive that trip
     as ``None``: it means *the provider did not say*, and a consumer that
     reads a missing count as zero understates cost while looking perfectly
-    healthy. Cached tokens are a discounted share of ``prompt_tokens``, never
+    healthy. Cached tokens are a discounted share of ``input_tokens``, never
     an addition, so a cost calculation that adds them double-counts.
     """
     from events.event_bus import bus
@@ -259,27 +259,27 @@ def test_llm_call_finished_publishes_every_token_count():
     events = []
     unsub = bus.subscribe(AGENT_LLM_CALL_FINISHED, events.append)
     try:
-        llm = _FakeLLM([_response(content="Hi", prompt_tokens=8177,
-                                  cached_prompt_tokens=7936,
-                                  completion_tokens=245)])
+        llm = _FakeLLM([_response(content="Hi", input_tokens=8177,
+                                  cache_read_tokens=7936,
+                                  output_tokens=245)])
         loop = ConversationLoop(llm, _FakeRegistry([]), {}, "prompt",
                                 session_key="chat")
         loop.drive(_agent_state(), "agent", [{"role": "user", "content": "hi"}])
 
         # A backend whose provider returned no usage block at all.
-        quiet = _FakeLLM([_response(content="Hi", prompt_tokens=None)])
+        quiet = _FakeLLM([_response(content="Hi", input_tokens=None)])
         ConversationLoop(quiet, _FakeRegistry([]), {}, "prompt",
                          session_key="chat").drive(
             _agent_state(), "agent", [{"role": "user", "content": "hi"}])
     finally:
         unsub()
 
-    assert events[0]["prompt_tokens"] == 8177
-    assert events[0]["cached_prompt_tokens"] == 7936
-    assert events[0]["completion_tokens"] == 245
-    assert events[1]["prompt_tokens"] is None
-    assert events[1]["cached_prompt_tokens"] is None
-    assert events[1]["completion_tokens"] is None
+    assert events[0]["input_tokens"] == 8177
+    assert events[0]["cache_read_tokens"] == 7936
+    assert events[0]["output_tokens"] == 245
+    assert events[1]["input_tokens"] is None
+    assert events[1]["cache_read_tokens"] is None
+    assert events[1]["output_tokens"] is None
 
 
 def test_compaction_emits_session_compacted_event():
@@ -811,7 +811,7 @@ def test_proactive_compaction_measures_the_brain_that_took_the_call():
 
     small = _SmallBrain([SimpleNamespace(
         content="Done.", tool_calls=[], has_tool_calls=False,
-        is_error=False, prompt_tokens=90,
+        is_error=False, input_tokens=90,
     )])
     loop, runtime = _overflow_rig(_FakeLLM([]), compactor)  # default has context_size=0
 
@@ -1050,8 +1050,8 @@ def test_agent_complete_selects_the_session_llm(monkeypatch):
                 tool_calls=[],
                 error=None,
                 error_code=None,
-                prompt_tokens=None,
-                cached_prompt_tokens=None,
+                input_tokens=None,
+                cache_read_tokens=None,
             )
 
     brain = Brain()

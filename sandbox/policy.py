@@ -521,6 +521,9 @@ ALWAYS_SAFE = {
     # safe (you can reach a person, you cannot reach anything of theirs) is
     # untouched by which pane draws it.
     R.NOTIFICATION_LIST, R.NOTIFICATION_MARK_READ,
+    # The caller's own user's token usage, scoped to ``ctx.user_id`` in SQL
+    # with no argument that names anybody — the notification.list shape.
+    R.USAGE_READ,
     R.SESSION_STATE_GET, R.SESSION_STATE_SET, R.SESSION_REMOVE_TOOL,
     R.SESSION_REMOVE_PROMPT,
     # Staging a file for the model to look at is safe for the reason FS_READ

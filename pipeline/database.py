@@ -500,6 +500,42 @@ class Database:
 		""")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_ts ON notifications(ts)")
 
+		# One row per model call: what it consumed, and whose work it was. The
+		# atomic fact behind every usage question — a conversation's total and
+		# an all-time total are both SUMs over it, which a running-total column
+		# on ``conversations`` could not be: it would lose the split by model,
+		# have nowhere to put a call that belongs to no conversation, and take
+		# the figure with it when the conversation is deleted. Hence the
+		# ledger's no-foreign-keys rule again. The four counts are the
+		# ``Usage`` vocabulary (sandbox/guest/llm.py): NULL means the provider
+		# did not say, which is not zero, and the cache columns are subsets of
+		# ``input_tokens`` rather than additions to it.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS llm_usage (
+				id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+				ts                 REAL NOT NULL,
+				session_key        TEXT,
+				conversation_id    INTEGER,
+				user_id            INTEGER,
+				origin             TEXT NOT NULL,
+				model              TEXT,
+				ok                 INTEGER NOT NULL,
+				duration_s         REAL,
+				input_tokens       INTEGER,
+				cache_read_tokens  INTEGER,
+				cache_write_tokens INTEGER,
+				output_tokens      INTEGER
+			)
+		""")
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_llm_usage_conv
+			ON llm_usage(conversation_id)
+		""")
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_llm_usage_user
+			ON llm_usage(user_id, ts)
+		""")
+
 		self.conn.commit()
 
 	# =================================================================
@@ -1472,6 +1508,121 @@ class Database:
 			logger.warning(f"Action-ledger write failed (ignored): {e}")
 
 	# =================================================================
+	# LLM USAGE
+	# =================================================================
+
+	def record_llm_usage(self, *, origin, ok, session_key=None,
+						 conversation_id=None, user_id=None, model=None,
+						 duration_s=None, input_tokens=None,
+						 cache_read_tokens=None, cache_write_tokens=None,
+						 output_tokens=None) -> None:
+		"""Append one model call to ``llm_usage``.
+
+		Best-effort, like ``record_action``: metering observes the system and
+		must never be why a turn fails.
+		"""
+		try:
+			with self.lock:
+				self.conn.execute("""
+					INSERT INTO llm_usage
+					(ts, session_key, conversation_id, user_id, origin, model, ok,
+					 duration_s, input_tokens, cache_read_tokens,
+					 cache_write_tokens, output_tokens)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""", (time.time(), session_key, conversation_id, user_id,
+					  str(origin), model, 1 if ok else 0, duration_s,
+					  input_tokens, cache_read_tokens, cache_write_tokens,
+					  output_tokens))
+				self.conn.commit()
+		except Exception as e:
+			logger.warning(f"LLM-usage write failed (ignored): {e}")
+
+	# What a usage group is keyed on. A whitelist of SQL expressions, never the
+	# caller's string: ``group_by`` arrives from plugin code.
+	_USAGE_GROUPS = {
+		"model": "u.model",
+		"origin": "u.origin",
+		"day": "date(u.ts, 'unixepoch', 'localtime')",
+		"conversation": "u.conversation_id",
+	}
+
+	# SUM skips NULLs and answers NULL when every value was NULL, which is
+	# exactly the rule the counts need: a group where no call reported input
+	# says "not reported", never 0.
+	_USAGE_AGGREGATES = """
+		COUNT(*) AS calls,
+		SUM(1 - u.ok) AS failed,
+		SUM(u.input_tokens) AS input_tokens,
+		SUM(u.cache_read_tokens) AS cache_read_tokens,
+		SUM(u.cache_write_tokens) AS cache_write_tokens,
+		SUM(u.output_tokens) AS output_tokens,
+		SUM(u.input_tokens IS NULL AND u.output_tokens IS NULL) AS unreported,
+		MIN(u.ts) AS first_ts,
+		MAX(u.ts) AS last_ts
+	"""
+
+	def llm_usage_summary(self, *, user_id, conversation_id=None, since=None,
+						  group_by=None, limit=20) -> dict:
+		"""Totals over ``llm_usage``, optionally split into groups.
+
+		Always scoped to one ``user_id`` — ``IS`` rather than ``=`` so a
+		kernel context with no user reads the rows that belong to nobody,
+		rather than everything. ``conversation_id`` and ``since`` narrow
+		further. Groups come back largest first, except by ``day``, which is
+		newest first because that is how a trend reads.
+		"""
+		clauses, params = ["u.user_id IS ?"], [user_id]
+		if conversation_id is not None:
+			clauses.append("u.conversation_id = ?")
+			params.append(conversation_id)
+		if since is not None:
+			clauses.append("u.ts >= ?")
+			params.append(since)
+		where = " WHERE " + " AND ".join(clauses)
+		with self.lock:
+			cur = self.conn.execute(
+				f"SELECT {self._USAGE_AGGREGATES} FROM llm_usage u{where}", params)
+			names = [c[0] for c in cur.description]
+			totals = dict(zip(names, cur.fetchone()))
+			groups = []
+			key = self._USAGE_GROUPS.get(group_by or "")
+			if key is not None:
+				title = ", c.title AS title" if group_by == "conversation" else ""
+				join = (" LEFT JOIN conversations c ON c.id = u.conversation_id"
+						if group_by == "conversation" else "")
+				order = ("key DESC" if group_by == "day" else
+						 "COALESCE(SUM(u.input_tokens), 0) "
+						 "+ COALESCE(SUM(u.output_tokens), 0) DESC")
+				cur = self.conn.execute(
+					f"SELECT {key} AS key{title}, {self._USAGE_AGGREGATES}"
+					f" FROM llm_usage u{join}{where}"
+					f" GROUP BY {key} ORDER BY {order} LIMIT ?",
+					[*params, int(limit)])
+				names = [c[0] for c in cur.description]
+				groups = [dict(zip(names, row)) for row in cur.fetchall()]
+		return {"totals": totals, "groups": groups}
+
+	def latest_llm_usage(self, *, user_id, conversation_id) -> dict | None:
+		"""The last *agent* call in a conversation that reported its input.
+
+		Its ``input_tokens`` is how full the context window was on that call —
+		the nearest thing to "how big is this conversation now" anybody has.
+		Agent calls only: a plugin's completion (the compactor summarizing)
+		sends its own prompt, which says nothing about the conversation's.
+		"""
+		with self.lock:
+			cur = self.conn.execute("""
+				SELECT * FROM llm_usage
+				WHERE user_id IS ? AND conversation_id = ?
+				  AND origin = 'agent' AND input_tokens IS NOT NULL
+				ORDER BY id DESC LIMIT 1
+			""", (user_id, conversation_id))
+			row = cur.fetchone()
+			if row is None:
+				return None
+			return dict(zip([c[0] for c in cur.description], row))
+
+	# =================================================================
 	# NOTIFICATIONS
 	# =================================================================
 
@@ -1575,7 +1726,7 @@ class Database:
 		"""Delete data older than ``days`` — the single retention knob.
 
 		Covers everything that accumulates without bound: action-ledger rows,
-		notifications, finished task runs, and idle conversations (their
+		notifications, LLM usage rows, finished task runs, and idle conversations (their
 		messages cascade).
 		A conversation's ``updated_at`` is bumped on every message, so
 		anything still in use is never eligible. ``ledger_only`` restricts to
@@ -1592,6 +1743,8 @@ class Database:
 			if not ledger_only:
 				deleted["notifications"] = self.conn.execute(
 					"DELETE FROM notifications WHERE ts < ?", (cutoff,)).rowcount
+				deleted["llm_usage"] = self.conn.execute(
+					"DELETE FROM llm_usage WHERE ts < ?", (cutoff,)).rowcount
 				deleted["task_runs"] = self.conn.execute(
 					"DELETE FROM task_runs WHERE finished_at IS NOT NULL AND finished_at < ?",
 					(cutoff,)).rowcount

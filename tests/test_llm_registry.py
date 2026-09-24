@@ -39,7 +39,7 @@ class EchoBackend(BaseLLMBackend):
                 sdk.llm.delta(piece + " ")
         return LLMResponse(
             content=f"echo:{last}",
-            prompt_tokens=len(request.messages),
+            input_tokens=len(request.messages),
             tool_calls=[{"id": "c1", "name": "t", "arguments": "{}"}]
             if request.tools else [],
         )
@@ -219,7 +219,7 @@ def test_a_call_crosses_and_comes_back(tree, isolation):
         messages=[{"role": "user", "content": "hello"}]))
 
     assert response.content == "echo:hello"
-    assert response.prompt_tokens == 1
+    assert response.input_tokens == 1
     assert target.loaded is True
     target.unload()
     assert target.loaded is False

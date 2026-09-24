@@ -915,6 +915,7 @@ not Requests.
 |---|---|---|---|
 | `notification.list(limit, since_id, unread_only)` | Read this user's notifications | — (scoped to `ctx.user_id` in SQL) | safe |
 | `notification.mark_read(ids, before_id)` | Settle notifications | — (scoped to `ctx.user_id` in SQL) | safe |
+| `usage.read(conversation_id, since, group_by, limit)` | Token usage totals, optionally grouped | — (scoped to `ctx.user_id` in SQL) | safe |
 
 Raising one is `session.push(notify=True)`, not a Request of its own: pushing
 text and raising a notification are the same act aimed at a different surface,

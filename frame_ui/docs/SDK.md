@@ -1369,7 +1369,7 @@ class SomeProvider(BaseLLMBackend):
             model=request.model_name, messages=request.messages,
             tools=request.tools or None, api_key=request.api_key or None,
             **request.params)
-        return LLMResponse(content=answer.text, prompt_tokens=answer.tokens)
+        return LLMResponse(content=answer.text, input_tokens=answer.tokens)
 ```
 
 **Everything about the model arrives on the request, nothing lives on you.**

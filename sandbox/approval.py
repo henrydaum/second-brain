@@ -400,6 +400,7 @@ GRANT_PHRASES = {
     # notifications" would cover both by covering neither.
     "notification.list": "read your notifications",
     "notification.mark_read": "mark your notifications as read",
+    "usage.read": "read your token usage",
     # The widget shown beside a conversation. Split the way the notification
     # pair above is: reading which widget is up is nothing like putting a
     # different document in front of somebody, and only the writes ever reach

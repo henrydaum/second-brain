@@ -182,23 +182,67 @@ class LLMRequest:
         )
 
 
+def _count(value) -> int | None:
+    """A token count, or ``None`` when there is not one.
+
+    Tolerant like everything else read off the wire: a backend handing back a
+    string or a negative number has not reported a count, and recording it as
+    one would put a wrong figure in a table nobody can correct afterwards.
+    ``bool`` is excluded explicitly because it is an ``int`` to Python.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+# The four token counts, in the kernel's vocabulary, named exactly as the
+# ``llm_usage`` columns are. One tuple so the response, its wire form and the
+# recorder all iterate the same list: a fifth count is one entry here and one
+# column there.
+#
+# - ``input_tokens``: all billed input, **including** cache reads and writes.
+#   Also the only measure of how full the context window is.
+# - ``cache_read_tokens``: the part of input served from a prompt cache.
+# - ``cache_write_tokens``: the part of input written to a prompt cache.
+# - ``output_tokens``: everything generated, **including** reasoning.
+#
+# Providers disagree about *shape* — Anthropic reports input excluding the
+# cache, OpenAI including it — so each backend normalizes into these meanings.
+# That is the backend's job, and so is saying (via ``sdk.log``) when its
+# provider reports something it cannot place; the kernel knows no provider.
+# ``None`` means *the provider did not say* and ``0`` means it said zero, and
+# the cache counts are subsets of input, never additions to it. Anything
+# derived — a cache hit rate, a cost — is computed by whoever displays it.
+USAGE_FIELDS = ("input_tokens", "cache_read_tokens", "cache_write_tokens",
+                "output_tokens")
+
+
 @dataclass
 class LLMResponse:
     """What a model said, however it was asked.
 
     One shape for the blocking and streaming paths alike — the streaming call
     accumulates deltas and returns the same thing — so no caller has to branch
-    on how the call was made.
+    on how the call was made. The token counts are :data:`USAGE_FIELDS`.
     """
 
     content: str = ""
     # Each: {"id": str, "name": str, "arguments": str (JSON)}
     tool_calls: list[dict] = field(default_factory=list)
-    prompt_tokens: int | None = None
-    cached_prompt_tokens: int | None = None
-    completion_tokens: int | None = None
+    input_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    output_tokens: int | None = None
     error: str | None = None
     error_code: str | None = None
+
+    def __post_init__(self):
+        for name in USAGE_FIELDS:
+            setattr(self, name, _count(getattr(self, name)))
+
+    def usage(self) -> dict:
+        """The four counts as a dict, keyed as the columns are."""
+        return {name: getattr(self, name) for name in USAGE_FIELDS}
 
     @property
     def has_tool_calls(self) -> bool:
@@ -225,9 +269,7 @@ class LLMResponse:
         """Serialize for the wire."""
         return {
             "content": self.content, "tool_calls": self.tool_calls,
-            "prompt_tokens": self.prompt_tokens,
-            "cached_prompt_tokens": self.cached_prompt_tokens,
-            "completion_tokens": self.completion_tokens,
+            **self.usage(),
             "error": self.error, "error_code": self.error_code,
         }
 
@@ -248,9 +290,7 @@ class LLMResponse:
         return cls(
             content=data.get("content") or "",
             tool_calls=list(calls) if isinstance(calls, list) else [],
-            prompt_tokens=data.get("prompt_tokens"),
-            cached_prompt_tokens=data.get("cached_prompt_tokens"),
-            completion_tokens=data.get("completion_tokens"),
+            **{name: data.get(name) for name in USAGE_FIELDS},
             error=data.get("error"),
             error_code=data.get("error_code"),
         )

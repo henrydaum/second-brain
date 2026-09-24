@@ -82,6 +82,7 @@ from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, NOTIFICATION_LIST,
                        NOTIFICATION_MARK_READ, PARSE_FILE, PARSE_MODALITY,
+                       USAGE_READ,
                        LLM_DELTA, LLM_LIST, LLM_LOAD, LLM_PROCEED,
                        LLM_UNLOAD, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
@@ -1746,6 +1747,33 @@ class _Notifications(_Namespace):
                          before_id=before_id)
 
 
+
+class _Usage(_Namespace):
+    """What model calls consumed — the ``llm_usage`` table, read back.
+
+    Only ever your own user's. The counts are the four in
+    ``guest.llm.USAGE_FIELDS``; a sum is ``None`` when no call in it reported
+    that count, which is not the same as 0. Nothing derived is stored, so a
+    cache hit rate is ``cache_read_tokens / input_tokens``, computed here.
+    """
+
+    def read(self, conversation_id=None, *, since: float | None = None,
+             group_by: str | None = None, limit: int = 20):
+        """Totals, optionally split by ``model``, ``origin``, ``day`` or
+        ``conversation``.
+
+        ``conversation_id="current"`` is the conversation this call comes
+        from; with none, ``totals`` is ``None``. Naming a conversation also
+        answers ``latest`` — its last reporting call, whose ``input_tokens``
+        is how full the context window is. ``since`` is a Unix timestamp.
+
+            here = sdk.usage.read("current", group_by="model")
+            week = sdk.usage.read(since=time.time() - 7 * 86400,
+                                  group_by="day")
+        """
+        return self._ask(USAGE_READ, conversation_id=conversation_id,
+                         since=since, group_by=group_by, limit=limit)
+
 class _Net(_Namespace):
     """Network Requests — always classified, never auto-safe."""
 
@@ -2557,6 +2585,7 @@ class SDK:
         self.parse = _Parse(self)
         self.ledger = _Ledger(self)
         self.notifications = _Notifications(self)
+        self.usage = _Usage(self)
         self.net = _Net(self)
         self.proc = _Proc(self)
         self.scripts = _Scripts(self)

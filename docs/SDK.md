@@ -1587,8 +1587,31 @@ class SomeProvider(BaseLLMBackend):
             model=request.model_name, messages=request.messages,
             tools=request.tools or None, api_key=request.api_key or None,
             **request.params)
-        return LLMResponse(content=answer.text, prompt_tokens=answer.tokens)
+        return LLMResponse(
+            content=answer.text,
+            input_tokens=answer.usage.input,
+            cache_read_tokens=answer.usage.cached,
+            output_tokens=answer.usage.output)
 ```
+
+**Report usage in the kernel's four counts.** Every call is metered into the
+`llm_usage` table, and the figures are yours. The kernel knows no provider's
+spelling, so translating is your job:
+
+| `LLMResponse` field | Means |
+|---|---|
+| `input_tokens` | all billed input, **including** cache reads and writes |
+| `cache_read_tokens` | the part of input served from a prompt cache |
+| `cache_write_tokens` | the part of input written to a prompt cache |
+| `output_tokens` | everything generated, **including** reasoning |
+
+A provider that reports input *excluding* its cache (Anthropic does) must have
+the cache counts added back. Leave a count the provider did not report as
+`None` — `0` claims it said zero. And if its usage block carries a non-zero
+field you cannot place, `sdk.log(..., level="warning")` it: a provider that
+starts billing for something new should be noticed the first time. These are
+the only names: the older `prompt_tokens` / `completion_tokens` spellings are
+gone, and a backend still using them reports nothing.
 
 **Everything about the model arrives on the request, nothing lives on you.**
 `model_name`, `api_key`, `base_url`, `messages`, `tools`, `params`,
@@ -1698,6 +1721,10 @@ sdk.ledger.read(limit=50)
 
 sdk.notifications.list(limit=50, since_id=None, unread_only=False)
 sdk.notifications.mark_read(ids=None, before_id=None)
+
+sdk.usage.read(conversation_id=None, since=None, group_by=None, limit=20)
+# -> {"totals", "groups", "latest"}; conversation_id="current" is yours,
+#    group_by is "model" / "origin" / "day" / "conversation"
 ```
 
 ---

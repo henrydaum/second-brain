@@ -32,7 +32,7 @@ def response(content="", tool_calls=None, **extra):
         tool_calls=tool_calls or [],
         has_tool_calls=bool(tool_calls),
         is_error=False,
-        prompt_tokens=0,
+        input_tokens=0,
     )
     fields.update(extra)
     return SimpleNamespace(**fields)
