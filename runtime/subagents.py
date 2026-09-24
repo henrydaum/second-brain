@@ -13,12 +13,17 @@ whole mechanisms fall away with it: the side-set of "children the parent already
 cancelled" (needed only to suppress a stale completion echo from a run that had
 no state of its own) and the second copy of the same query in the barrier.
 
-**One delivery, decided by whoever collects first.** A finished child's report
-is stored on its handle and delivered exactly once — by an explicit
-``collect``, or by the end-of-turn ``barrier`` for children nobody collected.
-The worker never queues it directly, which is what makes ``wait=False`` usable
-from a script (no turn to hold open) and from a turn (barrier holds it open)
-without the two racing to report the same result twice.
+**One delivery, decided by whoever claims it first.** A finished child's
+report is stored on its handle and delivered exactly once, under the registry
+lock. Three claimants, in the order they usually win: somebody *blocked on it*
+(``wait=True``, or an ``agent.collect`` in progress) takes it as a return
+value; otherwise, if the owner's turn is still in flight, the worker queues it
+the moment it finishes (``_deliver_live``) and the loop drains it at the next
+gap between model calls, exactly as it drains a message the person typed
+mid-turn; otherwise the end-of-turn ``barrier`` or a later ``collect`` takes
+it. A report used to wait for the barrier even when the parent was busy for
+minutes more, so the agent learned what its children found only when it tried
+to stop.
 
 **A deadline is a hard cutoff, never a silent drop.** A child still running at
 its deadline is cancelled and reported as failed. The model always learns each
@@ -133,6 +138,14 @@ class Handle:
     # open covers both paths with one line.
     profile: str = "default"
     collected: bool = False
+    # The spawner takes this report as its return value (``wait=True``), so
+    # it is never queued. Set at construction rather than when the wait
+    # begins: a child that fails at once would otherwise be queued *and*
+    # returned.
+    inline: bool = False
+    # How many ``collect`` calls are blocked on this handle right now. While
+    # nonzero the report belongs to them, for the same reason as ``inline``.
+    awaited: int = 0
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @property
@@ -309,8 +322,13 @@ class SubagentRegistry:
         category: str = "Subagent",
         notification_mode: str | None = "off",
         profile: str | None = None,
+        inline: bool = False,
     ) -> Handle:
-        """Start a child and return its handle. Raises on a refusal."""
+        """Start a child and return its handle. Raises on a refusal.
+
+        ``inline`` says the caller will wait for the report and return it, so
+        it must never also be queued on the owner's session.
+        """
         runtime = self.runtime
         if runtime is None:
             raise RuntimeError("the runtime is not available")
@@ -372,6 +390,7 @@ class SubagentRegistry:
             depth=depth,
             parent=spawner.id if spawner is not None else None,
             profile=profile,
+            inline=inline,
         )
         with self._lock:
             self._handles[handle.id] = handle
@@ -544,6 +563,7 @@ class SubagentRegistry:
             handle.text = text
             handle.error = error
         handle._done.set()
+        self._deliver_live(handle)
         self.wake(handle.owner)
         if handle.owner is None and state == FAILED:
             # Nobody is going to collect this one, so a failure that is not
@@ -615,15 +635,23 @@ class SubagentRegistry:
             return []
 
         limit = None if timeout is None else time.time() + max(0.0, float(timeout))
-        for handle in wanted:
-            self._wait_for(handle, limit, stop)
-
-        out = []
+        # Hold the claim for the whole wait, released in the same critical
+        # section that takes the reports: a child finishing in between then
+        # either sees the claim or finds itself already collected.
         with self._lock:
             for handle in wanted:
-                if handle.finished:
-                    handle.collected = True
-                out.append(handle.report())
+                handle.awaited += 1
+        out = []
+        try:
+            for handle in wanted:
+                self._wait_for(handle, limit, stop)
+        finally:
+            with self._lock:
+                for handle in wanted:
+                    handle.awaited -= 1
+                    if handle.finished:
+                        handle.collected = True
+                    out.append(handle.report())
         return out
 
     def _wait_for(self, handle: Handle, limit: float | None, stop=None) -> None:
@@ -715,6 +743,11 @@ class SubagentRegistry:
     def barrier(self, session) -> BarrierOutcome:
         """Hold an ending turn open until its children report.
 
+        Most reports no longer arrive here: a child finishing while its
+        parent's turn is in flight is delivered at once (``_deliver_live``).
+        The barrier waits for the ones still running, and re-drives for any
+        live-delivered report the loop has not drained yet.
+
         Standing at the exit — *before* the ``end_turn`` enact — is what keeps
         the agent's priority for the whole wait: there is no window in which a
         user message can land between the halves of one logical turn.
@@ -791,7 +824,9 @@ class SubagentRegistry:
         owner = str(getattr(session, "key", "") or "")
         pending = self.pending_for(owner)
         if not pending:
-            return BarrierOutcome.NONE
+            return (BarrierOutcome.REPORTS_DELIVERED
+                    if self._has_queued_report(session)
+                    else BarrierOutcome.NONE)
 
         cancel_event = getattr(session, "cancel_event", None)
         delivered = []
@@ -811,10 +846,16 @@ class SubagentRegistry:
             for handle in list(pending):
                 if handle.deadline <= now and not handle.finished:
                     self.cancel(handle.id)
-                if handle.finished:
-                    handle.collected = True
-                    delivered.append(handle)
-                    pending.remove(handle)
+                with self._lock:
+                    # Somebody else claimed it — a live delivery, which has
+                    # already queued it and will wake us below as user input.
+                    if handle.collected:
+                        pending.remove(handle)
+                        continue
+                    if handle.finished:
+                        handle.collected = True
+                        delivered.append(handle)
+                        pending.remove(handle)
             if not pending:
                 break
             if len(pending) != announced:
@@ -837,11 +878,71 @@ class SubagentRegistry:
 
         queued = self._deliver(session, delivered)
         self.forget(owner)
-        return (BarrierOutcome.REPORTS_DELIVERED if queued
+        return (BarrierOutcome.REPORTS_DELIVERED
+                if queued or self._has_queued_report(session)
                 else BarrierOutcome.NONE)
 
+    @staticmethod
+    def _has_queued_report(session) -> bool:
+        """Whether a report delivered live is still waiting to be drained.
+
+        A child can finish after the loop's last drain and before the turn's
+        ending reaches here. Its report is already queued, so there is nothing
+        to wait for — but ending now would leave it unread, so the barrier
+        asks for the re-drive a report delivered here would have.
+        """
+        with session.lock:
+            return any(item.get("author") == REPORT_AUTHOR
+                       for item in getattr(session, "pending_user_inputs", ()))
+
+    def _deliver_live(self, handle: Handle) -> None:
+        """Queue a report the moment it exists, if its owner's turn is live.
+
+        The loop drains ``pending_user_inputs`` at every gap between model
+        calls, so a report queued now is read at the next one — the same path
+        a message the person types mid-turn takes. Only while the turn is *in
+        flight*: an idle session has no drain coming, and the report stays on
+        the handle for ``collect`` or the next barrier.
+
+        The check, the claim and the enqueue share the session lock, which is
+        the lock the runtime's closing-race check takes before it lets a drive
+        go. So a report either lands while something will still read it or is
+        not claimed at all. Never raises: the worker calling this has already
+        settled the handle, and a failed early delivery falls back to the
+        barrier.
+        """
+        session = ((getattr(self.runtime, "sessions", None) or {})
+                   .get(handle.owner) if handle.owner else None)
+        if session is None:
+            return
+        try:
+            with session.lock:
+                if not getattr(session, "in_flight", session.busy):
+                    return
+                with self._lock:
+                    if handle.collected or handle.inline or handle.awaited:
+                        return
+                    handle.collected = True
+                reports = self._queue(session, [handle])
+        except Exception:
+            logger.exception("could not deliver subagent %s live", handle.id)
+            return
+        self._announce(session, reports)
+        self.forget(handle.owner)
+
     def _deliver(self, session, handles: list[Handle]) -> bool:
-        """Queue reports on the session's agent-facing message queue.
+        """Queue claimed reports and announce them. See :meth:`_queue`."""
+        try:
+            reports = self._queue(session, handles)
+        except Exception:
+            logger.exception("could not queue subagent reports")
+            return False
+        self._announce(session, reports)
+        return bool(reports)
+
+    @staticmethod
+    def _queue(session, handles: list[Handle]) -> list[Handle]:
+        """Put reports on the session's agent-facing message queue.
 
         Deliberately not ``runtime.push_message``: that is the *user*-facing
         bus push, and these reports are addressed to the model. The
@@ -854,29 +955,31 @@ class SubagentRegistry:
             or getattr(session, "conversation_id", None)
             == handle.owner_conversation_id
         ]
-        if not reports:
-            return False
-        # ``author`` is what keeps the row from reading as something the person
-        # typed: it is addressed to the model, so it wears the user role, and
-        # the column is the only thing that tells a client otherwise.
-        try:
+        if reports:
+            # ``author`` is what keeps the row from reading as something the
+            # person typed: it is addressed to the model, so it wears the user
+            # role, and the column is the only thing that tells a client
+            # otherwise.
             with session.lock:
                 session.pending_user_inputs.extend(
                     {"action_type": "send_text", "payload": handle.notice(),
                      "author": REPORT_AUTHOR}
                     for handle in reports)
-        except Exception:
-            logger.exception("could not queue subagent reports")
-            return False
-        # The live half of the marker, carrying the report itself so a client
-        # can show it in place. A drained row reaches a client only
-        # when it next reads the transcript, which is a reload; announcing the
-        # return on the turn's activity is what lets it appear as it happens.
-        # No ``phase``: this is an event within the wait, not a change of it.
-        self._emit_activity(session, None, returned=[
-            {"title": h.title, "state": h.state, "text": h.preview(),
-             "conversation_id": h.conversation_id} for h in reports])
-        return True
+        return reports
+
+    def _announce(self, session, reports: list[Handle]) -> None:
+        """The live half of the marker, carrying the report itself.
+
+        A drained row reaches a client only when it next reads the transcript,
+        which is a reload; announcing the return on the turn's activity is
+        what lets it appear as it happens. No ``phase``: a return is an event
+        within the turn, not a change of it. Emitted outside the session lock,
+        since bus handlers run on this thread.
+        """
+        if reports:
+            self._emit_activity(session, None, returned=[
+                {"title": h.title, "state": h.state, "text": h.preview(),
+                 "conversation_id": h.conversation_id} for h in reports])
 
     # --- scheduled spawns -----------------------------------------------
 

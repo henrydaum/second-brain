@@ -433,6 +433,16 @@ class ConversationRuntime:
                     # not legal here. Leave the queue; the next agent turn's
                     # drain absorbs it.
                     break
+                if session.pending_user_inputs[0].get("author"):
+                    # Something the kernel queued — a subagent report that
+                    # landed after the backstop barrier. Dispatching it as a
+                    # send_text would record it as the person's words, so it
+                    # gets the re-drive a barrier-delivered report gets, and
+                    # the loop's drain keeps its ``author``.
+                    restart_drive = True
+                    session.cs.set_priority("agent")
+                    out.data["_drive_agent_turn"] = True
+                    continue
                 queued = session.pending_user_inputs.pop(0)
                 _cfg.refresh_specs(self, session)
                 queued_payload = queued.get("payload")

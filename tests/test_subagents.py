@@ -1573,3 +1573,76 @@ def test_a_collector_hands_back_what_is_ready_rather_than_dying_with_it():
     finally:
         release.set()
         settle(registry, handle)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Live delivery: a report reaches a busy parent at its next model call.
+# ──────────────────────────────────────────────────────────────────────
+
+def _busy_owner(runtime, key="repl", cid=7):
+    session = FakeSession(key, cid)
+    session.busy = True
+    runtime.sessions[key] = session
+    return session
+
+
+def test_a_report_is_queued_the_moment_a_child_finishes_mid_turn():
+    """The parent used to learn what a child found only when it tried to end
+    its turn. The loop drains ``pending_user_inputs`` between model calls, so
+    queuing on finish is all it takes to be read at the next one."""
+    registry, runtime = registry_for()
+    session = _busy_owner(runtime)
+    handle = registry.spawn("job", owner="repl", owner_conversation_id=7)
+    settle(registry, handle)
+
+    assert eventually(lambda: len(session.pending_user_inputs) == 1)
+    item = session.pending_user_inputs[0]
+    assert item["author"] == "subagent_report"
+    assert "Background agent 'Subagent' finished" in item["payload"]
+    assert handle.collected
+    # Already delivered, so the barrier waits on nothing — but it still asks
+    # for the re-drive, since the report has not been drained yet.
+    assert registry.barrier(session) is BarrierOutcome.REPORTS_DELIVERED
+    assert len(session.pending_user_inputs) == 1, "delivered exactly once"
+
+
+def test_an_idle_owner_is_left_to_the_barrier():
+    """No turn in flight means no drain coming; queuing now would leave the
+    report sitting unread, so it stays on the handle."""
+    registry, runtime = registry_for()
+    session = FakeSession("repl", 7)
+    runtime.sessions["repl"] = session
+    handle = registry.spawn("job", owner="repl", owner_conversation_id=7)
+    settle(registry, handle)
+    time.sleep(0.05)
+    assert session.pending_user_inputs == []
+    assert not handle.collected
+
+
+def test_a_waited_spawn_is_answered_and_never_also_queued():
+    registry, runtime = registry_for()
+    session = _busy_owner(runtime)
+    handle = registry.spawn("job", owner="repl", owner_conversation_id=7,
+                            inline=True)
+    settle(registry, handle)
+    time.sleep(0.05)
+    assert session.pending_user_inputs == []
+    [report] = registry.collect([handle.id], owner="repl")
+    assert report["ok"] and handle.collected
+
+
+def test_a_blocked_collect_keeps_the_report_it_is_waiting_for():
+    release = threading.Event()
+
+    def turn(key, prompt, **kwargs):
+        release.wait(timeout=5.0)
+        return SimpleNamespace(ok=True, messages=["done"], error=None)
+
+    registry, runtime = registry_for(turn=turn)
+    session = _busy_owner(runtime)
+    handle = registry.spawn("slow", owner="repl", owner_conversation_id=7)
+    threading.Timer(0.1, release.set).start()
+    [report] = registry.collect([handle.id], owner="repl", timeout=5.0)
+    assert report["state"] == DONE
+    assert session.pending_user_inputs == [], "collected, so never queued"
+    assert handle.awaited == 0

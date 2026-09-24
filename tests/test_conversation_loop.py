@@ -981,6 +981,40 @@ def test_end_of_turn_leftover_starts_a_fresh_turn(tmp_path):
     assert session.cs.turn_priority == "user"
 
 
+def test_a_leftover_subagent_report_redrives_rather_than_speaking_as_the_user(
+        tmp_path):
+    """A report delivered live can land after the backstop barrier. Popped as a
+    send_text it would be recorded as the person's words with no ``author``;
+    it re-drives the same turn instead, so the loop's drain absorbs it with
+    its authorship intact and agent priority."""
+    db = _db(tmp_path)
+    cid = db.create_conversation("x")
+    rt = plain_runtime(db)
+    session = rt.load_conversation("s", cid)
+    report = {"action_type": "send_text", "payload": "[Background agent] x",
+              "author": "subagent_report"}
+
+    seen = []
+
+    def fake_drive(sess, out, allow_restart=True):
+        seen.append((sess.cs.turn_priority, list(sess.pending_user_inputs)))
+        if len(seen) == 1:
+            sess.pending_user_inputs.append(dict(report))
+        else:
+            sess.pending_user_inputs.clear()   # what the loop's drain does
+        sess.cs.set_priority("user")
+        sess.busy = False
+        return out
+
+    rt._drive_agent_turn = fake_drive
+    rt.handle_action("s", "send_text", "first message")
+
+    assert len(seen) == 2
+    assert seen[1] == ("agent", [report]), "left for the drain, not dispatched"
+    user_rows = [m["content"] for m in session.history if m["role"] == "user"]
+    assert report["payload"] not in user_rows
+
+
 # ────────────────────────────────────────────────────────────────────
 # The compactor as a sandboxed service (was test_service_compactor_sandbox.py)
 # ────────────────────────────────────────────────────────────────────

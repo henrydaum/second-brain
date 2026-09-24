@@ -2534,9 +2534,16 @@ still one Request answering with one report; `wait=False` returns a handle so a
 fan-out is expressible from code that has no turn to hold open — which is every
 script, and the reason spawning is in the SDK at all.
 
-**One delivery, decided by whoever collects first.** A finished child's report
-sits on its handle until an explicit `collect` takes it, or until the kernel's
-end-of-turn **barrier** takes it for children nobody collected. The barrier is
+**One delivery, decided by whoever claims it first.** A caller blocked on the
+report (`wait=True`, or a `collect` in progress) takes it as a return value.
+Otherwise, if the owner's turn is in flight, the worker queues it on
+`pending_user_inputs` the moment the child finishes (`_deliver_live`), and the
+loop drains it at the next gap between model calls — the same path a message
+the person types mid-turn takes. It used to wait for the barrier, so an agent
+busy for minutes more learned what its children found only when it tried to
+stop. The **barrier** takes whatever is left, and re-drives for a live report
+not yet drained; the runtime's closing-race check re-drives for one that
+landed later still, rather than dispatching it as the person's `send_text`. The barrier is
 *stacked* in `ConversationLoop._subagent_barrier` rather than registered as an
 `end_turn` hook — the same argument the compaction layer makes one moment over:
 collecting children must not depend on which plugins are installed. It stands

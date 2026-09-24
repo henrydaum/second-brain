@@ -2898,6 +2898,9 @@ def _agent_spawn(ctx, args: dict) -> Result:
             # so this needs no classification of its own — and naming an
             # unknown one raises rather than silently running unrestricted.
             profile=args.get("profile") or None,
+            # Waiting means the report is this Request's answer, so it must
+            # not also be queued on the session as a message.
+            inline=bool(args.get("wait", True)),
         )
     except (PermissionError, ValueError, FileNotFoundError) as exc:
         return Result.failure(str(exc))
