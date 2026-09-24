@@ -79,9 +79,11 @@ class CodexBackend(BaseLLMBackend):
         return LLMResponse(
             content="".join(pieces),
             tool_calls=ordered,
-            prompt_tokens=usage.get("input_tokens"),
-            cached_prompt_tokens=(usage.get("input_tokens_details") or {}).get("cached_tokens"),
-            completion_tokens=usage.get("output_tokens"),
+            # The Responses API already counts input inclusively, with the
+            # cache hit as a share of it; it reports no cache write.
+            input_tokens=usage.get("input_tokens"),
+            cache_read_tokens=(usage.get("input_tokens_details") or {}).get("cached_tokens"),
+            output_tokens=usage.get("output_tokens"),
         )
 
     def providers(self, sdk, provider=""):

@@ -1,7 +1,6 @@
 {
-  "description": "The baseline install: an LLM backend, the Telegram frontend, file read/edit/search, showing files to the user, shell and script running, SQL, ask-user-question, plugin validation, subagents, web search, downloading files, the docs-and-catalog lookup the system prompt leans on, and auto-titling of conversations.",
+  "description": "The baseline install: an LLM backend, file read/edit/search, showing files to the user, shell and script running, SQL, ask-user-question, plugin validation, subagents, web search, downloading files, the docs-and-catalog lookup the system prompt leans on, and auto-titling of conversations.",
   "files": [
-    "frontends/frontend_telegram.py",
     "llm/llm_litellm.py",
     "services/service_web_search.py",
     "tasks/task_update_titles.py",

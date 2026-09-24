@@ -270,6 +270,15 @@ IMAGE_EDGE = 2048
 IMAGE_QUALITY = 80
 
 
+def _field(obj, name):
+    """``obj.name`` or ``obj[name]`` — LiteLLM hands back either shape."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 class LiteLLMBackend(BaseLLMBackend):
     """Unified LLM backend via the litellm SDK."""
 
@@ -316,7 +325,7 @@ class LiteLLMBackend(BaseLLMBackend):
             if request.stream:
                 response = self._stream(sdk, model, messages, request, kwargs)
             else:
-                response = self._blocking(model, messages, request, kwargs)
+                response = self._blocking(sdk, model, messages, request, kwargs)
         except Exception as exc:
             # Classified here rather than left to the wrapper: only this file
             # knows what ``ContextWindowExceededError`` is, and getting that
@@ -369,13 +378,13 @@ class LiteLLMBackend(BaseLLMBackend):
         return (content[:start] + extra
                 + content[end + len("</think>"):]).lstrip()
 
-    def _blocking(self, model, messages, request, kwargs):
+    def _blocking(self, sdk, model, messages, request, kwargs):
         """One whole answer, at once."""
         raw = self._litellm.completion(
             model=model, messages=messages,
             tools=request.tools or None, **kwargs)
         choice = raw.choices[0]
-        prompt_tokens, cached, completion = self._usage(getattr(raw, "usage", None))
+        usage = self._usage(sdk, getattr(raw, "usage", None))
         calls = getattr(choice.message, "tool_calls", None) or []
         return LLMResponse(
             content=self._without_duplicated_reasoning(
@@ -384,8 +393,7 @@ class LiteLLMBackend(BaseLLMBackend):
             tool_calls=[{"id": call.id, "name": call.function.name,
                          "arguments": call.function.arguments}
                         for call in calls],
-            prompt_tokens=prompt_tokens, cached_prompt_tokens=cached,
-            completion_tokens=completion)
+            **usage)
 
     def _stream(self, sdk, model, messages, request, kwargs):
         """The same answer, pushed as it arrives *and* returned whole.
@@ -402,7 +410,7 @@ class LiteLLMBackend(BaseLLMBackend):
         mid-iteration. Nothing to handle, and nothing to add.
         """
         # drop_params is on, so a provider that rejects stream_options simply
-        # degrades to a stream with no usage chunk (prompt_tokens stays None).
+        # degrades to a stream with no usage chunk (every count stays None).
         stream = self._litellm.completion(
             model=model, messages=messages, tools=request.tools or None,
             stream=True, stream_options={"include_usage": True}, **kwargs)
@@ -410,21 +418,17 @@ class LiteLLMBackend(BaseLLMBackend):
         pieces = []
         thinking = []
         calls_by_index = {}
-        prompt_tokens = cached = completion = None
+        usage = {}
 
         for chunk in stream:
-            usage = getattr(chunk, "usage", None)
-            if usage is not None:
-                seen, seen_cached, seen_completion = self._usage(usage)
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
                 # Kept as ``is not None`` rather than ``or``: a completion of
                 # zero tokens is a real answer from the provider, and ``or``
                 # would discard it and report "never told us" instead.
-                if seen is not None:
-                    prompt_tokens = seen
-                if seen_cached is not None:
-                    cached = seen_cached
-                if seen_completion is not None:
-                    completion = seen_completion
+                usage.update({name: value for name, value
+                              in self._usage(sdk, chunk_usage).items()
+                              if value is not None})
             choices = getattr(chunk, "choices", None) or []
             if not choices:
                 continue
@@ -457,8 +461,7 @@ class LiteLLMBackend(BaseLLMBackend):
                          "arguments": entry["arguments"] or "{}"}
                         for index, entry in sorted(calls_by_index.items())
                         if entry["name"]],
-            prompt_tokens=prompt_tokens, cached_prompt_tokens=cached,
-            completion_tokens=completion)
+            **usage)
 
     # ── shaping the request ───────────────────────────────────────────
 
@@ -1078,28 +1081,71 @@ class LiteLLMBackend(BaseLLMBackend):
         stop = cut.rfind(". ")
         return cut[:stop + 1] if stop > limit // 2 else cut.rstrip() + "…"
 
-    def _usage(self, usage):
-        """``(prompt_tokens, cached_prompt_tokens, completion_tokens)``.
+    # Top-level keys of LiteLLM's ``Usage`` this backend accounts for. Anything
+    # else arriving non-zero is something the provider bills or reports that
+    # the kernel's four counts have no place for — logged, once per key.
+    _KNOWN_USAGE_KEYS = frozenset({
+        "prompt_tokens", "completion_tokens", "total_tokens",
+        "prompt_tokens_details", "completion_tokens_details",
+        "cache_creation_input_tokens", "cache_read_input_tokens",
+    })
 
-        All three are the provider's own counts, lifted from the ``usage``
-        block it returns. Nothing here tokenises anything: only the provider
-        knows how it serialised the chat template and the tool schemas, so its
-        number is the billable one and a local estimate would merely be a
-        second opinion nobody charges by.
+    def _usage(self, sdk, usage):
+        """The kernel's four counts (``guest.llm.USAGE_FIELDS``), as kwargs.
 
-        ``cached_prompt_tokens`` is the discounted *share of*
-        ``prompt_tokens``, not an addition to it.
+        All are the provider's own counts, lifted from the ``usage`` block it
+        returns. Nothing here tokenises anything: only the provider knows how
+        it serialised the chat template and the tool schemas, so its number is
+        the billable one and a local estimate would merely be a second opinion
+        nobody charges by.
+
+        LiteLLM already speaks the kernel's convention: ``prompt_tokens`` is
+        all input *including* cache reads and writes — it adds Anthropic's
+        separately reported cache counts back in — and
+        ``prompt_tokens_details`` carries both cache shares. So this is a
+        rename, not arithmetic. A count the provider did not report stays
+        ``None``; the cache fields are shares of input, never additions.
         """
+        counts = dict.fromkeys(("input_tokens", "cache_read_tokens",
+                                "cache_write_tokens", "output_tokens"))
         if not usage:
-            return None, None, None
-        prompt_tokens = getattr(usage, "prompt_tokens", None)
-        completion_tokens = getattr(usage, "completion_tokens", None)
+            return counts
+        counts["input_tokens"] = getattr(usage, "prompt_tokens", None)
+        counts["output_tokens"] = getattr(usage, "completion_tokens", None)
         details = getattr(usage, "prompt_tokens_details", None)
-        if not details:
-            return prompt_tokens, None, completion_tokens
-        cached = (details.get("cached_tokens") if isinstance(details, dict)
-                  else getattr(details, "cached_tokens", None))
-        return prompt_tokens, cached, completion_tokens
+        counts["cache_read_tokens"] = _field(details, "cached_tokens")
+        counts["cache_write_tokens"] = _field(details, "cache_creation_tokens")
+        if counts["cache_read_tokens"] is None:
+            counts["cache_read_tokens"] = getattr(
+                usage, "cache_read_input_tokens", None)
+        if counts["cache_write_tokens"] is None:
+            counts["cache_write_tokens"] = getattr(
+                usage, "cache_creation_input_tokens", None)
+        self._report_unplaced(sdk, usage)
+        return counts
+
+    def _report_unplaced(self, sdk, usage):
+        """Log a usage key nobody accounts for, the first time it is non-zero.
+
+        A provider that starts billing for something new — a server-side tool
+        call, a new modality — should be noticed the day it happens, not on an
+        invoice. Once per key per box, or a long conversation would say it on
+        every call.
+        """
+        dump = getattr(usage, "model_dump", None)
+        try:
+            fields = dump() if callable(dump) else dict(vars(usage))
+        except Exception:
+            return
+        warned = self.__dict__.setdefault("_warned_usage_keys", set())
+        for key, value in fields.items():
+            if key in self._KNOWN_USAGE_KEYS or key.startswith("_"):
+                continue
+            if not value or key in warned:
+                continue
+            warned.add(key)
+            sdk.log(f"LiteLLM reported usage the kernel does not count: "
+                    f"{key}={value!r}", level="warning")
 
     def _classified(self, exc):
         """Re-raise with a code the kernel acts on.
