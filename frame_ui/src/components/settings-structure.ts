@@ -5,6 +5,7 @@ import {
   BrainCircuitIcon,
   BracesIcon,
   BugIcon,
+  ChartColumnIcon,
   CalendarClockIcon,
   CheckCircle2Icon,
   CommandIcon,
@@ -88,6 +89,7 @@ const PAGE_COMMANDS: Record<SettingsPageId, readonly string[]> = {
     "agent",
     "permissions",
     "schedule",
+    "usage",
     "locations",
     "debug",
     "setup",
@@ -350,6 +352,11 @@ const COMMAND_PRESENTATION: Record<
     title: "Scheduled jobs",
     detail: "Manage background agents and recurring pipeline tasks.",
     icon: CalendarClockIcon,
+  },
+  usage: {
+    title: "Token usage",
+    detail: "See tokens and cache hits for this conversation and over time.",
+    icon: ChartColumnIcon,
   },
   locations: {
     title: "Locations",
