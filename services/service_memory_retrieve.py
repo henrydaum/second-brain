@@ -145,6 +145,14 @@ UNQUESTIONED_CHECK = (
     "with `memory update`."
 )
 
+NUDGE_QUESTIONS = {
+    "message_memory": "Should a memory be made about this message?",
+    "agent_action": "Did the agent do something that should be remembered?",
+    "explicit_request": "Did the user explicitly say to remember something?",
+    "future_use": "If a memory were made about this message, would it be useful to future conversations?",
+    "remember_message": "Should the agent remember this message?",
+}
+
 
 def _memory_root(sdk):
     """The folder this service reads. One per install, not per user."""
@@ -252,6 +260,9 @@ class MemoryRetrieve(BaseService):
          5, {"type": "slider", "range": (1, 25, 24), "is_float": False}),
         ("Memory question threshold", "memory_question_threshold",
          "Every one of an entry's when_to_retrieve questions must score above this for it to be surfaced.",
+         0.5, {"type": "slider", "range": (0.0, 1.0, 20), "is_float": True}),
+        ("Memory nudge threshold", "memory_nudge_threshold",
+         "Minimum mean of five Jev questions to ask the agent whether to save a memory at the end of a turn.",
          0.5, {"type": "slider", "range": (0.0, 1.0, 20), "is_float": True}),
     ]
 
@@ -730,6 +741,8 @@ class MemoryRetrieve(BaseService):
             return None
         if str(getattr(ctx, "session_key", "")).startswith(SUBAGENT_PREFIX):
             return None
+        if not self._should_nudge(sdk, ctx):
+            return None
         note = NUDGE
         if opened := self._opened_this_turn(sdk, ctx):
             note += STALE_CHECK.format(names=", ".join(opened))
@@ -738,6 +751,52 @@ class MemoryRetrieve(BaseService):
             if unquestioned:
                 note += UNQUESTIONED_CHECK.format(names=", ".join(unquestioned))
         return SendBack(note, ephemeral=True, quiet=True)
+
+    def _should_nudge(self, sdk, ctx):
+        """Ask Jev about this turn; let the agent decide what, if anything, to save.
+
+        Missing state or an unavailable model keeps the original nudge rather
+        than silently disabling memory writing.
+        """
+        latest = self._latest_user_message(sdk, ctx)
+        if not latest:
+            return True
+        row_id, request = latest
+        state = {"request": request,
+                 "agent_turn": self._agent_context_since(sdk, ctx, row_id)}
+        questions = {key: {"type": "noul", "instructions": instruction}
+                     for key, instruction in NUDGE_QUESTIONS.items()}
+        answers = self._evaluate(sdk, state, questions)
+        if answers is None:
+            return True
+        try:
+            scores = [float(answers[key]["noul"]) for key in questions]
+        except (KeyError, TypeError, ValueError):
+            return True
+        threshold = self._setting(sdk, "memory_nudge_threshold", 0.5, float)
+        mean = sum(scores) / len(scores)
+        sdk.log(f"memory: end-turn nudge score {mean:.3f}, threshold {threshold:.3f}",
+                level="debug")
+        return mean >= threshold
+
+    def _agent_context_since(self, sdk, ctx, user_message_id):
+        """Recent agent words and calls after the user's message, not tool results."""
+        cid = getattr(ctx, "conversation_id", None)
+        try:
+            rows = sdk.db.query(
+                "SELECT role, content FROM conversation_messages"
+                " WHERE conversation_id = ? AND id > ?"
+                " ORDER BY id DESC LIMIT ?",
+                [int(cid), int(user_message_id), CONTEXT_ROWS], max_rows=CONTEXT_ROWS)
+        except (sdk.Failed, TypeError, ValueError) as error:
+            sdk.log(f"memory: could not read agent turn for nudge: {error}",
+                    level="debug")
+            return ""
+        parts = [self._render_assistant(str(row.get("content") or ""))
+                 for row in reversed(rows or [])
+                 if str(row.get("role") or "").lower() == "assistant"]
+        text = "\n".join(part for part in parts if part)
+        return "…" + text[-MAX_CONTEXT_CHARS:] if len(text) > MAX_CONTEXT_CHARS else text
 
     def _opened_this_turn(self, sdk, ctx):
         """Entries the agent read with ``memory read`` since this turn began."""
