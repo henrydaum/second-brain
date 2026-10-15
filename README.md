@@ -89,6 +89,8 @@ It installs the `essentials` bundle (file tools, shell, web search, subagents an
 | **OpenRouter** | An API key from [openrouter.ai](https://openrouter.ai/settings/keys). One key gets you hundreds of models. |
 | **Another provider** | OpenAI, Anthropic, Gemini, a local model via Ollama, or any OpenAI-compatible endpoint. |
 
+If you use an OpenAI-compatible gateway, enter its API base URL, key, and a model ID available on that service when `/setup` asks for them. For example, [A2Agent](https://a2agent.me/) publishes `https://a2agent.me/v1` as its base URL. Choose a model that supports the tools your Second Brain workflow uses.
+
 Say hello. **You're done.** Everything else is a question you can ask Second Brain itself, like *"how do I use you from my phone?"*, *"index my Documents folder"*, *"set up Telegram"* or *"what can you do?"*.
 
 ## Going further
